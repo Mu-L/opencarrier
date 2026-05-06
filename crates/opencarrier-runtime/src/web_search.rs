@@ -1,8 +1,8 @@
 //! Multi-provider web search engine with auto-fallback.
 //!
-//! Supports 4 providers: Tavily (AI-agent-native), Brave, Perplexity, and
-//! DuckDuckGo (zero-config fallback). Auto mode cascades through available
-//! providers based on configured API keys.
+//! Supports 5 providers: Tavily (AI-agent-native), Brave, Perplexity,
+//! Bing (zero-config, China-friendly), and DuckDuckGo.
+//! Auto mode cascades: Tavily → Brave → Perplexity → Bing.
 //!
 //! All API keys use `Zeroizing<String>` via `resolve_api_key()` to auto-wipe
 //! secrets from memory on drop.
@@ -54,6 +54,7 @@ impl WebSearchEngine {
             SearchProvider::Brave => self.search_brave(query, max_results).await,
             SearchProvider::Tavily => self.search_tavily(query, max_results).await,
             SearchProvider::Perplexity => self.search_perplexity(query).await,
+            SearchProvider::Bing => self.search_bing(query, max_results).await,
             SearchProvider::DuckDuckGo => self.search_duckduckgo(query, max_results).await,
             SearchProvider::Auto => self.search_auto(query, max_results).await,
         };
@@ -67,7 +68,7 @@ impl WebSearchEngine {
     }
 
     /// Auto-select provider based on available API keys.
-    /// Priority: Tavily → Brave → Perplexity → DuckDuckGo
+    /// Priority: Tavily → Brave → Perplexity → Bing
     async fn search_auto(&self, query: &str, max_results: usize) -> Result<String, String> {
         // Tavily first (AI-agent-native)
         if resolve_api_key(&self.config.tavily.api_key_env).is_some() {
@@ -96,9 +97,9 @@ impl WebSearchEngine {
             }
         }
 
-        // DuckDuckGo always available as zero-config fallback
-        debug!("Auto: falling back to DuckDuckGo");
-        self.search_duckduckgo(query, max_results).await
+        // Bing always available as zero-config fallback (works in China)
+        debug!("Auto: falling back to Bing");
+        self.search_bing(query, max_results).await
     }
 
     /// Search via Brave Search API.
@@ -276,6 +277,49 @@ impl WebSearchEngine {
         Ok(wrap_external_content("perplexity-search", &output))
     }
 
+    /// Search via Bing HTML (no API key needed, works in China).
+    async fn search_bing(&self, query: &str, max_results: usize) -> Result<String, String> {
+        debug!(query, "Searching via Bing HTML");
+
+        let count = max_results.to_string();
+        let resp = self
+            .client
+            .get("https://www.bing.com/search")
+            .query(&[("q", query), ("count", count.as_str())])
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            )
+            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+            .send()
+            .await
+            .map_err(|e| format!("Bing request failed: {e}"))?;
+
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read Bing response: {e}"))?;
+
+        let results = parse_bing_results(&body, max_results);
+
+        if results.is_empty() {
+            return Err(format!("No results found for '{query}' (Bing)."));
+        }
+
+        let mut output = format!("Search results for '{query}':\n\n");
+        for (i, (title, url, snippet)) in results.iter().enumerate() {
+            output.push_str(&format!(
+                "{}. {}\n   URL: {}\n   {}\n\n",
+                i + 1,
+                title,
+                url,
+                snippet
+            ));
+        }
+
+        Ok(output)
+    }
+
     /// Search via DuckDuckGo HTML (no API key needed).
     async fn search_duckduckgo(&self, query: &str, max_results: usize) -> Result<String, String> {
         debug!(query, "Searching via DuckDuckGo HTML");
@@ -316,6 +360,69 @@ impl WebSearchEngine {
 
         Ok(output)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Bing HTML parser
+// ---------------------------------------------------------------------------
+
+/// Parse Bing HTML search results into (title, url, snippet) tuples.
+pub fn parse_bing_results(html: &str, max: usize) -> Vec<(String, String, String)> {
+    let mut results = Vec::new();
+
+    // Bing results live in <li class="b_algo"> blocks
+    for block in html.split("<li class=\"b_algo\">") {
+        if results.len() >= max {
+            break;
+        }
+
+        // Extract URL from <a href="...">
+        let url = extract_between(block, "<a href=\"", "\"")
+            .unwrap_or_default()
+            .to_string();
+
+        // Extract title (text between > and </a> of the first link)
+        let title = if let Some(href_end) = block.find("\">") {
+            let after = &block[href_end + 2..];
+            extract_between(after, "", "</a>")
+                .map(strip_html_tags)
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Extract snippet from <p> or class="b_caption" area
+        let snippet = extract_bing_snippet(block);
+
+        if !title.is_empty() && !url.is_empty() && !url.starts_with("javascript:") {
+            results.push((title, url, snippet));
+        }
+    }
+
+    results
+}
+
+fn extract_bing_snippet(block: &str) -> String {
+    // Try <div class="b_caption"><p>...</p> first
+    if let Some(cap) = block.find("class=\"b_caption\"") {
+        let after = &block[cap..];
+        if let Some(p_start) = after.find("<p>") {
+            let p_after = &after[p_start + 3..];
+            if let Some(p_end) = p_after.find("</p>") {
+                return strip_html_tags(&p_after[..p_end]);
+            }
+        }
+    }
+
+    // Fallback: any <p> tag content
+    if let Some(p_start) = block.find("<p>") {
+        let after = &block[p_start + 3..];
+        if let Some(p_end) = after.find("</p>") {
+            return strip_html_tags(&after[..p_end]);
+        }
+    }
+
+    String::new()
 }
 
 // ---------------------------------------------------------------------------

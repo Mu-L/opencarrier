@@ -5,7 +5,7 @@
 
 use crate::kernel_handle::KernelHandle;
 use crate::mcp;
-use crate::web_search::{parse_ddg_results, WebToolsContext};
+use crate::web_search::WebToolsContext;
 use opencarrier_types::taint::{TaintLabel, TaintSink, TaintedValue};
 use opencarrier_types::tool::{ToolDefinition, ToolResult};
 use opencarrier_types::tool_compat::normalize_tool_name;
@@ -2875,20 +2875,22 @@ async fn tool_web_search_legacy(input: &serde_json::Value) -> Result<String, Str
     let query = input["query"].as_str().ok_or("Missing 'query' parameter")?;
     let max_results = input["max_results"].as_u64().unwrap_or(5) as usize;
 
-    debug!(query, "Executing web search via DuckDuckGo HTML");
+    debug!(query, "Executing web search via Bing HTML");
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
 
+    let count = max_results.to_string();
     let resp = client
-        .get("https://html.duckduckgo.com/html/")
-        .query(&[("q", query)])
+        .get("https://www.bing.com/search")
+        .query(&[("q", query), ("count", count.as_str())])
         .header(
             "User-Agent",
-            format!("Mozilla/5.0 (compatible; OpenCarrierAgent/{})", env!("CARGO_PKG_VERSION")),
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         )
+        .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
         .send()
         .await
         .map_err(|e| format!("Search request failed: {e}"))?;
@@ -2898,8 +2900,7 @@ async fn tool_web_search_legacy(input: &serde_json::Value) -> Result<String, Str
         .await
         .map_err(|e| format!("Failed to read search response: {e}"))?;
 
-    // Parse DuckDuckGo HTML results
-    let results = parse_ddg_results(&body, max_results);
+    let results = crate::web_search::parse_bing_results(&body, max_results);
 
     if results.is_empty() {
         return Ok(format!("No results found for '{query}'."));

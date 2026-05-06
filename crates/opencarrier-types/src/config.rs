@@ -42,9 +42,11 @@ pub enum SearchProvider {
     Tavily,
     /// Perplexity AI search.
     Perplexity,
+    /// Bing HTML scraping (no API key needed, works in China).
+    Bing,
     /// DuckDuckGo HTML (no API key needed).
     DuckDuckGo,
-    /// Auto-select based on available API keys (Tavily → Brave → Perplexity → DuckDuckGo).
+    /// Auto-select based on available API keys (Tavily → Brave → Perplexity → Bing).
     #[default]
     Auto,
 }
@@ -1342,7 +1344,7 @@ impl KernelConfig {
                     ));
                 }
             }
-            SearchProvider::DuckDuckGo | SearchProvider::Auto => {}
+            SearchProvider::DuckDuckGo | SearchProvider::Bing | SearchProvider::Auto => {}
         }
 
         // --- Production bounds validation ---
