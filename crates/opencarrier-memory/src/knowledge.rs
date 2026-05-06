@@ -25,7 +25,7 @@ impl KnowledgeStore {
     }
 
     /// Add an entity to the knowledge graph.
-    pub fn add_entity(&self, entity: Entity, tenant_id: Option<&str>) -> OpenCarrierResult<String> {
+    pub fn add_entity(&self, entity: Entity) -> OpenCarrierResult<String> {
         let conn = self
             .conn
             .lock()
@@ -42,9 +42,9 @@ impl KnowledgeStore {
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO entities (id, entity_type, name, properties, created_at, updated_at, tenant_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5, NULL)
              ON CONFLICT(id) DO UPDATE SET name = ?3, properties = ?4, updated_at = ?5",
-            rusqlite::params![id, entity_type_str, entity.name, props_str, now, tenant_id],
+            rusqlite::params![id, entity_type_str, entity.name, props_str, now],
         )
         .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         Ok(id)
@@ -54,7 +54,6 @@ impl KnowledgeStore {
     pub fn add_relation(
         &self,
         relation: Relation,
-        tenant_id: Option<&str>,
     ) -> OpenCarrierResult<String> {
         let conn = self
             .conn
@@ -68,7 +67,7 @@ impl KnowledgeStore {
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO relations (id, source_entity, relation_type, target_entity, properties, confidence, created_at, tenant_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
             rusqlite::params![
                 id,
                 relation.source,
@@ -77,18 +76,16 @@ impl KnowledgeStore {
                 props_str,
                 relation.confidence as f64,
                 now,
-                tenant_id,
             ],
         )
         .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         Ok(id)
     }
 
-    /// Query the knowledge graph with a pattern, scoped to tenant.
+    /// Query the knowledge graph with a pattern.
     pub fn query_graph(
         &self,
         pattern: GraphPattern,
-        tenant_id: Option<&str>,
     ) -> OpenCarrierResult<Vec<GraphMatch>> {
         let conn = self
             .conn
@@ -107,13 +104,6 @@ impl KnowledgeStore {
         );
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let mut idx = 1;
-
-        // Tenant scoping
-        if let Some(tid) = tenant_id {
-            sql.push_str(&format!(" AND r.tenant_id = ?{idx}"));
-            params.push(Box::new(tid.to_string()));
-            idx += 1;
-        }
 
         if let Some(ref source) = pattern.source {
             sql.push_str(&format!(" AND (s.id = ?{idx} OR s.name = ?{idx})"));
@@ -300,7 +290,6 @@ mod tests {
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 },
-                None,
             )
             .unwrap();
         assert!(!id.is_empty());
@@ -319,7 +308,6 @@ mod tests {
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 },
-                None,
             )
             .unwrap();
         let company_id = store
@@ -332,7 +320,6 @@ mod tests {
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 },
-                None,
             )
             .unwrap();
         store
@@ -345,7 +332,6 @@ mod tests {
                     confidence: 0.95,
                     created_at: Utc::now(),
                 },
-                None,
             )
             .unwrap();
 
@@ -357,7 +343,6 @@ mod tests {
                     target: None,
                     max_depth: 1,
                 },
-                None,
             )
             .unwrap();
         assert_eq!(matches.len(), 1);

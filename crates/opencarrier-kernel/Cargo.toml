@@ -9,7 +9,6 @@ description = "Core kernel for the OpenCarrier Agent OS"
 opencarrier-types = { path = "../opencarrier-types" }
 opencarrier-memory = { path = "../opencarrier-memory" }
 opencarrier-runtime = { path = "../opencarrier-runtime" }
-opencarrier-skills = { path = "../opencarrier-skills" }
 opencarrier-lifecycle = { path = "../opencarrier-lifecycle" }
 opencarrier-clone = { path = "../opencarrier-clone" }
 tokio = { workspace = true }

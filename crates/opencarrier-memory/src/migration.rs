@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 11;
+const SCHEMA_VERSION: u32 = 12;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -53,6 +53,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 11 {
         migrate_v11(conn)?;
+    }
+
+    if current_version < 12 {
+        migrate_v12(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -436,6 +440,22 @@ fn migrate_v11(conn: &Connection) -> Result<(), rusqlite::Error> {
 
         INSERT OR IGNORE INTO migrations (version, applied_at, description)
         VALUES (11, datetime('now'), 'Add invite tracking table for share-page referral analytics');
+        ",
+    )?;
+    Ok(())
+}
+
+/// Version 12: Remove tenant layer — drop `tenants` and `canonical_sessions` tables.
+///
+/// Unused `tenant_id` columns remain in other tables (SQLite cannot DROP COLUMN portably).
+fn migrate_v12(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        DROP TABLE IF EXISTS tenants;
+        DROP TABLE IF EXISTS canonical_sessions;
+
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (12, datetime('now'), 'Remove tenant layer: drop tenants and canonical_sessions tables');
         ",
     )?;
     Ok(())

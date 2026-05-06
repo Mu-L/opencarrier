@@ -1,6 +1,5 @@
 //! System configuration endpoints.
 
-use crate::routes::common::*;
 use crate::routes::state::AppState;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -44,17 +43,7 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse
 /// Returns the reload plan showing what changed and what was applied.
 pub async fn config_reload(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     // SECURITY: Record config reload in audit trail
     state.kernel.audit_log.record(
         "system",
@@ -96,9 +85,7 @@ pub async fn config_reload(
 /// GET /api/config/schema — Return a simplified JSON description of the config structure.
 pub async fn config_schema(
     State(state): State<Arc<AppState>>,
-    _extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    // NOTE: admin check requires middleware-level enforcement (mixed return types)
     // Build modality options from Brain config (or legacy model catalog)
     let modalities: Vec<String> = state
         .kernel
@@ -166,17 +153,8 @@ pub async fn config_schema(
 /// Writes the value to the TOML config file and triggers a reload.
 pub async fn config_set(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
 ) -> axum::response::Response {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin only"})),
-        )
-            .into_response();
-    }
     let path = match body.get("path").and_then(|v| v.as_str()) {
         Some(p) => p.to_string(),
         None => {

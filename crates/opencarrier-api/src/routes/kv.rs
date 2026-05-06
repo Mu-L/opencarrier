@@ -14,15 +14,12 @@ use std::sync::Arc;
 /// GET /api/memory/agents/:id/kv — List KV pairs for an agent.
 pub async fn get_agent_kv(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let (agent_id, _entry) =
-        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     match state.kernel.memory.list_kv(agent_id) {
         Ok(pairs) => {
@@ -44,15 +41,12 @@ pub async fn get_agent_kv(
 /// GET /api/memory/agents/:id/kv/:key — Get a specific KV value.
 pub async fn get_agent_kv_key(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path((id, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let (agent_id, _entry) =
-        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     match state.kernel.memory.structured_get(agent_id, &key) {
         Ok(Some(val)) => (
@@ -75,16 +69,13 @@ pub async fn get_agent_kv_key(
 /// PUT /api/memory/agents/:id/kv/:key — Set a KV value.
 pub async fn set_agent_kv_key(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path((id, key)): Path<(String, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let (agent_id, _entry) =
-        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     let value = body.get("value").cloned().unwrap_or(body);
 
@@ -105,15 +96,12 @@ pub async fn set_agent_kv_key(
 /// DELETE /api/memory/agents/:id/kv/:key — Delete a KV value.
 pub async fn delete_agent_kv_key(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path((id, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let (agent_id, _entry) =
-        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     match state.kernel.memory.structured_delete(agent_id, &key) {
         Ok(()) => (

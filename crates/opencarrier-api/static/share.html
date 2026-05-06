@@ -7,8 +7,6 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:#f8faf9;color:#333;min-height:100vh;-webkit-font-smoothing:antialiased}
-
-/* ── Phase container ── */
 .phase{display:none;min-height:100vh}
 .phase.active{display:flex;flex-direction:column}
 
@@ -17,27 +15,31 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 .landing .logo{font-size:48px;margin-bottom:8px}
 .landing h1{font-size:28px;font-weight:800;color:#1a1a1a;margin-bottom:4px;letter-spacing:-0.5px}
 .landing h1 span{color:#07c160}
-.landing .tagline{font-size:15px;color:#666;margin-bottom:40px;line-height:1.6}
-.features{display:flex;flex-direction:column;gap:16px;width:100%;max-width:340px;margin-bottom:40px;text-align:left}
-.feat{display:flex;align-items:flex-start;gap:12px;padding:16px;background:#fff;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
-.feat .icon{font-size:28px;flex-shrink:0;width:40px;text-align:center}
-.feat h3{font-size:14px;font-weight:600;color:#333;margin-bottom:2px}
-.feat p{font-size:12px;color:#888;line-height:1.5}
+.landing .tagline{font-size:15px;color:#666;margin-bottom:32px;line-height:1.6}
+.clone-hero{background:#fff;border-radius:20px;padding:28px 24px;box-shadow:0 2px 16px rgba(0,0,0,.08);width:100%;max-width:360px;margin-bottom:32px}
+.clone-hero .avatar{width:72px;height:72px;border-radius:18px;background:linear-gradient(135deg,#07c160,#4cd964);display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 16px}
+.clone-hero h2{font-size:20px;font-weight:700;color:#1a1a1a;margin-bottom:4px}
+.clone-hero .desc{font-size:14px;color:#888;line-height:1.6}
 .btn-primary{background:#07c160;color:#fff;border:none;border-radius:24px;padding:14px 40px;font-size:16px;font-weight:600;cursor:pointer;letter-spacing:0.5px;transition:all .2s;box-shadow:0 4px 16px rgba(7,193,96,.3)}
 .btn-primary:hover{background:#06ad56;transform:translateY(-1px);box-shadow:0 6px 20px rgba(7,193,96,.35)}
 .btn-primary:active{transform:translateY(0)}
 .btn-primary:disabled{background:#ccc;box-shadow:none;cursor:not-allowed;transform:none}
-.btn-small{background:#07c160;color:#fff;border:none;border-radius:14px;padding:6px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s}
-.btn-small:hover{background:#06ad56}
-.btn-small:disabled{background:#ccc;cursor:not-allowed}
-.btn-small.bound{background:#e8f8ef;color:#07c160;cursor:default}
+
+/* Agent list (when no clone specified) */
+.agent-list{width:100%;max-width:360px;margin-bottom:24px}
+.agent-list h3{font-size:14px;font-weight:600;color:#333;margin-bottom:12px}
+.agent-card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.05);cursor:pointer;transition:all .2s;display:flex;gap:14px;align-items:center;margin-bottom:10px}
+.agent-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.1);transform:translateY(-1px)}
+.agent-card:active{transform:translateY(0)}
+.agent-avatar{width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,#07c160,#4cd964);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.agent-card .info{flex:1;min-width:0}
+.agent-card .info h4{font-size:14px;font-weight:600;color:#333;margin-bottom:2px}
+.agent-card .info p{font-size:12px;color:#999;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* ── Phase 2: Platform Auth ── */
 .auth{align-items:center;justify-content:flex-start;padding:32px 24px;text-align:center;background:#fff}
 .auth h2{font-size:20px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
 .auth .sub{font-size:14px;color:#888;margin-bottom:20px}
-
-/* Platform tabs */
 .platform-tabs{display:flex;gap:8px;justify-content:center;margin-bottom:24px;flex-wrap:wrap}
 .platform-tab{padding:8px 18px;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer;border:2px solid transparent;background:#f0f0f0;color:#666;transition:all .2s;display:flex;align-items:center;gap:6px}
 .platform-tab:hover{background:#e8e8e8}
@@ -46,8 +48,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 .platform-tab[data-platform="dingtalk"].active{background:#0089ff;border-color:#0089ff}
 .platform-tab .dot{width:8px;height:8px;border-radius:50%;background:currentColor;opacity:.5}
 .platform-tab.active .dot{opacity:1}
-
-/* Auth panels */
 .auth-panel{display:none;width:100%;max-width:360px;margin:0 auto}
 .auth-panel.active{display:block}
 .qr-wrap{background:#fff;border-radius:16px;padding:24px;box-shadow:0 2px 12px rgba(0,0,0,.08);display:inline-block;margin-bottom:16px}
@@ -60,313 +60,110 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 .auth-success .check{font-size:48px;margin-bottom:8px;display:block}
 .auth-link{display:inline-block;margin:12px 0;padding:12px 20px;background:#f5f5f5;border-radius:12px;color:#333;font-size:14px;text-decoration:none;word-break:break-all;max-width:100%}
 .auth-link:hover{background:#eee}
-.btn-auth{display:inline-block;background:#07c160;color:#fff;border:none;border-radius:24px;padding:14px 36px;font-size:15px;font-weight:600;cursor:pointer;transition:all .2s;margin:8px 0}
-.btn-auth:hover{transform:translateY(-1px)}
-.btn-auth:disabled{background:#ccc;cursor:not-allowed;transform:none}
-.btn-auth.feishu{background:#3370ff}
-.btn-auth.dingtalk{background:#0089ff}
-
-/* Platform-specific colors for status */
 .status-feishu .pulse-dot{background:#3370ff}
 .status-dingtalk .pulse-dot{background:#0089ff}
 .status-wecom .pulse-dot{background:#07c160}
 .status-weixin .pulse-dot{background:#07c160}
 
-/* ── Phase 3: Hub Selection ── */
-.hub{background:#f8faf9}
-.hub-header{background:#fff;padding:16px 20px;border-bottom:1px solid #eee;flex-shrink:0}
-.hub-header h2{font-size:18px;font-weight:700;color:#1a1a1a}
-.hub-header p{font-size:13px;color:#888;margin-top:2px}
-.hub-list{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
-.clone-card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.05);cursor:pointer;transition:all .2s;display:flex;gap:14px;align-items:center}
-.clone-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.1);transform:translateY(-1px)}
-.clone-card:active{transform:translateY(0)}
-.clone-avatar{width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,#07c160,#4cd964);display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0}
-.clone-info{flex:1;min-width:0}
-.clone-info h3{font-size:15px;font-weight:600;color:#333;margin-bottom:2px}
-.clone-info p{font-size:12px;color:#999;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.clone-meta{display:flex;gap:10px;margin-top:4px;font-size:11px;color:#bbb}
-.cat-tabs{display:flex;gap:8px;padding:12px 20px;background:#fff;border-bottom:1px solid #eee;flex-shrink:0;overflow-x:auto;-webkit-overflow-scrolling:touch;flex-wrap:nowrap}
-.cat-tab{padding:6px 14px;border-radius:16px;font-size:13px;font-weight:500;white-space:nowrap;cursor:pointer;background:#f0f0f0;color:#666;border:none;transition:all .2s}
-.cat-tab:hover{background:#e0e0e0}
-.cat-tab.active{background:#07c160;color:#fff}
-.clone-card .cat-badge{display:inline-block;font-size:11px;color:#07c160;background:#e8f8ef;border-radius:8px;padding:2px 8px;margin-top:4px}
-.badge-official{display:inline-block;font-size:11px;color:#b8860b;background:#fff8e1;border-radius:8px;padding:2px 8px;font-weight:600;margin-right:4px}
-.src-tabs{display:flex;gap:8px;padding:8px 20px 0;background:#fff;flex-shrink:0}
-.src-tab{padding:5px 12px;border-radius:14px;font-size:12px;font-weight:500;white-space:nowrap;cursor:pointer;background:#f5f5f5;color:#888;border:none;transition:all .2s}
-.src-tab:hover{background:#e8e8e8}
-.src-tab.active{background:#07c160;color:#fff}
-.hub-loading,.hub-empty{text-align:center;padding:60px 20px;color:#999;font-size:14px}
-.spinner{width:32px;height:32px;border:3px solid #e0e0e0;border-top-color:#07c160;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
-@keyframes spin{to{transform:rotate(360deg)}}
-
-/* My Agents section */
-.my-agents-wrap{background:#fff;border-radius:14px;padding:16px;margin:0 16px 12px;box-shadow:0 1px 4px rgba(0,0,0,.05)}
-.my-agents-wrap h3{font-size:14px;font-weight:600;color:#333;margin-bottom:12px}
-.my-agents-wrap .agent-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #f5f5f5}
-.my-agents-wrap .agent-row:last-child{border-bottom:none}
-.my-agents-wrap .agent-row .agent-name{flex:1;font-size:14px;color:#333}
-.my-agents-wrap .agent-row .agent-desc{font-size:12px;color:#999}
-.my-agents-wrap .empty{text-align:center;padding:20px;color:#999;font-size:13px}
-.section-divider{display:flex;align-items:center;gap:12px;padding:8px 20px;font-size:13px;color:#999;font-weight:600}
-.section-divider::before,.section-divider::after{content:'';flex:1;height:1px;background:#e0e0e0}
-
-/* Detail overlay */
-.detail-overlay{display:none;position:fixed;inset:0;background:#fff;z-index:100;flex-direction:column;overflow-y:auto}
-.detail-overlay.active{display:flex}
-.detail-back{padding:16px 20px;border-bottom:1px solid #eee;flex-shrink:0}
-.detail-back button{background:none;border:none;font-size:14px;color:#07c160;cursor:pointer;display:flex;align-items:center;gap:4px;font-weight:500}
-.detail-body{flex:1;padding:24px 20px}
-.detail-body .avatar{width:72px;height:72px;border-radius:18px;background:linear-gradient(135deg,#07c160,#4cd964);display:flex;align-items:center;justify-content:center;font-size:36px;margin-bottom:16px}
-.detail-body h2{font-size:22px;font-weight:700;color:#1a1a1a;margin-bottom:4px}
-.detail-body .author{font-size:13px;color:#999;margin-bottom:16px}
-.detail-body .desc{font-size:14px;line-height:1.8;color:#555;margin-bottom:24px}
-.detail-body .stats{display:flex;gap:20px;margin-bottom:24px}
-.detail-body .stat{text-align:center}
-.detail-body .stat .val{font-size:18px;font-weight:700;color:#333}
-.detail-body .stat .label{font-size:11px;color:#999}
-.detail-footer{padding:16px 20px;border-top:1px solid #eee;flex-shrink:0}
-.detail-footer .btn-primary{width:100%;font-size:16px;padding:14px}
-
-/* ── Phase 4: Birth ── */
-.birth{align-items:center;justify-content:center;padding:32px 24px;text-align:center;background:linear-gradient(160deg,#f0faf3 0%,#e8f5eb 50%,#f8faf9 100%)}
-.birth-steps{width:100%;max-width:320px;text-align:left;margin-bottom:32px}
-.birth-step{display:flex;align-items:flex-start;gap:14px;padding:14px 0;opacity:.3;transition:all .4s}
-.birth-step.active{opacity:1}
-.birth-step.done{opacity:.7}
-.birth-step .step-icon{width:36px;height:36px;border-radius:50%;background:#e8e8e8;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;transition:all .4s}
-.birth-step.active .step-icon{background:#07c160;color:#fff;animation:stepPulse 1.2s infinite}
-.birth-step.done .step-icon{background:#07c160;color:#fff;animation:none}
-@keyframes stepPulse{0%,100%{box-shadow:0 0 0 0 rgba(7,193,96,.3)}50%{box-shadow:0 0 0 8px rgba(7,193,96,0)}}
-.birth-step .step-text h4{font-size:14px;font-weight:600;color:#333;margin-bottom:1px}
-.birth-step .step-text p{font-size:12px;color:#999}
-.birth-done{display:none;text-align:center}
-.birth-done.show{display:block;animation:fadeUp .6s ease-out}
-@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-.birth-done p{font-size:14px;color:#888;line-height:1.6;margin-top:16px}
-#cert-img{width:320px;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,.12);display:block;margin:0 auto}
+/* ── Phase 3: Done ── */
+.done{align-items:center;justify-content:center;padding:32px 24px;text-align:center;background:linear-gradient(160deg,#f0faf3 0%,#e8f5eb 50%,#f8faf9 100%)}
+.done .big-check{font-size:72px;margin-bottom:16px}
+.done h2{font-size:24px;font-weight:800;color:#1a1a1a;margin-bottom:8px}
+.done p{font-size:15px;color:#666;line-height:1.6;margin-bottom:8px;max-width:340px}
+.done .highlight{color:#07c160;font-weight:600}
+.done .platform-hint{font-size:13px;color:#999;margin-top:16px;line-height:1.6}
+.done .btn-close{margin-top:24px}
 
 .hidden{display:none!important}
 </style>
 </head>
 <body>
 
-<!-- === Phase 1: Landing === -->
+<!-- === Phase 1: Clone Landing === -->
 <div id="p1" class="phase landing active">
-  <div class="logo">🤖</div>
-  <h1>Open<span>Carrier</span></h1>
-  <p class="tagline">你的专属 AI 助理，扫码就能拥有</p>
-  <div class="features">
-    <div class="feat"><div class="icon">💬</div><div><h3>智能对话</h3><p>理解你的需求，自然流畅地交流</p></div></div>
-    <div class="feat"><div class="icon">📚</div><div><h3>知识管理</h3><p>自动学习并记住你的偏好和知识</p></div></div>
-    <div class="feat"><div class="icon">📱</div><div><h3>多平台支持</h3><p>微信、企业微信、飞书、钉钉，随处可用</p></div></div>
-  </div>
-  <button class="btn-primary" onclick="startAuth()">免费获取你的 AI 助理</button>
+  <div id="p1-content"></div>
 </div>
 
 <!-- === Phase 2: Platform Auth === -->
 <div id="p2" class="phase auth">
   <h2>选择平台并授权</h2>
-  <p class="sub">扫码或点击授权，自动创建你的专属助理</p>
+  <p class="sub">扫码或点击授权，绑定你的 AI 分身</p>
 
-  <!-- Platform tabs -->
   <div class="platform-tabs">
-    <button class="platform-tab active" data-platform="weixin" onclick="switchPlatform('weixin')">
-      <span class="dot"></span>微信
-    </button>
-    <button class="platform-tab" data-platform="wecom" onclick="switchPlatform('wecom')">
-      <span class="dot"></span>企业微信
-    </button>
-    <button class="platform-tab" data-platform="feishu" onclick="switchPlatform('feishu')">
-      <span class="dot"></span>飞书
-    </button>
-    <button class="platform-tab" data-platform="dingtalk" onclick="switchPlatform('dingtalk')">
-      <span class="dot"></span>钉钉
-    </button>
+    <button class="platform-tab active" data-platform="weixin" onclick="switchPlatform('weixin')"><span class="dot"></span>微信</button>
+    <button class="platform-tab" data-platform="wecom" onclick="switchPlatform('wecom')"><span class="dot"></span>企业微信</button>
+    <button class="platform-tab" data-platform="feishu" onclick="switchPlatform('feishu')"><span class="dot"></span>飞书</button>
+    <button class="platform-tab" data-platform="dingtalk" onclick="switchPlatform('dingtalk')"><span class="dot"></span>钉钉</button>
   </div>
 
-  <!-- WeChat panel -->
   <div class="auth-panel active" id="panel-weixin">
-    <div id="weixin-qr-area">
-      <div class="qr-wrap"><div id="weixin-qr-img"></div></div>
-      <p class="qr-hint status-weixin" id="weixin-hint"><span class="pulse-dot"></span>请用微信扫描二维码</p>
-    </div>
-    <div id="weixin-success" class="auth-success hidden">
-      <span class="check">✅</span>
-      <p>微信授权成功</p>
-    </div>
+    <div id="weixin-qr-area"><div class="qr-wrap"><div id="weixin-qr-img"></div></div><p class="qr-hint status-weixin" id="weixin-hint"><span class="pulse-dot"></span>请用微信扫描二维码</p></div>
+    <div id="weixin-success" class="auth-success hidden"><span class="check">✅</span><p>微信授权成功</p></div>
   </div>
-
-  <!-- WeCom panel -->
   <div class="auth-panel" id="panel-wecom">
-    <div id="wecom-qr-area">
-      <div class="qr-wrap"><div id="wecom-qr-img"></div></div>
-      <p class="qr-hint status-wecom" id="wecom-hint"><span class="pulse-dot"></span>请用企业微信扫描或点击授权</p>
-      <a href="#" class="auth-link hidden" id="wecom-auth-link" target="_blank"></a>
-    </div>
-    <div id="wecom-success" class="auth-success hidden">
-      <span class="check">✅</span>
-      <p>企业微信授权成功</p>
-    </div>
+    <div id="wecom-qr-area"><div class="qr-wrap"><div id="wecom-qr-img"></div></div><p class="qr-hint status-wecom" id="wecom-hint"><span class="pulse-dot"></span>请用企业微信扫描或点击授权</p><a href="#" class="auth-link hidden" id="wecom-auth-link" target="_blank"></a></div>
+    <div id="wecom-success" class="auth-success hidden"><span class="check">✅</span><p>企业微信授权成功</p></div>
   </div>
-
-  <!-- Feishu panel -->
   <div class="auth-panel" id="panel-feishu">
-    <div id="feishu-qr-area">
-      <div class="qr-wrap"><div id="feishu-qr-img"></div></div>
-      <p class="qr-hint status-feishu" id="feishu-hint"><span class="pulse-dot"></span>请用飞书扫描或点击授权</p>
-      <a href="#" class="auth-link hidden" id="feishu-auth-link" target="_blank"></a>
-    </div>
-    <div id="feishu-success" class="auth-success hidden">
-      <span class="check">✅</span>
-      <p>飞书授权成功</p>
-    </div>
+    <div id="feishu-qr-area"><div class="qr-wrap"><div id="feishu-qr-img"></div></div><p class="qr-hint status-feishu" id="feishu-hint"><span class="pulse-dot"></span>请用飞书扫描或点击授权</p><a href="#" class="auth-link hidden" id="feishu-auth-link" target="_blank"></a></div>
+    <div id="feishu-success" class="auth-success hidden"><span class="check">✅</span><p>飞书授权成功</p></div>
   </div>
-
-  <!-- DingTalk panel -->
   <div class="auth-panel" id="panel-dingtalk">
-    <div id="dingtalk-qr-area">
-      <div class="qr-wrap"><div id="dingtalk-qr-img"></div></div>
-      <p class="qr-hint status-dingtalk" id="dingtalk-hint"><span class="pulse-dot"></span>请用钉钉扫描或点击授权</p>
-      <a href="#" class="auth-link hidden" id="dingtalk-auth-link" target="_blank"></a>
-    </div>
-    <div id="dingtalk-success" class="auth-success hidden">
-      <span class="check">✅</span>
-      <p>钉钉授权成功</p>
-    </div>
+    <div id="dingtalk-qr-area"><div class="qr-wrap"><div id="dingtalk-qr-img"></div></div><p class="qr-hint status-dingtalk" id="dingtalk-hint"><span class="pulse-dot"></span>请用钉钉扫描或点击授权</p><a href="#" class="auth-link hidden" id="dingtalk-auth-link" target="_blank"></a></div>
+    <div id="dingtalk-success" class="auth-success hidden"><span class="check">✅</span><p>钉钉授权成功</p></div>
   </div>
 </div>
 
-<!-- === Phase 3: Agent Selection + Hub === -->
-<div id="p3" class="phase hub">
-  <div class="hub-header">
-    <h2>选择你的 AI 分身</h2>
-    <p>绑定已有分身，或从 Hub 安装新的</p>
-  </div>
-
-  <!-- My Agents -->
-  <div class="my-agents-wrap" id="my-agents-wrap" style="display:none">
-    <h3>我的分身</h3>
-    <div id="my-agents-list"></div>
-  </div>
-
-  <!-- Section divider -->
-  <div class="section-divider" id="hub-divider" style="display:none">Hub 模板</div>
-
-  <!-- Hub filters -->
-  <div class="src-tabs" id="src-tabs"></div>
-  <div class="cat-tabs" id="cat-tabs"></div>
-  <div class="hub-list" id="hub-list">
-    <div class="hub-loading"><div class="spinner"></div>加载中...</div>
-  </div>
-
-  <!-- Detail overlay (for Hub templates) -->
-  <div id="detail-overlay" class="detail-overlay">
-    <div class="detail-back"><button onclick="closeDetail()">&#8592; 返回列表</button></div>
-    <div class="detail-body" id="detail-body"></div>
-    <div class="detail-footer">
-      <button class="btn-primary" id="btn-install" onclick="confirmInstall()">安装分身</button>
-    </div>
-  </div>
-</div>
-
-<!-- === Phase 4: Birth === -->
-<div id="p4" class="phase birth">
-  <div class="birth-steps" id="birth-steps">
-    <div class="birth-step" id="bs-download">
-      <div class="step-icon">⬇</div>
-      <div class="step-text"><h4>正在下载分身</h4><p>从 Hub 获取分身数据</p></div>
-    </div>
-    <div class="birth-step" id="bs-install">
-      <div class="step-icon">📦</div>
-      <div class="step-text"><h4>正在安装知识库</h4><p>写入分身的记忆与技能</p></div>
-    </div>
-    <div class="birth-step" id="bs-activate">
-      <div class="step-icon">⚡</div>
-      <div class="step-text"><h4>正在激活 AI 引擎</h4><p>启动分身的推理能力</p></div>
-    </div>
-    <div class="birth-step" id="bs-done">
-      <div class="step-icon">🎉</div>
-      <div class="step-text"><h4>分身已就绪</h4><p>可以开始对话了</p></div>
-    </div>
-  </div>
-  <div id="birth-done" class="birth-done">
-    <img id="cert-img" alt="分身出生证">
-    <div id="birth-info"><p>长按图片保存 · 去和你的助理对话吧</p></div>
-    <button class="btn btn-primary" style="margin-top:16px;width:100%;max-width:320px;" onclick="try{WeixinJSBridge.call('closeWindow')}catch(e){};try{window.close()}catch(e){};">关闭页面</button>
-  </div>
+<!-- === Phase 3: Done === -->
+<div id="p3" class="phase done">
+  <div class="big-check">🎉</div>
+  <h2 id="done-title">绑定成功！</h2>
+  <p id="done-desc"></p>
+  <div id="done-platform-hint" class="platform-hint"></div>
+  <button class="btn-primary btn-close" onclick="try{WeixinJSBridge.call('closeWindow')}catch(e){};try{window.close()}catch(e){};">关闭页面</button>
 </div>
 
 <script>
-// ── URL parameter recovery (for WeChat browser clicks) ──
 (function(){
   var params = new URLSearchParams(location.search);
-  var uFp = params.get('fp');
-  var uSess = params.get('session');
-  var uPhase = params.get('phase');
-  var uBot = params.get('bot');
-  var uPlatform = params.get('platform');
-  var uTenant = params.get('tenant');
-  if (uFp) { try { localStorage.setItem('oc_fingerprint', uFp); } catch(e){} }
-  if (uSess) {
-    try { localStorage.setItem('oc_share_session', uSess); } catch(e){}
-    document.cookie = 'opencarrier_session=' + uSess + ';path=/;max-age=86400;SameSite=Lax';
-  }
-  if (uBot) { try { localStorage.setItem('oc_bot_id', uBot); } catch(e){} }
-  if (uPlatform) { try { localStorage.setItem('oc_active_platform', uPlatform); } catch(e){} }
-  if (uTenant) { try { localStorage.setItem('oc_tenant_name', uTenant); } catch(e){} }
-  if (uPhase === '3' && uSess) { window.__jumpPhase3 = true; }
-})();
-
-(function(){
-  var sessionToken = '';
-  try { sessionToken = localStorage.getItem('oc_share_session') || ''; } catch(e) {}
-  var tenantId = '';
-  var tenantName = '';
-  try { tenantName = localStorage.getItem('oc_tenant_name') || ''; } catch(e) {}
-  var hubTemplates = [];
-  var selectedTemplate = null;
-  var installedAgents = [];
+  var cloneName = params.get('clone') || '';
   var activePlatform = '';
-  try { activePlatform = localStorage.getItem('oc_active_platform') || ''; } catch(e) {}
-  if (!activePlatform) { activePlatform = 'weixin'; }
-  var platformCredentials = {};
+
+  // Auto-detect platform from User-Agent
+  var ua = navigator.userAgent;
+  if (/MicroMessenger/i.test(ua)) activePlatform = 'weixin';
+  else if (/Feishu|Lark/i.test(ua)) activePlatform = 'feishu';
+  else if (/DingTalk/i.test(ua)) activePlatform = 'dingtalk';
+  else if (/wxwork/i.test(ua)) activePlatform = 'wecom';
+  else { try { activePlatform = localStorage.getItem('oc_active_platform') || ''; } catch(e) {} }
+  if (!activePlatform) activePlatform = 'weixin';
+  var detectedPlatform = activePlatform; // remember what we auto-detected
+
   var currentBotId = '';
-  try { currentBotId = localStorage.getItem('oc_bot_id') || ''; } catch(e) {}
-  var fingerprint = '';
-  var inviteFp = new URLSearchParams(location.search).get('invite') || '';
+  var platformCredentials = {};
+  var targetAgentName = cloneName; // agent name to bind to
+  var cloneAccess = 'public'; // 'public' or 'private'
+  var accessVerified = false;
 
-  // ── Phase 3 jump from URL params (WeChat browser link) ──
-  if (window.__jumpPhase3 && sessionToken) {
-    // DOM not ready yet; defer until after script executes
-    setTimeout(function(){ showPhase(3); loadAgentsAndHub(); }, 100);
-  }
-
-  // ── Fingerprint: stable user id across platforms ──
-  function getFingerprint() {
-    if (fingerprint) return fingerprint;
-    try {
-      var fp = localStorage.getItem('oc_fingerprint');
-      if (!fp) {
-        fp = 'fp_' + Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
-        localStorage.setItem('oc_fingerprint', fp);
-      }
-      fingerprint = fp;
-      return fp;
-    } catch(e) {
-      return '';
-    }
-  }
-
-  // ── Platform config ──
   var platformConfig = {
-    weixin:  { label: '微信',     color: '#07c160', icon: '💬' },
-    wecom:   { label: '企业微信', color: '#07c160', icon: '🏢' },
-    feishu:  { label: '飞书',     color: '#3370ff', icon: '📘' },
-    dingtalk:{ label: '钉钉',     color: '#0089ff', icon: '📌' },
+    weixin:  { label: '微信',     color: '#07c160' },
+    wecom:   { label: '企业微信', color: '#07c160' },
+    feishu:  { label: '飞书',     color: '#3370ff' },
+    dingtalk:{ label: '钉钉',     color: '#0089ff' },
   };
 
   // ── Helpers ──
+  function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+  function emoji(name) {
+    var map = {'customer-service':'🎧','writer':'✍️','analyst':'📊','assistant':'🤖','translator':'🌐','coder':'💻'};
+    var n = (name||'').toLowerCase();
+    for (var k in map) { if (n.indexOf(k) >= 0) return map[k]; }
+    var emojis = ['🤖','🧠','💡','🌟','🎯','🔮','🦾','✨'];
+    var h = 0; for (var i = 0; i < n.length; i++) h = ((h << 5) - h + n.charCodeAt(i)) | 0;
+    return emojis[Math.abs(h) % emojis.length];
+  }
+
   function showPhase(n) {
     document.querySelectorAll('.phase').forEach(function(p){p.classList.remove('active')});
     document.getElementById('p'+n).classList.add('active');
@@ -374,128 +171,149 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   }
 
   function api(method, path, body) {
-    var fp = getFingerprint();
-    var opts = {
-      method: method,
-      headers: {'Content-Type': 'application/json'},
-      credentials: 'same-origin'
-    };
-    if (fp) {
-      opts.headers['X-Fingerprint'] = fp;
-    }
+    var opts = { method: method, headers: {'Content-Type': 'application/json'}, credentials: 'same-origin' };
     if (body) opts.body = JSON.stringify(body);
-    if (sessionToken && path.indexOf('session=') < 0) {
-      var sep = path.indexOf('?') >= 0 ? '&' : '?';
-      path = path + sep + 'session=' + encodeURIComponent(sessionToken);
-    }
     var controller = new AbortController();
     opts.signal = controller.signal;
     var timeout = setTimeout(function(){ controller.abort(); }, 30000);
     return fetch(path, opts).then(function(r){
       clearTimeout(timeout);
-      if (r.status === 401) throw new Error('Unauthorized');
       if (r.status >= 400) throw new Error('HTTP ' + r.status);
       return r.json().catch(function(){ return {}; });
+    }).catch(function(e){ clearTimeout(timeout); throw e; });
+  }
+
+  // ── Phase 1: Show clone info ──
+  function initLanding() {
+    var el = document.getElementById('p1-content');
+    var isPlatformBrowser = /MicroMessenger|Feishu|Lark|DingTalk|wxwork/i.test(ua);
+
+    if (!isPlatformBrowser) {
+      // Not in a platform app browser — tell user to open on phone
+      el.innerHTML =
+        '<div class="logo">📱</div>' +
+        '<h1>Open<span>Carrier</span></h1>' +
+        '<p class="tagline" style="margin-bottom:24px">请在手机上用以下任一 App 扫码打开此页面</p>' +
+        '<div class="features">' +
+          '<div class="feat"><div class="icon">💬</div><div><h3>微信</h3><p>扫码或长按识别二维码</p></div></div>' +
+          '<div class="feat"><div class="icon">📘</div><div><h3>飞书</h3><p>扫码打开链接</p></div></div>' +
+          '<div class="feat"><div class="icon">📌</div><div><h3>钉钉</h3><p>扫码打开链接</p></div></div>' +
+        '</div>';
+      return;
+    }
+
+    // In a platform browser — show clone info + auth button
+    el.innerHTML =
+      '<div class="logo">' + emoji(cloneName || 'bot') + '</div>' +
+      '<h1>Open<span>Carrier</span></h1>' +
+      '<p class="tagline">获取你的专属 AI 分身</p>' +
+      '<div class="clone-hero">' +
+        '<div class="avatar">' + emoji(cloneName || 'bot') + '</div>' +
+        '<h2 id="clone-display-name">' + esc(cloneName || 'AI 助理') + '</h2>' +
+        '<p class="desc">点击开始使用</p>' +
+      '</div>' +
+      '<div id="password-area" style="display:none;margin-bottom:16px;width:100%;max-width:340px">' +
+        '<input type="password" id="clone-password" placeholder="输入访问密码" style="width:100%;padding:12px 16px;border:2px solid #e0e0e0;border-radius:14px;font-size:15px;outline:none;text-align:center" onkeydown="if(event.key===\'Enter\')verifyPassword()">' +
+        '<p id="password-error" style="color:#e08838;font-size:13px;margin-top:8px;display:none"></p>' +
+      '</div>' +
+      '<button class="btn-primary" id="btn-start" onclick="startAuth()">开始使用</button>';
+    // Check clone access if name specified
+    if (cloneName) {
+      api('GET', '/api/clones/' + encodeURIComponent(cloneName) + '/access').then(function(data){
+        if (data.error) {
+          el.querySelector('.clone-hero .desc').textContent = '分身不存在';
+          document.getElementById('btn-start').disabled = true;
+          return;
+        }
+        cloneAccess = data.access || 'public';
+        if (data.requires_password) {
+          document.getElementById('password-area').style.display = 'block';
+          document.getElementById('btn-start').textContent = '验证密码';
+          document.getElementById('btn-start').onclick = function(){ verifyPassword(); };
+        }
+      }).catch(function(){});
+    }
+  }
+
+  // ── Phase 2: Platform Auth ──
+  var weixinStarted = false, weixinPollTimer = null, weixinHandled = false, weixinQrRaw = '';
+  var wecomStarted = false, wecomScode = '', wecomPollTimer = null, wecomHandled = false;
+  var feishuStarted = false, feishuSessionId = '', feishuPollTimer = null, feishuHandled = false, feishuPollInterval = 5000;
+  var dingtalkStarted = false, dingtalkSessionId = '', dingtalkPollTimer = null, dingtalkHandled = false, dingtalkPollInterval = 5000;
+
+  window.startAuth = function() {
+    if (!targetAgentName && !cloneName) { alert('分身名称缺失'); return; }
+    if (!targetAgentName) targetAgentName = cloneName;
+    if (cloneAccess === 'private' && !accessVerified) {
+      verifyPassword();
+      return;
+    }
+    showPhase(2);
+    switchPlatform(activePlatform);
+  };
+
+  window.verifyPassword = function() {
+    var pw = document.getElementById('clone-password').value.trim();
+    if (!pw) return;
+    var errEl = document.getElementById('password-error');
+    var btn = document.getElementById('btn-start');
+    btn.disabled = true;
+    btn.textContent = '验证中...';
+    errEl.style.display = 'none';
+    api('POST', '/api/clones/' + encodeURIComponent(cloneName) + '/verify-access', {password: pw}).then(function(data){
+      if (data.ok) {
+        accessVerified = true;
+        cloneAccess = 'public'; // verified, treat as public now
+        document.getElementById('password-area').style.display = 'none';
+        btn.textContent = '选择平台并绑定';
+        btn.disabled = false;
+        btn.onclick = function(){ startAuth(); };
+        showPhase(2);
+        switchPlatform(activePlatform);
+      } else {
+        errEl.textContent = data.error || '密码错误';
+        errEl.style.display = 'block';
+        btn.textContent = '验证密码';
+        btn.disabled = false;
+      }
     }).catch(function(e){
-      clearTimeout(timeout);
-      throw e;
+      errEl.textContent = '验证失败: ' + e.message;
+      errEl.style.display = 'block';
+      btn.textContent = '验证密码';
+      btn.disabled = false;
     });
-  }
+  };
 
-  function setCookie(name, val, hours) {
-    var d = new Date();
-    d.setTime(d.getTime() + hours*3600000);
-    document.cookie = name + '=' + val + ';expires=' + d.toUTCString() + ';path=/;SameSite=Lax';
-  }
+  function stopPoll(t) { if (t) clearInterval(t); return null; }
 
-  function setSession(s) {
-    sessionToken = s;
-    setCookie('opencarrier_session', s, 24);
-    try { localStorage.setItem('oc_share_session', s); } catch(e){}
-  }
-
-  // ── Stop platform polls ──
-  function stopWeixinPoll() { clearInterval(weixinPollTimer); weixinPollTimer = null; }
-  function stopWecomPoll() { clearInterval(wecomPollTimer); wecomPollTimer = null; }
-  function stopFeishuPoll() { clearInterval(feishuPollTimer); feishuPollTimer = null; }
-  function stopDingtalkPoll() { clearInterval(dingtalkPollTimer); dingtalkPollTimer = null; }
-
-  // ── Platform tab switching ──
   window.switchPlatform = function(platform) {
     activePlatform = platform;
-    try { localStorage.setItem('oc_active_platform', platform); } catch(e) {}
-    document.querySelectorAll('.platform-tab').forEach(function(t){
-      t.classList.toggle('active', t.dataset.platform === platform);
-    });
-    document.querySelectorAll('.auth-panel').forEach(function(p){
-      p.classList.toggle('active', p.id === 'panel-' + platform);
-    });
-    // Stop inactive platform polls to avoid background API spam
-    if (platform !== 'weixin') stopWeixinPoll();
-    if (platform !== 'wecom') stopWecomPoll();
-    if (platform !== 'feishu') stopFeishuPoll();
-    if (platform !== 'dingtalk') stopDingtalkPoll();
-    // Start auth for this platform if not already started
+    document.querySelectorAll('.platform-tab').forEach(function(t){ t.classList.toggle('active', t.dataset.platform === platform); });
+    document.querySelectorAll('.auth-panel').forEach(function(p){ p.classList.toggle('active', p.id === 'panel-' + platform); });
+    if (platform !== 'weixin') weixinPollTimer = stopPoll(weixinPollTimer);
+    if (platform !== 'wecom') wecomPollTimer = stopPoll(wecomPollTimer);
+    if (platform !== 'feishu') feishuPollTimer = stopPoll(feishuPollTimer);
+    if (platform !== 'dingtalk') dingtalkPollTimer = stopPoll(dingtalkPollTimer);
     if (platform === 'weixin' && !weixinStarted) startWeixinAuth();
     if (platform === 'wecom' && !wecomStarted) startWecomAuth();
     if (platform === 'feishu' && !feishuStarted) startFeishuAuth();
     if (platform === 'dingtalk' && !dingtalkStarted) startDingtalkAuth();
   };
 
-  // ── Phase 2: WeChat Auth ──
-  var weixinStarted = false;
-  var weixinQrRaw = '';
-  var weixinPollTimer = null;
-  var weixinHandled = false;
-  var ilinkData = {};
-
-  window.startAuth = function() {
-    showPhase(2);
-    switchPlatform(activePlatform);
-  };
-
-  function startWeixinAuth() {
-    if (weixinStarted) return;
-    weixinStarted = true;
-    api('GET', '/api/weixin/qrcode').then(function(data){
-      if (data.error) throw new Error(data.error);
-      renderQR('weixin-qr-img', data);
-      tenantName = data.tenant || 'share';
-      try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
-      pollWeixinStatus(data);
-    }).catch(function(e){
-      document.getElementById('weixin-hint').textContent = '错误: ' + e.message;
-    });
-  }
-
   function renderQR(containerId, data) {
     var container = document.getElementById(containerId);
     container.innerHTML = '';
-    var d = data.data || {};
-    var qrContent = d.qrcode_img_content || '';
-    if (!qrContent) {
-      container.textContent = '获取二维码失败';
-      return;
-    }
+    var qrContent = (data.data || {}).qrcode_img_content || '';
+    if (!qrContent) { container.textContent = '获取二维码失败'; return; }
     if (typeof qrcode === 'function') {
       try {
         var qr = qrcode(0, 'M');
         qr.addData(qrContent);
         qr.make();
-        var imgTag = qr.createImgTag(6, 8);
-        container.innerHTML = imgTag;
+        container.innerHTML = qr.createImgTag(6, 8);
         var img = container.querySelector('img');
-        if (img) {
-          img.style.width = '200px';
-          img.style.height = '200px';
-          img.style.imageRendering = 'pixelated';
-          img.style.borderRadius = '8px';
-        }
-      } catch(e) {
-        container.innerHTML = '<p style="color:#999;font-size:13px">二维码生成失败</p>';
-      }
-    } else {
-      container.innerHTML = '<p style="color:#999;font-size:13px">二维码库加载中...</p>';
+        if (img) { img.style.width = '200px'; img.style.height = '200px'; img.style.imageRendering = 'pixelated'; img.style.borderRadius = '8px'; }
+      } catch(e) { container.innerHTML = '<p style="color:#999;font-size:13px">二维码生成失败</p>'; }
     }
   }
 
@@ -507,109 +325,71 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         var qr = qrcode(0, 'M');
         qr.addData(url);
         qr.make();
-        var imgTag = qr.createImgTag(6, 8);
-        container.innerHTML = imgTag;
+        container.innerHTML = qr.createImgTag(6, 8);
         var img = container.querySelector('img');
-        if (img) {
-          img.style.width = '200px';
-          img.style.height = '200px';
-          img.style.imageRendering = 'pixelated';
-          img.style.borderRadius = '8px';
-        }
-      } catch(e) {
-        container.innerHTML = '<p style="color:#999;font-size:13px">二维码生成失败</p>';
-      }
+        if (img) { img.style.width = '200px'; img.style.height = '200px'; img.style.imageRendering = 'pixelated'; img.style.borderRadius = '8px'; }
+      } catch(e) { container.innerHTML = '<p style="color:#999;font-size:13px">二维码生成失败</p>'; }
     }
   }
 
+  // ── WeChat Auth ──
+  function startWeixinAuth() {
+    if (weixinStarted) return;
+    weixinStarted = true;
+    api('GET', '/api/weixin/qrcode').then(function(data){
+      if (data.error) throw new Error(data.error);
+      renderQR('weixin-qr-img', data);
+      weixinQrRaw = (data.data || {}).qrcode || '';
+      pollWeixinStatus(data);
+    }).catch(function(e){
+      document.getElementById('weixin-hint').textContent = '错误: ' + e.message;
+    });
+  }
+
   function pollWeixinStatus(data) {
-    clearInterval(weixinPollTimer);
+    weixinPollTimer = stopPoll(weixinPollTimer);
     weixinHandled = false;
-    var d = data.data || {};
-    weixinQrRaw = d.qrcode || '';
+    // Use the bot name from qrcode response for tenant param (channel-level, not removed)
+    var botName = data.tenant || 'share';
     weixinPollTimer = setInterval(function(){
-      var url = '/api/weixin/qrcode-status?tenant=' + encodeURIComponent(tenantName);
+      var url = '/api/weixin/qrcode-status?tenant=' + encodeURIComponent(botName);
       if (weixinQrRaw) url += '&qrcode=' + encodeURIComponent(weixinQrRaw);
       api('GET', url).then(function(data){
         var status = data.status || (data.data && data.data.status);
         if (status === 'confirmed' || status === 'scaned_confirmed') {
           if (weixinHandled) return;
           weixinHandled = true;
-          clearInterval(weixinPollTimer);
+          weixinPollTimer = stopPoll(weixinPollTimer);
           document.getElementById('weixin-qr-area').classList.add('hidden');
           document.getElementById('weixin-success').classList.remove('hidden');
-
-          if (data.existing) {
-            tenantName = data.tenant || tenantName;
-            try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
-            if (data.session_token) {
-              sessionToken = data.session_token;
-              tenantId = data.tenant_id || data.tenant || tenantName;
-              setSession(sessionToken);
-            }
-            // Extract ilink data from response for dedup
-            ilinkData = {
-              ilink_bot_id: data.ilink_bot_id || '',
-              ilink_user_id: data.ilink_user_id || '',
-              bot_token: data.bot_token || '',
-              baseurl: data.baseurl || ''
-            };
-            createPlatformBot('weixin');
-          } else {
-            ilinkData = {
-              ilink_bot_id: data.ilink_bot_id || '',
-              ilink_user_id: data.ilink_user_id || '',
-              bot_token: data.bot_token || '',
-              baseurl: data.baseurl || ''
-            };
-            // Use fingerprint as tenant_name if available; fallback to ilink_user_id
-            var onboardName = getFingerprint() || ilinkData.ilink_user_id || 'weixin-share';
-            api('POST', '/api/onboard', inviteFp ? {source: inviteFp, tenant_name: onboardName} : {tenant_name: onboardName}).then(function(data){
-              if (!data.ok && !data.session_token) throw new Error(data.error || '创建失败');
-              sessionToken = data.session_token;
-              tenantId = data.tenant_id;
-              tenantName = data.tenant_name || onboardName;
-              try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
-              setSession(sessionToken);
-              api('POST', '/api/weixin/save-token', {
-                tenant_name: tenantName,
-                tenant_id: tenantId,
-                bot_token: ilinkData.bot_token,
-                ilink_bot_id: ilinkData.ilink_bot_id,
-                ilink_user_id: ilinkData.ilink_user_id,
-                baseurl: ilinkData.baseurl
-              }).catch(function(){});
-              createPlatformBot('weixin');
-            }).catch(function(e){
-              document.getElementById('weixin-hint').textContent = '错误: ' + e.message;
-            });
-          }
+          // Save ilink data and create bot, then bind
+          var ilinkData = {
+            ilink_bot_id: data.ilink_bot_id || '',
+            ilink_user_id: data.ilink_user_id || '',
+            bot_token: data.bot_token || '',
+            baseurl: data.baseurl || ''
+          };
+          createBotAndBind('weixin', botName, ilinkData);
         } else if (status === 'scaned') {
           document.getElementById('weixin-hint').innerHTML = '<span class="pulse-dot"></span>已扫码，请在手机上确认';
         } else if (status === 'expired') {
-          clearInterval(weixinPollTimer);
+          weixinPollTimer = stopPoll(weixinPollTimer);
           document.getElementById('weixin-hint').textContent = '二维码已过期，请刷新页面重试';
         }
       }).catch(function(){});
     }, 3000);
   }
 
-  // ── Phase 2: WeCom Auth ──
-  var wecomStarted = false;
-  var wecomScode = '';
-  var wecomPollTimer = null;
-  var wecomHandled = false;
-
+  // ── WeCom Auth ──
   function startWecomAuth() {
     if (wecomStarted) return;
     wecomStarted = true;
     api('POST', '/api/bots/wecom/smartbot/generate', {}).then(function(res){
       wecomScode = res.scode;
-      var authUrl = res.auth_url;
-      renderAuthLink('wecom-qr-img', authUrl);
+      renderAuthLink('wecom-qr-img', res.auth_url);
       var linkEl = document.getElementById('wecom-auth-link');
-      linkEl.href = authUrl;
-      linkEl.textContent = authUrl;
+      linkEl.href = res.auth_url;
+      linkEl.textContent = res.auth_url;
       linkEl.classList.remove('hidden');
       document.getElementById('wecom-hint').innerHTML = '<span class="pulse-dot"></span>请用企业微信扫描或点击链接授权';
       pollWecomStatus();
@@ -619,64 +399,36 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   }
 
   function pollWecomStatus() {
-    clearInterval(wecomPollTimer);
+    wecomPollTimer = stopPoll(wecomPollTimer);
     wecomHandled = false;
     wecomPollTimer = setInterval(function(){
       api('GET', '/api/bots/wecom/smartbot/poll?scode=' + encodeURIComponent(wecomScode)).then(function(res){
         if (res.status === 'success') {
           if (wecomHandled) return;
           wecomHandled = true;
-          clearInterval(wecomPollTimer);
+          wecomPollTimer = stopPoll(wecomPollTimer);
           document.getElementById('wecom-qr-area').classList.add('hidden');
           document.getElementById('wecom-success').classList.remove('hidden');
-          platformCredentials.wecom = {
-            bot_id: res.bot_id || '',
-            secret: res.secret || ''
-          };
-          // Create onboard session if needed
-          var wecomOnboardName = getFingerprint() || res.bot_id || 'wecom-share';
-          if (!sessionToken) {
-            api('POST', '/api/onboard', inviteFp ? {source: inviteFp, tenant_name: wecomOnboardName} : {tenant_name: wecomOnboardName}).then(function(data){
-              if (data.session_token) {
-                sessionToken = data.session_token;
-                tenantId = data.tenant_id;
-                tenantName = data.tenant_name || wecomOnboardName;
-                try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
-                setSession(sessionToken);
-              }
-              createPlatformBot('wecom');
-            }).catch(function(){
-              createPlatformBot('wecom');
-            });
-          } else {
-            tenantName = wecomOnboardName;
-            try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
-            createPlatformBot('wecom');
-          }
+          platformCredentials.wecom = { bot_id: res.bot_id || '', secret: res.secret || '' };
+          createBotAndBind('wecom');
         } else if (res.status === 'expired') {
-          clearInterval(wecomPollTimer);
+          wecomPollTimer = stopPoll(wecomPollTimer);
           document.getElementById('wecom-hint').textContent = '链接已过期，请刷新页面重试';
         }
       }).catch(function(){});
     }, 3000);
   }
 
-  // ── Phase 2: Feishu Auth ──
-  var feishuStarted = false;
-  var feishuSessionId = '';
-  var feishuPollTimer = null;
-  var feishuHandled = false;
-
+  // ── Feishu Auth ──
   function startFeishuAuth() {
     if (feishuStarted) return;
     feishuStarted = true;
     api('POST', '/api/bots/feishu/device-auth', {}).then(function(res){
       feishuSessionId = res.session_id;
-      var authUrl = res.auth_url;
-      renderAuthLink('feishu-qr-img', authUrl);
+      renderAuthLink('feishu-qr-img', res.auth_url);
       var linkEl = document.getElementById('feishu-auth-link');
-      linkEl.href = authUrl;
-      linkEl.textContent = authUrl;
+      linkEl.href = res.auth_url;
+      linkEl.textContent = res.auth_url;
       linkEl.classList.remove('hidden');
       document.getElementById('feishu-hint').innerHTML = '<span class="pulse-dot"></span>请用飞书扫描或点击链接授权';
       pollFeishuStatus();
@@ -685,9 +437,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     });
   }
 
-  var feishuPollInterval = 5000;
   function pollFeishuStatus() {
-    clearInterval(feishuPollTimer);
+    feishuPollTimer = stopPoll(feishuPollTimer);
     feishuHandled = false;
     feishuPollInterval = 5000;
     feishuPollTimer = setInterval(function(){
@@ -695,61 +446,33 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         if (res.status === 'success') {
           if (feishuHandled) return;
           feishuHandled = true;
-          clearInterval(feishuPollTimer);
+          feishuPollTimer = stopPoll(feishuPollTimer);
           document.getElementById('feishu-qr-area').classList.add('hidden');
           document.getElementById('feishu-success').classList.remove('hidden');
-          platformCredentials.feishu = {
-            app_id: res.app_id || '',
-            app_secret: res.app_secret || ''
-          };
-          var feishuOnboardName = getFingerprint() || res.app_id || 'feishu-share';
-          if (!sessionToken) {
-            api('POST', '/api/onboard', inviteFp ? {source: inviteFp, tenant_name: feishuOnboardName} : {tenant_name: feishuOnboardName}).then(function(data){
-              if (data.session_token) {
-                sessionToken = data.session_token;
-                tenantId = data.tenant_id;
-                tenantName = data.tenant_name || feishuOnboardName;
-                try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
-                setSession(sessionToken);
-              }
-              createPlatformBot('feishu');
-            }).catch(function(){
-              createPlatformBot('feishu');
-            });
-          } else {
-            tenantName = feishuOnboardName;
-            try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
-            createPlatformBot('feishu');
-          }
+          platformCredentials.feishu = { app_id: res.app_id || '', app_secret: res.app_secret || '' };
+          createBotAndBind('feishu');
         } else if (res.status === 'expired') {
-          clearInterval(feishuPollTimer);
+          feishuPollTimer = stopPoll(feishuPollTimer);
           document.getElementById('feishu-hint').textContent = '授权已过期，请刷新页面重试';
         } else if (res.raw_feishu && res.raw_feishu.error === 'slow_down') {
-          // Back off and retry with longer interval
           feishuPollInterval += 5000;
-          clearInterval(feishuPollTimer);
+          feishuPollTimer = stopPoll(feishuPollTimer);
           feishuPollTimer = setInterval(arguments.callee, feishuPollInterval);
         }
       }).catch(function(){});
     }, feishuPollInterval);
   }
 
-  // ── Phase 2: DingTalk Auth ──
-  var dingtalkStarted = false;
-  var dingtalkSessionId = '';
-  var dingtalkPollTimer = null;
-  var dingtalkHandled = false;
-
+  // ── DingTalk Auth ──
   function startDingtalkAuth() {
     if (dingtalkStarted) return;
     dingtalkStarted = true;
     api('POST', '/api/bots/dingtalk/device-auth', {}).then(function(res){
       dingtalkSessionId = res.session_id;
-      var authUrl = res.auth_url;
-      renderAuthLink('dingtalk-qr-img', authUrl);
+      renderAuthLink('dingtalk-qr-img', res.auth_url);
       var linkEl = document.getElementById('dingtalk-auth-link');
-      linkEl.href = authUrl;
-      linkEl.textContent = authUrl;
+      linkEl.href = res.auth_url;
+      linkEl.textContent = res.auth_url;
       linkEl.classList.remove('hidden');
       document.getElementById('dingtalk-hint').innerHTML = '<span class="pulse-dot"></span>请用钉钉扫描或点击链接授权';
       pollDingtalkStatus();
@@ -758,9 +481,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     });
   }
 
-  var dingtalkPollInterval = 5000;
   function pollDingtalkStatus() {
-    clearInterval(dingtalkPollTimer);
+    dingtalkPollTimer = stopPoll(dingtalkPollTimer);
     dingtalkHandled = false;
     dingtalkPollInterval = 5000;
     dingtalkPollTimer = setInterval(function(){
@@ -768,51 +490,37 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         if (res.status === 'success') {
           if (dingtalkHandled) return;
           dingtalkHandled = true;
-          clearInterval(dingtalkPollTimer);
+          dingtalkPollTimer = stopPoll(dingtalkPollTimer);
           document.getElementById('dingtalk-qr-area').classList.add('hidden');
           document.getElementById('dingtalk-success').classList.remove('hidden');
-          platformCredentials.dingtalk = {
-            client_id: res.client_id || '',
-            client_secret: res.client_secret || ''
-          };
-          var dingtalkOnboardName = getFingerprint() || res.client_id || 'dingtalk-share';
-          // Always call onboard to get a fresh session with correct tenant context
-          api('POST', '/api/onboard', inviteFp ? {source: inviteFp, tenant_name: dingtalkOnboardName} : {tenant_name: dingtalkOnboardName}).then(function(data){
-            if (data.session_token) {
-              sessionToken = data.session_token;
-              tenantId = data.tenant_id;
-              tenantName = data.tenant_name || dingtalkOnboardName;
-              try { localStorage.setItem('oc_tenant_name', tenantName); } catch(e) {}
-              setSession(sessionToken);
-            }
-            createPlatformBot('dingtalk');
-          }).catch(function(){
-            createPlatformBot('dingtalk');
-          });
+          platformCredentials.dingtalk = { client_id: res.client_id || '', client_secret: res.client_secret || '' };
+          createBotAndBind('dingtalk');
         } else if (res.status === 'expired') {
-          clearInterval(dingtalkPollTimer);
+          dingtalkPollTimer = stopPoll(dingtalkPollTimer);
           document.getElementById('dingtalk-hint').textContent = '授权已过期，请刷新页面重试';
         } else if (res.raw_dingtalk && res.raw_dingtalk.error === 'slow_down') {
           dingtalkPollInterval += 5000;
-          clearInterval(dingtalkPollTimer);
+          dingtalkPollTimer = stopPoll(dingtalkPollTimer);
           dingtalkPollTimer = setInterval(arguments.callee, dingtalkPollInterval);
         }
       }).catch(function(){});
     }, dingtalkPollInterval);
   }
 
-  // ── Create bot after platform auth ──
-  function createPlatformBot(platform) {
-    var payload = { name: tenantName || platform + '-share', platform: platform };
+  // ── Create bot and bind to target clone ──
+  function createBotAndBind(platform, weixinBotName, ilinkData) {
+    var botName = targetAgentName + '-' + platform;
+    var payload = { name: botName, platform: platform };
+
     if (platform === 'weixin') {
       payload.mode = 'ilink';
-      if (ilinkData.ilink_user_id) payload.ilink_user_id = ilinkData.ilink_user_id;
-      if (ilinkData.bot_token) payload.bot_token = ilinkData.bot_token;
+      if (ilinkData && ilinkData.ilink_user_id) payload.ilink_user_id = ilinkData.ilink_user_id;
+      if (ilinkData && ilinkData.bot_token) payload.bot_token = ilinkData.bot_token;
     } else if (platform === 'wecom') {
       payload.mode = 'smartbot';
-      var creds = platformCredentials.wecom || {};
-      if (creds.bot_id) payload.bot_id = creds.bot_id;
-      if (creds.secret) payload.secret = creds.secret;
+      var c = platformCredentials.wecom || {};
+      if (c.bot_id) payload.bot_id = c.bot_id;
+      if (c.secret) payload.secret = c.secret;
     } else if (platform === 'feishu') {
       var fc = platformCredentials.feishu || {};
       if (fc.app_id) payload.app_id = fc.app_id;
@@ -823,512 +531,66 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       if (dc.client_id) payload.app_key = dc.client_id;
       if (dc.client_secret) payload.app_secret = dc.client_secret;
     }
+
+    // Save WeChat ilink token if applicable
+    if (platform === 'weixin' && ilinkData && ilinkData.bot_token) {
+      api('POST', '/api/weixin/save-token', {
+        tenant_name: weixinBotName,
+        bot_token: ilinkData.bot_token,
+        ilink_bot_id: ilinkData.ilink_bot_id,
+        ilink_user_id: ilinkData.ilink_user_id,
+        baseurl: ilinkData.baseurl
+      }).catch(function(){});
+    }
+
     api('POST', '/api/bots', payload).then(function(res){
       currentBotId = res.bot_id || '';
-	      try { localStorage.setItem('oc_bot_id', currentBotId); } catch(e) {}
-      // Auto-install guide agent and bind to bot
-      installGuideAgent(platform);
-      setTimeout(function(){ showPhase(3); loadAgentsAndHub(); }, 1200);
+      // Bind the bot to the target agent/clone
+      bindClone(platform, weixinBotName);
     }).catch(function(err){
-      alert('创建机器人失败: ' + (err.message || '未知错误') + '，请重试');
+      // Bot might already exist, try binding anyway
+      bindClone(platform, weixinBotName);
     });
   }
 
-  // ── Auto-install guide agent and bind to bot ──
-  function installGuideAgent(platform) {
-    console.log('[guide] installing, platform=' + platform + ' currentBotId=' + currentBotId + ' tenantName=' + tenantName);
-
-    // Build share URL (always fresh, with current params)
-    var shareUrl = location.origin + '/share?fp=' + encodeURIComponent(getFingerprint())
-      + '&session=' + encodeURIComponent(sessionToken) + '&phase=3'
-      + '&bot=' + encodeURIComponent(currentBotId)
-      + '&platform=' + encodeURIComponent(activePlatform)
-      + '&tenant=' + encodeURIComponent(tenantName);
-    var knowledgeContent = '# 选择分身链接\n\n请点击以下链接选择你的 AI 分身：\n\n' + shareUrl;
-
-    // Get or create guide agent, then write knowledge + bind
-    var getGuide = api('GET', '/api/agents').then(function(agents) {
-      var existing = (agents || []).filter(function(a) { return a.name === 'guide'; });
-      if (existing.length > 0) {
-        console.log('[guide] found existing, updating knowledge:', existing[0].id);
-        return existing[0].id;
-      }
-      console.log('[guide] not found, installing from Hub');
-      return api('POST', '/api/hub/templates/guide/install', {}).then(function(data) {
-        console.log('[guide] install result:', JSON.stringify(data));
-        return data.agent_id;
-      });
-    });
-
-    getGuide.then(function(guideId) {
-      if (!guideId) return;
-      // Always write fresh knowledge (updates URL if guide already existed)
-      return api('POST', '/api/agents/' + guideId + '/knowledge', {
-        filename: 'guide.md',
-        content: knowledgeContent
-      }).then(function() { return guideId; });
-    }).then(function(guideId) {
-      if (!guideId) return;
-      // Clear ALL history (including per-user sessions) so guide reads new knowledge
-      return api('DELETE', '/api/agents/' + guideId + '/history').then(function() { return guideId; });
-    }).then(function(guideId) {
-      if (!guideId) return;
-      // Bind guide to bot
-      var bindUrl;
-      if (activePlatform === 'weixin' && tenantName) {
-        bindUrl = '/api/weixin/' + encodeURIComponent(tenantName) + '/bind';
-      } else if (currentBotId) {
-        bindUrl = '/api/bots/' + encodeURIComponent(currentBotId) + '/bind';
-      }
-      if (bindUrl) {
-        var m = activePlatform === 'weixin' ? 'POST' : 'PUT';
-        api(m, bindUrl, { agent_name: guideId }).catch(function(){});
-      }
-    }).catch(function(err) {
-      console.warn('Guide install failed (non-critical):', err);
-    });
-  }
-
-  // ── Phase 3: My Agents + Hub ──
-  var currentCat = '';
-  var currentSrc = '';
-
-  function loadAgentsAndHub() {
-    var list = document.getElementById('hub-list');
-    list.innerHTML = '<div class="hub-loading"><div class="spinner"></div>加载中...</div>';
-
-    Promise.all([
-      api('GET', '/api/agents').catch(function(){ return []; }),
-      api('GET', '/api/hub/templates').catch(function(){ return {templates: []}; })
-    ]).then(function(results){
-      var agents = results[0] || [];
-      var data = results[1] || {};
-      var templates = data.templates || data;
-
-      installedAgents = Array.isArray(agents) ? agents : [];
-      hubTemplates = Array.isArray(templates) ? templates : [];
-
-      renderMyAgents();
-      renderHubFilters();
-      renderHubList();
-    }).catch(function(e){
-      list.innerHTML = '<div class="hub-empty">加载失败: ' + esc(e.message) + '</div>';
-    });
-  }
-
-  function renderMyAgents() {
-    var wrap = document.getElementById('my-agents-wrap');
-    var list = document.getElementById('my-agents-list');
-    var divider = document.getElementById('hub-divider');
-
-    if (installedAgents.length === 0) {
-      wrap.style.display = 'none';
-      divider.style.display = 'none';
-      return;
-    }
-
-    wrap.style.display = 'block';
-    divider.style.display = 'flex';
-    list.innerHTML = '';
-
-    installedAgents.forEach(function(agent){
-      var row = document.createElement('div');
-      row.className = 'agent-row';
-      var name = agent.name || agent.id || 'Unknown';
-      var displayName = agent.display_name || name;
-      var desc = agent.description || agent.role || '';
-      var bound = !!agent.bind_agent;
-
-      row.innerHTML =
-        '<div class="clone-avatar" style="width:36px;height:36px;font-size:18px">' + emoji(name) + '</div>' +
-        '<div style="flex:1;min-width:0">' +
-          '<div class="agent-name">' + esc(displayName) + '</div>' +
-          '<div class="agent-desc">' + esc(desc) + '</div>' +
-        '</div>';
-
-      var btn = document.createElement('button');
-      if (bound) {
-        btn.className = 'btn-small bound';
-        btn.textContent = '已绑定';
-        btn.disabled = true;
-      } else {
-        btn.className = 'btn-small';
-        btn.textContent = '绑定';
-        btn.onclick = function(){ bindToAgent(agent); };
-      }
-      row.appendChild(btn);
-      list.appendChild(row);
-    });
-  }
-
-  function bindToAgent(agent) {
-    if (!tenantName) {
-      alert('请先完成平台授权');
-      return;
-    }
-    var btn = event.target;
-    btn.disabled = true;
-    btn.textContent = '绑定中...';
-
-    // Use platform-specific bind endpoint
-    var bindUrl;
-    if (activePlatform === 'weixin') {
-      bindUrl = '/api/weixin/' + encodeURIComponent(tenantName) + '/bind';
+  function bindClone(platform, weixinBotName) {
+    var bindUrl, method;
+    if (platform === 'weixin' && weixinBotName) {
+      bindUrl = '/api/weixin/' + encodeURIComponent(weixinBotName) + '/bind';
+      method = 'POST';
     } else if (currentBotId) {
       bindUrl = '/api/bots/' + encodeURIComponent(currentBotId) + '/bind';
+      method = 'PUT';
     } else {
-      alert('未找到当前平台机器人，请刷新重试');
-      btn.disabled = false;
-      btn.textContent = '绑定';
+      showDone();
       return;
     }
-    var payload = { agent_name: agent.id || agent.name };
 
-    var method = activePlatform === 'weixin' ? 'POST' : 'PUT';
-    api(method, bindUrl, payload).then(function(data){
-      btn.className = 'btn-small bound';
-      btn.textContent = '已绑定';
-      btn.disabled = true;
-      agent.bind_agent = agent.id;
-      alert('已绑定到 ' + (agent.name || agent.id));
-    }).catch(function(e){
-      btn.disabled = false;
-      btn.textContent = '绑定';
-      alert('绑定失败: ' + e.message);
+    api(method, bindUrl, { agent_name: targetAgentName }).then(function(){
+      showDone();
+    }).catch(function(){
+      // Bind failed but auth succeeded — still show done
+      showDone();
     });
   }
 
-  function renderHubFilters() {
-    var srcTabs = document.getElementById('src-tabs');
-    srcTabs.innerHTML = '';
-    ['全部','官方','社区'].forEach(function(s){
-      var btn = document.createElement('button');
-      btn.className = 'src-tab' + (s === '全部' && !currentSrc ? ' active' : '') + (s === currentSrc ? ' active' : '');
-      btn.textContent = s;
-      btn.onclick = function(){
-        currentSrc = s === '全部' ? '' : s;
-        document.querySelectorAll('.src-tab').forEach(function(b){b.classList.remove('active')});
-        btn.classList.add('active');
-        renderHubList();
-      };
-      srcTabs.appendChild(btn);
-    });
+  function showDone() {
+    document.getElementById('done-title').textContent = '绑定成功！';
+    document.getElementById('done-desc').innerHTML =
+      '你已成功绑定分身 <span class="highlight">' + esc(targetAgentName) + '</span>';
 
-    var cats = ['全部'];
-    var catSet = {};
-    hubTemplates.forEach(function(t){
-      var c = t.category || '通用';
-      if (!catSet[c]) { catSet[c] = true; cats.push(c); }
-    });
-    var tabsEl = document.getElementById('cat-tabs');
-    tabsEl.innerHTML = '';
-    cats.forEach(function(c){
-      var btn = document.createElement('button');
-      btn.className = 'cat-tab' + (c === '全部' && !currentCat ? ' active' : '') + (c === currentCat ? ' active' : '');
-      btn.textContent = c;
-      btn.onclick = function(){
-        currentCat = c === '全部' ? '' : c;
-        document.querySelectorAll('.cat-tab').forEach(function(b){b.classList.remove('active')});
-        btn.classList.add('active');
-        renderHubList();
-      };
-      tabsEl.appendChild(btn);
-    });
+    var hints = {
+      weixin: '返回微信聊天窗口，给机器人发条消息，分身就会回复你。<br><span style="color:#e08838">微信需每 24 小时内至少发一条消息保持在线</span>',
+      wecom: '返回企业微信聊天窗口，给机器人发条消息开始对话',
+      feishu: '返回飞书聊天窗口，给机器人发条消息开始对话',
+      dingtalk: '返回钉钉聊天窗口，给机器人发条消息开始对话',
+    };
+    document.getElementById('done-platform-hint').innerHTML = hints[activePlatform] || '';
+
+    setTimeout(function(){ showPhase(3); }, 800);
   }
 
-  function renderHubList() {
-    var list = document.getElementById('hub-list');
-    list.innerHTML = '';
-    var filtered = hubTemplates.filter(function(t){
-      if (!currentCat) return true;
-      return (t.category || '通用') === currentCat;
-    });
-    if (currentSrc === '官方') {
-      filtered = filtered.filter(function(t){ return t.is_official; });
-    } else if (currentSrc === '社区') {
-      filtered = filtered.filter(function(t){ return !t.is_official; });
-    }
-    if (filtered.length === 0) {
-      list.innerHTML = '<div class="hub-empty">该分类暂无分身</div>';
-      return;
-    }
-    filtered.forEach(function(t){
-      var card = document.createElement('div');
-      card.className = 'clone-card';
-      card.onclick = function(){ showDetail(t); };
-      var officialBadge = t.is_official ? '<span class="badge-official">官方</span>' : '';
-      var catBadge = t.category ? '<span class="cat-badge">' + esc(t.category) + '</span>' : '';
-      card.innerHTML =
-        '<div class="clone-avatar">' + emoji(t.name) + '</div>' +
-        '<div class="clone-info">' +
-          '<h3>' + esc(t.display_name || t.name) + '</h3>' +
-          '<p>' + esc(t.description || '') + '</p>' +
-          '<div>' + officialBadge + catBadge +
-            '<span class="clone-meta" style="display:inline-flex;gap:10px;margin-top:4px">' +
-              '<span style="font-size:11px;color:#bbb">⬇ ' + (t.download_count || 0) + '</span>' +
-            '</span>' +
-          '</div>' +
-        '</div>';
-      list.appendChild(card);
-    });
-  }
-
-  window.showDetail = function(t) {
-    selectedTemplate = t;
-    var body = document.getElementById('detail-body');
-    var officialBadge = t.is_official ? '<span class="badge-official" style="margin-bottom:12px">官方</span>' : '';
-    var catBadge = t.category ? '<span class="cat-badge" style="margin-bottom:12px">' + esc(t.category) + '</span>' : '';
-    body.innerHTML =
-      '<div class="avatar">' + emoji(t.name) + '</div>' +
-      '<h2>' + esc(t.display_name || t.name) + '</h2>' +
-      '<p class="author">by ' + esc(t.author || 'OpenCarrier') + ' · v' + (t.version || '1.0') + '</p>' +
-      '<div style="margin-bottom:12px">' + officialBadge + catBadge + '</div>' +
-      '<p class="desc">' + esc(t.description || '暂无详细介绍') + '</p>' +
-      '<div class="stats">' +
-        '<div class="stat"><div class="val">' + (t.download_count || 0) + '</div><div class="label">下载量</div></div>' +
-      '</div>';
-    document.getElementById('btn-install').disabled = false;
-    document.getElementById('btn-install').textContent = '安装分身';
-    document.getElementById('detail-overlay').classList.add('active');
-  };
-
-  window.closeDetail = function() {
-    document.getElementById('detail-overlay').classList.remove('active');
-    selectedTemplate = null;
-  };
-
-  window.confirmInstall = function() {
-    if (!selectedTemplate) return;
-    var tpl = selectedTemplate;
-    document.getElementById('btn-install').disabled = true;
-    document.getElementById('btn-install').textContent = '正在安装...';
-    document.getElementById('detail-overlay').classList.remove('active');
-    showPhase(4);
-    startBirth(tpl);
-  };
-
-  // ── Phase 4: Birth ──
-  function startBirth(tpl) {
-    var steps = ['bs-download','bs-install','bs-activate','bs-done'];
-    activateStep(steps[0]);
-    setTimeout(function(){ activateStep(steps[1]); }, 1500);
-    api('POST', '/api/hub/templates/' + encodeURIComponent(tpl.name) + '/install', {}).then(function(data){
-      var agentId = data.agent_id || '';
-      var serial = data.serial_number || '';
-      setTimeout(function(){ activateStep(steps[2]); }, 1000);
-      setTimeout(function(){
-        activateStep(steps[3]);
-        if (agentId) {
-          var bindUrl;
-          if (activePlatform === 'weixin' && tenantName) {
-            bindUrl = '/api/weixin/' + encodeURIComponent(tenantName) + '/bind';
-          } else if (currentBotId) {
-            bindUrl = '/api/bots/' + encodeURIComponent(currentBotId) + '/bind';
-          }
-          if (bindUrl) {
-            var m = activePlatform === 'weixin' ? 'POST' : 'PUT';
-            api(m, bindUrl, { agent_name: agentId }).catch(function(){});
-          }
-        }
-
-        // Build birth certificate link
-        var sessionToken = '';
-        try { sessionToken = localStorage.getItem('oc_share_session') || ''; } catch(e) {}
-        var birthUrl = location.origin + '/share?view=birth'
-          + '&agent=' + encodeURIComponent(agentId)
-          + '&session=' + encodeURIComponent(sessionToken)
-          + '&platform=' + encodeURIComponent(activePlatform)
-          + '&fp=' + encodeURIComponent(getFingerprint());
-
-        // Proactive platforms: send welcome message + birth link via bot API
-        if (activePlatform === 'dingtalk' || activePlatform === 'feishu') {
-          var welcomeText = '你的 AI 分身「' + (tpl.display_name || tpl.name) + '」已就绪！\n\n' + birthUrl;
-          if (currentBotId) {
-            api('POST', '/api/bots/' + encodeURIComponent(currentBotId) + '/send', {
-              user_id: '',
-              text: welcomeText
-            }).catch(function(){});
-          }
-        }
-
-        showBirthDone(tpl, serial, agentId, birthUrl);
-      }, 2200);
-    }).catch(function(e){
-      var el = document.getElementById('bs-install');
-      if (el) el.querySelector('p').textContent = '安装失败: ' + e.message;
-      setTimeout(function(){ activateStep(steps[2]); }, 1000);
-      setTimeout(function(){
-        activateStep(steps[3]);
-        showBirthDone(tpl, '', '', '');
-      }, 2200);
-    });
-  }
-
-  function activateStep(id) {
-    var all = document.querySelectorAll('.birth-step');
-    var found = false;
-    all.forEach(function(el){
-      if (el.id === id) {
-        el.classList.add('active');
-        el.classList.remove('done');
-        found = true;
-      } else if (found) {
-        el.classList.remove('active','done');
-      } else {
-        el.classList.remove('active');
-        el.classList.add('done');
-      }
-    });
-  }
-
-  function showBirthDone(tpl, serial, agentId, birthUrl) {
-    var done = document.getElementById('birth-done');
-    var W = 640, H = 860;
-    var c = document.createElement('canvas');
-    c.width = W; c.height = H;
-    var ctx = c.getContext('2d');
-
-    var bg = ctx.createLinearGradient(0, 0, W, H);
-    bg.addColorStop(0, '#fffdf7');
-    bg.addColorStop(1, '#fff8ee');
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, W, H);
-
-    var bar = ctx.createLinearGradient(0, 0, W, 0);
-    var pc = platformConfig[activePlatform] || platformConfig.weixin;
-    bar.addColorStop(0, pc.color);
-    bar.addColorStop(1, pc.color);
-    ctx.fillStyle = bar;
-    ctx.fillRect(0, 0, W, 8);
-
-    ctx.font = '72px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(emoji(tpl.name), W/2, 90);
-
-    var displayName = tpl.display_name || tpl.name;
-    ctx.font = 'bold 40px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
-    ctx.fillStyle = '#1a1a1a';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillText(displayName, W/2, 165);
-
-    var desc = tpl.description || 'AI 助理';
-    if (desc.length > 28) desc = desc.substring(0, 28) + '…';
-    ctx.font = '22px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
-    ctx.fillStyle = '#999';
-    ctx.fillText(desc, W/2, 200);
-
-    var divGrad = ctx.createLinearGradient(180, 0, 460, 0);
-    divGrad.addColorStop(0, 'rgba(212,197,160,0)');
-    divGrad.addColorStop(0.5, 'rgba(212,197,160,1)');
-    divGrad.addColorStop(1, 'rgba(212,197,160,0)');
-    ctx.strokeStyle = divGrad;
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(180, 235); ctx.lineTo(460, 235); ctx.stroke();
-
-    var fields = [];
-    var now = new Date();
-    fields.push(['出生日期', now.getFullYear() + '年' + (now.getMonth()+1) + '月' + now.getDate() + '日']);
-    fields.push(['出生时间', String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0')]);
-    fields.push(['分身类型', tpl.category || '通用']);
-    fields.push(['平台', platformConfig[activePlatform].label]);
-    fields.push(['编号', serial || 'OC-PENDING']);
-
-    var y = 285;
-    ctx.textBaseline = 'alphabetic';
-    fields.forEach(function(f) {
-      ctx.font = '26px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
-      ctx.fillStyle = '#999';
-      ctx.textAlign = 'left';
-      ctx.fillText(f[0], 100, y);
-      ctx.font = '600 26px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
-      ctx.fillStyle = '#333';
-      ctx.textAlign = 'right';
-      ctx.fillText(f[1], W - 100, y);
-      ctx.setLineDash([4, 4]);
-      ctx.strokeStyle = '#eee';
-      ctx.beginPath(); ctx.moveTo(100, y + 16); ctx.lineTo(W - 100, y + 16); ctx.stroke();
-      ctx.setLineDash([]);
-      y += 56;
-    });
-
-    // QR code — encodes the share page with invite param
-    var qrSize = 180;
-    var qrX = (W - qrSize) / 2;
-    var qrY = y + 20;
-    try {
-      var qrLink = 'https://carrier.yinnho.cn/share?invite=' + encodeURIComponent(getFingerprint());
-      var qr = qrcode(0, 'M');
-      qr.addData(qrLink);
-      qr.make();
-      var moduleCount = qr.getModuleCount();
-      var cellSize = qrSize / moduleCount;
-      for (var row = 0; row < moduleCount; row++) {
-        for (var col = 0; col < moduleCount; col++) {
-          ctx.fillStyle = qr.isDark(row, col) ? '#333' : '#fffdf7';
-          ctx.fillRect(qrX + col * cellSize, qrY + row * cellSize, cellSize + 0.5, cellSize + 0.5);
-        }
-      }
-    } catch(e) {}
-
-    ctx.textAlign = 'center';
-    ctx.font = '20px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
-    ctx.fillStyle = '#bbb';
-    ctx.fillText('扫码获取你的 AI 助理', W/2, qrY + qrSize + 32);
-
-    ctx.font = '600 18px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
-    ctx.fillStyle = '#bbb';
-    ctx.fillText('OpenCarrier — Digital Clone Engine', W/2, H - 28);
-
-    var img = document.getElementById('cert-img');
-    img.src = c.toDataURL('image/png');
-
-    // Update guidance text based on platform capability
-    var infoEl = document.getElementById('birth-info');
-    if (infoEl) {
-      var html = '';
-      if (activePlatform === 'dingtalk' || activePlatform === 'feishu') {
-        html = '<p>分身已就绪，<span class="highlight">返回聊天窗口</span>就能看到它的消息</p>';
-      } else if (activePlatform === 'weixin') {
-        html = '<p>分身已就绪</p>';
-        html += '<p><span class="highlight">返回聊天窗口</span>，给机器人发条消息，分身就会回复你</p>';
-        html += '<p style="font-size:12px;color:#e08838;margin-top:8px;">微信需每 24 小时内至少发一条消息保持在线；若超时未活动，需重新扫码绑定</p>';
-      } else {
-        html = '<p>分身已就绪</p>';
-        html += '<p><span class="highlight">返回聊天窗口</span>，给机器人发条消息，分身就会回复你</p>';
-      }
-      if (birthUrl) {
-        html += '<p style="font-size:13px;color:#aaa;margin-top:6px;">长按图片可保存或转发 · <a href="' + escAttr(birthUrl) + '" style="color:#e08838;">查看出生证</a></p>';
-      } else {
-        html += '<p style="font-size:13px;color:#aaa;margin-top:6px;">长按图片可保存或转发</p>';
-      }
-      infoEl.innerHTML = html;
-    }
-
-    done.classList.add('show');
-  }
-
-  // ── Utilities ──
-  function esc(s) {
-    var d = document.createElement('div');
-    d.textContent = s || '';
-    return d.innerHTML;
-  }
-
-  function escAttr(s) {
-    return (s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  }
-
-  function emoji(name) {
-    var map = {'customer-service':'🎧','writer':'✍️','analyst':'📊','assistant':'🤖','translator':'🌐','coder':'💻'};
-    var n = (name||'').toLowerCase();
-    for (var k in map) { if (n.indexOf(k) >= 0) return map[k]; }
-    var emojis = ['🤖','🧠','💡','🌟','🎯','🔮','🦾','✨'];
-    var h = 0;
-    for (var i = 0; i < n.length; i++) h = ((h << 5) - h + n.charCodeAt(i)) | 0;
-    return emojis[Math.abs(h) % emojis.length];
-  }
+  // ── Init ──
+  initLanding();
 })();
 </script>
-</body>
-</html>

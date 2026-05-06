@@ -1,6 +1,5 @@
 //! Hub template marketplace endpoints.
 
-use crate::routes::common::*;
 use crate::routes::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -68,21 +67,12 @@ pub async fn list_hub_templates(State(state): State<Arc<AppState>>) -> impl Into
     }
 }
 /// POST /api/hub/templates/{name}/install — Download and install a template from Hub.
-/// Body (optional): `{ "tenant_id": "..." }` — admin can specify target tenant.
 pub async fn install_hub_template(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let target_tenant: Option<String> = if ctx.is_admin() {
-        body.get("tenant_id")
-            .and_then(|v| v.as_str().map(String::from))
-            .or_else(|| ctx.tenant_id.clone())
-    } else {
-        ctx.tenant_id.clone()
-    };
+    let _ = body; // body kept for forward compatibility
     let hub_url = state.kernel.config.hub.url.clone();
     // SECURITY: Validate hub URL before fetching
     if let Err(e) = opencarrier_clone::hub::validate_hub_url(&hub_url) {
@@ -160,7 +150,7 @@ pub async fn install_hub_template(
 
     match state
         .kernel
-        .clone_install(&name, &agx_bytes, target_tenant.as_deref().unwrap_or(""))
+        .clone_install(&name, &agx_bytes)
         .await
     {
         Ok((agent_id, agent_name)) => {

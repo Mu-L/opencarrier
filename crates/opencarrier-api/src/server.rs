@@ -88,11 +88,6 @@ pub async fn build_router(
     let auth_state = crate::middleware::AuthState {
         api_key: api_key.clone(),
         auth_enabled: state.kernel.config.auth.enabled,
-        session_secret: if !api_key.is_empty() {
-            api_key.clone()
-        } else {
-            state.kernel.config.auth.password_hash.clone()
-        },
     };
     let gcra_limiter = rate_limiter::create_rate_limiter();
 
@@ -112,7 +107,6 @@ pub async fn build_router(
             axum::routing::get(webchat::katex_font),
         )
         .merge(routes::agents::router())
-        .merge(routes::auth::router())
         .merge(routes::bindings::router())
         .merge(routes::bots::router())
         .merge(routes::brain::router())
@@ -124,13 +118,11 @@ pub async fn build_router(
         .merge(routes::hub::router())
         .merge(routes::invites::router())
         .merge(routes::kv::router())
-        .merge(routes::onboard::router())
         .merge(routes::plugins::router())
         .merge(routes::messaging::router())
         .merge(routes::observability::router())
         .merge(routes::providers::router())
         .merge(routes::sessions::router())
-        .merge(routes::tenants::router())
         .merge(routes::tools_skills::router())
         .merge(routes::webhooks::router())
         .merge(routes::weixin::router())

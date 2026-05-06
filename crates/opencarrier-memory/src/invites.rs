@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 pub struct InviteRecord {
     pub id: i64,
     pub inviter_fp: String,
-    pub invitee_tenant_id: Option<String>,
+    pub invitee_sender_id: Option<String>,
     pub invited_at: String,
     pub converted_at: Option<String>,
     pub source_platform: Option<String>,
@@ -51,23 +51,23 @@ impl InviteStore {
     pub fn mark_converted(
         &self,
         invite_id: i64,
-        invitee_tenant_id: &str,
+        invitee_sender_id: &str,
     ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
             "UPDATE invites
              SET invitee_tenant_id = ?1, converted_at = datetime('now')
              WHERE id = ?2",
-            params![invitee_tenant_id, invite_id],
+            params![invitee_sender_id, invite_id],
         )?;
         Ok(())
     }
 
-    /// Link an invite by inviter_fp + invitee_tenant_id (for lookup after onboarding).
+    /// Link an invite by inviter_fp + invitee_sender_id (for lookup after onboarding).
     pub fn link_invitee(
         &self,
         inviter_fp: &str,
-        invitee_tenant_id: &str,
+        invitee_sender_id: &str,
     ) -> Result<(), rusqlite::Error> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         // Find the most recent unconverted invite for this inviter
@@ -85,7 +85,7 @@ impl InviteStore {
                 "UPDATE invites
                  SET invitee_tenant_id = ?1, converted_at = datetime('now')
                  WHERE id = ?2",
-                params![invitee_tenant_id, id],
+                params![invitee_sender_id, id],
             )?;
         }
         Ok(())
@@ -133,7 +133,7 @@ impl InviteStore {
             Ok(InviteRecord {
                 id: row.get(0)?,
                 inviter_fp: row.get(1)?,
-                invitee_tenant_id: row.get(2)?,
+                invitee_sender_id: row.get(2)?,
                 invited_at: row.get(3)?,
                 converted_at: row.get(4)?,
                 source_platform: row.get(5)?,

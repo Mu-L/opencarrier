@@ -13,9 +13,6 @@ use std::sync::Arc;
 pub struct InstallCloneRequest {
     /// Base64-encoded .agx file bytes.
     pub data: String,
-    /// Optional tenant_id override (admin only).
-    #[serde(default)]
-    pub tenant_id: Option<String>,
 }
 
 impl InstallCloneRequest {
@@ -33,11 +30,9 @@ impl InstallCloneRequest {
 /// POST /api/clones/install — Install a .agx clone from uploaded bytes.
 pub async fn install_clone(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Json(req): Json<InstallCloneRequest>,
 ) -> impl IntoResponse {
     use opencarrier_clone::{convert_to_manifest, install_clone_to_workspace, load_agx};
-    let ctx = get_tenant_ctx(&extensions);
 
     // Decode base64 data
     let raw_data = match req.decode_data() {
@@ -92,44 +87,27 @@ pub async fn install_clone(
     // Clean up temp file
     let _ = std::fs::remove_dir_all(&tmp_dir);
 
-    // Check for name collision within the same tenant
-    // Determine target tenant first for the collision check
-    let target_tenant_for_check = if ctx.is_admin() {
-        req.tenant_id.as_deref().or(ctx.tenant_id.as_deref())
-    } else {
-        ctx.tenant_id.as_deref()
-    };
-    let target_tenant_str = match target_tenant_for_check {
-        Some(tid) => tid,
-        None => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Tenant ID required"})),
-            );
-        }
-    };
+    // Check for name collision
     if state
         .kernel
         .registry
-        .find_by_name_and_tenant(&clone_data.name, target_tenant_str)
+        .find_by_name(&clone_data.name)
         .is_some()
     {
         return (
             StatusCode::CONFLICT,
             Json(
-                serde_json::json!({"error": format!("Agent '{}' already exists in this tenant", clone_data.name)}),
+                serde_json::json!({"error": format!("Agent '{}' already exists", clone_data.name)}),
             ),
         );
     }
 
-    // Determine target tenant: admin can override, otherwise use context
-    // Reuse target_tenant_str from collision check above
-
-    // Create workspace directory (tenant-scoped)
+    // Create workspace directory
     let workspace_dir = state
         .kernel
         .config
-        .tenant_workspaces_dir(target_tenant_str)
+        .data_dir
+        .join("agents")
         .join(&clone_data.name);
     if workspace_dir.exists() {
         return (
@@ -153,13 +131,13 @@ pub async fn install_clone(
     let mut manifest = convert_to_manifest(&clone_data, None);
     manifest.workspace = Some(workspace_dir.clone());
 
-    // Spawn agent (tenant-scoped)
+    // Spawn agent
     let name = manifest.name.clone();
     let warnings = clone_data.security_warnings.clone();
 
     match state
         .kernel
-        .spawn_agent_with_parent(manifest, None, None, target_tenant_str)
+        .spawn_agent(manifest)
     {
         Ok(id) => {
             tracing::info!("Clone '{}' installed and spawned: {}", name, id);
@@ -185,16 +163,8 @@ pub async fn install_clone(
 /// GET /api/clones — List installed clones (agents with clone_source).
 pub async fn list_clones(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let agents = if ctx.is_admin() {
-        state.kernel.registry.list()
-    } else if let Some(ref tid) = ctx.tenant_id {
-        state.kernel.registry.list_by_tenant(tid)
-    } else {
-        vec![]
-    };
+    let agents = state.kernel.registry.list();
     let clones: Vec<serde_json::Value> = agents
         .into_iter()
         .filter(|e| e.manifest.clone_source.is_some())
@@ -218,21 +188,9 @@ pub async fn list_clones(
 /// POST /api/clones/{name}/start — Start a stopped clone.
 pub async fn start_clone(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let entry = if ctx.is_admin() {
-        state.kernel.registry.find_by_name(&name)
-    } else {
-        ctx.tenant_id.as_ref().and_then(|tid| {
-            state
-                .kernel
-                .registry
-                .find_by_name_and_tenant(&name, tid.as_str())
-        })
-    };
-    let entry = match entry {
+    let entry = match state.kernel.registry.find_by_name(&name) {
         Some(e) => e,
         None => {
             return (
@@ -241,12 +199,6 @@ pub async fn start_clone(
             )
         }
     };
-    if !can_access(&ctx, entry.tenant_id.as_str()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Access denied"})),
-        );
-    }
 
     if entry.manifest.clone_source.is_none() {
         return (
@@ -273,21 +225,9 @@ pub async fn start_clone(
 /// POST /api/clones/{name}/stop — Stop a running clone.
 pub async fn stop_clone(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let entry = if ctx.is_admin() {
-        state.kernel.registry.find_by_name(&name)
-    } else {
-        ctx.tenant_id.as_ref().and_then(|tid| {
-            state
-                .kernel
-                .registry
-                .find_by_name_and_tenant(&name, tid.as_str())
-        })
-    };
-    let entry = match entry {
+    let entry = match state.kernel.registry.find_by_name(&name) {
         Some(e) => e,
         None => {
             return (
@@ -296,12 +236,6 @@ pub async fn stop_clone(
             )
         }
     };
-    if !can_access(&ctx, entry.tenant_id.as_str()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Access denied"})),
-        );
-    }
 
     if entry.manifest.clone_source.is_none() {
         return (
@@ -333,12 +267,10 @@ pub async fn stop_clone(
 /// and compression on the clone's knowledge directory.
 pub async fn clone_compile(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let (entry, workspace) =
-        match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
+        match get_clone_workspace(&name, &state.kernel.registry) {
             Ok(r) => r,
             Err(resp) => return resp,
         };
@@ -422,13 +354,11 @@ pub async fn clone_compile(
 /// issues when `?fix=true` is passed.
 pub async fn clone_health(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let (_entry, workspace) =
-        match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
+        match get_clone_workspace(&name, &state.kernel.registry) {
             Ok(r) => r,
             Err(resp) => return resp,
         };
@@ -458,12 +388,10 @@ pub async fn clone_health(
 /// to the configured Hub.
 pub async fn clone_feedback_push(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let (_entry, workspace) =
-        match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
+        match get_clone_workspace(&name, &state.kernel.registry) {
             Ok(r) => r,
             Err(resp) => return resp,
         };
@@ -523,13 +451,11 @@ pub async fn clone_feedback_push(
 /// GET /api/clones/{name}/evaluate?mode=deterministic|full
 pub async fn clone_evaluate(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let (entry, workspace) =
-        match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
+        match get_clone_workspace(&name, &state.kernel.registry) {
             Ok(r) => r,
             Err(resp) => return resp,
         };
@@ -666,11 +592,9 @@ pub async fn clone_evaluate(
 /// Body: { "filename": "refund-policy.md" }
 pub async fn clone_rollback(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let filename = match body["filename"].as_str() {
         Some(f) => f.to_string(),
         None => {
@@ -682,7 +606,7 @@ pub async fn clone_rollback(
     };
 
     let (_entry, workspace) =
-        match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
+        match get_clone_workspace(&name, &state.kernel.registry) {
             Ok(r) => r,
             Err(resp) => return resp,
         };
@@ -707,11 +631,9 @@ pub async fn clone_rollback(
 /// Body: { "filename": "refund-policy.md" }
 pub async fn clone_verify(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let filename = match body["filename"].as_str() {
         Some(f) => f.to_string(),
         None => {
@@ -723,7 +645,7 @@ pub async fn clone_verify(
     };
 
     let (_entry, workspace) =
-        match get_clone_workspace_with_tenant(&name, &state.kernel.registry, &ctx) {
+        match get_clone_workspace(&name, &state.kernel.registry) {
             Ok(r) => r,
             Err(resp) => return resp,
         };
@@ -743,23 +665,10 @@ pub async fn clone_verify(
 /// POST /api/clones/{name}/upgrade — Upgrade a clone from hub to latest version.
 pub async fn upgrade_clone(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-
-    // Verify the agent exists and is accessible
-    let entry = if ctx.is_admin() {
-        state.kernel.registry.find_by_name(&name)
-    } else {
-        ctx.tenant_id.as_ref().and_then(|tid| {
-            state
-                .kernel
-                .registry
-                .find_by_name_and_tenant(&name, tid.as_str())
-        })
-    };
-    let entry = match entry {
+    // Verify the agent exists
+    let entry = match state.kernel.registry.find_by_name(&name) {
         Some(e) => e,
         None => {
             return (
@@ -768,12 +677,6 @@ pub async fn upgrade_clone(
             )
         }
     };
-    if !can_access(&ctx, entry.tenant_id.as_str()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Access denied"})),
-        );
-    }
 
     // Must be a clone with hub_template_id
     if entry.manifest.clone_source.is_none() {
@@ -814,21 +717,9 @@ pub async fn upgrade_clone(
 /// DELETE /api/clones/{name} — Uninstall a clone.
 pub async fn uninstall_clone(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let entry = if ctx.is_admin() {
-        state.kernel.registry.find_by_name(&name)
-    } else {
-        ctx.tenant_id.as_ref().and_then(|tid| {
-            state
-                .kernel
-                .registry
-                .find_by_name_and_tenant(&name, tid.as_str())
-        })
-    };
-    let entry = match entry {
+    let entry = match state.kernel.registry.find_by_name(&name) {
         Some(e) => e,
         None => {
             return (
@@ -837,12 +728,6 @@ pub async fn uninstall_clone(
             )
         }
     };
-    if !can_access(&ctx, entry.tenant_id.as_str()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Access denied"})),
-        );
-    }
 
     if entry.manifest.clone_source.is_none() {
         return (

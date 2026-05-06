@@ -126,10 +126,6 @@ async fn start_test_server_with_provider(
         )
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .layer(axum::middleware::from_fn(middleware::request_logging))
-        // Inject admin TenantContext for tests (no auth middleware in test server)
-        .layer(axum::Extension(
-            opencarrier_types::tenant::TenantContext::admin(),
-        ))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state.clone());
@@ -387,7 +383,7 @@ async fn test_invalid_agent_id_returns_400() {
         .unwrap();
     assert_eq!(resp.status(), 400);
     let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body["error"].as_str().unwrap().contains("Invalid"));
+    assert!(body["error"].as_str().unwrap().contains("Agent not found"));
 
     // Kill invalid ID
     let resp = client
@@ -604,13 +600,6 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
     let auth_state = middleware::AuthState {
         api_key: api_key.clone(),
         auth_enabled: state.kernel.config.auth.enabled,
-        session_secret: if !api_key.is_empty() {
-            api_key.clone()
-        } else if state.kernel.config.auth.enabled {
-            state.kernel.config.auth.password_hash.clone()
-        } else {
-            String::new()
-        },
     };
 
     let app = Router::new()

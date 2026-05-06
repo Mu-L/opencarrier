@@ -17,7 +17,6 @@ use crate::tool_runner;
 use crate::web_search::WebToolsContext;
 use opencarrier_memory::session::Session;
 use opencarrier_memory::MemorySubstrate;
-use opencarrier_skills::registry::SkillRegistry;
 use opencarrier_types::agent::AgentManifest;
 use opencarrier_types::error::{OpenCarrierError, OpenCarrierResult};
 use opencarrier_types::memory::{Memory, MemoryFilter, MemorySource};
@@ -119,7 +118,6 @@ pub async fn run_agent_loop(
     driver: Arc<dyn LlmDriver>,
     available_tools: &[ToolDefinition],
     kernel: Option<Arc<dyn KernelHandle>>,
-    skill_registry: Option<&SkillRegistry>,
     mcp_connections: Option<&dashmap::DashMap<String, McpConnection>>,
     web_ctx: Option<&WebToolsContext>,
     browser_ctx: Option<&crate::browser::BrowserManager>,
@@ -595,7 +593,6 @@ pub async fn run_agent_loop(
                             kernel.as_ref(),
                             Some(&allowed_tool_names),
                             Some(&caller_id_str),
-                            skill_registry,
                             mcp_connections,
                             web_ctx,
                             browser_ctx,
@@ -996,7 +993,6 @@ pub async fn run_agent_loop_streaming(
     available_tools: &[ToolDefinition],
     kernel: Option<Arc<dyn KernelHandle>>,
     stream_tx: mpsc::Sender<StreamEvent>,
-    skill_registry: Option<&SkillRegistry>,
     mcp_connections: Option<&dashmap::DashMap<String, McpConnection>>,
     web_ctx: Option<&WebToolsContext>,
     browser_ctx: Option<&crate::browser::BrowserManager>,
@@ -1485,7 +1481,6 @@ pub async fn run_agent_loop_streaming(
                             kernel.as_ref(),
                             Some(&allowed_tool_names),
                             Some(&caller_id_str),
-                            skill_registry,
                             mcp_connections,
                             web_ctx,
                             browser_ctx,
@@ -2696,7 +2691,6 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id: String::new(),
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyAfterToolUseDriver::new());
@@ -2708,7 +2702,6 @@ mod tests {
             &memory,
             driver,
             &[], // no tools registered — the tool call will fail, which is fine
-            None,
             None,
             None,
             None,
@@ -2751,7 +2744,6 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id: String::new(),
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyAfterToolUseDriver::new());
@@ -2763,7 +2755,6 @@ mod tests {
             &memory,
             driver,
             &[], // no tools registered — the tool call will fail, which is fine
-            None,
             None,
             None,
             None,
@@ -2808,7 +2799,6 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id: String::new(),
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyMaxTokensDriver);
@@ -2820,7 +2810,6 @@ mod tests {
             &memory,
             driver,
             &[],
-            None,
             None,
             None,
             None,
@@ -2863,7 +2852,6 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id: String::new(),
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(NormalDriver);
@@ -2875,7 +2863,6 @@ mod tests {
             &memory,
             driver,
             &[],
-            None,
             None,
             None,
             None,
@@ -2909,7 +2896,6 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id: String::new(),
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyAfterToolUseDriver::new());
@@ -2924,7 +2910,6 @@ mod tests {
             &[],
             None,
             tx,
-            None,
             None,
             None,
             None,
@@ -3037,7 +3022,6 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id: String::new(),
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyThenNormalDriver::new());
@@ -3049,7 +3033,6 @@ mod tests {
             &memory,
             driver,
             &[],
-            None,
             None,
             None,
             None,
@@ -3086,7 +3069,6 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id: String::new(),
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(AlwaysEmptyDriver);
@@ -3098,7 +3080,6 @@ mod tests {
             &memory,
             driver,
             &[],
-            None,
             None,
             None,
             None,
@@ -3141,7 +3122,6 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id: String::new(),
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyMaxTokensDriver);
@@ -3156,7 +3136,6 @@ mod tests {
             &[],
             None,
             tx,
-            None,
             None,
             None,
             None,
@@ -4021,7 +4000,6 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id: String::new(),
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(TextToolCallDriver::new());
@@ -4045,7 +4023,6 @@ mod tests {
             &memory,
             driver,
             &tools,
-            None,
             None,
             None,
             None,
@@ -4096,7 +4073,6 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id: String::new(),
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(NormalDriver);
@@ -4114,7 +4090,6 @@ mod tests {
             &memory,
             driver,
             &tools, // tools available but not used
-            None,
             None,
             None,
             None,
@@ -4153,7 +4128,6 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id: String::new(),
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(TextToolCallDriver::new());
@@ -4180,7 +4154,6 @@ mod tests {
             &tools,
             None,
             tx,
-            None,
             None,
             None,
             None,

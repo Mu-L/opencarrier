@@ -8,13 +8,11 @@ use opencarrier_types::error::{OpenCarrierError, OpenCarrierResult};
 pub struct AgentRegistry {
     /// Primary index: agent ID → entry.
     agents: DashMap<AgentId, AgentEntry>,
-    /// Name index: (tenant_id, agent_name) → agent ID.
-    /// Per-tenant uniqueness: same name allowed across different tenants.
-    name_index: DashMap<(String, String), AgentId>,
+    /// Name index: agent_name → agent ID.
+    /// Names are globally unique.
+    name_index: DashMap<String, AgentId>,
     /// Tag index: tag → list of agent IDs.
     tag_index: DashMap<String, Vec<AgentId>>,
-    /// Tenant index: tenant_id → list of agent IDs.
-    tenant_index: DashMap<String, Vec<AgentId>>,
 }
 
 impl AgentRegistry {
@@ -24,26 +22,20 @@ impl AgentRegistry {
             agents: DashMap::new(),
             name_index: DashMap::new(),
             tag_index: DashMap::new(),
-            tenant_index: DashMap::new(),
         }
     }
 
     /// Register a new agent.
-    /// Name uniqueness is per-tenant: same name allowed across different tenants.
+    /// Names are globally unique.
     pub fn register(&self, entry: AgentEntry) -> OpenCarrierResult<()> {
-        let name_key = (entry.tenant_id.clone(), entry.name.clone());
-        if self.name_index.contains_key(&name_key) {
+        if self.name_index.contains_key(&entry.name) {
             return Err(OpenCarrierError::AgentAlreadyExists(entry.name.clone()));
         }
         let id = entry.id;
-        self.name_index.insert(name_key, id);
+        self.name_index.insert(entry.name.clone(), id);
         for tag in &entry.tags {
             self.tag_index.entry(tag.clone()).or_default().push(id);
         }
-        self.tenant_index
-            .entry(entry.tenant_id.clone())
-            .or_default()
-            .push(id);
         self.agents.insert(id, entry);
         Ok(())
     }
@@ -53,30 +45,11 @@ impl AgentRegistry {
         self.agents.get(&id).map(|e| e.value().clone())
     }
 
-    /// Find an agent by name within a specific tenant scope.
-    pub fn find_by_name_and_tenant(&self, name: &str, tenant_id: &str) -> Option<AgentEntry> {
-        let key = (tenant_id.to_string(), name.to_string());
-        self.name_index
-            .get(&key)
-            .and_then(|id| self.agents.get(id.value()).map(|e| e.value().clone()))
-    }
-
-    /// Find an agent by name (global, returns first match).
-    /// Prefer `find_by_name_and_tenant` for tenant-scoped lookups.
+    /// Find an agent by name (global lookup).
     pub fn find_by_name(&self, name: &str) -> Option<AgentEntry> {
-        for entry in self.name_index.iter() {
-            if entry.key().1 == name {
-                let id = entry.value();
-                return self.agents.get(id).map(|e| e.value().clone());
-            }
-        }
-        None
-    }
-
-    /// Check if an agent with the given name exists under a specific tenant.
-    pub fn exists_in_tenant(&self, name: &str, tenant_id: &str) -> bool {
-        let key = (tenant_id.to_string(), name.to_string());
-        self.name_index.contains_key(&key)
+        self.name_index
+            .get(name)
+            .and_then(|id| self.agents.get(id.value()).map(|e| e.value().clone()))
     }
 
     /// Update agent state.
@@ -107,15 +80,11 @@ impl AgentRegistry {
             .agents
             .remove(&id)
             .ok_or_else(|| OpenCarrierError::AgentNotFound(id.to_string()))?;
-        let name_key = (entry.tenant_id.clone(), entry.name.clone());
-        self.name_index.remove(&name_key);
+        self.name_index.remove(&entry.name);
         for tag in &entry.tags {
             if let Some(mut ids) = self.tag_index.get_mut(tag) {
                 ids.retain(|&agent_id| agent_id != id);
             }
-        }
-        if let Some(mut ids) = self.tenant_index.get_mut(&entry.tenant_id) {
-            ids.retain(|&agent_id| agent_id != id);
         }
         Ok(entry)
     }
@@ -125,39 +94,10 @@ impl AgentRegistry {
         self.agents.iter().map(|e| e.value().clone()).collect()
     }
 
-    /// List agents belonging to a specific tenant.
-    pub fn list_by_tenant(&self, tenant_id: &str) -> Vec<AgentEntry> {
-        self.tenant_index
-            .get(tenant_id)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(|id| self.agents.get(id).map(|e| e.value().clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
     /// Add a child agent ID to a parent's children list.
     pub fn add_child(&self, parent_id: AgentId, child_id: AgentId) {
         if let Some(mut entry) = self.agents.get_mut(&parent_id) {
             entry.children.push(child_id);
-        }
-    }
-
-    /// Update the tenant_id on an agent entry and re-index.
-    pub fn set_tenant_id(&self, agent_id: AgentId, tenant_id: String) {
-        if let Some(mut entry) = self.agents.get_mut(&agent_id) {
-            let old_tid = entry.tenant_id.clone();
-            entry.tenant_id = tenant_id.clone();
-            // Remove from old tenant index
-            if let Some(mut ids) = self.tenant_index.get_mut(&old_tid) {
-                ids.retain(|id| *id != agent_id);
-            }
-            // Add to new tenant index
-            self.tenant_index
-                .entry(tenant_id)
-                .or_default()
-                .push(agent_id);
         }
     }
 
@@ -283,11 +223,9 @@ impl AgentRegistry {
             .get(&id)
             .ok_or_else(|| OpenCarrierError::AgentNotFound(id.to_string()))?;
         let old_name = entry.name.clone();
-        let tenant_id = entry.tenant_id.clone();
         drop(entry);
 
-        let new_key = (tenant_id.clone(), new_name.clone());
-        if let Some(existing_id) = self.name_index.get(&new_key).as_deref().copied() {
+        if let Some(existing_id) = self.name_index.get(&new_name).as_deref().copied() {
             if existing_id != id {
                 return Err(OpenCarrierError::AgentAlreadyExists(new_name));
             }
@@ -301,9 +239,8 @@ impl AgentRegistry {
         entry.manifest.name = new_name.clone();
         entry.last_active = chrono::Utc::now();
         drop(entry);
-        let old_key = (tenant_id, old_name);
-        self.name_index.remove(&old_key);
-        self.name_index.insert(new_key, id);
+        self.name_index.remove(&old_name);
+        self.name_index.insert(new_name, id);
         Ok(())
     }
 
@@ -377,10 +314,6 @@ mod tests {
     use std::collections::HashMap;
 
     fn test_entry(name: &str) -> AgentEntry {
-        test_entry_with_tenant(name, "test-tenant")
-    }
-
-    fn test_entry_with_tenant(name: &str, tenant_id: &str) -> AgentEntry {
         AgentEntry {
             id: AgentId::new(),
             name: name.to_string(),
@@ -423,7 +356,6 @@ mod tests {
             identity: Default::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
-            tenant_id: tenant_id.to_string(),
         }
     }
 
@@ -445,27 +377,10 @@ mod tests {
     }
 
     #[test]
-    fn test_duplicate_name_same_tenant() {
+    fn test_duplicate_name_rejected() {
         let registry = AgentRegistry::new();
-        registry
-            .register(test_entry_with_tenant("dup", "t1"))
-            .unwrap();
-        assert!(registry
-            .register(test_entry_with_tenant("dup", "t1"))
-            .is_err());
-    }
-
-    #[test]
-    fn test_same_name_different_tenant() {
-        let registry = AgentRegistry::new();
-        registry
-            .register(test_entry_with_tenant("helper", "t1"))
-            .unwrap();
-        registry
-            .register(test_entry_with_tenant("helper", "t2"))
-            .unwrap();
-        assert!(registry.find_by_name_and_tenant("helper", "t1").is_some());
-        assert!(registry.find_by_name_and_tenant("helper", "t2").is_some());
+        registry.register(test_entry("dup")).unwrap();
+        assert!(registry.register(test_entry("dup")).is_err());
     }
 
     #[test]

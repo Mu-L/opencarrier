@@ -17,14 +17,17 @@ pub struct SetAgentFileRequest {
 /// GET /api/agents/{id}/files — List workspace identity files.
 pub async fn list_agent_files(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let (_agent_id, entry) =
-        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+        match parse_and_get_agent(&id, &state.kernel.registry) {
             Ok(r) => r,
-            Err(resp) => return resp,
+            Err((status, _)) => {
+                return (
+                    status,
+                    Json(serde_json::json!({"error": "Agent not found"})),
+                );
+            }
         };
 
     let workspace = match entry.manifest.workspace {
@@ -58,11 +61,9 @@ pub async fn list_agent_files(
 /// GET /api/agents/{id}/files/{filename} — Read a workspace identity file.
 pub async fn get_agent_file(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path((id, filename)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
+    let agent_id = match parse_agent_id(&id) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -142,12 +143,10 @@ pub async fn get_agent_file(
 /// Immutable files (SOUL.md) cannot be overwritten once created.
 pub async fn set_agent_file(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path((id, filename)): Path<(String, String)>,
     Json(req): Json<SetAgentFileRequest>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
+    let agent_id = match parse_agent_id(&id) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -294,14 +293,12 @@ fn is_allowed_content_type(ct: &str) -> bool {
 /// - `X-Filename` header (original filename)
 pub async fn upload_file(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    // Validate agent ID format and tenant ownership
-    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
+    // Validate agent ID format
+    let agent_id = match parse_agent_id(&id) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -379,7 +376,6 @@ pub async fn upload_file(
                             file_id.clone(),
                             UploadMeta {
                                 content_type: content_type.clone(),
-                                tenant_id: ctx.tenant_id.clone(),
                             },
                         );
 
@@ -457,7 +453,6 @@ pub async fn upload_file(
         file_id.clone(),
         UploadMeta {
             content_type: content_type.clone(),
-            tenant_id: ctx.tenant_id.clone(),
         },
     );
 
@@ -504,11 +499,8 @@ pub async fn upload_file(
 }
 /// GET /api/uploads/{file_id} — Serve an uploaded file.
 pub async fn serve_upload(
-    extensions: axum::http::Extensions,
     Path(file_id): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-
     // Validate file_id is a UUID to prevent path traversal
     if uuid::Uuid::parse_str(&file_id).is_err() {
         return (
@@ -521,19 +513,7 @@ pub async fn serve_upload(
         );
     }
 
-    // Tenant check: verify file belongs to caller's tenant
-    if let Some(meta) = UPLOAD_REGISTRY.get(&file_id) {
-        if !ctx.is_admin() && meta.tenant_id.as_ref() != ctx.tenant_id.as_ref() {
-            return (
-                StatusCode::FORBIDDEN,
-                [(
-                    axum::http::header::CONTENT_TYPE,
-                    "application/json".to_string(),
-                )],
-                b"{\"error\":\"Access denied\"}".to_vec(),
-            );
-        }
-    }
+    // File exists in upload registry — no tenant check needed (tenant layer removed)
 
     let file_path = std::env::temp_dir()
         .join("opencarrier_uploads")
@@ -590,13 +570,11 @@ pub struct OutputQuery {
 /// Requires `?sender_id=xxx` query param. No fallback — sender_id is mandatory.
 pub async fn list_output_files(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Query(params): Query<OutputQuery>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let (_agent_id, entry) =
-        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+        match parse_and_get_agent(&id, &state.kernel.registry) {
             Ok(r) => r,
             Err(resp) => return resp,
         };

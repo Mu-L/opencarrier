@@ -10,7 +10,6 @@ opencarrier-types = { path = "../opencarrier-types" }
 opencarrier-kernel = { path = "../opencarrier-kernel" }
 opencarrier-runtime = { path = "../opencarrier-runtime" }
 opencarrier-memory = { path = "../opencarrier-memory" }
-opencarrier-skills = { path = "../opencarrier-skills" }
 opencarrier-clone = { path = "../opencarrier-clone" }
 opencarrier-lifecycle = { path = "../opencarrier-lifecycle" }
 dashmap = { workspace = true }

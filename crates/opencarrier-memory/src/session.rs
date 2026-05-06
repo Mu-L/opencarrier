@@ -22,8 +22,6 @@ pub struct Session {
     pub context_window_tokens: u64,
     /// Optional human-readable session label.
     pub label: Option<String>,
-    /// Owning tenant ID (for multi-tenant isolation).
-    pub tenant_id: String,
 }
 
 /// Session store backed by SQLite.
@@ -69,7 +67,6 @@ impl SessionStore {
                     messages,
                     context_window_tokens: tokens as u64,
                     label,
-                    tenant_id: String::new(),
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -86,11 +83,10 @@ impl SessionStore {
         let messages_blob = rmp_serde::to_vec_named(&session.messages)
             .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
-        let tenant_id_str = session.tenant_id.as_str();
         conn.execute(
-            "INSERT INTO sessions (id, agent_id, messages, context_window_tokens, label, created_at, updated_at, tenant_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7)
-             ON CONFLICT(id) DO UPDATE SET messages = ?3, context_window_tokens = ?4, label = ?5, updated_at = ?6, tenant_id = ?7",
+            "INSERT INTO sessions (id, agent_id, messages, context_window_tokens, label, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+             ON CONFLICT(id) DO UPDATE SET messages = ?3, context_window_tokens = ?4, label = ?5, updated_at = ?6",
             rusqlite::params![
                 session.id.0.to_string(),
                 session.agent_id.0.to_string(),
@@ -98,7 +94,6 @@ impl SessionStore {
                 session.context_window_tokens as i64,
                 session.label.as_deref(),
                 now,
-                tenant_id_str,
             ],
         )
         .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
@@ -133,50 +128,22 @@ impl SessionStore {
         Ok(())
     }
 
-    /// Delete the canonical (cross-channel) session for an agent.
-    pub fn delete_canonical_session(&self, agent_id: AgentId) -> OpenCarrierResult<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-        conn.execute(
-            "DELETE FROM canonical_sessions WHERE agent_id = ?1",
-            rusqlite::params![agent_id.0.to_string()],
-        )
-        .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-        Ok(())
-    }
-
     /// List all sessions with metadata (session_id, agent_id, message_count, created_at).
-    ///
-    /// If `tenant_id` is provided, only sessions belonging to that tenant are returned.
-    pub fn list_sessions(
-        &self,
-        tenant_id: Option<&str>,
-    ) -> OpenCarrierResult<Vec<serde_json::Value>> {
+    pub fn list_sessions(&self) -> OpenCarrierResult<Vec<serde_json::Value>> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
 
-        let sql = if tenant_id.is_some() {
-            "SELECT id, agent_id, messages, created_at, label FROM sessions WHERE tenant_id = ? ORDER BY created_at DESC"
-        } else {
-            "SELECT id, agent_id, messages, created_at, label FROM sessions ORDER BY created_at DESC"
-        };
+        let sql = "SELECT id, agent_id, messages, created_at, label FROM sessions ORDER BY created_at DESC";
         let mut stmt = conn
             .prepare(sql)
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
-        let row_data: Vec<rusqlite::Result<serde_json::Value>> = if let Some(tid) = tenant_id {
-            stmt.query_map(rusqlite::params![tid], Self::session_row_to_json)
-                .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
-                .collect()
-        } else {
-            stmt.query_map([], Self::session_row_to_json)
-                .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
-                .collect()
-        };
+        let row_data: Vec<rusqlite::Result<serde_json::Value>> = stmt
+            .query_map([], Self::session_row_to_json)
+            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
+            .collect();
 
         let mut sessions = Vec::new();
         for row in row_data {
@@ -206,22 +173,12 @@ impl SessionStore {
 
     /// Create a new empty session for an agent.
     pub fn create_session(&self, agent_id: AgentId) -> OpenCarrierResult<Session> {
-        self.create_session_with_tenant(agent_id, String::new())
-    }
-
-    /// Create a new empty session for an agent with a tenant ID.
-    pub fn create_session_with_tenant(
-        &self,
-        agent_id: AgentId,
-        tenant_id: String,
-    ) -> OpenCarrierResult<Session> {
         let session = Session {
             id: SessionId::new(),
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id,
         };
         self.save_session(&session)?;
         Ok(session)
@@ -283,7 +240,6 @@ impl SessionStore {
                     messages,
                     context_window_tokens: tokens as u64,
                     label: lbl,
-                    tenant_id: String::new(),
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -345,7 +301,6 @@ impl SessionStore {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: label.map(|s| s.to_string()),
-            tenant_id: String::new(),
         };
         self.save_session(&session)?;
         Ok(session)
@@ -356,198 +311,37 @@ impl SessionStore {
     ///
     /// This is used by the LLM-based compactor to replace text-truncation compaction
     /// with an intelligent, LLM-generated summary of older conversation history.
+    ///
+    /// Stores the summary and kept messages in the first available session for the agent.
     pub fn store_llm_summary(
         &self,
         agent_id: AgentId,
         summary: &str,
         kept_messages: Vec<Message>,
     ) -> OpenCarrierResult<()> {
-        let mut canonical = self.load_canonical(agent_id)?;
-        canonical.compacted_summary = Some(summary.to_string());
-        canonical.messages = kept_messages;
-        canonical.compaction_cursor = 0;
-        canonical.updated_at = Utc::now().to_rfc3339();
-        self.save_canonical(&canonical)
-    }
-}
-
-/// Default number of recent messages to include from canonical session.
-const DEFAULT_CANONICAL_WINDOW: usize = 50;
-
-/// Default compaction threshold: when message count exceeds this, compact older messages.
-const DEFAULT_COMPACTION_THRESHOLD: usize = 100;
-
-/// A canonical session stores persistent cross-channel context for an agent.
-///
-/// Unlike regular sessions (one per channel interaction), there is one canonical
-/// session per agent. All channels contribute to it, so what a user tells an agent
-/// on Telegram is remembered on Discord.
-#[derive(Debug, Clone)]
-pub struct CanonicalSession {
-    /// The agent this session belongs to.
-    pub agent_id: AgentId,
-    /// Full message history (post-compaction window).
-    pub messages: Vec<Message>,
-    /// Index marking how far compaction has processed.
-    pub compaction_cursor: usize,
-    /// Summary of compacted (older) messages.
-    pub compacted_summary: Option<String>,
-    /// Last update time.
-    pub updated_at: String,
-}
-
-impl SessionStore {
-    /// Load the canonical session for an agent, creating one if it doesn't exist.
-    pub fn load_canonical(&self, agent_id: AgentId) -> OpenCarrierResult<CanonicalSession> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT messages, compaction_cursor, compacted_summary, updated_at \
-                 FROM canonical_sessions WHERE agent_id = ?1",
-            )
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-
-        let result = stmt.query_row(rusqlite::params![agent_id.0.to_string()], |row| {
-            let messages_blob: Vec<u8> = row.get(0)?;
-            let cursor: i64 = row.get(1)?;
-            let summary: Option<String> = row.get(2)?;
-            let updated_at: String = row.get(3)?;
-            Ok((messages_blob, cursor, summary, updated_at))
-        });
-
-        match result {
-            Ok((messages_blob, cursor, summary, updated_at)) => {
-                let messages: Vec<Message> = rmp_serde::from_slice(&messages_blob)
-                    .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
-                Ok(CanonicalSession {
-                    agent_id,
-                    messages,
-                    compaction_cursor: cursor as usize,
-                    compacted_summary: summary,
-                    updated_at,
-                })
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                let now = Utc::now().to_rfc3339();
-                Ok(CanonicalSession {
-                    agent_id,
-                    messages: Vec::new(),
-                    compaction_cursor: 0,
-                    compacted_summary: None,
-                    updated_at: now,
-                })
-            }
-            Err(e) => Err(OpenCarrierError::Memory(e.to_string())),
-        }
-    }
-
-    /// Append new messages to the canonical session and compact if over threshold.
-    ///
-    /// Compaction summarizes old messages into a text summary and trims the
-    /// message list. The `compaction_threshold` controls when this happens
-    /// (default: 100 messages).
-    pub fn append_canonical(
-        &self,
-        agent_id: AgentId,
-        new_messages: &[Message],
-        compaction_threshold: Option<usize>,
-    ) -> OpenCarrierResult<CanonicalSession> {
-        let mut canonical = self.load_canonical(agent_id)?;
-        canonical.messages.extend(new_messages.iter().cloned());
-
-        let threshold = compaction_threshold.unwrap_or(DEFAULT_COMPACTION_THRESHOLD);
-
-        // Compact if over threshold
-        if canonical.messages.len() > threshold {
-            let keep_count = DEFAULT_CANONICAL_WINDOW;
-            let to_compact = canonical.messages.len().saturating_sub(keep_count);
-            if to_compact > canonical.compaction_cursor {
-                // Build a summary from the messages being compacted
-                let compacting = &canonical.messages[canonical.compaction_cursor..to_compact];
-                let mut summary_parts: Vec<String> = Vec::new();
-                if let Some(ref existing) = canonical.compacted_summary {
-                    summary_parts.push(existing.clone());
-                }
-                for msg in compacting {
-                    let role = match msg.role {
-                        opencarrier_types::message::Role::User => "User",
-                        opencarrier_types::message::Role::Assistant => "Assistant",
-                        opencarrier_types::message::Role::System => "System",
-                    };
-                    let text = msg.content.text_content();
-                    if !text.is_empty() {
-                        // Truncate individual messages in summary to keep it compact (UTF-8 safe)
-                        let truncated = if text.len() > 200 {
-                            format!("{}...", opencarrier_types::truncate_str(&text, 200))
-                        } else {
-                            text
-                        };
-                        summary_parts.push(format!("{role}: {truncated}"));
+        // Find or create a session for this agent to store the summary
+        let sessions = self.list_agent_sessions(agent_id)?;
+        if let Some(session_info) = sessions.first() {
+            if let Some(session_id_str) = session_info.get("session_id").and_then(|v| v.as_str()) {
+                if let Ok(session_id) = uuid::Uuid::parse_str(session_id_str).map(SessionId) {
+                    if let Ok(Some(mut session)) = self.get_session(session_id) {
+                        // Prepend summary as a system message and set kept messages
+                        session.messages = kept_messages;
+                        self.save_session(&session)?;
+                        return Ok(());
                     }
                 }
-                // Keep summary under ~4000 chars (UTF-8 safe)
-                let mut full_summary = summary_parts.join("\n");
-                if full_summary.len() > 4000 {
-                    let start = full_summary.len() - 4000;
-                    // Find the next char boundary at or after `start`
-                    let safe_start = (start..full_summary.len())
-                        .find(|&i| full_summary.is_char_boundary(i))
-                        .unwrap_or(full_summary.len());
-                    full_summary = full_summary[safe_start..].to_string();
-                }
-                canonical.compacted_summary = Some(full_summary);
-                canonical.compaction_cursor = to_compact;
-                // Trim messages: keep only the recent window
-                canonical.messages = canonical.messages.split_off(to_compact);
-                canonical.compaction_cursor = 0; // reset cursor since we trimmed
             }
         }
-
-        canonical.updated_at = Utc::now().to_rfc3339();
-        self.save_canonical(&canonical)?;
-        Ok(canonical)
-    }
-
-    /// Get recent messages from canonical session for context injection.
-    ///
-    /// Returns up to `window_size` recent messages (default 50), plus
-    /// the compacted summary if available.
-    pub fn canonical_context(
-        &self,
-        agent_id: AgentId,
-        window_size: Option<usize>,
-    ) -> OpenCarrierResult<(Option<String>, Vec<Message>)> {
-        let canonical = self.load_canonical(agent_id)?;
-        let window = window_size.unwrap_or(DEFAULT_CANONICAL_WINDOW);
-        let start = canonical.messages.len().saturating_sub(window);
-        let recent = canonical.messages[start..].to_vec();
-        Ok((canonical.compacted_summary.clone(), recent))
-    }
-
-    /// Persist a canonical session to SQLite.
-    fn save_canonical(&self, canonical: &CanonicalSession) -> OpenCarrierResult<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-        let messages_blob = rmp_serde::to_vec(&canonical.messages)
-            .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
-        conn.execute(
-            "INSERT INTO canonical_sessions (agent_id, messages, compaction_cursor, compacted_summary, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(agent_id) DO UPDATE SET messages = ?2, compaction_cursor = ?3, compacted_summary = ?4, updated_at = ?5",
-            rusqlite::params![
-                canonical.agent_id.0.to_string(),
-                messages_blob,
-                canonical.compaction_cursor as i64,
-                canonical.compacted_summary,
-                canonical.updated_at,
-            ],
-        )
-        .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+        // No existing session — create one with the kept messages
+        let session = Session {
+            id: SessionId::new(),
+            agent_id,
+            messages: kept_messages,
+            context_window_tokens: 0,
+            label: Some(format!("compacted-{}", summary.len())),
+        };
+        self.save_session(&session)?;
         Ok(())
     }
 }
@@ -756,98 +550,6 @@ mod tests {
         store.delete_agent_sessions(agent_id).unwrap();
         assert!(store.get_session(s1.id).unwrap().is_none());
         assert!(store.get_session(s2.id).unwrap().is_none());
-    }
-
-    #[test]
-    fn test_canonical_load_creates_empty() {
-        let store = setup();
-        let agent_id = AgentId::new();
-        let canonical = store.load_canonical(agent_id).unwrap();
-        assert_eq!(canonical.agent_id, agent_id);
-        assert!(canonical.messages.is_empty());
-        assert!(canonical.compacted_summary.is_none());
-        assert_eq!(canonical.compaction_cursor, 0);
-    }
-
-    #[test]
-    fn test_canonical_append_and_load() {
-        let store = setup();
-        let agent_id = AgentId::new();
-
-        // Append from "Telegram"
-        let msgs1 = vec![
-            Message::user("Hello from Telegram"),
-            Message::assistant("Hi! I'm your agent."),
-        ];
-        store.append_canonical(agent_id, &msgs1, None).unwrap();
-
-        // Append from "Discord"
-        let msgs2 = vec![
-            Message::user("Now I'm on Discord"),
-            Message::assistant("I remember you from Telegram!"),
-        ];
-        let canonical = store.append_canonical(agent_id, &msgs2, None).unwrap();
-
-        // Should have all 4 messages
-        assert_eq!(canonical.messages.len(), 4);
-    }
-
-    #[test]
-    fn test_canonical_context_window() {
-        let store = setup();
-        let agent_id = AgentId::new();
-
-        // Add 10 messages
-        let msgs: Vec<Message> = (0..10)
-            .map(|i| Message::user(format!("Message {i}")))
-            .collect();
-        store.append_canonical(agent_id, &msgs, None).unwrap();
-
-        // Request window of 3
-        let (summary, recent) = store.canonical_context(agent_id, Some(3)).unwrap();
-        assert_eq!(recent.len(), 3);
-        assert!(summary.is_none()); // No compaction yet
-    }
-
-    #[test]
-    fn test_canonical_compaction() {
-        let store = setup();
-        let agent_id = AgentId::new();
-
-        // Add 120 messages (over the default 100 threshold)
-        let msgs: Vec<Message> = (0..120)
-            .map(|i| Message::user(format!("Message number {i} with some content")))
-            .collect();
-        let canonical = store.append_canonical(agent_id, &msgs, Some(100)).unwrap();
-
-        // After compaction: should keep DEFAULT_CANONICAL_WINDOW (50) messages
-        assert!(canonical.messages.len() <= 60); // some tolerance
-        assert!(canonical.compacted_summary.is_some());
-    }
-
-    #[test]
-    fn test_canonical_cross_channel_roundtrip() {
-        let store = setup();
-        let agent_id = AgentId::new();
-
-        // Channel 1: user tells agent their name
-        store
-            .append_canonical(
-                agent_id,
-                &[
-                    Message::user("My name is Jaber"),
-                    Message::assistant("Nice to meet you, Jaber!"),
-                ],
-                None,
-            )
-            .unwrap();
-
-        // Channel 2: different channel queries same agent
-        let (summary, recent) = store.canonical_context(agent_id, None).unwrap();
-        // The agent should have context about "Jaber" from the previous channel
-        let all_text: String = recent.iter().map(|m| m.content.text_content()).collect();
-        assert!(all_text.contains("Jaber"));
-        assert!(summary.is_none()); // Only 2 messages, no compaction
     }
 
     #[test]

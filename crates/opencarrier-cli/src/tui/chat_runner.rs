@@ -659,15 +659,7 @@ impl StandaloneChat {
                         }
                     };
                 let name = manifest.name.clone();
-                let spawn_tid = kernel
-                    .memory
-                    .tenant()
-                    .get_tenant_by_name(&kernel.config.auth.username)
-                    .ok()
-                    .flatten()
-                    .map(|t| t.id)
-                    .unwrap_or_default();
-                match kernel.spawn_agent(manifest, &spawn_tid) {
+                match kernel.spawn_agent(manifest) {
                     Ok(id) => {
                         self.enter_chat_inprocess(id, name);
                     }

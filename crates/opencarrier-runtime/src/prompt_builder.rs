@@ -31,8 +31,6 @@ pub struct PromptContext {
     pub user_md: Option<String>,
     /// MEMORY.md content.
     pub memory_md: Option<String>,
-    /// Cross-channel canonical context summary.
-    pub canonical_context: Option<String>,
     /// Known user name (from agent's own KV namespace).
     pub user_name: Option<String>,
     /// Channel type (telegram, discord, web, etc.).
@@ -173,6 +171,9 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
                 ));
             }
         }
+
+        // System evolution prompt — auto-injected for all clones
+        sections.push(EVOLUTION_PROMPT.to_string());
     }
 
     // Section 1.5 — Current Date/Time (always present when set)
@@ -294,10 +295,7 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     // Section 11 — Operational Guidelines (always present)
     sections.push(OPERATIONAL_GUIDELINES.to_string());
 
-    // Section 12 — Canonical Context moved to build_canonical_context_message()
-    // to keep the system prompt stable across turns for provider prompt caching.
-
-    // Section 13 — Bootstrap Protocol (only on first-run, skip for subagents)
+    // Section 12 — Bootstrap Protocol (only on first-run, skip for subagents)
     if !ctx.is_subagent {
         if let Some(ref bootstrap) = ctx.bootstrap_md {
             if !bootstrap.trim().is_empty() {
@@ -395,21 +393,6 @@ pub fn build_tools_section(granted_tools: &[String]) -> String {
         out.push_str(&descs.join(", "));
     }
     out
-}
-
-/// Build canonical context as a standalone user message (instead of system prompt).
-///
-/// This keeps the system prompt stable across turns, enabling provider prompt caching
-/// (Anthropic cache_control, etc.). The canonical context changes every turn, so
-/// injecting it in the system prompt caused 82%+ cache misses.
-pub fn build_canonical_context_message(ctx: &PromptContext) -> Option<String> {
-    if ctx.is_subagent {
-        return None;
-    }
-    ctx.canonical_context
-        .as_ref()
-        .filter(|c| !c.is_empty())
-        .map(|c| format!("[Previous conversation context]\n{}", cap_str(c, 500)))
 }
 
 /// Build the memory section (Section 4).
@@ -600,6 +583,18 @@ const SAFETY_SECTION: &str = "\
 - If you cannot accomplish a task safely, explain the limitation.
 - When in doubt, ask the user.";
 
+/// System evolution prompt — auto-injected for all clones.
+/// Tells the clone about self-improvement tools so it can learn and adapt autonomously.
+const EVOLUTION_PROMPT: &str = "\
+## 自我进化
+你拥有自我学习和改进的能力。在对话中发现有价值的新知识时，主动使用工具保存：
+- **knowledge_extract**: 从对话中提取新知识（事实、规则、偏好）并保存到知识库
+- **skill_create**: 创建新技能来扩展你的能力
+- **skill_update**: 改进现有技能的流程和内容
+- **session_summarize**: 总结长对话的关键信息以备后续回忆
+
+不需要每次对话都调用，只在有实质性新知识或改进机会时使用。越用越好。";
+
 /// Static operational guidelines (replaces STABILITY_GUIDELINES).
 const OPERATIONAL_GUIDELINES: &str = "\
 ## Operational Guidelines
@@ -716,6 +711,14 @@ pub fn tool_hint(name: &str) -> &'static str {
         "process_write" => "write to a process's stdin",
         "process_kill" => "terminate a running process",
         "process_list" => "list active processes",
+
+        // Evolution (self-improvement)
+        "knowledge_extract" => "extract and save new knowledge from conversation",
+        "knowledge_index" => "rebuild knowledge index (MEMORY.md)",
+        "skill_create" => "create a new skill",
+        "skill_update" => "update an existing skill",
+        "skill_load" => "load full skill content",
+        "session_summarize" => "save a conversation summary",
 
         _ => "",
     }
@@ -1019,32 +1022,6 @@ mod tests {
         let ctx = basic_ctx();
         let prompt = build_system_prompt(&ctx);
         assert!(prompt.contains("don't know the user's name"));
-    }
-
-    #[test]
-    fn test_canonical_context_not_in_system_prompt() {
-        let mut ctx = basic_ctx();
-        ctx.canonical_context =
-            Some("User was discussing Rust async patterns last time.".to_string());
-        let prompt = build_system_prompt(&ctx);
-        // Canonical context should NOT be in system prompt (moved to user message)
-        assert!(!prompt.contains("## Previous Conversation Context"));
-        assert!(!prompt.contains("Rust async patterns"));
-        // But should be available via build_canonical_context_message
-        let msg = build_canonical_context_message(&ctx);
-        assert!(msg.is_some());
-        assert!(msg.unwrap().contains("Rust async patterns"));
-    }
-
-    #[test]
-    fn test_canonical_context_omitted_for_subagent() {
-        let mut ctx = basic_ctx();
-        ctx.is_subagent = true;
-        ctx.canonical_context = Some("Previous context here.".to_string());
-        let prompt = build_system_prompt(&ctx);
-        assert!(!prompt.contains("Previous Conversation Context"));
-        // Should also be None from build_canonical_context_message
-        assert!(build_canonical_context_message(&ctx).is_none());
     }
 
     #[test]

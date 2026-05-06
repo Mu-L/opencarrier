@@ -12,23 +12,13 @@ use std::sync::Arc;
 // Agent Communication (Comms) endpoints
 // ---------------------------------------------------------------------------
 
-/// GET /api/comms/topology — Build agent topology graph from registry.
+/// GET /api/comms/topology -- Build agent topology graph from registry.
 pub async fn comms_topology(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
     use opencarrier_types::comms::{EdgeKind, TopoEdge, TopoNode, Topology};
 
-    let ctx = get_tenant_ctx(&extensions);
-    let all_agents = state.kernel.registry.list();
-    let agents: Vec<_> = if ctx.is_admin() {
-        all_agents
-    } else {
-        all_agents
-            .into_iter()
-            .filter(|a| can_access(&ctx, a.tenant_id.as_str()))
-            .collect()
-    };
+    let agents = state.kernel.registry.list();
 
     let nodes: Vec<TopoNode> = agents
         .iter()
@@ -167,7 +157,7 @@ fn audit_to_comms_event(
     let action_str = format!("{:?}", entry.action);
     let (kind, detail, target_label) = match action_str.as_str() {
         "AgentMessage" => {
-            // Format detail: "tokens_in=X, tokens_out=Y" → readable summary
+            // Format detail: "tokens_in=X, tokens_out=Y" -> readable summary
             let detail = if entry.detail.starts_with("tokens_in=") {
                 let parts: Vec<&str> = entry.detail.split(", ").collect();
                 let in_tok = parts
@@ -182,7 +172,7 @@ fn audit_to_comms_event(
                     format!("{} in / {} out tokens", in_tok, out_tok)
                 } else {
                     format!(
-                        "{} in / {} out — {}",
+                        "{} in / {} out -- {}",
                         in_tok,
                         out_tok,
                         opencarrier_types::truncate_str(&entry.outcome, 80)
@@ -190,7 +180,7 @@ fn audit_to_comms_event(
                 }
             } else if entry.outcome != "ok" {
                 format!(
-                    "{} — {}",
+                    "{} -- {}",
                     opencarrier_types::truncate_str(&entry.detail, 80),
                     opencarrier_types::truncate_str(&entry.outcome, 80)
                 )
@@ -237,31 +227,21 @@ fn audit_to_comms_event(
         detail,
     })
 }
-/// GET /api/comms/events — Return recent inter-agent communication events.
+/// GET /api/comms/events -- Return recent inter-agent communication events.
 ///
 /// Sources from both the event bus (for lifecycle events with full context)
 /// and the audit log (for message/spawn/kill events that are always captured).
 pub async fn comms_events(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let limit = params
         .get("limit")
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(100)
         .min(500);
 
-    let all_agents = state.kernel.registry.list();
-    let agents: Vec<_> = if ctx.is_admin() {
-        all_agents
-    } else {
-        all_agents
-            .into_iter()
-            .filter(|a| can_access(&ctx, a.tenant_id.as_str()))
-            .collect()
-    };
+    let agents = state.kernel.registry.list();
 
     // Primary source: event bus (has full source/target context)
     let bus_events = state.kernel.coordination.event_bus.history(500).await;
@@ -289,17 +269,12 @@ pub async fn comms_events(
 
     Json(comms_events)
 }
-/// GET /api/comms/events/stream — SSE stream of inter-agent communication events.
+/// GET /api/comms/events/stream -- SSE stream of inter-agent communication events.
 ///
 /// Polls the audit log every 500ms for new inter-agent events.
 pub async fn comms_events_stream(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> axum::response::Response {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, "Admin only").into_response();
-    }
     use axum::response::sse::{Event, KeepAlive, Sse};
 
     let (tx, rx) = tokio::sync::mpsc::channel::<
@@ -345,46 +320,29 @@ pub async fn comms_events_stream(
         )
         .into_response()
 }
-/// POST /api/comms/send — Send a message from one agent to another.
+/// POST /api/comms/send -- Send a message from one agent to another.
 pub async fn comms_send(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Json(req): Json<opencarrier_types::comms::CommsSendRequest>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-
-    // Validate from agent exists and tenant can access it
+    // Validate from agent exists
     let from_id = match parse_agent_id(&req.from_agent_id) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
-    if let Some(from_entry) = state.kernel.registry.get(from_id) {
-        if !can_access(&ctx, from_entry.tenant_id.as_str()) {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Access denied to source agent"})),
-            );
-        }
-    } else {
+    if state.kernel.registry.get(from_id).is_none() {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Source agent not found"})),
         );
     }
 
-    // Validate to agent exists and tenant can access it
+    // Validate to agent exists
     let to_id = match parse_agent_id(&req.to_agent_id) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
-    if let Some(to_entry) = state.kernel.registry.get(to_id) {
-        if !can_access(&ctx, &to_entry.tenant_id) {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Access denied to target agent"})),
-            );
-        }
-    } else {
+    if state.kernel.registry.get(to_id).is_none() {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Target agent not found"})),
@@ -415,19 +373,11 @@ pub async fn comms_send(
         ),
     }
 }
-/// POST /api/comms/task — Post a task to the agent task queue.
+/// POST /api/comms/task -- Post a task to the agent task queue.
 pub async fn comms_task(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Json(req): Json<opencarrier_types::comms::CommsTaskRequest>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin only"})),
-        );
-    }
     if req.title.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -443,7 +393,6 @@ pub async fn comms_task(
             &req.description,
             req.assigned_to.as_deref(),
             Some("ui-user"),
-            None,
         )
         .await
     {

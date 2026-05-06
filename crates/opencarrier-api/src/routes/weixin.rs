@@ -1,6 +1,5 @@
 //! WeChat iLink Bot, WeCom, and Feishu channel endpoints.
 
-use crate::routes::common::get_tenant_ctx;
 use crate::routes::plugin_toml::*;
 use crate::routes::state::AppState;
 use axum::extract::{Path, Query, State};
@@ -221,12 +220,7 @@ pub async fn weixin_qrcode_status(
                                 );
 
                                 // Look up real tenant_id (UUID) from tenant store
-                                let real_tenant_id = state.kernel.memory.tenant()
-                                    .get_tenant_by_name(&existing_tenant)
-                                    .ok()
-                                    .flatten()
-                                    .map(|t| t.id)
-                                    .unwrap_or_else(|| existing_tenant.clone());
+                                let real_tenant_id = existing_tenant.clone();
 
                                 // Ensure token file has tenant_id
                                 updated["tenant_id"] = serde_json::Value::String(real_tenant_id.clone());
@@ -252,16 +246,6 @@ pub async fn weixin_qrcode_status(
                                 }
 
                                 // Create session token with real tenant_id
-                                let api_key = state.kernel.config.api_key.trim().to_string();
-                                let secret = if !api_key.is_empty() {
-                                    api_key
-                                } else {
-                                    state.kernel.config.auth.password_hash.clone()
-                                };
-                                let session_token = crate::session_auth::create_session_token(
-                                    Some(&real_tenant_id), "tenant", &existing_tenant, &secret, 24,
-                                );
-
                                 return (
                                     StatusCode::OK,
                                     Json(serde_json::json!({
@@ -270,7 +254,6 @@ pub async fn weixin_qrcode_status(
                                         "status": "confirmed",
                                         "existing": true,
                                         "bind_agent": existing_bind,
-                                        "session_token": session_token,
                                         "ilink_bot_id": ilink_bot_id,
                                         "ilink_user_id": ilink_user_id,
                                         "bot_token": bot_token,
@@ -469,12 +452,7 @@ pub async fn weixin_status(State(state): State<Arc<AppState>>) -> impl IntoRespo
 /// GET `/api/channels/status` — aggregate status for all channel plugins.
 ///
 /// Reads WeChat token files, WeCom and Feishu plugin.toml tenants.
-pub async fn channels_status(State(state): State<Arc<AppState>>, extensions: axum::http::Extensions) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin access required"})));
-    }
-
+pub async fn channels_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let home = &state.kernel.config.home_dir;
 
     // ── WeChat iLink ──────────────────────────────────────────────────
@@ -653,14 +631,8 @@ pub async fn channels_status(State(state): State<Arc<AppState>>, extensions: axu
 /// Body: `{ "name": "...", "mode": "smartbot"|"app"|"kf", "corp_id": "...", "bot_id": "...", "secret": "...", "webhook_port": 8454, "encoding_aes_key": "..." }`
 pub async fn wecom_add_tenant(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin access required"})));
-    }
-
     let name = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => match channel_sanitize_name(n) {
             Some(s) => s,
@@ -798,14 +770,8 @@ pub async fn wecom_add_tenant(
 /// Body: `{ "name": "...", "app_id": "...", "app_secret": "...", "brand": "feishu"|"lark" }`
 pub async fn feishu_add_tenant(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin access required"})));
-    }
-
     let name = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => match channel_sanitize_name(n) {
             Some(s) => s,
@@ -995,7 +961,7 @@ pub async fn weixin_bind_bot(
     let agent_uuid = if uuid::Uuid::parse_str(&agent_input).is_ok() {
         agent_input.clone()
     } else {
-        let agents = state.kernel.list_agents("");
+        let agents = state.kernel.list_agents();
         match agents.iter().find(|a| a.name == agent_input) {
             Some(agent) => agent.id.clone(),
             None => {

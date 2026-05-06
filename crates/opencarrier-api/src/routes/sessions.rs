@@ -7,17 +7,20 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use std::sync::Arc;
-/// GET /api/agents/:id/session — Get agent session (conversation history).
+/// GET /api/agents/:id/session -- Get agent session (conversation history).
 pub async fn get_agent_session(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let (agent_id, entry) = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx)
+    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry)
     {
         Ok(r) => r,
-        Err(resp) => return resp,
+        Err((status, _)) => {
+            return (
+                status,
+                Json(serde_json::json!({"error": "Agent not found"})),
+            );
+        }
     };
 
     match state.kernel.memory.get_session(entry.session_id) {
@@ -26,7 +29,7 @@ pub async fn get_agent_session(
             // ToolResult blocks arrive in subsequent User messages.  Pass 1
             // collects all tool_use entries keyed by id; pass 2 attaches results.
 
-            // Pass 1: build messages and a lookup from tool_use_id → (msg_idx, tool_idx)
+            // Pass 1: build messages and a lookup from tool_use_id -> (msg_idx, tool_idx)
             use base64::Engine as _;
             let mut built_messages: Vec<serde_json::Value> = Vec::new();
             let mut tool_use_index: std::collections::HashMap<String, (usize, usize)> =
@@ -63,7 +66,6 @@ pub async fn get_agent_session(
                                             file_id.clone(),
                                             UploadMeta {
                                                 content_type: media_type.clone(),
-                                                tenant_id: ctx.tenant_id.clone(),
                                             },
                                         );
                                         msg_images.push(serde_json::json!({
@@ -187,29 +189,20 @@ pub async fn get_agent_session(
 // Session listing endpoints
 // ---------------------------------------------------------------------------
 
-/// GET /api/sessions — List all sessions with metadata.
+/// GET /api/sessions -- List all sessions with metadata.
 pub async fn list_sessions(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let tid = if ctx.is_admin() {
-        None
-    } else {
-        ctx.tenant_id.as_deref()
-    };
-    match state.kernel.memory.list_sessions(tid) {
+    match state.kernel.memory.list_sessions() {
         Ok(sessions) => Json(serde_json::json!({"sessions": sessions})),
         Err(_) => Json(serde_json::json!({"sessions": []})),
     }
 }
-/// DELETE /api/sessions/:id — Delete a session.
+/// DELETE /api/sessions/:id -- Delete a session.
 pub async fn delete_session(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let session_id = match id.parse::<uuid::Uuid>() {
         Ok(u) => opencarrier_types::agent::SessionId(u),
         Err(_) => {
@@ -220,18 +213,9 @@ pub async fn delete_session(
         }
     };
 
-    // Tenant check: resolve session → agent → agent's tenant
+    // Verify session exists
     match state.kernel.memory.get_session(session_id) {
-        Ok(Some(session)) => {
-            if let Some(entry) = state.kernel.registry.get(session.agent_id) {
-                if !can_access(&ctx, &entry.tenant_id) {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(serde_json::json!({"error": "Access denied"})),
-                    );
-                }
-            }
-        }
+        Ok(Some(_)) => {}
         Ok(None) => {
             return (
                 StatusCode::NOT_FOUND,
@@ -257,14 +241,12 @@ pub async fn delete_session(
         ),
     }
 }
-/// PUT /api/sessions/:id/label — Set a session label.
+/// PUT /api/sessions/:id/label -- Set a session label.
 pub async fn set_session_label(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let session_id = match id.parse::<uuid::Uuid>() {
         Ok(u) => opencarrier_types::agent::SessionId(u),
         Err(_) => {
@@ -275,18 +257,9 @@ pub async fn set_session_label(
         }
     };
 
-    // Tenant check: resolve session → agent → agent's tenant
+    // Verify session exists
     match state.kernel.memory.get_session(session_id) {
-        Ok(Some(session)) => {
-            if let Some(entry) = state.kernel.registry.get(session.agent_id) {
-                if !can_access(&ctx, &entry.tenant_id) {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(serde_json::json!({"error": "Access denied"})),
-                    );
-                }
-            }
-        }
+        Ok(Some(_)) => {}
         Ok(None) => {
             return (
                 StatusCode::NOT_FOUND,
@@ -328,15 +301,13 @@ pub async fn set_session_label(
         ),
     }
 }
-/// GET /api/sessions/by-label/:label — Find session by label (scoped to agent).
+/// GET /api/sessions/by-label/:label -- Find session by label (scoped to agent).
 pub async fn find_session_by_label(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path((agent_id_str, label)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let (agent_id, _entry) =
-        match resolve_agent_id_with_tenant(&agent_id_str, &state.kernel.registry, &ctx) {
+        match resolve_agent_id(&agent_id_str, &state.kernel.registry) {
             Ok(r) => r,
             Err(resp) => return resp,
         };
@@ -361,16 +332,14 @@ pub async fn find_session_by_label(
         ),
     }
 }
-// ── Multi-Session Endpoints ─────────────────────────────────────────────
+// -- Multi-Session Endpoints -------------------------------------------------
 
-/// GET /api/agents/{id}/sessions — List all sessions for an agent.
+/// GET /api/agents/{id}/sessions -- List all sessions for an agent.
 pub async fn list_agent_sessions(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
+    let agent_id = match parse_agent_id(&id) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -385,15 +354,13 @@ pub async fn list_agent_sessions(
         ),
     }
 }
-/// POST /api/agents/{id}/sessions — Create a new session for an agent.
+/// POST /api/agents/{id}/sessions -- Create a new session for an agent.
 pub async fn create_agent_session(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
+    let agent_id = match parse_agent_id(&id) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -406,14 +373,12 @@ pub async fn create_agent_session(
         ),
     }
 }
-/// POST /api/agents/{id}/sessions/{session_id}/switch — Switch to an existing session.
+/// POST /api/agents/{id}/sessions/{session_id}/switch -- Switch to an existing session.
 pub async fn switch_agent_session(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path((id, session_id_str)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
+    let agent_id = match parse_agent_id(&id) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -437,16 +402,14 @@ pub async fn switch_agent_session(
         ),
     }
 }
-// ── Extended Chat Command API Endpoints ─────────────────────────────────
+// -- Extended Chat Command API Endpoints --------------------------------------
 
-/// POST /api/agents/{id}/session/reset — Reset an agent's session.
+/// POST /api/agents/{id}/session/reset -- Reset an agent's session.
 pub async fn reset_session(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
+    let agent_id = match parse_agent_id(&id) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -461,17 +424,20 @@ pub async fn reset_session(
         ),
     }
 }
-/// DELETE /api/agents/{id}/history — Clear ALL conversation history for an agent.
+/// DELETE /api/agents/{id}/history -- Clear ALL conversation history for an agent.
 pub async fn clear_agent_history(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let (agent_id, _entry) =
-        match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+        match parse_and_get_agent(&id, &state.kernel.registry) {
             Ok(r) => r,
-            Err(resp) => return resp,
+            Err((status, _)) => {
+                return (
+                    status,
+                    Json(serde_json::json!({"error": "Agent not found"})),
+                );
+            }
         };
     match state.kernel.clear_agent_history(agent_id) {
         Ok(()) => (
@@ -484,14 +450,12 @@ pub async fn clear_agent_history(
         ),
     }
 }
-/// POST /api/agents/{id}/session/compact — Trigger LLM session compaction.
+/// POST /api/agents/{id}/session/compact -- Trigger LLM session compaction.
 pub async fn compact_session(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let agent_id = match parse_agent_id_with_tenant(&id, &state.kernel.registry, &ctx) {
+    let agent_id = match parse_agent_id(&id) {
         Ok(id) => id,
         Err(resp) => return resp,
     };

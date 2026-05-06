@@ -17,7 +17,6 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::routes::plugin_toml::*;
 use crate::routes::state::AppState;
-use crate::routes::common::{get_tenant_ctx};
 
 /// Detect platform from plugin's [[channels]] declarations.
 fn detect_platform(doc: &toml::Value) -> Vec<&str> {
@@ -216,13 +215,7 @@ fn scan_bots(
 // GET /api/bots — list all bots
 // ---------------------------------------------------------------------------
 
-pub async fn list_bots(State(state): State<Arc<AppState>>, extensions: axum::http::Extensions) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    if ctx.is_deny_all() {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Authentication required"})));
-    }
-    let _is_admin = ctx.is_admin();
-
+pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let home = &state.kernel.config.home_dir;
     let plugins_dir = home.join("plugins");
     let mut bots: Vec<serde_json::Value> = Vec::new();
@@ -1104,14 +1097,8 @@ fn build_bot_fields(platform: &str, body: &serde_json::Value, tenant_name: &str)
 
 pub async fn create_bot(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin access required"})));
-    }
-
     let tenant_name = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => match channel_sanitize_name(n) {
             Some(s) => s,
@@ -1280,14 +1267,8 @@ pub async fn create_bot(
 
 pub async fn delete_bot(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(bot_uuid): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin access required"})));
-    }
-
     let home = &state.kernel.config.home_dir;
     let plugins_dir = home.join("plugins");
 
@@ -1342,15 +1323,9 @@ pub async fn delete_bot(
 
 pub async fn bind_bot(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(bot_uuid): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin access required"})));
-    }
-
     let agent_input = match body.get("agent_name").and_then(|v| v.as_str()) {
         Some(n) if !n.is_empty() => n.to_string(),
         _ => {
@@ -1365,7 +1340,7 @@ pub async fn bind_bot(
     let agent_uuid = if uuid::Uuid::parse_str(&agent_input).is_ok() {
         agent_input.clone()
     } else {
-        let agents = state.kernel.list_agents("");
+        let agents = state.kernel.list_agents();
         match agents.iter().find(|a| a.name == agent_input) {
             Some(agent) => agent.id.clone(),
             None => {
@@ -1539,14 +1514,8 @@ pub async fn bind_bot(
 
 pub async fn unbind_bot(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(bot_uuid): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin access required"})));
-    }
-
     let home = &state.kernel.config.home_dir;
     let plugins_dir = home.join("plugins");
 
@@ -1701,14 +1670,8 @@ fn update_bot_toml(
 
 pub async fn get_bot(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(bot_uuid): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    if ctx.is_deny_all() {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error": "Authentication required"})));
-    }
-
     let home = &state.kernel.config.home_dir;
     let plugins_dir = home.join("plugins");
 
@@ -1762,15 +1725,9 @@ pub async fn get_bot(
 
 pub async fn update_bot(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(bot_uuid): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin access required"})));
-    }
-
     let home = &state.kernel.config.home_dir;
     let plugins_dir = home.join("plugins");
 
@@ -1854,15 +1811,9 @@ pub struct BotSendBody {
 
 pub async fn bot_send_message(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(bot_uuid): Path<String>,
     Json(body): Json<BotSendBody>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Admin access required"})));
-    }
-
     let Some(ref pm) = state.plugin_manager else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,

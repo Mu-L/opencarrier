@@ -10,7 +10,6 @@ opencarrier-types = { path = "../opencarrier-types" }
 opencarrier-plugin-sdk = { path = "../opencarrier-plugin-sdk" }
 opencarrier-clone = { path = "../opencarrier-clone" }
 opencarrier-memory = { path = "../opencarrier-memory" }
-opencarrier-skills = { path = "../opencarrier-skills" }
 opencarrier-lifecycle = { path = "../opencarrier-lifecycle" }
 tokio = { workspace = true }
 axum = { workspace = true }

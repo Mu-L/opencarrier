@@ -1,6 +1,5 @@
 //! Health, metrics, audit, logs, and usage endpoints.
 
-use crate::routes::common::*;
 use crate::routes::state::AppState;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -76,16 +75,7 @@ pub async fn health_detail(State(state): State<Arc<AppState>>) -> impl IntoRespo
 /// - `opencarrier_restarts_total` — supervisor restart count
 pub async fn prometheus_metrics(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> axum::response::Response {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin only"})),
-        )
-            .into_response();
-    }
     let mut out = String::with_capacity(2048);
 
     // Uptime
@@ -169,17 +159,8 @@ pub async fn prometheus_metrics(
 /// GET /api/audit/recent — Get recent audit log entries.
 pub async fn audit_recent(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Query(params): Query<HashMap<String, String>>,
 ) -> axum::response::Response {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin only"})),
-        )
-            .into_response();
-    }
     let n: usize = params
         .get("n")
         .and_then(|v| v.parse().ok())
@@ -214,16 +195,7 @@ pub async fn audit_recent(
 /// GET /api/audit/verify — Verify the audit chain integrity.
 pub async fn audit_verify(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> axum::response::Response {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin only"})),
-        )
-            .into_response();
-    }
     let entry_count = state.kernel.audit_log.len();
     match state.kernel.audit_log.verify_integrity() {
         Ok(()) => {
@@ -267,17 +239,8 @@ pub async fn audit_verify(
 /// as a backfill so the client has immediate context.
 pub async fn logs_stream(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Query(params): Query<HashMap<String, String>>,
 ) -> axum::response::Response {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin only"})),
-        )
-            .into_response();
-    }
     use axum::response::sse::{Event, KeepAlive, Sse};
 
     let level_filter = params.get("level").cloned().unwrap_or_default();
@@ -377,19 +340,9 @@ fn classify_audit_level(action: &str) -> &'static str {
 /// GET /api/usage — Get per-agent usage statistics.
 pub async fn usage_stats(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let all_agents = state.kernel.registry.list();
-    let agents_filtered: Vec<_> = if ctx.is_admin() {
-        all_agents
-    } else {
-        all_agents
-            .into_iter()
-            .filter(|e| can_access(&ctx, &e.tenant_id))
-            .collect()
-    };
-    let agents: Vec<serde_json::Value> = agents_filtered
+    let agents: Vec<serde_json::Value> = all_agents
         .iter()
         .map(|e| {
             let (tokens, tool_calls) = state
@@ -416,19 +369,12 @@ pub async fn usage_stats(
 /// GET /api/usage/summary — Get overall usage summary from UsageStore.
 pub async fn usage_summary(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let tid = if ctx.is_admin() {
-        None
-    } else {
-        ctx.tenant_id.clone()
-    };
     match state
         .kernel
         .memory
         .usage()
-        .query_summary(None, tid.as_deref())
+        .query_summary(None)
     {
         Ok(s) => Json(serde_json::json!({
             "total_input_tokens": s.total_input_tokens,
@@ -447,15 +393,8 @@ pub async fn usage_summary(
 /// GET /api/usage/by-model — Get usage grouped by model.
 pub async fn usage_by_model(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let tid = if ctx.is_admin() {
-        None
-    } else {
-        ctx.tenant_id.clone()
-    };
-    match state.kernel.memory.usage().query_by_model(tid.as_deref()) {
+    match state.kernel.memory.usage().query_by_model() {
         Ok(models) => {
             let list: Vec<serde_json::Value> = models
                 .iter()
@@ -476,19 +415,12 @@ pub async fn usage_by_model(
 /// GET /api/usage/daily — Get daily usage breakdown for the last 7 days.
 pub async fn usage_daily(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let tid = if ctx.is_admin() {
-        None
-    } else {
-        ctx.tenant_id.clone()
-    };
     let days = state
         .kernel
         .memory
         .usage()
-        .query_daily_breakdown(7, tid.as_deref());
+        .query_daily_breakdown(7);
     let first_event = state.kernel.memory.usage().query_first_event_date();
 
     let days_list = match days {

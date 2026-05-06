@@ -172,35 +172,9 @@ pub async fn agent_ws(
             .map(|token| ct_eq(token, api_key))
             .unwrap_or(false);
 
-        // Session cookie auth: browser WebSocket automatically sends cookies
-        let auth_cfg = &state.kernel.config.auth;
-        let session_secret = if !api_key.is_empty() {
-            api_key.to_string()
-        } else {
-            auth_cfg.password_hash.clone()
-        };
-        let cookie_auth = headers
-            .get("cookie")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|cookies| {
-                cookies.split(';').find_map(|c| {
-                    c.trim()
-                        .strip_prefix("opencarrier_session=")
-                        .map(|v| v.to_string())
-                })
-            })
-            .and_then(|token| crate::session_auth::verify_session_token(&token, &session_secret))
-            .is_some();
+        // Session cookie/query auth removed (dashboard login no longer exists)
 
-        // Session query param auth (for share page WebSocket)
-        let query_session_auth = uri
-            .query()
-            .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("session=")))
-            .map(|t| urlencoding::decode(t).map(|s| s.to_string()).unwrap_or_default())
-            .and_then(|token| crate::session_auth::verify_session_token(&token, &session_secret))
-            .is_some();
-
-        if !header_auth && !query_auth && !cookie_auth && !query_session_auth {
+        if !header_auth && !query_auth {
             warn!("WebSocket upgrade rejected: invalid auth");
             return axum::http::StatusCode::UNAUTHORIZED.into_response();
         }

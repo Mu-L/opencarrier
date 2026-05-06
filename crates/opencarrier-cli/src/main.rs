@@ -1153,35 +1153,6 @@ fn cmd_start(config: Option<PathBuf>) {
         // ── Install default clones from Hub (only if missing) ─────────
         const DEFAULT_CLONES: &[&str] = &["clone-creator", "clone-trainer"];
         let hub = &kernel.config.hub;
-        // Resolve admin tenant_id so clones are visible after login
-        let admin_tenant_id: String = kernel.config.auth.enabled
-            .then(|| {
-                // Ensure admin tenant record exists
-                let tenant_store = kernel.memory.tenant();
-                match tenant_store.get_tenant_by_name(&kernel.config.auth.username) {
-                    Ok(Some(t)) => Some(t.id),
-                    _ => {
-                        // Auto-create admin tenant record
-                        let id = uuid::Uuid::new_v4().to_string();
-                        let hash = kernel.config.auth.password_hash.clone();
-                        let entry = opencarrier_types::tenant::TenantEntry {
-                            id: id.clone(),
-                            name: kernel.config.auth.username.clone(),
-                            password_hash: hash,
-                            role: opencarrier_types::tenant::TenantRole::Admin,
-                            enabled: true,
-                            created_at: chrono::Utc::now().to_rfc3339(),
-                            updated_at: chrono::Utc::now().to_rfc3339(),
-                        };
-                        if let Err(e) = tenant_store.create_tenant(&entry) {
-                            eprintln!("  ⚠ Failed to create admin tenant: {e}");
-                        }
-                        Some(id)
-                    }
-                }
-            })
-            .flatten()
-            .unwrap_or_default();
         if let Ok(api_key) = std::env::var(&hub.api_key_env) {
             for clone_name in DEFAULT_CLONES {
                 if kernel.registry.find_by_name(clone_name).is_some() {
@@ -1209,7 +1180,7 @@ fn cmd_start(config: Option<PathBuf>) {
                         if resp.status().is_success() {
                             match resp.bytes().await {
                                 Ok(bytes) => {
-                                    match kernel.clone_install(clone_name, &bytes, &admin_tenant_id).await {
+                                    match kernel.clone_install(clone_name, &bytes).await {
                                         Ok((id, name)) => {
                                             eprintln!("  ✓ Clone '{}' installed (id={})", name, id);
                                         }
@@ -1261,7 +1232,7 @@ fn cmd_start(config: Option<PathBuf>) {
 
         let dashboard_url = format!("http://{listen_addr}/");
 
-        // Auto-login: generate session token locally and pass via URL
+        // Auto-login: pass API key as session token for dashboard auth
         let mut open_url = dashboard_url.clone();
         if kernel.config.auth.enabled {
             let username = kernel.config.auth.username.clone();
@@ -1269,16 +1240,16 @@ fn cmd_start(config: Option<PathBuf>) {
                 .map(|(_, p)| p.clone())
                 .or_else(|| setup::read_login_secret(&kernel.config.home_dir));
 
-            if let (Some(u), Some(_p)) = (Some(username.clone()), password) {
-                let secret = if !kernel.config.api_key.trim().is_empty() {
+            if let (Some(_u), Some(_p)) = (Some(username.clone()), password) {
+                let token = if !kernel.config.api_key.trim().is_empty() {
                     kernel.config.api_key.trim().to_string()
                 } else {
+                    // Use password hash as the bearer token when no API key is set
                     kernel.config.auth.password_hash.clone()
                 };
-                let token = opencarrier_api::session_auth::create_session_token(
-                    None, "admin", &u, &secret, kernel.config.auth.session_ttl_hours,
-                );
-                open_url = format!("{}?session={}", dashboard_url, token);
+                if !token.is_empty() {
+                    open_url = format!("{}?session={}", dashboard_url, token);
+                }
             }
         }
 
@@ -1455,15 +1426,7 @@ fn cmd_agent_spawn(config: Option<PathBuf>, manifest_path: PathBuf) {
             std::process::exit(1);
         });
         let kernel = boot_kernel(config);
-        let spawn_tid = kernel
-            .memory
-            .tenant()
-            .get_tenant_by_name(&kernel.config.auth.username)
-            .ok()
-            .flatten()
-            .map(|t| t.id)
-            .unwrap_or_default();
-        match kernel.spawn_agent(manifest, &spawn_tid) {
+        match kernel.spawn_agent(manifest) {
             Ok(id) => {
                 println!("Agent spawned (in-process mode).");
                 println!("  ID: {id}");
@@ -1824,15 +1787,7 @@ fn spawn_template_agent(config: Option<PathBuf>, template: &templates::AgentTemp
             std::process::exit(1);
         });
         let kernel = boot_kernel(config);
-        let spawn_tid = kernel
-            .memory
-            .tenant()
-            .get_tenant_by_name(&kernel.config.auth.username)
-            .ok()
-            .flatten()
-            .map(|t| t.id)
-            .unwrap_or_default();
-        match kernel.spawn_agent(manifest, &spawn_tid) {
+        match kernel.spawn_agent(manifest) {
             Ok(id) => {
                 ui::blank();
                 ui::success(&format!("Agent '{}' spawned (in-process)", template.name));
@@ -2447,79 +2402,7 @@ fn cmd_doctor(json: bool, repair: bool) {
         }
     }
 
-    // --- Check 13: Skill registry health ---
-    {
-        if !json {
-            println!("\n  Skills:");
-        }
-        let skills_dir = cli_opencarrier_home().join("skills");
-        let mut skill_reg = opencarrier_skills::registry::SkillRegistry::new(skills_dir.clone());
-        let _ = skill_reg.load_all();
-        let skill_count = skill_reg.count();
-        if !json {
-            ui::check_ok(&format!("Skills loaded: {skill_count}"));
-        }
-        checks.push(serde_json::json!({"check": "skills", "status": "ok", "count": skill_count}));
-
-        // Check workspace skills if home dir available
-        if skills_dir.exists() {
-            match skill_reg.load_workspace_skills(&skills_dir) {
-                Ok(_) => {
-                    let total = skill_reg.count();
-                    let ws_count = total.saturating_sub(skill_count);
-                    if ws_count > 0 {
-                        if !json {
-                            ui::check_ok(&format!("Workspace skills loaded: {ws_count}"));
-                        }
-                        checks.push(serde_json::json!({"check": "workspace_skills", "status": "ok", "count": ws_count}));
-                    }
-                }
-                Err(e) => {
-                    if !json {
-                        ui::check_warn(&format!("Failed to load workspace skills: {e}"));
-                    }
-                    checks.push(serde_json::json!({"check": "workspace_skills", "status": "warn", "error": e.to_string()}));
-                }
-            }
-        }
-
-        // Check for prompt injection issues in skill definitions
-        // Only flag Critical-severity warnings (Warning-level hits are expected
-        // in bundled skills that mention shell commands in educational context).
-        let skills = skill_reg.list();
-        let mut injection_warnings = 0;
-        for skill in &skills {
-            if let Some(ref prompt) = skill.manifest.prompt_context {
-                let warnings =
-                    opencarrier_skills::verify::SkillVerifier::scan_prompt_content(prompt);
-                let has_critical = warnings.iter().any(|w| {
-                    matches!(
-                        w.severity,
-                        opencarrier_skills::verify::WarningSeverity::Critical
-                    )
-                });
-                if has_critical {
-                    injection_warnings += 1;
-                    if !json {
-                        ui::check_warn(&format!(
-                            "Prompt injection warning in skill: {}",
-                            skill.manifest.skill.name
-                        ));
-                    }
-                }
-            }
-        }
-        if injection_warnings > 0 {
-            checks.push(serde_json::json!({"check": "skill_injection_scan", "status": "warn", "warnings": injection_warnings}));
-        } else {
-            if !json {
-                ui::check_ok("All skills pass prompt injection scan");
-            }
-            checks.push(serde_json::json!({"check": "skill_injection_scan", "status": "ok"}));
-        }
-    }
-
-    // --- Check 15: Daemon health detail (if running) ---
+    // --- Check 14: Daemon health detail (if running) ---
     if let Some(ref base) = find_daemon() {
         if !json {
             println!("\n  Daemon Health:");
@@ -4905,14 +4788,6 @@ args = ["-y", "@modelcontextprotocol/server-github"]
             }
             _ => panic!("Expected Stdio transport"),
         }
-    }
-
-    #[test]
-    fn test_doctor_skill_injection_scan_clean() {
-        let clean_content = "This is a normal skill prompt with helpful instructions.";
-        let warnings =
-            opencarrier_skills::verify::SkillVerifier::scan_prompt_content(clean_content);
-        assert!(warnings.is_empty(), "Clean content should have no warnings");
     }
 
     #[test]

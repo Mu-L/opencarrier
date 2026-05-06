@@ -77,7 +77,12 @@ pub fn run_first_time_setup(
     crate::restrict_file_permissions(&env_path);
 
     // Write config.toml with auth enabled
-    let password_hash = opencarrier_api::session_auth::hash_password(&password);
+    let password_hash = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(password.as_bytes());
+        format!("{:x}", hasher.finalize())
+    };
     let config_content = format!(
         r#"# OpenCarrier Agent OS configuration
 api_listen = "127.0.0.1:4200"

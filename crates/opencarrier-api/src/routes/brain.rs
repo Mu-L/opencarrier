@@ -1,6 +1,5 @@
 //! Brain configuration and management endpoints.
 
-use crate::routes::common::*;
 use crate::routes::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -88,19 +87,9 @@ pub async fn brain_modality_detail(
 /// PUT /api/brain/providers/{name} — create or update a Brain provider.
 pub async fn set_brain_provider(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     let api_key_env = body["api_key_env"]
         .as_str()
         .unwrap_or("")
@@ -140,18 +129,8 @@ pub async fn set_brain_provider(
 /// DELETE /api/brain/providers/{name} — remove a Brain provider.
 pub async fn delete_brain_provider(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     // Check no endpoints reference this provider
     let guard = state.kernel.brain_read();
     {
@@ -200,19 +179,9 @@ pub async fn delete_brain_provider(
 /// PUT /api/brain/endpoints/{name} — create or update a Brain endpoint.
 pub async fn set_brain_endpoint(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     let provider = body["provider"].as_str().unwrap_or("").trim().to_string();
     let model = body["model"].as_str().unwrap_or("").trim().to_string();
     let base_url = body["base_url"].as_str().unwrap_or("").trim().to_string();
@@ -303,18 +272,8 @@ pub async fn set_brain_endpoint(
 /// DELETE /api/brain/endpoints/{name} — remove a Brain endpoint.
 pub async fn delete_brain_endpoint(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     // Check no modalities reference this endpoint
     let guard = state.kernel.brain_read();
     {
@@ -363,19 +322,9 @@ pub async fn delete_brain_endpoint(
 /// PUT /api/brain/modalities/{name} — create or update a Brain modality.
 pub async fn set_brain_modality(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     let primary = body["primary"].as_str().unwrap_or("").trim().to_string();
     let fallbacks: Vec<String> = body["fallbacks"]
         .as_array()
@@ -446,18 +395,8 @@ pub async fn set_brain_modality(
 /// DELETE /api/brain/modalities/{name} — remove a Brain modality.
 pub async fn delete_brain_modality(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     // Cannot delete default modality
     let guard = state.kernel.brain_read();
     if guard.config().default_modality == name {
@@ -495,18 +434,8 @@ pub async fn delete_brain_modality(
 /// PUT /api/brain/default-modality — set the default modality.
 pub async fn set_brain_default_modality(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     let modality = body["default_modality"]
         .as_str()
         .unwrap_or("")
@@ -549,17 +478,7 @@ pub async fn set_brain_default_modality(
 /// POST /api/brain/reload — reload Brain from disk.
 pub async fn reload_brain(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     match state.kernel.reload_brain() {
         Ok(()) => {
             state.kernel.audit_log.record(
@@ -582,17 +501,7 @@ pub async fn reload_brain(
 /// GET /api/brain/config — Return raw brain.json content.
 pub async fn get_brain_config_raw(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     let path = state.kernel.brain_path();
     match std::fs::read_to_string(path) {
         Ok(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
@@ -608,18 +517,8 @@ pub async fn get_brain_config_raw(
 /// PUT /api/brain/config — Update brain.json from raw JSON.
 pub async fn put_brain_config_raw(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     // Validate it's a valid BrainConfig before writing
     let config: opencarrier_types::brain::BrainConfig = match serde_json::from_value(body.clone()) {
         Ok(c) => c,

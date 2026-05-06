@@ -561,12 +561,6 @@ pub struct AgentIdentity {
     pub greeting_style: Option<String>,
 }
 
-/// Default tenant_id placeholder for deserialization of legacy data.
-/// This should never appear in normal operation — the DB migration backfills real values.
-fn default_tenant_id() -> String {
-    String::new()
-}
-
 /// A registered agent entry in the kernel's registry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentEntry {
@@ -602,9 +596,6 @@ pub struct AgentEntry {
     /// When onboarding was completed.
     #[serde(default)]
     pub onboarding_completed_at: Option<DateTime<Utc>>,
-    /// Owning tenant ID — every agent must belong to a tenant.
-    #[serde(default = "default_tenant_id")]
-    pub tenant_id: String,
 }
 
 #[cfg(test)]
@@ -889,7 +880,6 @@ mod tests {
             identity: AgentIdentity::default(),
             onboarding_completed: false,
             onboarding_completed_at: None,
-            tenant_id: "test-tenant".to_string(),
         };
         let json = serde_json::to_string(&entry).unwrap();
         let back: AgentEntry = serde_json::from_str(&json).unwrap();
@@ -952,7 +942,6 @@ mod tests {
             },
             onboarding_completed: false,
             onboarding_completed_at: None,
-            tenant_id: "test-tenant".to_string(),
         };
         let json = serde_json::to_string(&entry).unwrap();
         let back: AgentEntry = serde_json::from_str(&json).unwrap();

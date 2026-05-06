@@ -21,7 +21,6 @@ pub mod plugin;
 pub mod scheduler;
 pub mod serde_compat;
 pub mod taint;
-pub mod tenant;
 pub mod tool;
 pub mod tool_compat;
 pub mod webhook;

@@ -173,7 +173,7 @@ memory_write = ["self.*"]
     for (name, manifest_str, _) in &agents {
         let manifest = load_manifest(manifest_str);
         let id = kernel
-            .spawn_agent(manifest, "test-tenant")
+            .spawn_agent(manifest)
             .unwrap_or_else(|e| panic!("Failed to spawn {name}: {e}"));
         println!("  Spawned: {name:<12} -> {id}");
         agent_ids.push(id);

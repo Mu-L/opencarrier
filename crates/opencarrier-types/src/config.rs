@@ -491,9 +491,6 @@ pub struct AgentBinding {
     pub agent: String,
     /// Match criteria (all specified fields must match).
     pub match_rule: BindingMatchRule,
-    /// Owning tenant ID (None for global/admin bindings).
-    #[serde(default)]
-    pub tenant_id: Option<String>,
 }
 
 /// Match rule for agent bindings. All specified (non-None) fields must match.
@@ -1112,14 +1109,6 @@ impl KernelConfig {
         self.workspaces_dir
             .clone()
             .unwrap_or_else(|| self.home_dir.join("workspaces"))
-    }
-
-    /// Resolved workspaces root directory scoped to a specific tenant.
-    ///
-    /// Returns `workspaces/{tenant_id}/` under the effective workspaces directory.
-    /// Falls back to `effective_workspaces_dir()` if tenant_id is None (global agents).
-    pub fn tenant_workspaces_dir(&self, tenant_id: &str) -> PathBuf {
-        self.effective_workspaces_dir().join(tenant_id)
     }
 
     /// Resolve the API key env var name for a provider.

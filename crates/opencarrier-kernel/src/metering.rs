@@ -75,7 +75,7 @@ impl MeteringEngine {
         }
 
         // Sum tokens from the last 31 days as the "monthly" window
-        let daily = match self.store.query_daily_breakdown(31, None) {
+        let daily = match self.store.query_daily_breakdown(31) {
             Ok(d) => d,
             Err(_) => return None,
         };
@@ -115,12 +115,12 @@ impl MeteringEngine {
 
     /// Get a usage summary, optionally filtered by agent.
     pub fn get_summary(&self, agent_id: Option<AgentId>) -> OpenCarrierResult<UsageSummary> {
-        self.store.query_summary(agent_id, None)
+        self.store.query_summary(agent_id)
     }
 
     /// Get usage grouped by model.
     pub fn get_by_model(&self) -> OpenCarrierResult<Vec<opencarrier_memory::usage::ModelUsage>> {
-        self.store.query_by_model(None)
+        self.store.query_by_model()
     }
 
     /// Get monthly budget status (used tokens, limit, percentage, fired alerts).
@@ -128,7 +128,7 @@ impl MeteringEngine {
         let limit = self.budget.monthly_token_limit;
         let used_tokens = self
             .store
-            .query_daily_breakdown(31, None)
+            .query_daily_breakdown(31)
             .map(|d| d.iter().map(|x| x.tokens).sum())
             .unwrap_or(0);
 
@@ -203,7 +203,6 @@ mod tests {
                 input_tokens: 500,
                 output_tokens: 200,
                 tool_calls: 3,
-                tenant_id: String::new(),
             })
             .unwrap();
 
@@ -250,7 +249,6 @@ mod tests {
                 input_tokens: 4000,
                 output_tokens: 2000,
                 tool_calls: 1,
-                tenant_id: String::new(),
             })
             .unwrap();
         assert!(alert.is_some());
@@ -264,7 +262,6 @@ mod tests {
                 input_tokens: 1000,
                 output_tokens: 500,
                 tool_calls: 0,
-                tenant_id: String::new(),
             })
             .unwrap();
         assert!(alert2.is_none());
@@ -288,7 +285,6 @@ mod tests {
                 input_tokens: 6000,
                 output_tokens: 0,
                 tool_calls: 0,
-                tenant_id: String::new(),
             })
             .unwrap();
         assert!(a1.is_some());
@@ -302,7 +298,6 @@ mod tests {
                 input_tokens: 3000,
                 output_tokens: 0,
                 tool_calls: 0,
-                tenant_id: String::new(),
             })
             .unwrap();
         assert!(a2.is_some());
@@ -316,7 +311,6 @@ mod tests {
                 input_tokens: 2000,
                 output_tokens: 0,
                 tool_calls: 0,
-                tenant_id: String::new(),
             })
             .unwrap();
         assert!(a3.is_some());

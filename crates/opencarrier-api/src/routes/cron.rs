@@ -1,12 +1,11 @@
 //! Cron job management endpoints.
 
-use crate::routes::common::*;
 use crate::routes::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use opencarrier_runtime::kernel_handle::KernelHandle;
+use opencarrier_kernel::KernelHandle;
 use opencarrier_types::agent::AgentId;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,22 +16,13 @@ use std::sync::Arc;
 /// GET /api/cron/jobs — List all cron jobs, optionally filtered by agent_id.
 pub async fn list_cron_jobs(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let jobs = if let Some(agent_id_str) = params.get("agent_id") {
         match uuid::Uuid::parse_str(agent_id_str) {
             Ok(uuid) => {
                 let aid = AgentId(uuid);
-                let jobs = state.kernel.cron_scheduler.list_jobs(aid);
-                if ctx.is_admin() {
-                    jobs
-                } else {
-                    jobs.into_iter()
-                        .filter(|j| can_access(&ctx, &j.tenant_id))
-                        .collect()
-                }
+                state.kernel.cron_scheduler.list_jobs(aid)
             }
             Err(_) => {
                 return (
@@ -41,13 +31,8 @@ pub async fn list_cron_jobs(
                 );
             }
         }
-    } else if ctx.is_admin() {
-        state.kernel.cron_scheduler.list_all_jobs()
     } else {
-        state
-            .kernel
-            .cron_scheduler
-            .list_all_jobs_by_tenant(ctx.tenant_id.as_deref().unwrap_or(""))
+        state.kernel.cron_scheduler.list_all_jobs()
     };
     let total = jobs.len();
     let jobs_json: Vec<serde_json::Value> = jobs
@@ -62,22 +47,9 @@ pub async fn list_cron_jobs(
 /// POST /api/cron/jobs — Create a new cron job.
 pub async fn create_cron_job(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let agent_id = body["agent_id"].as_str().unwrap_or("");
-    // Verify tenant owns the target agent
-    if let Ok(aid) = agent_id.parse::<AgentId>() {
-        if let Some(entry) = state.kernel.registry.get(aid) {
-            if !can_access(&ctx, &entry.tenant_id) {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({"error": "Access denied"})),
-                );
-            }
-        }
-    }
     match state.kernel.cron_create(agent_id, body.clone()).await {
         Ok(result) => (
             StatusCode::CREATED,
@@ -92,22 +64,11 @@ pub async fn create_cron_job(
 /// DELETE /api/cron/jobs/{id} — Delete a cron job.
 pub async fn delete_cron_job(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     match uuid::Uuid::parse_str(&id) {
         Ok(uuid) => {
             let job_id = opencarrier_types::scheduler::CronJobId(uuid);
-            // Tenant ownership check
-            if let Some(job) = state.kernel.cron_scheduler.get_job(job_id) {
-                if !can_access(&ctx, &job.tenant_id) {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(serde_json::json!({"error": "Access denied"})),
-                    );
-                }
-            }
             match state.kernel.cron_scheduler.remove_job(job_id) {
                 Ok(_) => {
                     let _ = state.kernel.cron_scheduler.persist();
@@ -131,24 +92,13 @@ pub async fn delete_cron_job(
 /// PUT /api/cron/jobs/{id}/enable — Enable or disable a cron job.
 pub async fn toggle_cron_job(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let enabled = body["enabled"].as_bool().unwrap_or(true);
     match uuid::Uuid::parse_str(&id) {
         Ok(uuid) => {
             let job_id = opencarrier_types::scheduler::CronJobId(uuid);
-            // Tenant ownership check
-            if let Some(job) = state.kernel.cron_scheduler.get_job(job_id) {
-                if !can_access(&ctx, &job.tenant_id) {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(serde_json::json!({"error": "Access denied"})),
-                    );
-                }
-            }
             match state.kernel.cron_scheduler.set_enabled(job_id, enabled) {
                 Ok(()) => {
                     let _ = state.kernel.cron_scheduler.persist();
@@ -172,22 +122,11 @@ pub async fn toggle_cron_job(
 /// GET /api/cron/jobs/{id}/status — Get status of a specific cron job.
 pub async fn cron_job_status(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     match uuid::Uuid::parse_str(&id) {
         Ok(uuid) => {
             let job_id = opencarrier_types::scheduler::CronJobId(uuid);
-            // Tenant ownership check
-            if let Some(job) = state.kernel.cron_scheduler.get_job(job_id) {
-                if !can_access(&ctx, &job.tenant_id) {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(serde_json::json!({"error": "Access denied"})),
-                    );
-                }
-            }
             match state.kernel.cron_scheduler.get_meta(job_id) {
                 Some(meta) => (
                     StatusCode::OK,

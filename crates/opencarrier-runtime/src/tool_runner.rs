@@ -6,7 +6,6 @@
 use crate::kernel_handle::KernelHandle;
 use crate::mcp;
 use crate::web_search::{parse_ddg_results, WebToolsContext};
-use opencarrier_skills::registry::SkillRegistry;
 use opencarrier_types::taint::{TaintLabel, TaintSink, TaintedValue};
 use opencarrier_types::tool::{ToolDefinition, ToolResult};
 use opencarrier_types::tool_compat::normalize_tool_name;
@@ -113,7 +112,6 @@ pub async fn execute_tool(
     kernel: Option<&Arc<dyn KernelHandle>>,
     allowed_tools: Option<&[String]>,
     caller_agent_id: Option<&str>,
-    skill_registry: Option<&SkillRegistry>,
     mcp_connections: Option<&dashmap::DashMap<String, mcp::McpConnection>>,
     web_ctx: Option<&WebToolsContext>,
     browser_ctx: Option<&crate::browser::BrowserManager>,
@@ -165,6 +163,16 @@ pub async fn execute_tool(
         "knowledge_remove" => tool_knowledge_remove(input, workspace_root).await,
         "knowledge_import" => tool_knowledge_import(input, workspace_root).await,
         "clone_evaluate" => tool_clone_evaluate(workspace_root).await,
+
+        // Evolution tools (self-driven knowledge and skill management)
+        "knowledge_extract" => tool_knowledge_extract(input, workspace_root).await,
+        "knowledge_index" => tool_knowledge_index(workspace_root).await,
+        "skill_create" => tool_skill_create(input, workspace_root).await,
+        "skill_update" => tool_skill_update(input, workspace_root).await,
+        "skill_load" => tool_skill_load(input, workspace_root).await,
+        "session_summarize" => {
+            tool_session_summarize(input, kernel, caller_agent_id).await
+        }
 
         // Cross-workspace training tools (for trainer agents like clone-trainer)
         "train_read" => tool_train_read(input, kernel, caller_agent_id).await,
@@ -476,42 +484,7 @@ pub async fn execute_tool(
                 }
             }
             // Fallback 2: Skill registry tool providers
-            else if let Some(registry) = skill_registry {
-                if let Some(skill) = registry.find_tool_provider(other) {
-                    debug!(tool = other, skill = %skill.manifest.skill.name, "Dispatching to skill");
-                    match opencarrier_skills::loader::execute_skill_tool(
-                        &skill.manifest,
-                        &skill.path,
-                        other,
-                        input,
-                        &[], // TODO: credential injection via KernelHandle
-                    )
-                    .await
-                    {
-                        Ok(skill_result) => {
-                            let content = serde_json::to_string(&skill_result.output)
-                                .unwrap_or_else(|_| skill_result.output.to_string());
-                            if skill_result.is_error {
-                                Err(content)
-                            } else {
-                                Ok(content)
-                            }
-                        }
-                        Err(e) => Err(format!("Skill execution failed: {e}")),
-                    }
-                } else if let Some(kh) = kernel {
-                    // Fallback 3: Plugin tools (dlopen-loaded shared libraries)
-                    let s_id = sender_id.unwrap_or("");
-                    let a_id = caller_agent_id.unwrap_or("");
-                    match kh.execute_plugin_tool(other, input, s_id, a_id).await {
-                        Ok(result) => Ok(result),
-                        Err(e) if e.starts_with("Unknown tool:") => Err(e),
-                        Err(e) => Err(format!("Plugin tool execution failed: {e}")),
-                    }
-                } else {
-                    Err(format!("Unknown tool: {other}"))
-                }
-            } else if let Some(kh) = kernel {
+            else if let Some(kh) = kernel {
                 // Fallback 3: Plugin tools (dlopen-loaded shared libraries)
                 let s_id = sender_id.unwrap_or("");
                 let a_id = caller_agent_id.unwrap_or("");
@@ -662,6 +635,72 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             name: "clone_evaluate".to_string(),
             description: "Evaluate the clone's quality with deterministic metrics. Returns a score (0-100) based on identity completeness, knowledge richness, skills, and knowledge quality.".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        // --- Evolution tools (self-driven knowledge and skill management) ---
+        ToolDefinition {
+            name: "knowledge_extract".to_string(),
+            description: "Extract new knowledge from a conversation and save it to the knowledge base. Uses dual-layer format with timeline tracking and rebuilds MEMORY.md index. Use when you discover facts, rules, or preferences worth remembering.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short title for the knowledge (English or pinyin preferred, used as filename)"},
+                    "content": {"type": "string", "description": "The knowledge content to save (markdown)"},
+                },
+                "required": ["title", "content"],
+            }),
+        },
+        ToolDefinition {
+            name: "knowledge_index".to_string(),
+            description: "Rebuild the knowledge index file (MEMORY.md) by scanning all knowledge files in data/knowledge/. Use after manually adding or removing knowledge files.".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        },
+        ToolDefinition {
+            name: "skill_create".to_string(),
+            description: "Create a new skill file in the workspace skills/ directory. Skills define reusable workflows with steps and tool requirements.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Skill name (used as filename)"},
+                    "when_to_use": {"type": "string", "description": "Brief description of when to activate this skill"},
+                    "body": {"type": "string", "description": "The skill content: workflow steps, instructions, and examples (markdown)"},
+                    "allowed_tools": {"type": "string", "description": "Comma-separated list of tools this skill needs (optional)"},
+                },
+                "required": ["name", "body"],
+            }),
+        },
+        ToolDefinition {
+            name: "skill_update".to_string(),
+            description: "Update the body of an existing skill. Preserves the skill's frontmatter (name, when_to_use, allowed_tools).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Skill name to update"},
+                    "body": {"type": "string", "description": "New skill body content (replaces existing)"},
+                },
+                "required": ["name", "body"],
+            }),
+        },
+        ToolDefinition {
+            name: "skill_load".to_string(),
+            description: "Load the full content of a skill by name. Returns the complete skill file including frontmatter and body.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Skill name to load"},
+                },
+                "required": ["name"],
+            }),
+        },
+        ToolDefinition {
+            name: "session_summarize".to_string(),
+            description: "Save a summary of the current conversation for future recall. Use after long or important conversations to preserve key points, decisions, and outcomes.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string", "description": "Key points, decisions, and outcomes from this conversation"},
+                },
+                "required": ["summary"],
+            }),
         },
         // --- Cross-workspace training tools (for trainer agents) ---
         ToolDefinition {
@@ -1971,6 +2010,202 @@ async fn tool_knowledge_add(
     Ok(format!("Knowledge added: {filename}.md"))
 }
 
+async fn tool_knowledge_extract(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let root = workspace_root.ok_or("knowledge_extract requires a workspace root")?;
+    let title = input["title"]
+        .as_str()
+        .ok_or("Missing 'title' parameter")?;
+    let content = input["content"]
+        .as_str()
+        .ok_or("Missing 'content' parameter")?;
+
+    let candidate = opencarrier_lifecycle::evolution::KnowledgeCandidate {
+        title: title.to_string(),
+        content: content.to_string(),
+    };
+    let analysis = opencarrier_lifecycle::evolution::EvolutionAnalysis {
+        knowledge: vec![candidate],
+        gaps: vec![],
+        trivial: false,
+    };
+    let saved = opencarrier_lifecycle::evolution::apply_evolution(root, &analysis);
+    match saved.len() {
+        0 => Ok("No knowledge extracted (nothing new to save).".to_string()),
+        n => Ok(format!("Extracted {n} knowledge item(s) and updated index.")),
+    }
+}
+
+async fn tool_knowledge_index(workspace_root: Option<&Path>) -> Result<String, String> {
+    let root = workspace_root.ok_or("knowledge_index requires a workspace root")?;
+    opencarrier_lifecycle::evolution::update_memory_index(root)
+        .map_err(|e| format!("Failed to rebuild index: {e}"))?;
+    Ok("Knowledge index (MEMORY.md) rebuilt successfully.".to_string())
+}
+
+async fn tool_skill_create(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let root = workspace_root.ok_or("skill_create requires a workspace root")?;
+    let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
+    let when_to_use = input["when_to_use"].as_str().unwrap_or("");
+    let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
+    let allowed_tools = input["allowed_tools"].as_str().unwrap_or("");
+
+    let skills_dir = root.join("skills");
+    tokio::fs::create_dir_all(&skills_dir)
+        .await
+        .map_err(|e| format!("Failed to create skills dir: {e}"))?;
+
+    let filename = opencarrier_lifecycle::evolution::sanitize_filename(name);
+    let path = skills_dir.join(format!("{filename}.md"));
+
+    if path.exists() {
+        return Err(format!(
+            "Skill '{name}' already exists. Use skill_update to modify it."
+        ));
+    }
+
+    let mut frontmatter = format!("---\nname: {name}\n");
+    if !when_to_use.is_empty() {
+        frontmatter.push_str(&format!("when_to_use: {when_to_use}\n"));
+    }
+    if !allowed_tools.is_empty() {
+        frontmatter.push_str(&format!("allowed_tools: {allowed_tools}\n"));
+    }
+    frontmatter.push_str("---\n");
+
+    let full = format!("{frontmatter}\n{body}");
+    tokio::fs::write(&path, &full)
+        .await
+        .map_err(|e| format!("Failed to write skill: {e}"))?;
+
+    Ok(format!("Skill '{name}' created successfully."))
+}
+
+async fn tool_skill_update(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let root = workspace_root.ok_or("skill_update requires a workspace root")?;
+    let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
+    let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
+
+    let skills_dir = root.join("skills");
+    let filename = opencarrier_lifecycle::evolution::sanitize_filename(name);
+    let flat_path = skills_dir.join(format!("{filename}.md"));
+    let dir_path = skills_dir.join(&filename).join("SKILL.md");
+
+    let target = if flat_path.exists() {
+        flat_path
+    } else if dir_path.exists() {
+        dir_path
+    } else {
+        return Err(format!("Skill '{name}' not found."));
+    };
+
+    let existing = tokio::fs::read_to_string(&target)
+        .await
+        .map_err(|e| format!("Failed to read skill: {e}"))?;
+
+    let updated = if let Some(rest) = existing.strip_prefix("---") {
+        if let Some(end) = rest.find("---") {
+            let fm_end = end + 6;
+            format!("{}\n{}", &existing[..fm_end].trim_end(), body)
+        } else {
+            body.to_string()
+        }
+    } else {
+        body.to_string()
+    };
+
+    tokio::fs::write(&target, &updated)
+        .await
+        .map_err(|e| format!("Failed to write skill: {e}"))?;
+
+    Ok(format!("Skill '{name}' updated successfully."))
+}
+
+async fn tool_skill_load(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> Result<String, String> {
+    let root = workspace_root.ok_or("skill_load requires a workspace root")?;
+    let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
+
+    let skills_dir = root.join("skills");
+    let filename = opencarrier_lifecycle::evolution::sanitize_filename(name);
+    let flat_path = skills_dir.join(format!("{filename}.md"));
+    let dir_path = skills_dir.join(&filename).join("SKILL.md");
+
+    if flat_path.exists() {
+        return tokio::fs::read_to_string(&flat_path)
+            .await
+            .map_err(|e| format!("Failed to read skill: {e}"));
+    }
+    if dir_path.exists() {
+        return tokio::fs::read_to_string(&dir_path)
+            .await
+            .map_err(|e| format!("Failed to read skill: {e}"));
+    }
+
+    // Fuzzy match
+    if skills_dir.exists() {
+        let mut entries = tokio::fs::read_dir(&skills_dir)
+            .await
+            .map_err(|e| format!("Failed to read skills dir: {e}"))?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("Read error: {e}"))?
+        {
+            let entry_name = entry.file_name().to_string_lossy().to_string();
+            if entry_name
+                .to_lowercase()
+                .contains(&name.to_lowercase())
+            {
+                if entry_name.ends_with(".md") {
+                    return tokio::fs::read_to_string(entry.path())
+                        .await
+                        .map_err(|e| format!("Failed to read skill: {e}"));
+                } else if entry.path().is_dir() {
+                    let skill_md = entry.path().join("SKILL.md");
+                    if skill_md.exists() {
+                        return tokio::fs::read_to_string(&skill_md)
+                            .await
+                            .map_err(|e| format!("Failed to read skill: {e}"));
+                    }
+                }
+            }
+        }
+    }
+
+    Err(format!("Skill '{name}' not found."))
+}
+
+async fn tool_session_summarize(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = kernel.ok_or("session_summarize requires kernel access")?;
+    let agent_id = caller_agent_id.ok_or("session_summarize requires caller agent ID")?;
+    let summary = input["summary"]
+        .as_str()
+        .ok_or("Missing 'summary' parameter")?;
+
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let key = format!("session_summary:{date}");
+
+    kh.memory_store(agent_id, &key, serde_json::Value::String(summary.to_string()))
+        .map_err(|e| format!("Failed to store summary: {e}"))?;
+
+    Ok(format!("Session summary stored for {date}."))
+}
+
 async fn tool_knowledge_remove(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
@@ -2037,28 +2272,21 @@ async fn tool_clone_evaluate(workspace_root: Option<&Path>) -> Result<String, St
 // Cross-workspace training tools (for trainer agents)
 // ---------------------------------------------------------------------------
 
-/// Resolve a target clone's workspace root via kernel, with tenant isolation.
-/// Ensures the caller and target belong to the same tenant.
+/// Resolve a target clone's workspace root via kernel.
 fn resolve_target_workspace(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
 ) -> Result<PathBuf, String> {
     let kh = kernel.ok_or("train_* tools require kernel access")?;
-    let caller_id = caller_agent_id.ok_or("train_* tools require caller agent identity")?;
     let target = input["target"]
         .as_str()
         .ok_or("Missing 'target' parameter (target clone name)")?;
 
-    // Tenant isolation: single tenant-scoped lookup for both workspace and tenant check
-    let caller_tenant = kh
-        .get_agent_tenant_id(caller_id)
-        .ok_or("Cannot determine caller tenant")?;
     let target_workspace = kh
-        .resolve_agent_workspace_in_tenant(target, &caller_tenant)
+        .resolve_agent_workspace(target)
         .ok_or_else(|| {
             format!(
-                "Agent '{}' not found in your tenant or has no workspace",
+                "Agent '{}' not found or has no workspace",
                 target
             )
         })?;
@@ -2076,9 +2304,9 @@ fn resolve_target_workspace(
 async fn tool_train_read(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
+    let target_root = resolve_target_workspace(input, kernel)?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
     validate_path(path)?;
     let full_path = target_root.join(path);
@@ -2093,9 +2321,9 @@ async fn tool_train_read(
 async fn tool_train_write(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
+    let target_root = resolve_target_workspace(input, kernel)?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
     validate_path(path)?;
     let content = input["content"]
@@ -2123,9 +2351,9 @@ async fn tool_train_write(
 async fn tool_train_list(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
+    let target_root = resolve_target_workspace(input, kernel)?;
     let sub_path = input["path"].as_str().unwrap_or(".");
     validate_path(sub_path)?;
     let full_path = target_root.join(sub_path);
@@ -2156,9 +2384,9 @@ async fn tool_train_list(
 async fn tool_train_knowledge_add(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
+    let target_root = resolve_target_workspace(input, kernel)?;
     let title = input["title"].as_str().ok_or("Missing 'title' parameter")?;
     let content = input["content"]
         .as_str()
@@ -2170,9 +2398,9 @@ async fn tool_train_knowledge_add(
 async fn tool_train_knowledge_import(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
+    let target_root = resolve_target_workspace(input, kernel)?;
     let data = input["data"].as_str().ok_or("Missing 'data' parameter")?;
     let data_type = input["data_type"].as_str().unwrap_or("auto");
     let (saved, quality) = knowledge_import_core(&target_root, data, data_type).await?;
@@ -2186,45 +2414,45 @@ async fn tool_train_knowledge_import(
 async fn tool_train_knowledge_list(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
+    let target_root = resolve_target_workspace(input, kernel)?;
     tool_knowledge_list(Some(&target_root)).await
 }
 
 async fn tool_train_knowledge_read(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
+    let target_root = resolve_target_workspace(input, kernel)?;
     tool_knowledge_read(input, Some(&target_root)).await
 }
 
 async fn tool_train_knowledge_lint(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
+    let target_root = resolve_target_workspace(input, kernel)?;
     tool_knowledge_lint(Some(&target_root)).await
 }
 
 async fn tool_train_knowledge_heal(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
+    let target_root = resolve_target_workspace(input, kernel)?;
     tool_knowledge_heal(Some(&target_root)).await
 }
 
 async fn tool_train_evaluate(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel, caller_agent_id)?;
+    let target_root = resolve_target_workspace(input, kernel)?;
     tool_clone_evaluate(Some(&target_root)).await
 }
 
@@ -2326,7 +2554,7 @@ async fn tool_user_profile(
 async fn tool_clone_install(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kernel = kernel.ok_or("clone_install requires kernel access")?;
     let name_raw = input["name"].as_str().ok_or("Missing 'name' parameter")?;
@@ -2491,11 +2719,8 @@ async fn tool_clone_install(
     // Pack into .agx bytes
     let agx_bytes = pack_agx(&clone_data).map_err(|e| format!("Failed to pack .agx: {e}"))?;
 
-    // Install via kernel — inherit tenant_id from the calling agent
-    let tenant_id = caller_agent_id
-        .and_then(|aid| kernel.get_agent_tenant_id(aid))
-        .ok_or("Cannot determine caller tenant")?;
-    let (agent_id, agent_name) = kernel.clone_install(&name, &agx_bytes, &tenant_id).await?;
+    // Install via kernel
+    let (agent_id, agent_name) = kernel.clone_install(&name, &agx_bytes).await?;
 
     Ok(format!(
         "Clone '{}' installed successfully. Agent ID: {}. {} knowledge files, {} skills, {} agents.",
@@ -2509,20 +2734,11 @@ async fn tool_clone_install(
 async fn tool_clone_export(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kernel = kernel.ok_or("clone_export requires kernel access")?;
-    let caller_id = caller_agent_id.ok_or("clone_export requires caller agent identity")?;
     let name =
         validate_clone_name(input["name"].as_str().ok_or("Missing 'name' parameter")?)?.to_string();
-
-    // Tenant check: verify caller owns this clone
-    let caller_tenant = kernel
-        .get_agent_tenant_id(caller_id)
-        .ok_or("Cannot determine caller tenant")?;
-    kernel
-        .resolve_agent_workspace_in_tenant(&name, &caller_tenant)
-        .ok_or_else(|| format!("Clone '{}' not found in your tenant", name))?;
 
     let agx_bytes = kernel.clone_export(&name)?;
 
@@ -2537,20 +2753,11 @@ async fn tool_clone_export(
 async fn tool_clone_publish(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kernel = kernel.ok_or("clone_publish requires kernel access")?;
-    let caller_id = caller_agent_id.ok_or("clone_publish requires caller agent identity")?;
     let name =
         validate_clone_name(input["name"].as_str().ok_or("Missing 'name' parameter")?)?.to_string();
-
-    // Tenant check: verify caller owns this clone
-    let caller_tenant = kernel
-        .get_agent_tenant_id(caller_id)
-        .ok_or("Cannot determine caller tenant")?;
-    kernel
-        .resolve_agent_workspace_in_tenant(&name, &caller_tenant)
-        .ok_or_else(|| format!("Clone '{}' not found in your tenant", name))?;
 
     // Export the clone first
     let agx_bytes = kernel.clone_export(&name)?;
@@ -2895,16 +3102,7 @@ async fn tool_agent_spawn(
     let manifest_toml = input["manifest_toml"]
         .as_str()
         .ok_or("Missing 'manifest_toml' parameter")?;
-    let tenant_id = parent_id
-        .and_then(|pid| kh.get_agent_tenant_id(pid))
-        .ok_or("Cannot determine tenant for spawn")?;
-    let (id, name) = kh.spawn_agent(manifest_toml, parent_id, &tenant_id).await?;
-    // Inherit parent's tenant
-    if let Some(pid) = parent_id {
-        if let Some(tid) = kh.get_agent_tenant_id(pid) {
-            let _ = kh.set_agent_tenant(&id, &tid);
-        }
-    }
+    let (id, name) = kh.spawn_agent(manifest_toml, parent_id).await?;
     Ok(format!(
         "Agent spawned successfully.\n  ID: {id}\n  Name: {name}"
     ))
@@ -2912,13 +3110,10 @@ async fn tool_agent_spawn(
 
 fn tool_agent_list(
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id
-        .and_then(|id| kh.get_agent_tenant_id(id))
-        .ok_or("Cannot determine caller tenant")?;
-    let agents = kh.list_agents(&tenant_id);
+    let agents = kh.list_agents();
     if agents.is_empty() {
         return Ok("No agents currently running.".to_string());
     }
@@ -2935,21 +3130,12 @@ fn tool_agent_list(
 fn tool_agent_kill(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let caller_id = caller_agent_id.ok_or("Missing caller agent identity")?;
     let target_id = input["agent_id"]
         .as_str()
         .ok_or("Missing 'agent_id' parameter")?;
-    // Tenant check: caller and target must share tenant
-    let caller_tenant = kh
-        .get_agent_tenant_id(caller_id)
-        .ok_or("Cannot determine caller tenant")?;
-    let target_tenant = kh.get_agent_tenant_id(target_id);
-    if target_tenant.as_ref() != Some(&caller_tenant) {
-        return Err("Access denied: target agent belongs to another tenant".to_string());
-    }
     kh.kill_agent(target_id)?;
     Ok(format!("Agent {target_id} killed successfully."))
 }
@@ -2957,21 +3143,12 @@ fn tool_agent_kill(
 fn tool_agent_restart(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let caller_id = caller_agent_id.ok_or("Missing caller agent identity")?;
     let target_id = input["agent_id"]
         .as_str()
         .ok_or("Missing 'agent_id' parameter")?;
-    // Tenant check: caller and target must share tenant
-    let caller_tenant = kh
-        .get_agent_tenant_id(caller_id)
-        .ok_or("Cannot determine caller tenant")?;
-    let target_tenant = kh.get_agent_tenant_id(target_id);
-    if target_tenant.as_ref() != Some(&caller_tenant) {
-        return Err("Access denied: target agent belongs to another tenant".to_string());
-    }
     kh.restart_agent(target_id)?;
     Ok(format!("Agent {target_id} restarted successfully."))
 }
@@ -3036,14 +3213,11 @@ fn tool_memory_list(
 fn tool_agent_find(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let query = input["query"].as_str().ok_or("Missing 'query' parameter")?;
-    let tenant_id = caller_agent_id
-        .and_then(|id| kh.get_agent_tenant_id(id))
-        .ok_or("Cannot determine caller tenant")?;
-    let agents = kh.find_agents(query, &tenant_id);
+    let agents = kh.find_agents(query);
     if agents.is_empty() {
         return Ok(format!("No agents found matching '{query}'."));
     }
@@ -3087,10 +3261,7 @@ async fn tool_task_claim(
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
-    let tenant_id = kh
-        .get_agent_tenant_id(agent_id)
-        .ok_or("Cannot determine caller tenant")?;
-    match kh.task_claim(agent_id, &tenant_id).await? {
+    match kh.task_claim(agent_id).await? {
         Some(task) => {
             serde_json::to_string_pretty(&task).map_err(|e| format!("Serialize error: {e}"))
         }
@@ -3101,34 +3272,27 @@ async fn tool_task_claim(
 async fn tool_task_complete(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let caller_id = caller_agent_id.ok_or("Missing caller agent identity")?;
     let task_id = input["task_id"]
         .as_str()
         .ok_or("Missing 'task_id' parameter")?;
     let result = input["result"]
         .as_str()
         .ok_or("Missing 'result' parameter")?;
-    let tenant_id = kh
-        .get_agent_tenant_id(caller_id)
-        .ok_or("Cannot determine caller tenant")?;
-    kh.task_complete(task_id, result, &tenant_id).await?;
+    kh.task_complete(task_id, result).await?;
     Ok(format!("Task {task_id} marked as completed."))
 }
 
 async fn tool_task_list(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id
-        .and_then(|id| kh.get_agent_tenant_id(id))
-        .ok_or("Cannot determine caller tenant")?;
     let status = input["status"].as_str();
-    let tasks = kh.task_list(status, &tenant_id).await?;
+    let tasks = kh.task_list(status).await?;
     if tasks.is_empty() {
         return Ok("No tasks found.".to_string());
     }
@@ -3138,22 +3302,16 @@ async fn tool_task_list(
 async fn tool_event_publish(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let event_type = input["event_type"]
         .as_str()
         .ok_or("Missing 'event_type' parameter")?;
-    let mut payload = input
+    let payload = input
         .get("payload")
         .cloned()
         .unwrap_or(serde_json::json!({}));
-    // Attach caller's tenant_id so the kernel can scope event delivery
-    if let Some(cid) = caller_agent_id {
-        if let Some(tid) = kh.get_agent_tenant_id(cid) {
-            payload["_tenant_id"] = serde_json::Value::String(tid);
-        }
-    }
     kh.publish_event(event_type, payload).await?;
     Ok(format!("Event '{event_type}' published successfully."))
 }
@@ -3197,12 +3355,9 @@ fn parse_relation_type(s: &str) -> opencarrier_types::memory::RelationType {
 async fn tool_knowledge_add_entity(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id
-        .and_then(|id| kh.get_agent_tenant_id(id))
-        .ok_or("Cannot determine caller tenant")?;
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
     let entity_type_str = input["entity_type"]
         .as_str()
@@ -3222,19 +3377,16 @@ async fn tool_knowledge_add_entity(
         updated_at: chrono::Utc::now(),
     };
 
-    let id = kh.knowledge_add_entity(entity, &tenant_id).await?;
+    let id = kh.knowledge_add_entity(entity).await?;
     Ok(format!("Entity '{name}' added with ID: {id}"))
 }
 
 async fn tool_knowledge_add_relation(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id
-        .and_then(|id| kh.get_agent_tenant_id(id))
-        .ok_or("Cannot determine caller tenant")?;
     let source = input["source"]
         .as_str()
         .ok_or("Missing 'source' parameter")?;
@@ -3260,7 +3412,7 @@ async fn tool_knowledge_add_relation(
         created_at: chrono::Utc::now(),
     };
 
-    let id = kh.knowledge_add_relation(relation, &tenant_id).await?;
+    let id = kh.knowledge_add_relation(relation).await?;
     Ok(format!(
         "Relation '{source}' --[{relation_str}]--> '{target}' added with ID: {id}"
     ))
@@ -3269,12 +3421,9 @@ async fn tool_knowledge_add_relation(
 async fn tool_knowledge_query(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
+    _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
-    let tenant_id = caller_agent_id
-        .and_then(|id| kh.get_agent_tenant_id(id))
-        .ok_or("Cannot determine caller tenant")?;
     let source = input["source"].as_str().map(|s| s.to_string());
     let target = input["target"].as_str().map(|s| s.to_string());
     let relation = input["relation"].as_str().map(parse_relation_type);
@@ -3287,7 +3436,7 @@ async fn tool_knowledge_query(
         max_depth,
     };
 
-    let matches = kh.knowledge_query(pattern, &tenant_id).await?;
+    let matches = kh.knowledge_query(pattern).await?;
     if matches.is_empty() {
         return Ok("No matching knowledge graph entries found.".to_string());
     }
@@ -4597,7 +4746,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         assert!(
@@ -4628,7 +4776,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -4656,7 +4803,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -4684,7 +4830,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -4716,7 +4861,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         // web_search now attempts a real fetch; may succeed or fail depending on network
@@ -4744,7 +4888,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -4772,7 +4915,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -4801,7 +4943,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -4833,7 +4974,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         // Should fail for file-not-found, NOT for permission denied
@@ -4880,7 +5020,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         // Should NOT be "Permission denied" — it should normalize to file_write
@@ -4915,7 +5054,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -5086,7 +5224,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         assert!(result.is_error);
@@ -5133,7 +5270,6 @@ mod tests {
             None, // docker_config
             None, // process_manager
             None, // sender_id
-            None, // brain
         )
         .await;
         assert!(result.is_error);

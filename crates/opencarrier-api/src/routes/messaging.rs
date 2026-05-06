@@ -85,7 +85,6 @@ pub fn inject_attachments_into_session(
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            tenant_id: String::new(),
         },
     };
 
@@ -102,13 +101,16 @@ pub fn inject_attachments_into_session(
 pub async fn send_message(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    extensions: axum::http::Extensions,
     Json(req): Json<MessageRequest>,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
-    let agent_id = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+    let agent_id = match parse_and_get_agent(&id, &state.kernel.registry) {
         Ok((aid, _)) => aid,
-        Err(resp) => return resp,
+        Err((status, _)) => {
+            return (
+                status,
+                Json(serde_json::json!({"error": "Agent not found"})),
+            );
+        }
     };
 
     // SECURITY: Reject oversized messages to prevent OOM / LLM token abuse.
@@ -187,7 +189,6 @@ pub async fn send_message(
 /// POST /api/agents/:id/message/stream — SSE streaming response.
 pub async fn send_message_stream(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(id): Path<String>,
     Json(req): Json<MessageRequest>,
 ) -> axum::response::Response {
@@ -205,10 +206,15 @@ pub async fn send_message_stream(
             .into_response();
     }
 
-    let ctx = get_tenant_ctx(&extensions);
-    let agent_id = match parse_and_get_agent_with_tenant(&id, &state.kernel.registry, &ctx) {
+    let agent_id = match parse_and_get_agent(&id, &state.kernel.registry) {
         Ok((aid, _)) => aid,
-        Err(resp) => return resp.into_response(),
+        Err((status, _)) => {
+            return (
+                status,
+                Json(serde_json::json!({"error": "Agent not found"})),
+            )
+                .into_response();
+        }
     };
 
     let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;

@@ -110,8 +110,8 @@ pub async fn webhook_agent(
     let agent_id: AgentId = match &body.agent {
         Some(agent_ref) => match agent_ref.parse() {
             Ok(id) => {
-                // UUID lookup — verify tenant ownership if tenant_id provided
-                let entry = match state.kernel.registry.get(id) {
+                // UUID lookup
+                let _entry = match state.kernel.registry.get(id) {
                     Some(e) => e,
                     None => {
                         return (
@@ -120,34 +120,11 @@ pub async fn webhook_agent(
                         );
                     }
                 };
-                // If webhook payload specifies tenant_id, verify the agent belongs to that tenant
-                if let Some(ref tid) = body.tenant_id {
-                    if entry.tenant_id != *tid {
-                        return (
-                            StatusCode::FORBIDDEN,
-                            Json(serde_json::json!({"error": "Agent does not belong to the specified tenant"})),
-                        );
-                    }
-                }
                 id
             }
             Err(_) => {
-                // Name lookup — use tenant-scoped if tenant_id provided
-                let entry = match &body.tenant_id {
-                    Some(tid) => state
-                        .kernel
-                        .registry
-                        .find_by_name_and_tenant(agent_ref, tid.as_str()),
-                    None => {
-                        // No tenant context: reject name lookup to prevent cross-tenant ambiguity
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            Json(serde_json::json!({
-                                "error": "Name-based agent lookup requires 'tenant_id' in multi-tenant mode. Use agent UUID instead."
-                            })),
-                        );
-                    }
-                };
+                // Name lookup
+                let entry = state.kernel.registry.find_by_name(agent_ref);
                 match entry {
                     Some(e) => e.id,
                     None => {

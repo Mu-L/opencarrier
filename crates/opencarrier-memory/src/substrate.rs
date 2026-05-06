@@ -10,7 +10,6 @@ use crate::migration::run_migrations;
 use crate::semantic::SemanticStore;
 use crate::session::{Session, SessionStore};
 use crate::structured::StructuredStore;
-use crate::tenant::TenantStore;
 use crate::usage::UsageStore;
 
 use async_trait::async_trait;
@@ -34,8 +33,6 @@ pub struct MemorySubstrate {
     knowledge: KnowledgeStore,
     sessions: SessionStore,
     consolidation: ConsolidationEngine,
-    usage: UsageStore,
-    tenant: TenantStore,
     invites: InviteStore,
 }
 
@@ -55,9 +52,7 @@ impl MemorySubstrate {
             semantic: SemanticStore::new(Arc::clone(&shared)),
             knowledge: KnowledgeStore::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
-            usage: UsageStore::new(Arc::clone(&shared)),
             consolidation: ConsolidationEngine::new(Arc::clone(&shared), decay_rate),
-            tenant: TenantStore::new(Arc::clone(&shared)),
             invites: InviteStore::new(Arc::clone(&shared)),
         })
     }
@@ -75,26 +70,19 @@ impl MemorySubstrate {
             semantic: SemanticStore::new(Arc::clone(&shared)),
             knowledge: KnowledgeStore::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
-            usage: UsageStore::new(Arc::clone(&shared)),
             consolidation: ConsolidationEngine::new(Arc::clone(&shared), decay_rate),
-            tenant: TenantStore::new(Arc::clone(&shared)),
             invites: InviteStore::new(Arc::clone(&shared)),
         })
-    }
-
-    /// Get a reference to the usage store.
-    pub fn usage(&self) -> &UsageStore {
-        &self.usage
-    }
-
-    /// Get a reference to the tenant store.
-    pub fn tenant(&self) -> &TenantStore {
-        &self.tenant
     }
 
     /// Get a reference to the invite store.
     pub fn invites(&self) -> &InviteStore {
         &self.invites
+    }
+
+    /// Create a new UsageStore from the shared connection.
+    pub fn usage(&self) -> UsageStore {
+        UsageStore::new(Arc::clone(&self.conn))
     }
 
     /// Get the shared database connection (for constructing stores from outside).
@@ -120,21 +108,13 @@ impl MemorySubstrate {
     }
 
     /// Load all agent entries from persistent storage.
-    ///
-    /// If `tenant_id` is provided, only agents belonging to that tenant (or global
-    /// agents with no tenant_id) are returned.
-    pub fn load_all_agents(&self, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<AgentEntry>> {
-        self.structured.load_all_agents(tenant_id)
+    pub fn load_all_agents(&self) -> OpenCarrierResult<Vec<AgentEntry>> {
+        self.structured.load_all_agents()
     }
 
     /// List all saved agents.
-    ///
-    /// If `tenant_id` is provided, only agents belonging to that tenant are listed.
-    pub fn list_agents(
-        &self,
-        tenant_id: Option<&str>,
-    ) -> OpenCarrierResult<Vec<(String, String, String)>> {
-        self.structured.list_agents(tenant_id)
+    pub fn list_agents(&self) -> OpenCarrierResult<Vec<(String, String, String)>> {
+        self.structured.list_agents()
     }
 
     /// Synchronous get from the structured store (for kernel handle use).
@@ -195,11 +175,8 @@ impl MemorySubstrate {
     }
 
     /// List all sessions with metadata.
-    pub fn list_sessions(
-        &self,
-        tenant_id: Option<&str>,
-    ) -> OpenCarrierResult<Vec<serde_json::Value>> {
-        self.sessions.list_sessions(tenant_id)
+    pub fn list_sessions(&self) -> OpenCarrierResult<Vec<serde_json::Value>> {
+        self.sessions.list_sessions()
     }
 
     /// Delete a session by ID.
@@ -210,11 +187,6 @@ impl MemorySubstrate {
     /// Delete all sessions belonging to an agent.
     pub fn delete_agent_sessions(&self, agent_id: AgentId) -> OpenCarrierResult<()> {
         self.sessions.delete_agent_sessions(agent_id)
-    }
-
-    /// Delete the canonical (cross-channel) session for an agent.
-    pub fn delete_canonical_session(&self, agent_id: AgentId) -> OpenCarrierResult<()> {
-        self.sessions.delete_canonical_session(agent_id)
     }
 
     /// Set or clear a session label.
@@ -252,18 +224,6 @@ impl MemorySubstrate {
         self.sessions.create_session_with_label(agent_id, label)
     }
 
-    /// Load canonical session context for cross-channel memory.
-    ///
-    /// Returns the compacted summary (if any) and recent messages from the
-    /// agent's persistent canonical session.
-    pub fn canonical_context(
-        &self,
-        agent_id: AgentId,
-        window_size: Option<usize>,
-    ) -> OpenCarrierResult<(Option<String>, Vec<opencarrier_types::message::Message>)> {
-        self.sessions.canonical_context(agent_id, window_size)
-    }
-
     /// Store an LLM-generated summary, replacing older messages with the kept subset.
     ///
     /// Used by the compactor to replace text-truncation compaction with an
@@ -292,18 +252,6 @@ impl MemorySubstrate {
             .write_jsonl_mirror(session, sessions_dir, sender_id)
     }
 
-    /// Append messages to the agent's canonical session for cross-channel persistence.
-    pub fn append_canonical(
-        &self,
-        agent_id: AgentId,
-        messages: &[opencarrier_types::message::Message],
-        compaction_threshold: Option<usize>,
-    ) -> OpenCarrierResult<()> {
-        self.sessions
-            .append_canonical(agent_id, messages, compaction_threshold)?;
-        Ok(())
-    }
-
     // -----------------------------------------------------------------
     // Embedding-aware memory operations
     // -----------------------------------------------------------------
@@ -319,7 +267,7 @@ impl MemorySubstrate {
         embedding: Option<&[f32]>,
     ) -> OpenCarrierResult<MemoryId> {
         self.semantic
-            .remember_with_embedding(agent_id, content, source, scope, metadata, embedding, None)
+            .remember_with_embedding(agent_id, content, source, scope, metadata, embedding)
     }
 
     /// Recall memories using vector similarity when a query embedding is provided.
@@ -379,7 +327,6 @@ impl MemorySubstrate {
                 &scope,
                 metadata,
                 embedding_owned.as_deref(),
-                None,
             )
         })
         .await
@@ -397,23 +344,21 @@ impl MemorySubstrate {
         description: &str,
         assigned_to: Option<&str>,
         created_by: Option<&str>,
-        tenant_id: Option<&str>,
     ) -> OpenCarrierResult<String> {
         let conn = Arc::clone(&self.conn);
         let title = title.to_string();
         let description = description.to_string();
         let assigned_to = assigned_to.unwrap_or("").to_string();
         let created_by = created_by.unwrap_or("").to_string();
-        let tenant_id = tenant_id.map(|s| s.to_string());
 
         tokio::task::spawn_blocking(move || {
             let id = uuid::Uuid::new_v4().to_string();
             let now = chrono::Utc::now().to_rfc3339();
             let db = conn.lock().map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
             db.execute(
-                "INSERT INTO task_queue (id, agent_id, task_type, payload, status, priority, created_at, title, description, assigned_to, created_by, tenant_id)
-                 VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?6, ?7, ?8, ?9, ?10)",
-                rusqlite::params![id, &created_by, &title, b"", now, title, description, assigned_to, created_by, tenant_id],
+                "INSERT INTO task_queue (id, agent_id, task_type, payload, status, priority, created_at, title, description, assigned_to, created_by)
+                 VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![id, &created_by, &title, b"", now, title, description, assigned_to, created_by],
             )
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
             Ok(id)
@@ -422,42 +367,26 @@ impl MemorySubstrate {
         .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    /// Claim the next pending task scoped to a tenant. Returns task JSON or None.
+    /// Claim the next pending task. Returns task JSON or None.
     pub async fn task_claim(
         &self,
         agent_id: &str,
-        tenant_id: Option<&str>,
     ) -> OpenCarrierResult<Option<serde_json::Value>> {
         let conn = Arc::clone(&self.conn);
         let agent_id = agent_id.to_string();
-        let tenant_id = tenant_id.map(|s| s.to_string());
 
         tokio::task::spawn_blocking(move || {
             let db = conn.lock().map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-            // Find first pending task assigned to this agent, or any unassigned pending task, scoped to tenant
-            let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match &tenant_id {
-                Some(tid) => (
-                    "SELECT id, title, description, assigned_to, created_by, created_at
-                     FROM task_queue
-                     WHERE status = 'pending' AND (assigned_to = ?1 OR assigned_to = '') AND tenant_id = ?2
-                     ORDER BY priority DESC, created_at ASC
-                     LIMIT 1",
-                    vec![Box::new(agent_id.clone()), Box::new(tid.clone())],
-                ),
-                None => (
-                    "SELECT id, title, description, assigned_to, created_by, created_at
+
+            let sql = "SELECT id, title, description, assigned_to, created_by, created_at
                      FROM task_queue
                      WHERE status = 'pending' AND (assigned_to = ?1 OR assigned_to = '')
                      ORDER BY priority DESC, created_at ASC
-                     LIMIT 1",
-                    vec![Box::new(agent_id.clone())],
-                ),
-            };
+                     LIMIT 1";
 
             let mut stmt = db.prepare(sql).map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-            let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
-            let result = stmt.query_row(params_refs.as_slice(), |row| {
+            let result = stmt.query_row(rusqlite::params![agent_id.clone()], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -494,31 +423,23 @@ impl MemorySubstrate {
         .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    /// Mark a task as completed with a result string. Validates tenant ownership.
+    /// Mark a task as completed with a result string.
     pub async fn task_complete(
         &self,
         task_id: &str,
         result: &str,
-        tenant_id: Option<&str>,
     ) -> OpenCarrierResult<()> {
         let conn = Arc::clone(&self.conn);
         let task_id = task_id.to_string();
         let result = result.to_string();
-        let tenant_id = tenant_id.map(|s| s.to_string());
 
         tokio::task::spawn_blocking(move || {
             let now = chrono::Utc::now().to_rfc3339();
             let db = conn.lock().map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-            let rows = match &tenant_id {
-                Some(tid) => db.execute(
-                    "UPDATE task_queue SET status = 'completed', result = ?2, completed_at = ?3 WHERE id = ?1 AND tenant_id = ?4",
-                    rusqlite::params![task_id, result, now, tid],
-                ),
-                None => db.execute(
-                    "UPDATE task_queue SET status = 'completed', result = ?2, completed_at = ?3 WHERE id = ?1",
-                    rusqlite::params![task_id, result, now],
-                ),
-            }.map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+            let rows = db.execute(
+                "UPDATE task_queue SET status = 'completed', result = ?2, completed_at = ?3 WHERE id = ?1",
+                rusqlite::params![task_id, result, now],
+            ).map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
             if rows == 0 {
                 return Err(OpenCarrierError::Internal(format!("Task not found: {task_id}")));
             }
@@ -528,32 +449,22 @@ impl MemorySubstrate {
         .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    /// List tasks, optionally filtered by status, scoped to tenant.
+    /// List tasks, optionally filtered by status.
     pub async fn task_list(
         &self,
         status: Option<&str>,
-        tenant_id: Option<&str>,
     ) -> OpenCarrierResult<Vec<serde_json::Value>> {
         let conn = Arc::clone(&self.conn);
         let status = status.map(|s| s.to_string());
-        let tenant_id = tenant_id.map(|s| s.to_string());
 
         tokio::task::spawn_blocking(move || {
             let db = conn.lock().map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
-            let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match (&status, &tenant_id) {
-                (Some(s), Some(tid)) => (
-                    "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result FROM task_queue WHERE status = ?1 AND tenant_id = ?2 ORDER BY created_at DESC",
-                    vec![Box::new(s.clone()), Box::new(tid.clone())],
-                ),
-                (Some(s), None) => (
+            let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match &status {
+                Some(s) => (
                     "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result FROM task_queue WHERE status = ?1 ORDER BY created_at DESC",
                     vec![Box::new(s.clone())],
                 ),
-                (None, Some(tid)) => (
-                    "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result FROM task_queue WHERE tenant_id = ?1 ORDER BY created_at DESC",
-                    vec![Box::new(tid.clone())],
-                ),
-                (None, None) => (
+                None => (
                     "SELECT id, title, description, status, assigned_to, created_by, created_at, completed_at, result FROM task_queue ORDER BY created_at DESC",
                     vec![],
                 ),
@@ -662,11 +573,9 @@ impl Memory for MemorySubstrate {
     async fn add_entity(
         &self,
         entity: Entity,
-        tenant_id: Option<&str>,
     ) -> OpenCarrierResult<String> {
         let store = self.knowledge.clone();
-        let tenant_id = tenant_id.map(|s| s.to_string());
-        tokio::task::spawn_blocking(move || store.add_entity(entity, tenant_id.as_deref()))
+        tokio::task::spawn_blocking(move || store.add_entity(entity))
             .await
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
@@ -674,11 +583,9 @@ impl Memory for MemorySubstrate {
     async fn add_relation(
         &self,
         relation: Relation,
-        tenant_id: Option<&str>,
     ) -> OpenCarrierResult<String> {
         let store = self.knowledge.clone();
-        let tenant_id = tenant_id.map(|s| s.to_string());
-        tokio::task::spawn_blocking(move || store.add_relation(relation, tenant_id.as_deref()))
+        tokio::task::spawn_blocking(move || store.add_relation(relation))
             .await
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
@@ -686,11 +593,9 @@ impl Memory for MemorySubstrate {
     async fn query_graph(
         &self,
         pattern: GraphPattern,
-        tenant_id: Option<&str>,
     ) -> OpenCarrierResult<Vec<GraphMatch>> {
         let store = self.knowledge.clone();
-        let tenant_id = tenant_id.map(|s| s.to_string());
-        tokio::task::spawn_blocking(move || store.query_graph(pattern, tenant_id.as_deref()))
+        tokio::task::spawn_blocking(move || store.query_graph(pattern))
             .await
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
@@ -760,13 +665,12 @@ mod tests {
                 "Check the auth module for issues",
                 Some("auditor"),
                 Some("orchestrator"),
-                None,
             )
             .await
             .unwrap();
         assert!(!id.is_empty());
 
-        let tasks = substrate.task_list(Some("pending"), None).await.unwrap();
+        let tasks = substrate.task_list(Some("pending")).await.unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["title"], "Review code");
         assert_eq!(tasks[0]["assigned_to"], "auditor");
@@ -782,13 +686,12 @@ mod tests {
                 "Security audit the /api/login endpoint",
                 Some("auditor"),
                 None,
-                None,
             )
             .await
             .unwrap();
 
         // Claim the task
-        let claimed = substrate.task_claim("auditor", None).await.unwrap();
+        let claimed = substrate.task_claim("auditor").await.unwrap();
         assert!(claimed.is_some());
         let claimed = claimed.unwrap();
         assert_eq!(claimed["id"], task_id);
@@ -796,12 +699,12 @@ mod tests {
 
         // Complete the task
         substrate
-            .task_complete(&task_id, "No vulnerabilities found", None)
+            .task_complete(&task_id, "No vulnerabilities found")
             .await
             .unwrap();
 
         // Verify it shows as completed
-        let tasks = substrate.task_list(Some("completed"), None).await.unwrap();
+        let tasks = substrate.task_list(Some("completed")).await.unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["result"], "No vulnerabilities found");
     }
@@ -809,7 +712,7 @@ mod tests {
     #[tokio::test]
     async fn test_task_claim_empty() {
         let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
-        let claimed = substrate.task_claim("nobody", None).await.unwrap();
+        let claimed = substrate.task_claim("nobody").await.unwrap();
         assert!(claimed.is_none());
     }
 }

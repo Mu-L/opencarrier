@@ -251,12 +251,10 @@ impl StructuredStore {
         let identity_json = serde_json::to_string(&entry.identity)
             .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
 
-        let tenant_id_str = entry.tenant_id.as_str();
-
         conn.execute(
-            "INSERT INTO agents (id, name, manifest, state, created_at, updated_at, session_id, identity, tenant_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-             ON CONFLICT(id) DO UPDATE SET name = ?2, manifest = ?3, state = ?4, updated_at = ?6, session_id = ?7, identity = ?8, tenant_id = ?9",
+            "INSERT INTO agents (id, name, manifest, state, created_at, updated_at, session_id, identity)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(id) DO UPDATE SET name = ?2, manifest = ?3, state = ?4, updated_at = ?6, session_id = ?7, identity = ?8",
             rusqlite::params![
                 entry.id.0.to_string(),
                 entry.name,
@@ -266,7 +264,6 @@ impl StructuredStore {
                 now,
                 entry.session_id.0.to_string(),
                 identity_json,
-                tenant_id_str,
             ],
         )
         .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
@@ -281,15 +278,12 @@ impl StructuredStore {
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
 
         let mut stmt = conn
-            .prepare("SELECT id, name, manifest, state, created_at, updated_at, session_id, identity, tenant_id FROM agents WHERE id = ?1")
+            .prepare("SELECT id, name, manifest, state, created_at, updated_at, session_id, identity FROM agents WHERE id = ?1")
             .or_else(|_| {
-                conn.prepare("SELECT id, name, manifest, state, created_at, updated_at, session_id, identity FROM agents WHERE id = ?1")
+                conn.prepare("SELECT id, name, manifest, state, created_at, updated_at, session_id FROM agents WHERE id = ?1")
                     .or_else(|_| {
-                        conn.prepare("SELECT id, name, manifest, state, created_at, updated_at, session_id FROM agents WHERE id = ?1")
-                            .or_else(|_| {
-                                // Fallback without session_id column for old DBs
-                                conn.prepare("SELECT id, name, manifest, state, created_at, updated_at FROM agents WHERE id = ?1")
-                            })
+                        // Fallback without session_id column for old DBs
+                        conn.prepare("SELECT id, name, manifest, state, created_at, updated_at FROM agents WHERE id = ?1")
                     })
             })
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
@@ -310,11 +304,6 @@ impl StructuredStore {
             } else {
                 None
             };
-            let tenant_id_str: Option<String> = if col_count >= 9 {
-                row.get(8).ok()
-            } else {
-                None
-            };
             Ok((
                 name,
                 manifest_blob,
@@ -322,7 +311,6 @@ impl StructuredStore {
                 created_str,
                 session_id_str,
                 identity_str,
-                tenant_id_str,
             ))
         });
 
@@ -334,7 +322,6 @@ impl StructuredStore {
                 created_str,
                 session_id_str,
                 identity_str,
-                tenant_id_str,
             )) => {
                 let manifest = rmp_serde::from_slice(&manifest_blob)
                     .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
@@ -350,7 +337,6 @@ impl StructuredStore {
                 let identity = identity_str
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_default();
-                let tenant_id = tenant_id_str.unwrap_or_default();
                 Ok(Some(AgentEntry {
                     id: agent_id,
                     name,
@@ -366,7 +352,6 @@ impl StructuredStore {
                     identity,
                     onboarding_completed: false,
                     onboarding_completed_at: None,
-                    tenant_id,
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -394,39 +379,26 @@ impl StructuredStore {
     /// fields gracefully. When an agent is loaded with lenient defaults, it is
     /// automatically re-saved to upgrade the stored blob. Duplicate agent names
     /// are deduplicated (first occurrence wins).
-    ///
-    /// If `tenant_id` is provided, only agents belonging to that tenant (or global
-    /// agents with no tenant_id) are returned.
-    pub fn load_all_agents(&self, tenant_id: Option<&str>) -> OpenCarrierResult<Vec<AgentEntry>> {
+    pub fn load_all_agents(&self) -> OpenCarrierResult<Vec<AgentEntry>> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
 
-        // Build query with optional tenant filter
-        let sql = if tenant_id.is_some() {
-            "SELECT id, name, manifest, state, created_at, updated_at, session_id, identity, tenant_id FROM agents WHERE tenant_id = ? OR tenant_id IS NULL OR tenant_id = ''"
-        } else {
-            "SELECT id, name, manifest, state, created_at, updated_at, session_id, identity, tenant_id FROM agents"
-        };
-
         // Try with full columns first, fall back gracefully
-        let (mut stmt, _has_tenant_col) = if let Ok(s) = conn.prepare(sql) {
-            (s, true)
-        } else if let Ok(s) = conn.prepare(
+        let mut stmt = if let Ok(s) = conn.prepare(
             "SELECT id, name, manifest, state, created_at, updated_at, session_id, identity FROM agents",
         ) {
-            (s, false)
+            s
         } else if let Ok(s) = conn.prepare(
             "SELECT id, name, manifest, state, created_at, updated_at, session_id FROM agents",
         ) {
-            (s, false)
+            s
         } else {
-            let s = conn.prepare(
+            conn.prepare(
                 "SELECT id, name, manifest, state, created_at, updated_at FROM agents",
             )
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-            (s, false)
+            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
         };
 
         let col_count = stmt.column_count();
@@ -441,19 +413,10 @@ impl StructuredStore {
                 String,
                 Option<String>,
                 Option<String>,
-                Option<String>,
             )>,
-        > = if let Some(tid) = tenant_id {
-            stmt.query_map(rusqlite::params![tid], |row| {
-                Self::row_to_agent_parts(row, col_count)
-            })
+        > = stmt.query_map([], |row| Self::row_to_agent_parts(row, col_count))
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
-            .collect()
-        } else {
-            stmt.query_map([], |row| Self::row_to_agent_parts(row, col_count))
-                .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
-                .collect()
-        };
+            .collect();
 
         let mut agents = Vec::new();
         let mut seen_names = std::collections::HashSet::new();
@@ -468,7 +431,6 @@ impl StructuredStore {
                 created_str,
                 session_id_str,
                 identity_str,
-                tid_str,
             ) = match row {
                 Ok(r) => r,
                 Err(e) => {
@@ -477,11 +439,10 @@ impl StructuredStore {
                 }
             };
 
-            // Deduplicate: skip agents with same (tenant_id, name) we've already seen
+            // Deduplicate: skip agents with same name we've already seen
             let name_lower = name.to_lowercase();
-            let dedup_key = format!("{}:{}", tid_str.as_deref().unwrap_or(""), name_lower);
-            if !seen_names.insert(dedup_key) {
-                tracing::info!(agent = %name, id = %id_str, tenant = tid_str.as_deref().unwrap_or(""), "Skipping duplicate agent name");
+            if !seen_names.insert(name_lower.clone()) {
+                tracing::info!(agent = %name, id = %id_str, "Skipping duplicate agent name");
                 continue;
             }
 
@@ -539,8 +500,6 @@ impl StructuredStore {
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default();
 
-            let tenant_id = tid_str.unwrap_or_default();
-
             agents.push(AgentEntry {
                 id: agent_id,
                 name,
@@ -556,7 +515,6 @@ impl StructuredStore {
                 identity,
                 onboarding_completed: false,
                 onboarding_completed_at: None,
-                tenant_id,
             });
         }
 
@@ -586,7 +544,6 @@ impl StructuredStore {
         String,
         Option<String>,
         Option<String>,
-        Option<String>,
     )> {
         let id_str: String = row.get(0)?;
         let name: String = row.get(1)?;
@@ -603,11 +560,6 @@ impl StructuredStore {
         } else {
             None
         };
-        let tenant_id_str: Option<String> = if col_count >= 9 {
-            row.get(8).ok()
-        } else {
-            None
-        };
         Ok((
             id_str,
             name,
@@ -616,43 +568,22 @@ impl StructuredStore {
             created_str,
             session_id_str,
             identity_str,
-            tenant_id_str,
         ))
     }
 
     /// List all agents in the database.
-    ///
-    /// If `tenant_id` is provided, only agents belonging to that tenant are listed.
-    pub fn list_agents(
-        &self,
-        tenant_id: Option<&str>,
-    ) -> OpenCarrierResult<Vec<(String, String, String)>> {
+    pub fn list_agents(&self) -> OpenCarrierResult<Vec<(String, String, String)>> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
 
-        let sql = if tenant_id.is_some() {
-            "SELECT id, name, state FROM agents WHERE tenant_id = ?"
-        } else {
-            "SELECT id, name, state FROM agents"
-        };
+        let sql = "SELECT id, name, state FROM agents";
         let mut stmt = conn
             .prepare(sql)
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
-        let row_data: Vec<rusqlite::Result<(String, String, String)>> = if let Some(tid) = tenant_id
-        {
-            stmt.query_map(rusqlite::params![tid], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
-            .collect()
-        } else {
+        let row_data: Vec<rusqlite::Result<(String, String, String)>> =
             stmt.query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -661,8 +592,7 @@ impl StructuredStore {
                 ))
             })
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
-            .collect()
-        };
+            .collect();
         let mut agents = Vec::new();
         for row in row_data {
             agents.push(row.map_err(|e| OpenCarrierError::Memory(e.to_string()))?);

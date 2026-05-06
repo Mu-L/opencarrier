@@ -27,13 +27,11 @@ pub struct AgentInfo {
 pub trait KernelHandle: Send + Sync {
     /// Spawn a new agent from a TOML manifest string.
     /// `parent_id` is the UUID string of the spawning agent (for lineage tracking).
-    /// `tenant_id` scopes the agent and its workspace to a specific tenant.
     /// Returns (agent_id, agent_name) on success.
     async fn spawn_agent(
         &self,
         manifest_toml: &str,
         parent_id: Option<&str>,
-        tenant_id: &str,
     ) -> Result<(String, String), String>;
 
     /// Send a message to another agent and get the response.
@@ -51,8 +49,7 @@ pub trait KernelHandle: Send + Sync {
     ) -> Result<String, String>;
 
     /// List all running agents visible to the caller.
-    /// `caller_tenant_id` scopes results to the same tenant.
-    fn list_agents(&self, caller_tenant_id: &str) -> Vec<AgentInfo>;
+    fn list_agents(&self) -> Vec<AgentInfo>;
 
     /// Kill an agent by ID.
     fn kill_agent(&self, agent_id: &str) -> Result<(), String>;
@@ -76,8 +73,7 @@ pub trait KernelHandle: Send + Sync {
     fn memory_list(&self, agent_id: &str) -> Result<Vec<(String, serde_json::Value)>, String>;
 
     /// Find agents by query (matches on name substring, tag, or tool name; case-insensitive).
-    /// `caller_tenant_id` scopes results to the same tenant.
-    fn find_agents(&self, query: &str, caller_tenant_id: &str) -> Vec<AgentInfo>;
+    fn find_agents(&self, query: &str) -> Vec<AgentInfo>;
 
     /// Post a task to the shared task queue. Returns the task ID.
     async fn task_post(
@@ -88,11 +84,10 @@ pub trait KernelHandle: Send + Sync {
         created_by: Option<&str>,
     ) -> Result<String, String>;
 
-    /// Claim the next available task scoped to the caller's tenant.
+    /// Claim the next available task.
     async fn task_claim(
         &self,
         agent_id: &str,
-        tenant_id: &str,
     ) -> Result<Option<serde_json::Value>, String>;
 
     /// Mark a task as completed with a result string.
@@ -100,14 +95,12 @@ pub trait KernelHandle: Send + Sync {
         &self,
         task_id: &str,
         result: &str,
-        tenant_id: &str,
     ) -> Result<(), String>;
 
-    /// List tasks, optionally filtered by status, scoped to tenant.
+    /// List tasks, optionally filtered by status.
     async fn task_list(
         &self,
         status: Option<&str>,
-        tenant_id: &str,
     ) -> Result<Vec<serde_json::Value>, String>;
 
     /// Publish a custom event that can trigger proactive agents.
@@ -120,25 +113,22 @@ pub trait KernelHandle: Send + Sync {
     /// Set the default plugin tenant for an agent (used when no channel context is available).
     fn set_default_plugin_tenant(&self, agent_id: &str, tenant_id: &str);
 
-    /// Add an entity to the knowledge graph, scoped to tenant.
+    /// Add an entity to the knowledge graph.
     async fn knowledge_add_entity(
         &self,
         entity: opencarrier_types::memory::Entity,
-        tenant_id: &str,
     ) -> Result<String, String>;
 
-    /// Add a relation to the knowledge graph, scoped to tenant.
+    /// Add a relation to the knowledge graph.
     async fn knowledge_add_relation(
         &self,
         relation: opencarrier_types::memory::Relation,
-        tenant_id: &str,
     ) -> Result<String, String>;
 
-    /// Query the knowledge graph with a pattern, scoped to tenant.
+    /// Query the knowledge graph with a pattern.
     async fn knowledge_query(
         &self,
         pattern: opencarrier_types::memory::GraphPattern,
-        tenant_id: &str,
     ) -> Result<Vec<opencarrier_types::memory::GraphMatch>, String>;
 
     /// Create a cron job for the calling agent.
@@ -181,38 +171,6 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
-    /// Resolve an agent's workspace directory by name, scoped to a specific tenant.
-    /// Uses `find_by_name_and_tenant` to avoid cross-tenant name collisions.
-    /// Returns the absolute path string, or None if no agent with that name exists under the tenant.
-    fn resolve_agent_workspace_in_tenant(
-        &self,
-        agent_name: &str,
-        tenant_id: &str,
-    ) -> Option<String> {
-        let _ = (agent_name, tenant_id);
-        None
-    }
-
-    /// Get the tenant_id of an agent by its ID.
-    /// Returns None if the agent is not found or has no tenant.
-    fn get_agent_tenant_id(&self, agent_id: &str) -> Option<String> {
-        let _ = agent_id;
-        None
-    }
-
-    /// Assign a tenant_id to an agent by ID. Used after spawn to inherit parent's tenant.
-    fn set_agent_tenant(&self, agent_id: &str, tenant_id: &str) -> Result<(), String> {
-        let _ = (agent_id, tenant_id);
-        Err("Tenant assignment not available".to_string())
-    }
-
-    /// Get the tenant_id of an agent by its name.
-    /// Returns None if the agent is not found or has no tenant.
-    fn get_agent_tenant_id_from_name(&self, agent_name: &str) -> Option<String> {
-        let _ = agent_name;
-        None
-    }
-
     /// Rebuild the available tool list for an agent.
     /// Used after mid-loop skill installations (e.g., train_write) so the
     /// LLM can use newly installed tools in the next iteration.
@@ -225,14 +183,12 @@ pub trait KernelHandle: Send + Sync {
     }
 
     /// Install a clone from raw .agx bytes. Returns (agent_id, agent_name).
-    /// `tenant_id` scopes the clone's workspace to a specific tenant.
     async fn clone_install(
         &self,
         name: &str,
         agx_data: &[u8],
-        tenant_id: &str,
     ) -> Result<(String, String), String> {
-        let _ = (name, agx_data, tenant_id);
+        let _ = (name, agx_data);
         Err("Clone install not available".to_string())
     }
 
@@ -256,12 +212,11 @@ pub trait KernelHandle: Send + Sync {
         manifest_toml: &str,
         parent_id: Option<&str>,
         parent_caps: &[opencarrier_types::capability::Capability],
-        tenant_id: &str,
     ) -> Result<(String, String), String> {
         // Default: delegate to spawn_agent (no enforcement)
         // The kernel MUST override this with real enforcement
         let _ = parent_caps;
-        self.spawn_agent(manifest_toml, parent_id, tenant_id).await
+        self.spawn_agent(manifest_toml, parent_id).await
     }
 
     /// Execute a plugin tool (loaded via dlopen).

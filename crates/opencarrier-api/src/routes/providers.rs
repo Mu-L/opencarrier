@@ -1,6 +1,5 @@
 //! Provider API key management endpoints.
 
-use crate::routes::common::*;
 use crate::routes::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -65,19 +64,9 @@ pub async fn list_provider_keys(State(state): State<Arc<AppState>>) -> impl Into
 /// For `jwt` auth type: `{ "params": { "access_key_env": "val", "secret_key_env": "val" } }`
 pub async fn set_provider_key(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     let brain = state.kernel.brain_info();
     let config = brain.config();
 
@@ -161,18 +150,8 @@ pub async fn set_provider_key(
 /// DELETE /api/providers/{name}/key — Remove API key for a provider.
 pub async fn delete_provider_key(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    {
-        let ctx = get_tenant_ctx(&extensions);
-        if !ctx.is_admin() {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Admin only"})),
-            );
-        }
-    }
     let brain = state.kernel.brain_info();
     let config = brain.config();
 

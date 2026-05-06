@@ -3,7 +3,7 @@
 //! Provides:
 //! - Request ID generation and propagation
 //! - Per-endpoint structured request logging
-//! - In-memory rate limiting (per IP)
+//! - Bearer token (API key) authentication
 
 use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
@@ -48,7 +48,6 @@ pub async fn request_logging(request: Request<Body>, next: Next) -> Response<Bod
 pub struct AuthState {
     pub api_key: String,
     pub auth_enabled: bool,
-    pub session_secret: String,
 }
 
 /// Bearer token authentication middleware.
@@ -57,11 +56,9 @@ pub struct AuthState {
 /// endpoints must include `Authorization: Bearer <api_key>`.
 /// If the key is empty or whitespace-only, auth is disabled entirely
 /// (public/local development mode).
-///
-/// When dashboard auth is enabled, session cookies are also accepted.
 pub async fn auth(
     axum::extract::State(auth_state): axum::extract::State<AuthState>,
-    mut request: Request<Body>,
+    request: Request<Body>,
     next: Next,
 ) -> Response<Body> {
     // SECURITY: Capture method early for method-aware public endpoint checks.
@@ -80,16 +77,11 @@ pub async fn auth(
         }
     }
 
-    // Public endpoints that don't require auth (dashboard needs these).
-    // SECURITY: /api/agents is GET-only (listing). POST (spawn) requires auth.
+    // Public endpoints that don't require auth.
     // SECURITY: Public endpoints are GET-only unless explicitly noted.
     // POST/PUT/DELETE to any endpoint ALWAYS requires auth to prevent
     // unauthenticated writes (cron job creation, skill install, etc.).
     let is_get = method == axum::http::Method::GET;
-    // Minimal public endpoints:
-    //   - Dashboard SPA shell, favicon, logo (static assets needed before auth)
-    //   - Health check for external monitoring
-    //   - Auth endpoints (login/logout/check) — must be public to authenticate
     let is_public = path == "/"
         || path == "/share"
         || path == "/logo.png"
@@ -100,11 +92,7 @@ pub async fn auth(
         || path.starts_with("/katex-fonts/")
         || (path == "/.well-known/agent.json" && is_get)
         || path == "/api/health"
-        || path == "/api/auth/login"
-        || path == "/api/auth/logout"
-        || (path == "/api/auth/check" && is_get)
-        || path == "/api/onboard"
-        // Share-page platform auth flows (pre-onboarding, no session yet)
+        // Share-page platform auth flows (pre-onboarding)
         || path == "/api/weixin/qrcode"
         || path == "/api/weixin/qrcode-status"
         || path == "/api/bots/wecom/smartbot/generate"
@@ -113,6 +101,8 @@ pub async fn auth(
         || path == "/api/bots/feishu/device-auth/poll"
         || path == "/api/bots/dingtalk/device-auth"
         || path == "/api/bots/dingtalk/device-auth/poll"
+        // Clone access control (share page needs these without auth)
+        || path.starts_with("/api/clones/") && (path.ends_with("/access") || path.ends_with("/verify-access"))
         // Agent output files — must be public for WeChat direct download links
         || (path.starts_with("/api/agents/") && path.contains("/output/") && is_get);
 
@@ -122,37 +112,9 @@ pub async fn auth(
 
     // If no API key configured (empty, whitespace-only, or missing), skip auth
     // entirely. Users who don't set api_key accept that all endpoints are open.
-    // To secure the dashboard, set a non-empty api_key in config.toml.
-    // BUT: if a session token is present, honor it (for share/onboarding tenant context).
     let api_key_trimmed = auth_state.api_key.trim().to_string();
 
-    // Check ?session= and cookie session before the admin shortcut,
-    // so onboarding users get proper tenant-scoped context.
-    let query_session = request
-        .uri()
-        .query()
-        .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("session=")))
-        .map(|t| urlencoding::decode(t).map(|s| s.to_string()).unwrap_or_default());
-    let cookie_session = extract_session_cookie(&request);
-    let session_token = query_session.as_deref().or(cookie_session.as_deref());
-    if let Some(token) = session_token {
-        if let Some(info) =
-            crate::session_auth::verify_session_token(token, &auth_state.session_secret)
-        {
-            let ctx = opencarrier_types::tenant::TenantContext {
-                tenant_id: info.tenant_id,
-                role: opencarrier_types::tenant::TenantRole::from_role_str(&info.role),
-            };
-            request.extensions_mut().insert(ctx);
-            return next.run(request).await;
-        }
-    }
-
     if api_key_trimmed.is_empty() && !auth_state.auth_enabled {
-        // No auth → admin context (backward compatible)
-        request
-            .extensions_mut()
-            .insert(opencarrier_types::tenant::TenantContext::admin());
         return next.run(request).await;
     }
     let api_key = api_key_trimmed.as_str();
@@ -198,14 +160,9 @@ pub async fn auth(
 
     // Accept if either auth method matches
     if header_auth == Some(true) || query_auth == Some(true) {
-        // Bearer/API-key auth → admin context (backward compatible)
-        request
-            .extensions_mut()
-            .insert(opencarrier_types::tenant::TenantContext::admin());
         return next.run(request).await;
     }
 
-    // Check session cookie (dashboard login sessions)
     // Determine error message: was a credential provided but wrong, or missing entirely?
     let credential_provided = header_auth.is_some() || query_auth.is_some();
     let error_msg = if credential_provided {
@@ -221,21 +178,6 @@ pub async fn auth(
             serde_json::json!({"error": error_msg}).to_string(),
         ))
         .unwrap_or_default()
-}
-
-/// Extract the `opencarrier_session` cookie value from a request.
-fn extract_session_cookie(request: &Request<Body>) -> Option<String> {
-    request
-        .headers()
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|c| {
-                c.trim()
-                    .strip_prefix("opencarrier_session=")
-                    .map(|v| v.to_string())
-            })
-        })
 }
 
 /// Security headers middleware — applied to ALL API responses.

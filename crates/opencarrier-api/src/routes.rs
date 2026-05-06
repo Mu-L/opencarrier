@@ -1,7 +1,6 @@
 //! Route handlers for the OpenCarrier API.
 
 pub mod agents;
-pub mod auth;
 pub mod bindings;
 pub mod bots;
 pub mod brain;
@@ -16,13 +15,11 @@ pub mod invites;
 pub mod kv;
 pub mod messaging;
 pub mod observability;
-pub mod onboard;
 pub mod plugin_toml;
 pub mod plugins;
 pub mod providers;
 pub mod sessions;
 pub mod state;
-pub mod tenants;
 pub mod tools_skills;
 pub mod webhooks;
 pub mod weixin;
@@ -40,7 +37,6 @@ pub use sessions::{create_agent_session, get_agent_session, list_agent_sessions,
 pub use tools_skills::list_tools;
 
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use std::sync::Arc;
@@ -52,19 +48,9 @@ use std::sync::Arc;
 /// GET /api/status — Kernel status.
 pub async fn status(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let ctx = get_tenant_ctx(&extensions);
     let all_agents = state.kernel.registry.list();
-    let agents_owned = if ctx.is_admin() {
-        all_agents
-    } else {
-        all_agents
-            .into_iter()
-            .filter(|e| can_access(&ctx, e.tenant_id.as_str()))
-            .collect()
-    };
-    let agents: Vec<serde_json::Value> = agents_owned
+    let agents: Vec<serde_json::Value> = all_agents
         .into_iter()
         .map(|e| {
             let (modality, model) = state.kernel.resolve_model_label(&e.manifest.model.modality);
@@ -102,16 +88,7 @@ pub async fn status(
 /// POST /api/shutdown — Graceful shutdown.
 pub async fn shutdown(
     State(state): State<Arc<AppState>>,
-    extensions: axum::http::Extensions,
 ) -> axum::response::Response {
-    let ctx = get_tenant_ctx(&extensions);
-    if !ctx.is_admin() {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin only"})),
-        )
-            .into_response();
-    }
     tracing::info!("Shutdown requested via API");
     state.kernel.audit_log.record(
         "system",
@@ -138,8 +115,8 @@ pub async fn version() -> impl IntoResponse {
 }
 
 /// GET /api/commands — List available chat commands (for dynamic slash menu).
-pub async fn list_commands(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let mut commands = vec![
+pub async fn list_commands(State(_state): State<Arc<AppState>>) -> impl IntoResponse {
+    let commands = vec![
         serde_json::json!({"cmd": "/help", "desc": "Show available commands"}),
         serde_json::json!({"cmd": "/new", "desc": "Reset session (clear history)"}),
         serde_json::json!({"cmd": "/compact", "desc": "Trigger LLM session compaction"}),
@@ -154,17 +131,6 @@ pub async fn list_commands(State(state): State<Arc<AppState>>) -> impl IntoRespo
         serde_json::json!({"cmd": "/clear", "desc": "Clear chat display"}),
         serde_json::json!({"cmd": "/exit", "desc": "Disconnect from agent"}),
     ];
-
-    if let Ok(registry) = state.kernel.plugins.skill_registry.read() {
-        for skill in registry.list() {
-            let desc: String = skill.manifest.skill.description.chars().take(80).collect();
-            commands.push(serde_json::json!({
-                "cmd": format!("/{}", skill.manifest.skill.name),
-                "desc": if desc.is_empty() { format!("Skill: {}", skill.manifest.skill.name) } else { desc },
-                "source": "skill",
-            }));
-        }
-    }
 
     Json(serde_json::json!({"commands": commands}))
 }
