@@ -171,7 +171,7 @@ pub async fn execute_tool(
         "skill_update" => tool_skill_update(input, workspace_root).await,
         "skill_load" => tool_skill_load(input, workspace_root).await,
         "session_summarize" => {
-            tool_session_summarize(input, kernel, caller_agent_id).await
+            tool_session_summarize(input, kernel, caller_agent_id, sender_id).await
         }
 
         // Cross-workspace training tools (for trainer agents like clone-trainer)
@@ -288,10 +288,10 @@ pub async fn execute_tool(
         "agent_kill" => tool_agent_kill(input, kernel, caller_agent_id),
         "agent_restart" => tool_agent_restart(input, kernel, caller_agent_id),
 
-        // Memory tools (scoped to caller's agent namespace)
-        "memory_store" => tool_memory_store(input, kernel, caller_agent_id),
-        "memory_recall" => tool_memory_recall(input, kernel, caller_agent_id),
-        "memory_list" => tool_memory_list(input, kernel, caller_agent_id),
+        // Memory tools (scoped to caller's agent + sender namespace)
+        "memory_store" => tool_memory_store(input, kernel, caller_agent_id, sender_id),
+        "memory_recall" => tool_memory_recall(input, kernel, caller_agent_id, sender_id),
+        "memory_list" => tool_memory_list(input, kernel, caller_agent_id, sender_id),
 
         // Collaboration tools
         "agent_find" => tool_agent_find(input, kernel, caller_agent_id),
@@ -2190,9 +2190,11 @@ async fn tool_session_summarize(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = kernel.ok_or("session_summarize requires kernel access")?;
     let agent_id = caller_agent_id.ok_or("session_summarize requires caller agent ID")?;
+    let sid = sender_id.unwrap_or("");
     let summary = input["summary"]
         .as_str()
         .ok_or("Missing 'summary' parameter")?;
@@ -2200,7 +2202,7 @@ async fn tool_session_summarize(
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let key = format!("session_summary:{date}");
 
-    kh.memory_store(agent_id, &key, serde_json::Value::String(summary.to_string()))
+    kh.memory_store(agent_id, sid, &key, serde_json::Value::String(summary.to_string()))
         .map_err(|e| format!("Failed to store summary: {e}"))?;
 
     Ok(format!("Session summary stored for {date}."))
@@ -3161,12 +3163,14 @@ fn tool_memory_store(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let aid = caller_agent_id.ok_or("No agent context for memory_store")?;
+    let sid = sender_id.unwrap_or("");
     let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
     let value = input.get("value").ok_or("Missing 'value' parameter")?;
-    kh.memory_store(aid, key, value.clone())?;
+    kh.memory_store(aid, sid, key, value.clone())?;
     Ok(format!("Stored value under key '{key}'."))
 }
 
@@ -3174,11 +3178,13 @@ fn tool_memory_recall(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let aid = caller_agent_id.ok_or("No agent context for memory_recall")?;
+    let sid = sender_id.unwrap_or("");
     let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
-    match kh.memory_recall(aid, key)? {
+    match kh.memory_recall(aid, sid, key)? {
         Some(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())),
         None => Ok(format!("No value found for key '{key}'.")),
     }
@@ -3188,11 +3194,13 @@ fn tool_memory_list(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let _ = input; // no parameters needed
     let kh = require_kernel(kernel)?;
     let aid = caller_agent_id.ok_or("No agent context for memory_list")?;
-    let pairs = kh.memory_list(aid)?;
+    let sid = sender_id.unwrap_or("");
+    let pairs = kh.memory_list(aid, sid)?;
     if pairs.is_empty() {
         return Ok("No keys stored.".to_string());
     }
@@ -3612,13 +3620,13 @@ async fn tool_schedule_create(
     });
 
     // Load existing schedules from agent's memory
-    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
 
     schedules.push(entry);
-    kh.memory_store(aid, SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    kh.memory_store(aid, "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
 
     Ok(format!(
         "Schedule created:\n  ID: {schedule_id}\n  Description: {description}\n  Cron: {cron_expr}\n  Original: {schedule_str}"
@@ -3632,7 +3640,7 @@ async fn tool_schedule_list(
     let kh = require_kernel(kernel)?;
     let aid = caller_agent_id.ok_or("No agent context for schedule_list")?;
 
-    let schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, SCHEDULES_KEY)? {
+    let schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -3667,7 +3675,7 @@ async fn tool_schedule_delete(
     let aid = caller_agent_id.ok_or("No agent context for schedule_delete")?;
     let id = input["id"].as_str().ok_or("Missing 'id' parameter")?;
 
-    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -3679,7 +3687,7 @@ async fn tool_schedule_delete(
         return Err(format!("Schedule '{id}' not found."));
     }
 
-    kh.memory_store(aid, SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    kh.memory_store(aid, "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
     Ok(format!("Schedule '{id}' deleted."))
 }
 

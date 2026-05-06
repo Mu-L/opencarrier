@@ -57,20 +57,21 @@ pub trait KernelHandle: Send + Sync {
     /// Restart an agent by ID (reset state, re-read manifest from workspace).
     fn restart_agent(&self, agent_id: &str) -> Result<(), String>;
 
-    /// Store a key-value pair in the agent's own memory namespace.
+    /// Store a key-value pair in the agent's per-user memory namespace.
     fn memory_store(
         &self,
         agent_id: &str,
+        sender_id: &str,
         key: &str,
         value: serde_json::Value,
     ) -> Result<(), String>;
 
-    /// Recall a value from the agent's own memory namespace.
-    fn memory_recall(&self, agent_id: &str, key: &str)
+    /// Recall a value from the agent's per-user memory namespace.
+    fn memory_recall(&self, agent_id: &str, sender_id: &str, key: &str)
         -> Result<Option<serde_json::Value>, String>;
 
-    /// List all keys in the agent's own memory namespace.
-    fn memory_list(&self, agent_id: &str) -> Result<Vec<(String, serde_json::Value)>, String>;
+    /// List all keys in the agent's per-user memory namespace.
+    fn memory_list(&self, agent_id: &str, sender_id: &str) -> Result<Vec<(String, serde_json::Value)>, String>;
 
     /// Find agents by query (matches on name substring, tag, or tool name; case-insensitive).
     fn find_agents(&self, query: &str) -> Vec<AgentInfo>;

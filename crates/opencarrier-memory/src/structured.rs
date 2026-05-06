@@ -22,6 +22,7 @@ impl StructuredStore {
     pub fn get(
         &self,
         agent_id: AgentId,
+        sender_id: &str,
         key: &str,
     ) -> OpenCarrierResult<Option<serde_json::Value>> {
         let conn = self
@@ -29,9 +30,9 @@ impl StructuredStore {
             .lock()
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
         let mut stmt = conn
-            .prepare("SELECT value FROM kv_store WHERE agent_id = ?1 AND key = ?2")
+            .prepare("SELECT value FROM kv_store WHERE agent_id = ?1 AND sender_id = ?2 AND key = ?3")
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-        let result = stmt.query_row(rusqlite::params![agent_id.0.to_string(), key], |row| {
+        let result = stmt.query_row(rusqlite::params![agent_id.0.to_string(), sender_id, key], |row| {
             let blob: Vec<u8> = row.get(0)?;
             Ok(blob)
         });
@@ -54,6 +55,7 @@ impl StructuredStore {
     pub fn set(
         &self,
         agent_id: AgentId,
+        sender_id: &str,
         key: &str,
         value: serde_json::Value,
     ) -> OpenCarrierResult<()> {
@@ -72,15 +74,15 @@ impl StructuredStore {
         // Archive the old value before overwriting (memory immutability)
         let old: Option<(Vec<u8>, i64)> = conn
             .query_row(
-                "SELECT value, version FROM kv_store WHERE agent_id = ?1 AND key = ?2",
-                rusqlite::params![agent_id.0.to_string(), key],
+                "SELECT value, version FROM kv_store WHERE agent_id = ?1 AND sender_id = ?2 AND key = ?3",
+                rusqlite::params![agent_id.0.to_string(), sender_id, key],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .ok();
         if let Some((old_blob, old_version)) = old {
             conn.execute(
-                "INSERT INTO kv_history (agent_id, key, value, version, archived_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![agent_id.0.to_string(), key, old_blob, old_version, now],
+                "INSERT INTO kv_history (agent_id, sender_id, key, value, version, archived_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![agent_id.0.to_string(), sender_id, key, old_blob, old_version, now],
             )
             .map_err(|e| {
                 let _ = conn.execute("ROLLBACK", []);
@@ -89,9 +91,9 @@ impl StructuredStore {
         }
 
         conn.execute(
-            "INSERT INTO kv_store (agent_id, key, value, version, updated_at) VALUES (?1, ?2, ?3, 1, ?4)
-             ON CONFLICT(agent_id, key) DO UPDATE SET value = ?3, version = version + 1, updated_at = ?4",
-            rusqlite::params![agent_id.0.to_string(), key, blob, now],
+            "INSERT INTO kv_store (agent_id, sender_id, key, value, version, updated_at) VALUES (?1, ?2, ?3, ?4, 1, ?5)
+             ON CONFLICT(agent_id, sender_id, key) DO UPDATE SET value = ?4, version = version + 1, updated_at = ?5",
+            rusqlite::params![agent_id.0.to_string(), sender_id, key, blob, now],
         )
         .map_err(|e| {
             let _ = conn.execute("ROLLBACK", []);
@@ -107,7 +109,7 @@ impl StructuredStore {
     ///
     /// **Immutability guarantee**: the value is archived to `kv_history`
     /// before deletion, so no memory is ever truly lost.
-    pub fn delete(&self, agent_id: AgentId, key: &str) -> OpenCarrierResult<()> {
+    pub fn delete(&self, agent_id: AgentId, sender_id: &str, key: &str) -> OpenCarrierResult<()> {
         let conn = self
             .conn
             .lock()
@@ -121,15 +123,15 @@ impl StructuredStore {
         // Archive before deleting
         let old: Option<(Vec<u8>, i64)> = conn
             .query_row(
-                "SELECT value, version FROM kv_store WHERE agent_id = ?1 AND key = ?2",
-                rusqlite::params![agent_id.0.to_string(), key],
+                "SELECT value, version FROM kv_store WHERE agent_id = ?1 AND sender_id = ?2 AND key = ?3",
+                rusqlite::params![agent_id.0.to_string(), sender_id, key],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .ok();
         if let Some((old_blob, old_version)) = old {
             conn.execute(
-                "INSERT INTO kv_history (agent_id, key, value, version, archived_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![agent_id.0.to_string(), key, old_blob, old_version, now],
+                "INSERT INTO kv_history (agent_id, sender_id, key, value, version, archived_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![agent_id.0.to_string(), sender_id, key, old_blob, old_version, now],
             )
             .map_err(|e| {
                 let _ = conn.execute("ROLLBACK", []);
@@ -138,8 +140,8 @@ impl StructuredStore {
         }
 
         conn.execute(
-            "DELETE FROM kv_store WHERE agent_id = ?1 AND key = ?2",
-            rusqlite::params![agent_id.0.to_string(), key],
+            "DELETE FROM kv_store WHERE agent_id = ?1 AND sender_id = ?2 AND key = ?3",
+            rusqlite::params![agent_id.0.to_string(), sender_id, key],
         )
         .map_err(|e| {
             let _ = conn.execute("ROLLBACK", []);
@@ -155,6 +157,7 @@ impl StructuredStore {
     pub fn get_history(
         &self,
         agent_id: AgentId,
+        sender_id: &str,
         key: &str,
     ) -> OpenCarrierResult<Vec<(serde_json::Value, i64, String)>> {
         let conn = self
@@ -163,11 +166,11 @@ impl StructuredStore {
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
-                "SELECT value, version, archived_at FROM kv_history WHERE agent_id = ?1 AND key = ?2 ORDER BY version ASC",
+                "SELECT value, version, archived_at FROM kv_history WHERE agent_id = ?1 AND sender_id = ?2 AND key = ?3 ORDER BY version ASC",
             )
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         let rows = stmt
-            .query_map(rusqlite::params![agent_id.0.to_string(), key], |row| {
+            .query_map(rusqlite::params![agent_id.0.to_string(), sender_id, key], |row| {
                 let blob: Vec<u8> = row.get(0)?;
                 let version: i64 = row.get(1)?;
                 let archived_at: String = row.get(2)?;
@@ -193,16 +196,17 @@ impl StructuredStore {
     pub fn list_kv(
         &self,
         agent_id: AgentId,
+        sender_id: &str,
     ) -> OpenCarrierResult<Vec<(String, serde_json::Value)>> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
         let mut stmt = conn
-            .prepare("SELECT key, value FROM kv_store WHERE agent_id = ?1 ORDER BY key")
+            .prepare("SELECT key, value FROM kv_store WHERE agent_id = ?1 AND sender_id = ?2 ORDER BY key")
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         let rows = stmt
-            .query_map(rusqlite::params![agent_id.0.to_string()], |row| {
+            .query_map(rusqlite::params![agent_id.0.to_string(), sender_id], |row| {
                 let key: String = row.get(0)?;
                 let blob: Vec<u8> = row.get(1)?;
                 Ok((key, blob))
@@ -617,9 +621,9 @@ mod tests {
         let store = setup();
         let agent_id = AgentId::new();
         store
-            .set(agent_id, "test_key", serde_json::json!("test_value"))
+            .set(agent_id, "user1", "test_key", serde_json::json!("test_value"))
             .unwrap();
-        let value = store.get(agent_id, "test_key").unwrap();
+        let value = store.get(agent_id, "user1", "test_key").unwrap();
         assert_eq!(value, Some(serde_json::json!("test_value")));
     }
 
@@ -627,7 +631,7 @@ mod tests {
     fn test_kv_get_missing() {
         let store = setup();
         let agent_id = AgentId::new();
-        let value = store.get(agent_id, "nonexistent").unwrap();
+        let value = store.get(agent_id, "user1", "nonexistent").unwrap();
         assert!(value.is_none());
     }
 
@@ -636,10 +640,10 @@ mod tests {
         let store = setup();
         let agent_id = AgentId::new();
         store
-            .set(agent_id, "to_delete", serde_json::json!(42))
+            .set(agent_id, "user1", "to_delete", serde_json::json!(42))
             .unwrap();
-        store.delete(agent_id, "to_delete").unwrap();
-        let value = store.get(agent_id, "to_delete").unwrap();
+        store.delete(agent_id, "user1", "to_delete").unwrap();
+        let value = store.get(agent_id, "user1", "to_delete").unwrap();
         assert!(value.is_none());
     }
 
@@ -647,9 +651,9 @@ mod tests {
     fn test_kv_update() {
         let store = setup();
         let agent_id = AgentId::new();
-        store.set(agent_id, "key", serde_json::json!("v1")).unwrap();
-        store.set(agent_id, "key", serde_json::json!("v2")).unwrap();
-        let value = store.get(agent_id, "key").unwrap();
+        store.set(agent_id, "user1", "key", serde_json::json!("v1")).unwrap();
+        store.set(agent_id, "user1", "key", serde_json::json!("v2")).unwrap();
+        let value = store.get(agent_id, "user1", "key").unwrap();
         assert_eq!(value, Some(serde_json::json!("v2")));
     }
 
@@ -657,16 +661,16 @@ mod tests {
     fn test_kv_update_preserves_history() {
         let store = setup();
         let agent_id = AgentId::new();
-        store.set(agent_id, "key", serde_json::json!("v1")).unwrap();
-        store.set(agent_id, "key", serde_json::json!("v2")).unwrap();
-        store.set(agent_id, "key", serde_json::json!("v3")).unwrap();
+        store.set(agent_id, "user1", "key", serde_json::json!("v1")).unwrap();
+        store.set(agent_id, "user1", "key", serde_json::json!("v2")).unwrap();
+        store.set(agent_id, "user1", "key", serde_json::json!("v3")).unwrap();
 
         // Latest value is v3
-        let value = store.get(agent_id, "key").unwrap();
+        let value = store.get(agent_id, "user1", "key").unwrap();
         assert_eq!(value, Some(serde_json::json!("v3")));
 
         // History preserves all old values
-        let history = store.get_history(agent_id, "key").unwrap();
+        let history = store.get_history(agent_id, "user1", "key").unwrap();
         assert_eq!(history.len(), 2, "should have 2 archived entries (v1, v2)");
         assert_eq!(history[0].0, serde_json::json!("v1"));
         assert_eq!(history[1].0, serde_json::json!("v2"));
@@ -677,17 +681,35 @@ mod tests {
         let store = setup();
         let agent_id = AgentId::new();
         store
-            .set(agent_id, "key", serde_json::json!("important"))
+            .set(agent_id, "user1", "key", serde_json::json!("important"))
             .unwrap();
-        store.delete(agent_id, "key").unwrap();
+        store.delete(agent_id, "user1", "key").unwrap();
 
         // Value is gone from main store
-        let value = store.get(agent_id, "key").unwrap();
+        let value = store.get(agent_id, "user1", "key").unwrap();
         assert!(value.is_none());
 
         // But history preserves it
-        let history = store.get_history(agent_id, "key").unwrap();
+        let history = store.get_history(agent_id, "user1", "key").unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].0, serde_json::json!("important"));
+    }
+
+    #[test]
+    fn test_kv_per_user_isolation() {
+        let store = setup();
+        let agent_id = AgentId::new();
+        store.set(agent_id, "user_a", "pref", serde_json::json!("dark mode")).unwrap();
+        store.set(agent_id, "user_b", "pref", serde_json::json!("light mode")).unwrap();
+
+        // Each user sees their own value
+        assert_eq!(store.get(agent_id, "user_a", "pref").unwrap(), Some(serde_json::json!("dark mode")));
+        assert_eq!(store.get(agent_id, "user_b", "pref").unwrap(), Some(serde_json::json!("light mode")));
+
+        // list_kv is per-user
+        let a_keys = store.list_kv(agent_id, "user_a").unwrap();
+        let b_keys = store.list_kv(agent_id, "user_b").unwrap();
+        assert_eq!(a_keys.len(), 1);
+        assert_eq!(b_keys.len(), 1);
     }
 }

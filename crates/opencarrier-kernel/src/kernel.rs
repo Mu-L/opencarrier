@@ -325,14 +325,19 @@ fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
 
 /// Append an assistant response summary to the daily memory log (best-effort, append-only).
 /// Caps daily log at 1MB to prevent unbounded growth.
-fn append_daily_memory_log(workspace: &Path, response: &str) {
+/// When sender_id is present, writes to per-user memory directory.
+fn append_daily_memory_log(workspace: &Path, response: &str, sender_id: Option<&str>) {
     use std::io::Write;
     let trimmed = response.trim();
     if trimmed.is_empty() {
         return;
     }
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let log_path = workspace.join("memory").join(format!("{today}.md"));
+    let log_path = if let Some(sid) = sender_id {
+        workspace.join("users").join(sid).join("memory").join(format!("{today}.md"))
+    } else {
+        workspace.join("memory").join(format!("{today}.md"))
+    };
     // Security: cap total daily log to 1MB
     if let Ok(metadata) = std::fs::metadata(&log_path) {
         if metadata.len() > 1_048_576 {
@@ -1898,7 +1903,7 @@ impl OpenCarrierKernel {
                             warn!("Failed to write JSONL session mirror (streaming): {e}");
                         }
                         // Append daily memory log (best-effort)
-                        append_daily_memory_log(workspace, &result.response);
+                        append_daily_memory_log(workspace, &result.response, sender_id.as_deref());
                     }
 
                     kernel_clone
@@ -2324,7 +2329,7 @@ impl OpenCarrierKernel {
                 warn!("Failed to write JSONL session mirror: {e}");
             }
             // Append daily memory log (best-effort)
-            append_daily_memory_log(workspace, &result.response);
+            append_daily_memory_log(workspace, &result.response, sender_id.as_deref());
         }
 
         // Record usage and check budget thresholds
@@ -2589,7 +2594,7 @@ impl OpenCarrierKernel {
         let key = format!("session_{date}_{slug}");
         let _ =
             self.memory
-                .structured_set(agent_id, &key, serde_json::Value::String(summary.clone()));
+                .structured_set(agent_id, "", &key, serde_json::Value::String(summary.clone()));
 
         // Also write to workspace memory/ dir if workspace exists
         if let Some(ref workspace) = entry.manifest.workspace {
@@ -4356,10 +4361,11 @@ impl OpenCarrierKernel {
         sender_name: Option<String>,
     ) {
         let mcp_tool_count = self.plugins.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
-        // Read user_name from the agent's own KV namespace (per-agent memory)
+        // Read user_name from the agent's KV namespace (per-sender memory)
+        let sid = sender_id.as_deref().unwrap_or("");
         let user_name = self
             .memory
-            .structured_get(*agent_id, "user_name")
+            .structured_get(*agent_id, sid, "user_name")
             .ok()
             .flatten()
             .and_then(|v| v.as_str().map(String::from))
@@ -5023,6 +5029,7 @@ impl KernelHandle for OpenCarrierKernel {
     fn memory_store(
         &self,
         agent_id: &str,
+        sender_id: &str,
         key: &str,
         value: serde_json::Value,
     ) -> Result<(), String> {
@@ -5030,29 +5037,30 @@ impl KernelHandle for OpenCarrierKernel {
             .parse()
             .map_err(|_| "Invalid agent ID".to_string())?;
         self.memory
-            .structured_set(aid, key, value)
+            .structured_set(aid, sender_id, key, value)
             .map_err(|e| format!("Memory store failed: {e}"))
     }
 
     fn memory_recall(
         &self,
         agent_id: &str,
+        sender_id: &str,
         key: &str,
     ) -> Result<Option<serde_json::Value>, String> {
         let aid: AgentId = agent_id
             .parse()
             .map_err(|_| "Invalid agent ID".to_string())?;
         self.memory
-            .structured_get(aid, key)
+            .structured_get(aid, sender_id, key)
             .map_err(|e| format!("Memory recall failed: {e}"))
     }
 
-    fn memory_list(&self, agent_id: &str) -> Result<Vec<(String, serde_json::Value)>, String> {
+    fn memory_list(&self, agent_id: &str, sender_id: &str) -> Result<Vec<(String, serde_json::Value)>, String> {
         let aid: AgentId = agent_id
             .parse()
             .map_err(|_| "Invalid agent ID".to_string())?;
         self.memory
-            .list_kv(aid)
+            .list_kv(aid, sender_id)
             .map_err(|e| format!("Memory list failed: {e}"))
     }
 

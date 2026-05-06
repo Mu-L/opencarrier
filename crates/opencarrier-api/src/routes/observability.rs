@@ -20,7 +20,7 @@ pub async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         let shared_id = opencarrier_types::agent::AgentId(uuid::Uuid::from_bytes([
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
         ]));
-        memory.structured_get(shared_id, "__health_check__").is_ok()
+        memory.structured_get(shared_id, "", "__health_check__").is_ok()
     })
     .await
     .unwrap_or(false);
@@ -41,7 +41,7 @@ pub async fn health_detail(State(state): State<Arc<AppState>>) -> impl IntoRespo
         let shared_id = opencarrier_types::agent::AgentId(uuid::Uuid::from_bytes([
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
         ]));
-        memory.structured_get(shared_id, "__health_check__").is_ok()
+        memory.structured_get(shared_id, "", "__health_check__").is_ok()
     })
     .await
     .unwrap_or(false);

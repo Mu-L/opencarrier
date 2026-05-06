@@ -19,7 +19,6 @@ fn is_internal_path(rel: &str) -> bool {
     ) || rel.starts_with("knowledge/")
         || rel.starts_with("skills/")
         || rel.starts_with("sessions/")
-        || rel.starts_with("memory/")
         || rel.starts_with("users/")
         || rel.starts_with("data/")
 }
@@ -159,7 +158,7 @@ pub fn resolve_sandbox_path_for_write(
         ));
     }
 
-    // Rewrite output/ to per-user output when sender_id is present
+    // Rewrite output/ and memory/ to per-user directories when sender_id is present
     // Non-internal paths are auto-routed to users/{sender_id}/output/
     let effective_path = if let Some(sid) = sender_id {
         if rel_str.starts_with("output/") || rel_str == "output" {
@@ -169,6 +168,14 @@ pub fn resolve_sandbox_path_for_write(
                 format!("users/{}/output", sid)
             } else {
                 format!("users/{}/output/{}", sid, rest)
+            }
+        } else if rel_str.starts_with("memory/") || rel_str == "memory" {
+            let rest = rel_str.strip_prefix("memory").unwrap_or("");
+            let rest = rest.strip_prefix('/').unwrap_or(rest);
+            if rest.is_empty() {
+                format!("users/{}/memory", sid)
+            } else {
+                format!("users/{}/memory/{}", sid, rest)
             }
         } else if is_internal_path(&rel_str) {
             rel_str.to_string()
@@ -236,7 +243,7 @@ pub fn resolve_sandbox_path_for_read(
 
     let rel_str = relative.to_string_lossy();
 
-    // Rewrite input/ and output/ to per-user directories when sender_id is present
+    // Rewrite input/, output/, and memory/ to per-user directories when sender_id is present
     let effective_path = if let Some(sid) = sender_id {
         if rel_str.starts_with("input/") || rel_str == "input" {
             let rest = rel_str.strip_prefix("input").unwrap_or("");
@@ -253,6 +260,14 @@ pub fn resolve_sandbox_path_for_read(
                 format!("users/{}/output", sid)
             } else {
                 format!("users/{}/output/{}", sid, rest)
+            }
+        } else if rel_str.starts_with("memory/") || rel_str == "memory" {
+            let rest = rel_str.strip_prefix("memory").unwrap_or("");
+            let rest = rest.strip_prefix('/').unwrap_or(rest);
+            if rest.is_empty() {
+                format!("users/{}/memory", sid)
+            } else {
+                format!("users/{}/memory/{}", sid, rest)
             }
         } else {
             rel_str.to_string()

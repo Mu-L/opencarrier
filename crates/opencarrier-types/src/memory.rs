@@ -263,23 +263,25 @@ pub struct ImportReport {
 pub trait Memory: Send + Sync {
     // -- Key-value operations (structured store) --
 
-    /// Get a value by key for a specific agent.
+    /// Get a value by key for a specific agent and user.
     async fn get(
         &self,
         agent_id: AgentId,
+        sender_id: &str,
         key: &str,
     ) -> crate::error::OpenCarrierResult<Option<serde_json::Value>>;
 
-    /// Set a key-value pair for a specific agent.
+    /// Set a key-value pair for a specific agent and user.
     async fn set(
         &self,
         agent_id: AgentId,
+        sender_id: &str,
         key: &str,
         value: serde_json::Value,
     ) -> crate::error::OpenCarrierResult<()>;
 
-    /// Delete a key-value pair for a specific agent.
-    async fn delete(&self, agent_id: AgentId, key: &str) -> crate::error::OpenCarrierResult<()>;
+    /// Delete a key-value pair for a specific agent and user.
+    async fn delete(&self, agent_id: AgentId, sender_id: &str, key: &str) -> crate::error::OpenCarrierResult<()>;
 
     // -- Semantic operations --
 

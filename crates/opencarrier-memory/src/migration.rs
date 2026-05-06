@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 12;
+const SCHEMA_VERSION: u32 = 13;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -57,6 +57,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 12 {
         migrate_v12(conn)?;
+    }
+
+    if current_version < 13 {
+        migrate_v13(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -456,6 +460,68 @@ fn migrate_v12(conn: &Connection) -> Result<(), rusqlite::Error> {
 
         INSERT OR IGNORE INTO migrations (version, applied_at, description)
         VALUES (12, datetime('now'), 'Remove tenant layer: drop tenants and canonical_sessions tables');
+        ",
+    )?;
+    Ok(())
+}
+
+/// Version 13: Per-user memory isolation — add `sender_id` to kv_store and kv_history.
+///
+/// The composite primary key becomes (agent_id, sender_id, key) so that
+/// each user's memory is isolated within a shared clone.
+/// Existing rows get `sender_id = ''` (system/internal context).
+fn migrate_v13(conn: &Connection) -> Result<(), rusqlite::Error> {
+    // Add sender_id column if missing
+    if !column_exists(conn, "kv_store", "sender_id") {
+        conn.execute_batch("ALTER TABLE kv_store ADD COLUMN sender_id TEXT NOT NULL DEFAULT ''")?;
+    }
+    if !column_exists(conn, "kv_history", "sender_id") {
+        conn.execute_batch("ALTER TABLE kv_history ADD COLUMN sender_id TEXT NOT NULL DEFAULT ''")?;
+    }
+
+    // Recreate kv_store with new composite primary key
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS kv_store_v13 (
+            agent_id TEXT NOT NULL,
+            sender_id TEXT NOT NULL DEFAULT '',
+            key TEXT NOT NULL,
+            value BLOB NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (agent_id, sender_id, key)
+        );
+        INSERT OR IGNORE INTO kv_store_v13 (agent_id, sender_id, key, value, version, updated_at)
+            SELECT agent_id, COALESCE(sender_id, ''), key, value, version, updated_at FROM kv_store;
+        DROP TABLE kv_store;
+        ALTER TABLE kv_store_v13 RENAME TO kv_store;
+        ",
+    )?;
+
+    // Recreate kv_history with sender_id
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS kv_history_v13 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL,
+            sender_id TEXT NOT NULL DEFAULT '',
+            key TEXT NOT NULL,
+            value BLOB NOT NULL,
+            version INTEGER NOT NULL,
+            archived_at TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO kv_history_v13 (agent_id, sender_id, key, value, version, archived_at)
+            SELECT agent_id, COALESCE(sender_id, ''), key, value, version, archived_at FROM kv_history;
+        DROP TABLE kv_history;
+        ALTER TABLE kv_history_v13 RENAME TO kv_history;
+        CREATE INDEX IF NOT EXISTS idx_kv_history_agent_key ON kv_history(agent_id, key);
+        ",
+    )?;
+
+    conn.execute_batch(
+        "
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (13, datetime('now'), 'Per-user memory: add sender_id to kv_store/kv_history');
         ",
     )?;
     Ok(())
