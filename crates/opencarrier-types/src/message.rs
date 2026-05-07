@@ -201,10 +201,11 @@ impl Message {
 }
 
 /// Why the LLM stopped generating.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
     /// The model finished its turn.
+    #[default]
     EndTurn,
     /// The model wants to use a tool.
     ToolUse,

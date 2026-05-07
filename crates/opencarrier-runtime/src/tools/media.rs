@@ -480,6 +480,7 @@ async fn tool_media_describe(
         temperature: 0.3,
         system: None,
         thinking: None,
+            extra: Default::default(),
     };
 
     let response = brain

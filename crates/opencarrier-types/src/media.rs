@@ -340,6 +340,50 @@ pub struct GeneratedImage {
     pub url: Option<String>,
 }
 
+/// Media output from non-LLM drivers (TTS, image gen, video gen).
+///
+/// Carried in `CompletionResponse::media`. Drivers set this instead of
+/// `content` when the result is binary media rather than text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MediaOutput {
+    /// Synthesized audio.
+    Audio {
+        /// Raw audio bytes.
+        data: Vec<u8>,
+        /// Audio format (e.g., "mp3", "wav").
+        format: String,
+        /// Estimated duration in milliseconds.
+        duration_ms: u64,
+    },
+    /// Single generated image.
+    Image {
+        /// Raw image bytes (PNG/JPEG).
+        data: Vec<u8>,
+        /// Image format (e.g., "png").
+        format: String,
+    },
+    /// Multiple generated images.
+    Images {
+        /// Generated image items.
+        items: Vec<GeneratedImage>,
+    },
+    /// Async task submitted (video/long-running generation).
+    AsyncTask {
+        /// Task ID for polling.
+        task_id: String,
+        /// Endpoint ID that owns the task.
+        endpoint_id: String,
+    },
+    /// Completed video with download URL.
+    Video {
+        /// Video download URL (may expire).
+        url: String,
+        /// Cover/thumbnail image URL.
+        cover_url: Option<String>,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

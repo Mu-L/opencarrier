@@ -291,6 +291,7 @@ pub async fn run_agent_loop(
             temperature: manifest.model.temperature,
             system: Some(system_prompt.clone()),
             thinking: None,
+            extra: Default::default(),
         };
 
         // Notify phase: Thinking
@@ -1176,6 +1177,7 @@ pub async fn run_agent_loop_streaming(
             temperature: manifest.model.temperature,
             system: Some(system_prompt.clone()),
             thinking: None,
+            extra: Default::default(),
         };
 
         // Notify phase: on first iteration emit Streaming; on subsequent
@@ -2628,6 +2630,7 @@ mod tests {
                         input_tokens: 10,
                         output_tokens: 5,
                     },
+                media: None,
                 })
             } else {
                 // Second call: LLM returns EndTurn with EMPTY text (the bug)
@@ -2639,6 +2642,7 @@ mod tests {
                         input_tokens: 10,
                         output_tokens: 0,
                     },
+                media: None,
                 })
             }
         }
@@ -2662,6 +2666,7 @@ mod tests {
                     input_tokens: 10,
                     output_tokens: 0,
                 },
+            media: None,
             })
         }
     }
@@ -2686,6 +2691,7 @@ mod tests {
                     input_tokens: 10,
                     output_tokens: 8,
                 },
+            media: None,
             })
         }
     }
@@ -2980,6 +2986,7 @@ mod tests {
                         input_tokens: 10,
                         output_tokens: 0,
                     },
+                media: None,
                 })
             } else {
                 // Second call (retry): normal response
@@ -2994,6 +3001,7 @@ mod tests {
                         input_tokens: 15,
                         output_tokens: 8,
                     },
+                media: None,
                 })
             }
         }
@@ -3017,6 +3025,7 @@ mod tests {
                     input_tokens: 10,
                     output_tokens: 0,
                 },
+            media: None,
             })
         }
     }
@@ -3977,6 +3986,7 @@ mod tests {
                         input_tokens: 20,
                         output_tokens: 15,
                     },
+                media: None,
                 })
             } else {
                 // After tool result, return normal response
@@ -3991,6 +4001,7 @@ mod tests {
                         input_tokens: 30,
                         output_tokens: 12,
                     },
+                media: None,
                 })
             }
         }

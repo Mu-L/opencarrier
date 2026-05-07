@@ -469,6 +469,7 @@ async fn summarize_messages(
                 .to_string(),
         ),
         thinking: None,
+            extra: Default::default(),
     };
 
     // Retry logic for transient failures
@@ -587,6 +588,7 @@ async fn summarize_in_chunks(
                 .to_string(),
         ),
         thinking: None,
+            extra: Default::default(),
     };
 
     match driver.complete(merge_request).await {
@@ -787,6 +789,7 @@ mod tests {
                         input_tokens: 100,
                         output_tokens: 50,
                     },
+                media: None,
                 })
             }
         }
@@ -849,6 +852,7 @@ mod tests {
                         input_tokens: 100,
                         output_tokens: 50,
                     },
+                media: None,
                 })
             }
         }
@@ -942,6 +946,7 @@ mod tests {
                         input_tokens: 500,
                         output_tokens: 100,
                     },
+                media: None,
                 })
             }
         }
@@ -1138,6 +1143,7 @@ mod tests {
                         input_tokens: 50,
                         output_tokens: 20,
                     },
+                media: None,
                 })
             }
         }

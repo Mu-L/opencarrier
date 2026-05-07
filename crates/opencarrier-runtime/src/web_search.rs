@@ -80,6 +80,7 @@ impl WebToolsContext {
                  Return up to {max_results} results."
             )),
             thinking: None,
+            extra: Default::default(),
         };
 
         let response = brain

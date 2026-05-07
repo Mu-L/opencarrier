@@ -5,6 +5,7 @@
 use async_trait::async_trait;
 use opencarrier_types::brain::{ApiFormat, AuthHeaderType, EndpointReport};
 use opencarrier_types::error::{OpenCarrierError, OpenCarrierResult};
+use opencarrier_types::media::MediaOutput;
 use opencarrier_types::message::{ContentBlock, Message, StopReason, TokenUsage};
 use opencarrier_types::tool::{ToolCall, ToolDefinition};
 use serde::{Deserialize, Serialize};
@@ -73,7 +74,7 @@ impl LlmError {
 }
 
 /// A request to an LLM for completion.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CompletionRequest {
     /// Model identifier.
     pub model: String,
@@ -89,10 +90,13 @@ pub struct CompletionRequest {
     pub system: Option<String>,
     /// Extended thinking configuration (if supported by the model).
     pub thinking: Option<opencarrier_types::config::ThinkingConfig>,
+    /// Modality-specific extra parameters (voice, size, resolution, etc.).
+    /// Ignored by standard LLM drivers; used by media drivers.
+    pub extra: serde_json::Value,
 }
 
 /// A response from an LLM completion.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CompletionResponse {
     /// The content blocks in the response.
     pub content: Vec<ContentBlock>,
@@ -102,6 +106,9 @@ pub struct CompletionResponse {
     pub tool_calls: Vec<ToolCall>,
     /// Token usage statistics.
     pub usage: TokenUsage,
+    /// Media output (audio, image, video) from non-LLM drivers.
+    /// Set by TTS/image/video drivers; `None` for standard text completions.
+    pub media: Option<MediaOutput>,
 }
 
 impl CompletionResponse {
@@ -301,6 +308,20 @@ pub trait Brain: Send + Sync {
 
     /// Check if a modality is available.
     fn has_modality(&self, modality: &str) -> bool;
+
+    /// Poll an async task for completion (video gen, etc.).
+    /// Returns the updated `CompletionResponse` with `media` set to the final
+    /// result once the task completes, or an error if it fails/times out.
+    /// Default: not supported.
+    async fn task_status(
+        &self,
+        _endpoint_id: &str,
+        _task_id: &str,
+    ) -> OpenCarrierResult<CompletionResponse> {
+        Err(OpenCarrierError::LlmDriver(
+            "Async task polling not supported".to_string(),
+        ))
+    }
 }
 
 /// Configuration for creating an LLM driver.
@@ -380,6 +401,7 @@ mod tests {
             stop_reason: StopReason::EndTurn,
             tool_calls: vec![],
             usage: TokenUsage::default(),
+        media: None,
         };
         assert_eq!(response.text(), "Hello world!");
     }
@@ -445,6 +467,7 @@ mod tests {
                         input_tokens: 5,
                         output_tokens: 3,
                     },
+                media: None,
                 })
             }
         }
@@ -459,6 +482,7 @@ mod tests {
             temperature: 0.0,
             system: None,
             thinking: None,
+            extra: Default::default(),
         };
 
         let response = driver.stream(request, tx).await.unwrap();

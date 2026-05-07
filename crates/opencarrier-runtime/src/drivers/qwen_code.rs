@@ -268,6 +268,7 @@ impl LlmDriver for QwenCodeDriver {
                     input_tokens: usage.input_tokens,
                     output_tokens: usage.output_tokens,
                 },
+            media: None,
             });
         }
 
@@ -283,6 +284,7 @@ impl LlmDriver for QwenCodeDriver {
                 input_tokens: 0,
                 output_tokens: 0,
             },
+        media: None,
         })
     }
 
@@ -406,6 +408,7 @@ impl LlmDriver for QwenCodeDriver {
             stop_reason: StopReason::EndTurn,
             tool_calls: Vec::new(),
             usage: final_usage,
+        media: None,
         })
     }
 }
@@ -460,6 +463,7 @@ mod tests {
             temperature: 0.7,
             system: Some("You are helpful.".to_string()),
             thinking: None,
+            extra: Default::default(),
         };
 
         let prompt = QwenCodeDriver::build_prompt(&request);

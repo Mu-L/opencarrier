@@ -303,6 +303,7 @@ pub async fn clone_compile(
                 temperature: 0.3,
                 system: Some(sys.to_string()),
                 thinking: None,
+                    extra: Default::default(),
             };
             rt.block_on(async { driver.complete(request).await })
                 .map(|r: opencarrier_runtime::llm_driver::CompletionResponse| r.text())
@@ -494,6 +495,7 @@ pub async fn clone_evaluate(
                         temperature: 0.7,
                         system: Some(sys_prompt),
                         thinking: None,
+                    extra: Default::default(),
                     })
                     .await
                 {
@@ -523,6 +525,7 @@ pub async fn clone_evaluate(
                                     "Answer the following question concisely.".to_string(),
                                 ),
                                 thinking: None,
+                    extra: Default::default(),
                             })
                             .await
                         {
@@ -547,6 +550,7 @@ pub async fn clone_evaluate(
                                 temperature: 0.0,
                                 system: Some(j_sys),
                                 thinking: None,
+                    extra: Default::default(),
                             })
                             .await
                         {

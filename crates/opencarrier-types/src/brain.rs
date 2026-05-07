@@ -82,12 +82,16 @@ fn default_format() -> ApiFormat {
 
 /// API protocol format.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum ApiFormat {
     #[default]
     OpenAI,
     Anthropic,
     Gemini,
+    DashScopeTts,
+    DashScopeImage,
+    DashScopeVideo,
+    Kling,
 }
 
 /// Authentication header type for HTTP API drivers.
@@ -110,6 +114,10 @@ impl std::fmt::Display for ApiFormat {
             ApiFormat::OpenAI => write!(f, "openai"),
             ApiFormat::Anthropic => write!(f, "anthropic"),
             ApiFormat::Gemini => write!(f, "gemini"),
+            ApiFormat::DashScopeTts => write!(f, "dashscope_tts"),
+            ApiFormat::DashScopeImage => write!(f, "dashscope_image"),
+            ApiFormat::DashScopeVideo => write!(f, "dashscope_video"),
+            ApiFormat::Kling => write!(f, "kling"),
         }
     }
 }

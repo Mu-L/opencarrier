@@ -77,6 +77,12 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
                 config.auth_header,
             )))
         }
+        ApiFormat::DashScopeTts
+        | ApiFormat::DashScopeImage
+        | ApiFormat::DashScopeVideo
+        | ApiFormat::Kling => Err(LlmError::Config(format!(
+            "Format '{format}' driver not yet implemented"
+        ))),
     }
 }
 

@@ -488,6 +488,7 @@ impl OpenCarrierKernel {
                 temperature: 0.3,
                 system: Some(prompt),
                 thinking: None,
+                extra: Default::default(),
             };
 
             match driver.complete(request).await {
@@ -528,6 +529,7 @@ impl OpenCarrierKernel {
                                             temperature: 0.1,
                                             system: Some(sys),
                                             thinking: None,
+                extra: Default::default(),
                                         };
                                     match driver.complete(anon_req).await {
                                         Ok(anon_resp) => {
@@ -3102,6 +3104,7 @@ impl OpenCarrierKernel {
                         temperature: 0.3,
                         system: Some(sys.to_string()),
                         thinking: None,
+                extra: Default::default(),
                     };
                     rt_handle.block_on(async { driver.complete(request).await })
                         .map(|r: opencarrier_runtime::llm_driver::CompletionResponse| r.text())
