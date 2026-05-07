@@ -3,6 +3,8 @@
 //! Each tool category implements `ToolModule` and provides both definitions
 //! (for LLM tool schemas) and execution (the actual logic).
 
+pub mod agent;
+pub mod browser_tool;
 pub mod filesystem;
 pub mod knowledge;
 pub mod media;
@@ -44,6 +46,8 @@ pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
         Box::new(misc::MiscTools),
         Box::new(knowledge::KnowledgeTools),
         Box::new(media::MediaTools),
+        Box::new(browser_tool::BrowserTools),
+        Box::new(agent::AgentTools),
     ]
 }
 
