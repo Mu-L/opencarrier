@@ -161,12 +161,16 @@ var OpenCarrierAPI = (function() {
     return fetch(BASE + path, opts).then(function(r) {
       if (_connectionState !== 'connected') setConnectionState('connected');
       if (!r.ok) {
-        // On 401, show auth overlay
-        if (r.status === 401) {
-          _authToken = '';
-          localStorage.removeItem('opencarrier-api-key');
-          var authOverlay = document.getElementById('auth-overlay');
-          if (authOverlay) authOverlay.style.display = 'flex';
+        // On 401, auto-show auth prompt so the user can re-enter their key
+        if (r.status === 401 && typeof Alpine !== 'undefined') {
+          try {
+            var store = Alpine.store('app');
+            if (store && !store.showAuthPrompt) {
+              _authToken = '';
+              localStorage.removeItem('opencarrier-api-key');
+              store.showAuthPrompt = true;
+            }
+          } catch(e2) { /* ignore Alpine errors */ }
         }
         return r.text().then(function(text) {
           var msg = '';

@@ -162,6 +162,9 @@ document.addEventListener('alpine:init', function() {
     sessionUser: null,
     userRole: null,
     tenantId: null,
+    _loginUser: '',
+    _loginPass: '',
+    _apiKey: '',
 
     isAdmin() {
       return this.userRole === 'admin';
@@ -232,8 +235,7 @@ document.addEventListener('alpine:init', function() {
             this.userRole = authInfo.role || null;
             this.tenantId = authInfo.tenant_id || null;
             this.showAuthPrompt = false;
-            document.getElementById('auth-overlay').style.display = 'none';
-            this.refreshAgents();
+                        this.refreshAgents();
             return;
           }
         } catch(e) { /* fall through */ }
@@ -253,8 +255,7 @@ document.addEventListener('alpine:init', function() {
             this.userRole = authInfo.role || null;
             this.tenantId = authInfo.tenant_id || null;
             this.showAuthPrompt = false;
-            document.getElementById('auth-overlay').style.display = 'none';
-            return;
+                        return;
           }
           // Session auth enabled but not authenticated — show login prompt
           this.showAuthPrompt = true;
@@ -266,8 +267,7 @@ document.addEventListener('alpine:init', function() {
       try {
         await OpenCarrierAPI.get('/api/tools');
         this.showAuthPrompt = false;
-        document.getElementById('auth-overlay').style.display = 'none';
-      } catch(e) {
+              } catch(e) {
         if (e.message && (e.message.indexOf('Not authorized') >= 0 || e.message.indexOf('401') >= 0 || e.message.indexOf('Missing Authorization') >= 0 || e.message.indexOf('Unauthorized') >= 0)) {
           var saved = localStorage.getItem('opencarrier-api-key');
           if (saved) {
@@ -284,8 +284,7 @@ document.addEventListener('alpine:init', function() {
       OpenCarrierAPI.setAuthToken(key.trim());
       localStorage.setItem('opencarrier-api-key', key.trim());
       this.showAuthPrompt = false;
-      document.getElementById('auth-overlay').style.display = 'none';
-      this.refreshAgents();
+            this.refreshAgents();
     },
 
     async sessionLogin(username, password) {
@@ -297,8 +296,7 @@ document.addEventListener('alpine:init', function() {
           this.userRole = data.role || null;
           this.tenantId = data.tenant_id || null;
           this.showAuthPrompt = false;
-          document.getElementById('auth-overlay').style.display = 'none';
-          this.refreshAgents();
+                    this.refreshAgents();
         } else {
           OpenCarrierToast.error(data.error || 'Login failed');
         }
