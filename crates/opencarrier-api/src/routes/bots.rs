@@ -303,7 +303,15 @@ pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 // POST /api/bots/wecom/smartbot/generate — step 1: get auth URL
 // ---------------------------------------------------------------------------
 
-pub async fn wecom_smartbot_generate() -> impl IntoResponse {
+pub async fn wecom_smartbot_generate(
+    Json(req_body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let agent_name = req_body
+        .get("agent_name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
     let http = reqwest::Client::builder()
         .cookie_store(true)
         .build()
@@ -312,7 +320,7 @@ pub async fn wecom_smartbot_generate() -> impl IntoResponse {
 
     match http.get(url).send().await {
         Ok(resp) => match resp.text().await {
-            Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
+            Ok(resp_body) => match serde_json::from_str::<serde_json::Value>(&resp_body) {
                 Ok(data) => {
                     let inner = data.get("data").unwrap_or(&data);
                     let scode = inner.get("scode").and_then(|v| v.as_str()).unwrap_or("");
@@ -331,6 +339,13 @@ pub async fn wecom_smartbot_generate() -> impl IntoResponse {
                                 "https://work.weixin.qq.com/ai/qc/gen?source=wecom_cli_external&scode={scode}"
                             )
                         });
+                    // Store agent_name for auto-bind in poll
+                    if let Some(ref name) = agent_name {
+                        WECOM_PENDING_AGENTS
+                            .lock()
+                            .unwrap()
+                            .insert(scode.to_string(), name.clone());
+                    }
                     (
                         StatusCode::OK,
                         Json(serde_json::json!({
@@ -365,7 +380,10 @@ pub struct PollQuery {
     scode: String,
 }
 
-pub async fn wecom_smartbot_poll(Query(query): Query<PollQuery>) -> impl IntoResponse {
+pub async fn wecom_smartbot_poll(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PollQuery>,
+) -> impl IntoResponse {
     if query.scode.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -411,6 +429,28 @@ pub async fn wecom_smartbot_poll(Query(query): Query<PollQuery>) -> impl IntoRes
                                 "secret".into(),
                                 serde_json::Value::String(secret.to_string()),
                             );
+                            // Auto-create bot and bind to agent
+                            let agent_name = WECOM_PENDING_AGENTS
+                                .lock()
+                                .unwrap()
+                                .remove(&query.scode);
+                            if let Some(agent_name) = agent_name {
+                                let creds = serde_json::json!({
+                                    "bot_id": bot_id,
+                                    "secret": secret,
+                                });
+                                if let Err(e) = auto_create_and_bind_bot(
+                                    &state, "wecom", &creds, &agent_name,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(
+                                        agent = %agent_name,
+                                        error = %e,
+                                        "Auto-create/bind WeCom bot failed"
+                                    );
+                                }
+                            }
                         }
                     }
 
@@ -448,6 +488,8 @@ struct DeviceAuthSession {
     credentials: Option<serde_json::Value>,
     // Reuse the same HTTP client so cookies/session from init→begin→poll are preserved.
     client: reqwest::Client,
+    // Auto-bind: agent name to bind after successful auth
+    agent_name: Option<String>,
 }
 
 static DEVICE_AUTH_SESSIONS: LazyLock<Mutex<HashMap<String, DeviceAuthSession>>> =
@@ -471,6 +513,8 @@ fn cleanup_expired_sessions() {
 pub struct FeishuDeviceAuthBeginBody {
     #[serde(default)]
     brand: String,
+    #[serde(default)]
+    agent_name: String,
 }
 
 pub async fn feishu_device_auth_begin(
@@ -583,6 +627,12 @@ pub async fn feishu_device_auth_begin(
         .and_then(|v| v.as_u64())
         .unwrap_or(240u64);
 
+    let agent_name_feishu = if body.agent_name.trim().is_empty() {
+        None
+    } else {
+        Some(body.agent_name.trim().to_string())
+    };
+
     let session = DeviceAuthSession {
         device_code: device_code.to_string(),
         auth_url: auth_url.to_string(),
@@ -590,6 +640,7 @@ pub async fn feishu_device_auth_begin(
         platform: "feishu".to_string(),
         credentials: None,
         client: http,
+        agent_name: agent_name_feishu,
     };
 
     {
@@ -614,6 +665,7 @@ pub struct FeishuDeviceAuthPollQuery {
 }
 
 pub async fn feishu_device_auth_poll(
+    State(state): State<Arc<AppState>>,
     Query(query): Query<FeishuDeviceAuthPollQuery>,
 ) -> impl IntoResponse {
     cleanup_expired_sessions();
@@ -717,9 +769,24 @@ pub async fn feishu_device_auth_poll(
             "app_secret": secret,
         });
 
-        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
-        if let Some(s) = sessions.get_mut(&query.session_id) {
-            s.credentials = Some(result.clone());
+        {
+            let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+            if let Some(s) = sessions.get_mut(&query.session_id) {
+                s.credentials = Some(result.clone());
+            }
+        }
+
+        // Auto-create bot and bind to agent if agent_name was provided
+        if let Some(ref agent_name) = session.agent_name {
+            let creds = serde_json::json!({
+                "app_id": id,
+                "app_secret": secret,
+            });
+            if let Err(e) = auto_create_and_bind_bot(
+                &state, "feishu", &creds, agent_name,
+            ).await {
+                tracing::warn!(agent = %agent_name, error = %e, "Auto-create/bind Feishu bot failed");
+            }
         }
 
         return (StatusCode::OK, Json(result));
@@ -765,7 +832,9 @@ pub struct DingtalkDeviceAuthPollQuery {
     session_id: String,
 }
 
-pub async fn dingtalk_device_auth_begin() -> impl IntoResponse {
+pub async fn dingtalk_device_auth_begin(
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
     cleanup_expired_sessions();
 
     let http = reqwest::Client::builder()
@@ -855,6 +924,8 @@ pub async fn dingtalk_device_auth_begin() -> impl IntoResponse {
         .and_then(|v| v.as_u64())
         .unwrap_or(7200u64);
 
+    let agent_name = body.get("agent_name").and_then(|v| v.as_str()).map(|s| s.to_string());
+
     let session = DeviceAuthSession {
         device_code: device_code.to_string(),
         auth_url: auth_url.to_string(),
@@ -862,6 +933,7 @@ pub async fn dingtalk_device_auth_begin() -> impl IntoResponse {
         platform: "dingtalk".to_string(),
         credentials: None,
         client: http,
+        agent_name,
     };
 
     {
@@ -881,6 +953,7 @@ pub async fn dingtalk_device_auth_begin() -> impl IntoResponse {
 }
 
 pub async fn dingtalk_device_auth_poll(
+    State(state): State<Arc<AppState>>,
     Query(query): Query<DingtalkDeviceAuthPollQuery>,
 ) -> impl IntoResponse {
     cleanup_expired_sessions();
@@ -957,9 +1030,24 @@ pub async fn dingtalk_device_auth_poll(
                 "client_secret": client_secret,
             });
 
-            let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
-            if let Some(s) = sessions.get_mut(&query.session_id) {
-                s.credentials = Some(result.clone());
+            {
+                let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+                if let Some(s) = sessions.get_mut(&query.session_id) {
+                    s.credentials = Some(result.clone());
+                }
+            }
+
+            // Auto-create bot and bind to agent if agent_name was provided
+            if let Some(ref agent_name) = session.agent_name {
+                let creds = serde_json::json!({
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                });
+                if let Err(e) = auto_create_and_bind_bot(
+                    &state, "dingtalk", &creds, agent_name,
+                ).await {
+                    tracing::warn!(agent = %agent_name, error = %e, "Auto-create/bind DingTalk bot failed");
+                }
             }
 
             return (StatusCode::OK, Json(result));
@@ -1639,6 +1727,178 @@ pub async fn unbind_bot(
 }
 
 /// Helper to atomically update a bot.toml file.
+// WeCom scode → agent_name mapping for auto-bind
+static WECOM_PENDING_AGENTS: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Auto-create a bot and bind it to the specified agent.
+/// Works for dingtalk, feishu, and wecom platforms.
+async fn auto_create_and_bind_bot(
+    state: &Arc<AppState>,
+    platform: &str,
+    credentials: &serde_json::Value,
+    agent_name: &str,
+) -> Result<String, String> {
+    // Resolve agent_name to UUID
+    let agent_uuid = if uuid::Uuid::parse_str(agent_name).is_ok() {
+        agent_name.to_string()
+    } else {
+        let agents = state.kernel.list_agents();
+        match agents.iter().find(|a| a.name == agent_name) {
+            Some(agent) => agent.id.clone(),
+            None => return Err(format!("分身 '{agent_name}' 不存在")),
+        }
+    };
+
+    let bot_name = format!("{}-{}", agent_name, platform);
+    let tenant_name = match channel_sanitize_name(&bot_name) {
+        Some(s) => s,
+        None => return Err("名称无效".to_string()),
+    };
+
+    let plugin_dir_name = match platform_plugin_dir(platform) {
+        Some(d) => d,
+        None => return Err(format!("不支持的平台: {platform}")),
+    };
+
+    let home = &state.kernel.config.home_dir;
+    let plugin_dir = home.join("plugins").join(plugin_dir_name);
+
+    if !plugin_dir.exists() {
+        std::fs::create_dir_all(&plugin_dir).map_err(|e| format!("创建目录失败: {e}"))?;
+    }
+
+    // Build body for build_bot_fields
+    let mut body = serde_json::json!({});
+    match platform {
+        "dingtalk" => {
+            if let Some(v) = credentials.get("client_id").and_then(|v| v.as_str()) {
+                body["app_key"] = serde_json::Value::String(v.to_string());
+            }
+            if let Some(v) = credentials.get("client_secret").and_then(|v| v.as_str()) {
+                body["app_secret"] = serde_json::Value::String(v.to_string());
+            }
+        }
+        "feishu" => {
+            if let Some(v) = credentials.get("app_id").and_then(|v| v.as_str()) {
+                body["app_id"] = serde_json::Value::String(v.to_string());
+            }
+            if let Some(v) = credentials.get("app_secret").and_then(|v| v.as_str()) {
+                body["app_secret"] = serde_json::Value::String(v.to_string());
+            }
+            body["brand"] = serde_json::Value::String("feishu".to_string());
+        }
+        "wecom" => {
+            body["mode"] = serde_json::Value::String("smartbot".to_string());
+            if let Some(v) = credentials.get("bot_id").and_then(|v| v.as_str()) {
+                body["bot_id"] = serde_json::Value::String(v.to_string());
+            }
+            if let Some(v) = credentials.get("secret").and_then(|v| v.as_str()) {
+                body["secret"] = serde_json::Value::String(v.to_string());
+            }
+        }
+        _ => {}
+    }
+
+    // Dedup check: if same platform user id exists, update it
+    let puid = platform_user_id(platform, &body);
+    if let Some(ref uid) = puid {
+        if !uid.is_empty() {
+            for existing in scan_bots(&plugin_dir, plugin_dir_name, platform) {
+                let existing_puid = match platform {
+                    "dingtalk" => existing.get("app_key").and_then(|v| v.as_str()),
+                    "feishu" => existing.get("app_id").and_then(|v| v.as_str()),
+                    "wecom" => existing.get("bot_id").and_then(|v| v.as_str()),
+                    _ => None,
+                };
+                if existing_puid == Some(uid.as_str()) {
+                    let existing_id = existing
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let bot_dir = plugin_dir.join("bot").join(&existing_id);
+                    let bot_toml_path = bot_dir.join("bot.toml");
+                    update_bot_toml(&bot_toml_path, |table| {
+                        let new_fields = build_bot_fields(platform, &body, &tenant_name);
+                        for (k, v) in new_fields {
+                            table.insert(k, v);
+                        }
+                        table.insert(
+                            "name".into(),
+                            toml::Value::String(tenant_name.to_string()),
+                        );
+                        table.insert(
+                            "bind_agent".into(),
+                            toml::Value::String(agent_uuid.clone()),
+                        );
+                    })?;
+                    add_dynamic_binding(state, platform, &tenant_name, &existing_id, &agent_uuid)
+                        .await;
+                    return Ok(existing_id);
+                }
+            }
+        }
+    }
+
+    // Create new bot
+    let mut bot_fields = build_bot_fields(platform, &body, &tenant_name);
+    bot_fields.insert("name".into(), toml::Value::String(tenant_name.clone()));
+    bot_fields.insert(
+        "bind_agent".into(),
+        toml::Value::String(agent_uuid.clone()),
+    );
+
+    let bot_uuid = uuid::Uuid::new_v4().to_string();
+    let bot_dir = plugin_dir.join("bot").join(&bot_uuid);
+    std::fs::create_dir_all(&bot_dir).map_err(|e| format!("创建目录失败: {e}"))?;
+
+    let bot_toml_path = bot_dir.join("bot.toml");
+    let content =
+        toml::to_string_pretty(&toml::Value::Table(bot_fields)).map_err(|e| format!("序列化失败: {e}"))?;
+    std::fs::write(&bot_toml_path, &content).map_err(|e| format!("写入失败: {e}"))?;
+
+    add_dynamic_binding(state, platform, &tenant_name, &bot_uuid, &agent_uuid).await;
+
+    Ok(bot_uuid)
+}
+
+/// Add dynamic bridge binding for a newly created/updated bot.
+async fn add_dynamic_binding(
+    state: &Arc<AppState>,
+    platform: &str,
+    tenant_name: &str,
+    bot_uuid: &str,
+    agent_uuid: &str,
+) {
+    let channel_type = match platform {
+        "weixin" => "weixin",
+        "wecom" => "wecom",
+        "feishu" => "feishu",
+        "dingtalk" => "dingtalk",
+        _ => "",
+    };
+
+    if !channel_type.is_empty() && !tenant_name.is_empty() {
+        state.kernel.set_default_plugin_tenant(agent_uuid, bot_uuid);
+        if let Some(ref pm) = state.plugin_manager {
+            let pm = pm.lock().await;
+            pm.add_channel_binding(channel_type, bot_uuid, agent_uuid);
+            if channel_type == "wecom" || channel_type == "weixin" {
+                pm.add_channel_binding(channel_type, tenant_name, agent_uuid);
+            }
+            pm.map_channel_tenant(channel_type, tenant_name, bot_uuid);
+            tracing::info!(
+                platform = %platform,
+                tenant = %tenant_name,
+                agent = %agent_uuid,
+                bot = %bot_uuid,
+                "Auto-bind: dynamic bridge binding added"
+            );
+        }
+    }
+}
+
 fn update_bot_toml(
     path: &std::path::Path,
     f: impl FnOnce(&mut toml::value::Table),
