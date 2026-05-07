@@ -92,6 +92,8 @@ pub async fn auth(
         || path.starts_with("/katex-fonts/")
         || (path == "/.well-known/agent.json" && is_get)
         || path == "/api/health"
+        || path == "/api/auth/check"
+        || path == "/api/auth/login"
         // Share-page platform auth flows (pre-onboarding)
         || path == "/api/weixin/qrcode"
         || path == "/api/weixin/qrcode-status"
@@ -161,6 +163,24 @@ pub async fn auth(
     // Accept if either auth method matches
     if header_auth == Some(true) || query_auth == Some(true) {
         return next.run(request).await;
+    }
+
+    // Check session cookie (dashboard login)
+    if auth_state.auth_enabled {
+        let session_token = request
+            .headers()
+            .get("cookie")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|cookie_str| {
+                cookie_str
+                    .split(';')
+                    .find_map(|part| part.trim().strip_prefix("opencarrier_session="))
+            });
+        if let Some(token) = session_token {
+            if crate::session_auth::verify_session_token(token, api_key).is_some() {
+                return next.run(request).await;
+            }
+        }
     }
 
     // Determine error message: was a credential provided but wrong, or missing entirely?

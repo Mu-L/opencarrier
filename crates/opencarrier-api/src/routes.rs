@@ -1,6 +1,7 @@
 //! Route handlers for the OpenCarrier API.
 
 pub mod agents;
+pub mod auth;
 pub mod bindings;
 pub mod bots;
 pub mod brain;

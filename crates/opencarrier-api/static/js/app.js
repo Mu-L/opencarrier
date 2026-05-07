@@ -286,15 +286,16 @@ document.addEventListener('alpine:init', function() {
 
     async sessionLogin(username, password) {
       try {
-        var result = await OpenCarrierAPI.post('/api/auth/login', { username: username, password: password });
-        if (result.status === 'ok') {
-          this.sessionUser = result.username;
-          this.userRole = result.role || null;
-          this.tenantId = result.tenant_id || null;
+        var data = await OpenCarrierAPI.post('/api/auth/login', { username: username, password: password });
+        if (data.status === 'ok' && data.token) {
+          document.cookie = 'opencarrier_session=' + data.token + '; Path=/; SameSite=Strict; Max-Age=604800';
+          this.sessionUser = data.username;
+          this.userRole = data.role || null;
+          this.tenantId = data.tenant_id || null;
           this.showAuthPrompt = false;
           this.refreshAgents();
         } else {
-          OpenCarrierToast.error(result.error || 'Login failed');
+          OpenCarrierToast.error(data.error || 'Login failed');
         }
       } catch(e) {
         OpenCarrierToast.error(e.message || 'Login failed');

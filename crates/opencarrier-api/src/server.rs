@@ -107,6 +107,7 @@ pub async fn build_router(
             axum::routing::get(webchat::katex_font),
         )
         .merge(routes::agents::router())
+        .merge(routes::auth::router())
         .merge(routes::bindings::router())
         .merge(routes::bots::router())
         .merge(routes::brain::router())
