@@ -441,9 +441,32 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     else if (pending.platform === 'dingtalk') pollDingtalk(sd.session_id);
   }
 
+  // ── Poll error helper ──
+  // HTTP 400 = session expired/gone (server restarted or session cleaned up)
+  // 3 consecutive errors → show timeout with retry
+  function makePollCatch(label, started) {
+    var errCount = 0;
+    return function(e) {
+      errCount++;
+      var msg = (e && e.message) || String(e);
+      var dbgEl = document.getElementById('auth-debug');
+      if (dbgEl) dbgEl.textContent = label + ' ERR#' + errCount + ': ' + msg;
+      // Session gone → no point retrying
+      if (msg.indexOf('HTTP 400') >= 0) {
+        stopPoll(); clearPendingAuth(); showAuthTimeout('会话已失效，请重新授权');
+        return;
+      }
+      // Too many consecutive errors
+      if (errCount >= 5) {
+        stopPoll(); clearPendingAuth(); showAuthTimeout('连接失败，请重试');
+      }
+    };
+  }
+
   // ── WeChat poll ──
   function pollWeixin(qrcode, tenant) {
     var started = Date.now();
+    var errHandler = makePollCatch('weixin', started);
     function doPoll() {
       var url = '/api/weixin/qrcode-status?tenant=' + encodeURIComponent(tenant);
       if (qrcode) url += '&qrcode=' + encodeURIComponent(qrcode);
@@ -456,21 +479,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
             bot_token: data.bot_token || '', baseurl: data.baseurl || ''
           });
         } else if (status === 'expired') {
-          stopPoll(); clearPendingAuth();
-          showAuthTimeout('授权已过期');
+          stopPoll(); clearPendingAuth(); showAuthTimeout('授权已过期');
         } else if (Date.now() - started > 120000) {
-          stopPoll(); clearPendingAuth();
-          showAuthTimeout('等待超时');
+          stopPoll(); clearPendingAuth(); showAuthTimeout('等待超时');
         }
-      }).catch(function(){});
+      }).catch(errHandler);
     }
-    doPoll(); // immediate first poll
+    doPoll();
     pollTimer = setInterval(doPoll, 2000);
   }
 
   // ── WeCom poll ──
   function pollWecom(scode) {
     var started = Date.now();
+    var errHandler = makePollCatch('wecom', started);
     function doPoll() {
       api('GET', '/api/bots/wecom/smartbot/poll?scode=' + encodeURIComponent(scode)).then(function(res){
         if (res.status === 'success') {
@@ -482,7 +504,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         } else if (Date.now() - started > 120000) {
           stopPoll(); clearPendingAuth(); showAuthTimeout('等待超时');
         }
-      }).catch(function(){});
+      }).catch(errHandler);
     }
     doPoll();
     pollTimer = setInterval(doPoll, 2000);
@@ -492,14 +514,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   function pollFeishu(sessionId) {
     var interval = 3000;
     var started = Date.now();
-    var pollCount = 0;
+    var errHandler = makePollCatch('feishu', started);
     function doPoll() {
-      pollCount++;
-      var dbgEl = document.getElementById('auth-debug');
-      if (dbgEl) dbgEl.textContent = '#' + pollCount + ' polling...';
       api('GET', '/api/bots/feishu/device-auth/poll?session_id=' + encodeURIComponent(sessionId)).then(function(res){
         var elapsed = Math.round((Date.now() - started) / 1000);
-        if (dbgEl) dbgEl.textContent = '#' + pollCount + ' (' + elapsed + 's) ' + JSON.stringify(res).substring(0, 200);
+        var dbgEl = document.getElementById('auth-debug');
+        if (dbgEl) dbgEl.textContent = 'feishu poll (' + elapsed + 's) ' + JSON.stringify(res).substring(0, 200);
         if (res.status === 'success') {
           stopPoll(); clearPendingAuth(); showAuthSuccess('飞书授权成功');
           platformCredentials.feishu = { app_id: res.app_id || '', app_secret: res.app_secret || '' };
@@ -512,9 +532,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
           interval = Math.min(interval + 2000, 10000); stopPoll();
           pollTimer = setInterval(doPoll, interval);
         }
-      }).catch(function(e){
-        if (dbgEl) dbgEl.textContent = '#' + pollCount + ' ERR: ' + (e.message || e);
-      });
+      }).catch(errHandler);
     }
     doPoll();
     pollTimer = setInterval(doPoll, interval);
@@ -524,6 +542,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   function pollDingtalk(sessionId) {
     var interval = 3000;
     var started = Date.now();
+    var errHandler = makePollCatch('dingtalk', started);
     function doPoll() {
       api('GET', '/api/bots/dingtalk/device-auth/poll?session_id=' + encodeURIComponent(sessionId)).then(function(res){
         if (res.status === 'success') {
@@ -538,7 +557,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
           interval = Math.min(interval + 2000, 10000); stopPoll();
           pollTimer = setInterval(doPoll, interval);
         }
-      }).catch(function(){});
+      }).catch(errHandler);
     }
     doPoll();
     pollTimer = setInterval(doPoll, interval);
