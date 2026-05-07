@@ -211,19 +211,19 @@ pub async fn set_brain_endpoint(
         );
     }
 
-    let format = match format_str.as_str() {
-        "openai" => opencarrier_types::brain::ApiFormat::OpenAI,
-        "anthropic" => opencarrier_types::brain::ApiFormat::Anthropic,
-        "gemini" => opencarrier_types::brain::ApiFormat::Gemini,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"error": "format must be 'openai', 'anthropic', or 'gemini'"}),
-                ),
-            )
-        }
-    };
+    let format: opencarrier_types::brain::ApiFormat =
+        match serde_json::from_value(serde_json::Value::String(format_str.clone())) {
+            Ok(f) => f,
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": format!(
+                        "Invalid format '{}'. Supported: openai, anthropic, gemini, dashscope_tts, dashscope_image, dashscope_video, kling",
+                        format_str
+                    )})),
+                )
+            }
+        };
 
     // Validate provider exists
     {
