@@ -7,14 +7,41 @@
   <div class="login-box">
     <h2>登录</h2>
     <p>请输入管理面板的账号密码</p>
-    <form method="post" action="/api/auth/login">
-      <input type="text" name="username" placeholder="用户名" autocomplete="username" required>
-      <input type="password" name="password" placeholder="密码" autocomplete="current-password" required>
+    <form id="login-form">
+      <input type="text" id="login-user" placeholder="用户名" autocomplete="username" required>
+      <input type="password" id="login-pass" placeholder="密码" autocomplete="current-password" required>
       <button type="submit" class="btn btn-primary">登录</button>
     </form>
-    {% if error %}
-    <div class="login-error">{{ error }}</div>
-    {% endif %}
+    <div class="login-error" id="login-error" style="display:none"></div>
+    <script>
+    (function() {
+      var form = document.getElementById('login-form');
+      var errEl = document.getElementById('login-error');
+      form.onsubmit = function(e) {
+        e.preventDefault();
+        errEl.style.display = 'none';
+        var u = document.getElementById('login-user').value.trim();
+        var p = document.getElementById('login-pass').value;
+        fetch('/api/auth/login', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          credentials: 'same-origin',
+          body: JSON.stringify({username: u, password: p})
+        }).then(function(r) { return r.json(); }).then(function(data) {
+          if (data.status === 'ok' && data.token) {
+            document.cookie = 'opencarrier_session=' + data.token + '; Path=/; SameSite=Strict; Max-Age=604800';
+            location.href = '/';
+          } else {
+            errEl.textContent = data.error || '登录失败';
+            errEl.style.display = 'block';
+          }
+        }).catch(function() {
+          errEl.textContent = '网络错误，请重试';
+          errEl.style.display = 'block';
+        });
+      };
+    })();
+    </script>
   </div>
 </div>
 {% endblock %}
