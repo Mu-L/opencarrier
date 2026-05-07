@@ -413,8 +413,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       api('POST', '/api/bots/dingtalk/device-auth', {}).then(function(res){
         if (!res.auth_url) throw new Error('未返回授权链接');
         savePendingAuth({ platform: 'dingtalk', agentName: targetAgentName, sessionData: { session_id: res.session_id } });
-        document.getElementById('auth-status-text').textContent = '正在等待钉钉授权...';
-        pollDingtalk(res.session_id);
+        document.getElementById('auth-status-text').textContent = '正在跳转钉钉授权...';
+        location.href = res.auth_url;
       }).catch(function(e){
         document.getElementById('auth-status-text').textContent = '错误: ' + (e.message || '生成链接失败');
       });
