@@ -1254,6 +1254,134 @@
               </div>
             </div>
 
+          <!-- Endpoints -->
+            <div class="card" style="border-left:3px solid var(--accent-light);margin-top:16px">
+              <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+                <span>端点 <span class="badge badge-secondary" style="font-size:10px" x-text="endpointsList.length"></span></span>
+                <div style="display:flex;gap:6px">
+                  <button class="btn btn-ghost btn-sm" @click="reloadBrain()">重载</button>
+                  <button class="btn btn-primary btn-sm" @click="showAddEndpoint = !showAddEndpoint">+ 添加</button>
+                </div>
+              </div>
+              <div class="card-body" style="padding-top:8px">
+                <!-- Add endpoint form -->
+                <div x-show="showAddEndpoint" style="margin-bottom:12px;padding:10px;background:var(--bg);border-radius:4px;border:1px solid var(--border)">
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">
+                    <input class="form-input" style="font-size:12px" placeholder="名称 (如 qwen_tts)" x-model="newEndpoint.name">
+                    <select class="form-input" style="font-size:12px" x-model="newEndpoint.format">
+                      <option value="openai">openai</option>
+                      <option value="anthropic">anthropic</option>
+                      <option value="gemini">gemini</option>
+                      <option value="dashscope_tts">dashscope_tts</option>
+                      <option value="dashscope_image">dashscope_image</option>
+                      <option value="dashscope_video">dashscope_video</option>
+                      <option value="kling">kling</option>
+                    </select>
+                    <input class="form-input" style="font-size:12px" placeholder="Provider (如 qwen)" x-model="newEndpoint.provider">
+                    <input class="form-input" style="font-size:12px" placeholder="Model (如 qwen3-tts-flash)" x-model="newEndpoint.model">
+                  </div>
+                  <input class="form-input" style="font-size:12px;margin-top:6px;width:100%" placeholder="Base URL (如 https://dashscope.aliyuncs.com/...)" x-model="newEndpoint.base_url">
+                  <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:6px">
+                    <button class="btn btn-ghost btn-sm" @click="showAddEndpoint = false">取消</button>
+                    <button class="btn btn-primary btn-sm" @click="addEndpoint()">添加</button>
+                  </div>
+                </div>
+                <table style="width:100%;font-size:12px;border-collapse:collapse">
+                  <thead>
+                    <tr style="border-bottom:1px solid var(--border)">
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">端点</th>
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">Provider</th>
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">Model</th>
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">Format</th>
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">Status</th>
+                      <th style="text-align:right;padding:6px 4px;font-weight:600;width:30px"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="ep in endpointsList" :key="ep.name">
+                      <tr style="border-bottom:1px solid var(--border-light)">
+                        <td style="padding:6px 4px">
+                          <div style="font-weight:600" x-text="ep.name"></div>
+                          <div style="font-size:10px;color:var(--text-dim);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" x-text="ep.base_url"></div>
+                        </td>
+                        <td style="padding:6px 4px;font-size:11px" x-text="ep.provider"></td>
+                        <td style="padding:6px 4px;font-family:var(--font-mono);font-size:11px" x-text="ep.model"></td>
+                        <td style="padding:6px 4px"><span class="badge badge-secondary" style="font-size:10px" x-text="ep.format"></span></td>
+                        <td style="padding:6px 4px">
+                          <span class="badge" :class="ep.ready ? 'badge-success' : 'badge-warning'" style="font-size:10px" x-text="ep.ready ? 'Ready' : 'Idle'"></span>
+                        </td>
+                        <td style="padding:6px 4px;text-align:right">
+                          <button class="btn btn-ghost btn-sm" style="color:var(--error);padding:2px 6px" @click="deleteEndpoint(ep.name)">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                          </button>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          <!-- Modalities -->
+            <div class="card" style="border-left:3px solid var(--accent-light);margin-top:16px">
+              <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+                <span>模态 <span class="badge badge-secondary" style="font-size:10px" x-text="modalitiesList.length"></span></span>
+                <button class="btn btn-primary btn-sm" @click="showAddModality = !showAddModality">+ 添加</button>
+              </div>
+              <div class="card-body" style="padding-top:8px">
+                <!-- Add modality form -->
+                <div x-show="showAddModality" style="margin-bottom:12px;padding:10px;background:var(--bg);border-radius:4px;border:1px solid var(--border)">
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">
+                    <input class="form-input" style="font-size:12px" placeholder="名称 (如 tts, image, video)" x-model="newModality.name">
+                    <input class="form-input" style="font-size:12px" placeholder="主端点 (如 qwen_tts)" x-model="newModality.primary">
+                  </div>
+                  <input class="form-input" style="font-size:12px;margin-top:6px;width:100%" placeholder="备用端点 (逗号分隔, 如 keling_image)" x-model="newModality.fallbacks">
+                  <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:6px">
+                    <button class="btn btn-ghost btn-sm" @click="showAddModality = false">取消</button>
+                    <button class="btn btn-primary btn-sm" @click="addModality()">添加</button>
+                  </div>
+                </div>
+                <table style="width:100%;font-size:12px;border-collapse:collapse">
+                  <thead>
+                    <tr style="border-bottom:1px solid var(--border)">
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">模态</th>
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">主端点</th>
+                      <th style="text-align:left;padding:6px 4px;font-weight:600">备用链</th>
+                      <th style="text-align:right;padding:6px 4px;font-weight:600;width:30px"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="m in modalitiesList" :key="m.name">
+                      <tr style="border-bottom:1px solid var(--border-light)">
+                        <td style="padding:6px 4px">
+                          <div style="font-weight:600" x-text="m.name"></div>
+                          <div x-show="brainInfo && brainInfo.default_modality === m.name" style="font-size:10px;color:var(--accent-light)">默认</div>
+                        </td>
+                        <td style="padding:6px 4px"><span class="badge badge-primary" style="font-size:10px" x-text="m.primary"></span></td>
+                        <td style="padding:6px 4px">
+                          <template x-if="m.fallbacks && m.fallbacks.length > 0">
+                            <div>
+                              <template x-for="fb in m.fallbacks" :key="fb">
+                                <span class="badge badge-secondary" style="font-size:10px;margin-right:4px" x-text="fb"></span>
+                              </template>
+                            </div>
+                          </template>
+                          <template x-if="!m.fallbacks || m.fallbacks.length === 0">
+                            <span style="font-size:10px;color:var(--text-dim)">—</span>
+                          </template>
+                        </td>
+                        <td style="padding:6px 4px;text-align:right">
+                          <button class="btn btn-ghost btn-sm" style="color:var(--error);padding:2px 6px" @click="deleteModality(m.name)">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                          </button>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
           </div>
         </div>
       </div>
