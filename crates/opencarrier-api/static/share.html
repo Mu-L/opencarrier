@@ -405,6 +405,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       api('POST', '/api/bots/feishu/device-auth', {}).then(function(res){
         if (!res.auth_url) throw new Error('未返回授权链接');
         savePendingAuth({ platform: 'feishu', agentName: targetAgentName, sessionData: { session_id: res.session_id } });
+        document.getElementById('auth-status-text').textContent = '正在跳转飞书授权...';
         location.href = res.auth_url;
       }).catch(function(e){
         document.getElementById('auth-status-text').textContent = '错误: ' + (e.message || '生成链接失败');
@@ -413,7 +414,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       api('POST', '/api/bots/dingtalk/device-auth', {}).then(function(res){
         if (!res.auth_url) throw new Error('未返回授权链接');
         savePendingAuth({ platform: 'dingtalk', agentName: targetAgentName, sessionData: { session_id: res.session_id } });
-        location.href = res.auth_url;
+        document.getElementById('auth-status-text').textContent = '请在新窗口完成钉钉授权';
+        window.open(res.auth_url, '_blank');
+        pollDingtalk(res.session_id);
       }).catch(function(e){
         document.getElementById('auth-status-text').textContent = '错误: ' + (e.message || '生成链接失败');
       });
