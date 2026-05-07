@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}{{ agent.name }} — OpenCarrier{% endblock %}
+
+{% block content %}
+<div class="chat-container">
+  <div class="chat-header">
+    <div style="display:flex;align-items:center;gap:10px">
+      {% if agent.identity.emoji %}<span style="font-size:24px">{{ agent.identity.emoji }}</span>{% endif %}
+      <div>
+        <h2 style="font-size:18px">{{ agent.name }}</h2>
+        <p style="font-size:12px;color:var(--text-dim)">{{ agent.model_name }} · {{ agent.state }}</p>
+      </div>
+    </div>
+    <a href="/agents" class="btn btn-sm">返回列表</a>
+  </div>
+
+  <div class="chat-messages" id="messages">
+    <div class="msg msg-bot">你好，我是 {{ agent.name }}。有什么可以帮你的？</div>
+  </div>
+
+  <form class="chat-input" id="chat-form">
+    <input type="text" id="msg-input" placeholder="输入消息..." autocomplete="off">
+    <button type="submit" class="btn btn-primary">发送</button>
+  </form>
+</div>
+
+<script>
+(function() {
+  var agentId = '{{ agent.id }}';
+  var apiKey = '{{ api_key|e }}';
+  var messagesEl = document.getElementById('messages');
+  var form = document.getElementById('chat-form');
+  var input = document.getElementById('msg-input');
+
+  function appendMsg(text, isUser) {
+    var div = document.createElement('div');
+    div.className = 'msg ' + (isUser ? 'msg-user' : 'msg-bot');
+    div.textContent = text;
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  var wsUrl = 'wss://' + location.host + '/api/agents/' + agentId + '/ws';
+  if (location.protocol === 'http:') wsUrl = 'ws://' + location.host + '/api/agents/' + agentId + '/ws';
+  if (apiKey) wsUrl += '?token=' + encodeURIComponent(apiKey);
+
+  var ws = new WebSocket(wsUrl);
+  ws.onopen = function() { console.log('WS connected'); };
+  ws.onmessage = function(e) {
+    try {
+      var data = JSON.parse(e.data);
+      if (data.text || data.content) {
+        appendMsg(data.text || data.content, false);
+      }
+    } catch(err) {}
+  };
+  ws.onclose = function() { appendMsg('[连接已断开]', false); };
+  ws.onerror = function() { appendMsg('[连接错误]', false); };
+
+  form.onsubmit = function(e) {
+    e.preventDefault();
+    var text = input.value.trim();
+    if (!text) return;
+    appendMsg(text, true);
+    ws.send(JSON.stringify({text: text}));
+    input.value = '';
+  };
+})();
+</script>
+{% endblock %}

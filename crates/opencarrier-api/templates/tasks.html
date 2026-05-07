@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}任务 — OpenCarrier{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>任务</h2>
+  <p>调度器和定时任务</p>
+</div>
+
+<div class="card">
+  <p style="color:var(--text-dim)">任务管理功能正在迁移中。请通过 API 或 CLI 管理任务。</p>
+  <pre style="margin-top:12px;background:var(--bg);padding:12px;border-radius:var(--radius);font-size:13px"
+>opencarrier task list
+opencarrier task create --name "daily-report" --schedule "0 9 * * *"</pre>
+</div>
+{% endblock %}

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}大脑 — OpenCarrier{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>大脑配置</h2>
+  <p>AI 服务提供商和模型配置</p>
+</div>
+
+<div class="card">
+  <h3 style="font-size:16px;margin-bottom:16px">当前配置</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>键</th><th>值</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>默认模型</td><td>{{ default_model }}</td></tr>
+        <tr><td>默认模态</td><td>{{ default_modality }}</td></tr>
+        <tr><td>配置路径</td><td>{{ config_path }}</td></tr>
+        <tr><td>数据目录</td><td>{{ data_dir }}</td></tr>
+        <tr><td>日志级别</td><td>{{ log_level }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="margin-top:16px;color:var(--text-dim);font-size:13px">
+    编辑 ~/.opencarrier/config.toml 和 brain.json 来修改配置。
+  </p>
+</div>
+{% endblock %}

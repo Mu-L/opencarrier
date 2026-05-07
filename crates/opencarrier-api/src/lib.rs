@@ -5,6 +5,7 @@
 
 pub mod command_security;
 pub mod middleware;
+pub mod pages;
 pub mod rate_limiter;
 pub mod routes;
 pub mod server;

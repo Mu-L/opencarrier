@@ -38,6 +38,8 @@ reqwest = { workspace = true }
 urlencoding = "2"
 anyhow = { workspace = true }
 fs4 = "0.12"
+lazy_static = "1"
+minijinja = "2"
 
 [dev-dependencies]
 tokio-test = { workspace = true }

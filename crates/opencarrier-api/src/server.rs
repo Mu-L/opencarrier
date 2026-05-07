@@ -91,21 +91,19 @@ pub async fn build_router(
     };
     let gcra_limiter = rate_limiter::create_rate_limiter();
 
-    let app = Router::new()
-        .route("/", axum::routing::get(webchat::webchat_page))
-        .route("/logo.png", axum::routing::get(webchat::logo_png))
-        .route("/favicon.ico", axum::routing::get(webchat::favicon_ico))
-        .route("/manifest.json", axum::routing::get(webchat::manifest_json))
-        .route("/share", axum::routing::get(webchat::share_page))
-        .route("/sw.js", axum::routing::get(webchat::sw_js))
-        .route(
-            "/bd00e4fe4983179012e6ffdcc66d0c4b.txt",
-            axum::routing::get(webchat::verification_txt),
-        )
-        .route(
-            "/katex-fonts/{name}",
-            axum::routing::get(webchat::katex_font),
-        )
+    // Pages router — server-side rendered HTML, handles its own auth checks
+    let pages_router = Router::new()
+        .route("/", axum::routing::get(crate::pages::overview_page))
+        .route("/login", axum::routing::get(crate::pages::login_page))
+        .route("/logout", axum::routing::get(crate::pages::logout_page))
+        .route("/agents", axum::routing::get(crate::pages::agents_page))
+        .route("/agents/{id}/chat", axum::routing::get(crate::pages::chat_page))
+        .route("/tasks", axum::routing::get(crate::pages::tasks_page))
+        .route("/brain", axum::routing::get(crate::pages::brain_page))
+        .with_state(state.clone());
+
+    // API router — JSON endpoints protected by auth middleware
+    let api_router = Router::new()
         .merge(routes::agents::router())
         .merge(routes::auth::router())
         .merge(routes::bindings::router())
@@ -129,7 +127,6 @@ pub async fn build_router(
         .merge(routes::weixin::router())
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
         .route("/api/commands", axum::routing::get(routes::list_commands))
-        // plugins routes handled by routes::plugins::router() above
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .route("/api/status", axum::routing::get(routes::status))
         .route("/api/version", axum::routing::get(routes::version))
@@ -137,6 +134,29 @@ pub async fn build_router(
             auth_state,
             middleware::auth,
         ))
+        .with_state(state.clone());
+
+    // Static assets (public)
+    let static_router = Router::new()
+        .route("/logo.png", axum::routing::get(webchat::logo_png))
+        .route("/favicon.ico", axum::routing::get(webchat::favicon_ico))
+        .route("/manifest.json", axum::routing::get(webchat::manifest_json))
+        .route("/share", axum::routing::get(webchat::share_page))
+        .route("/sw.js", axum::routing::get(webchat::sw_js))
+        .route(
+            "/bd00e4fe4983179012e6ffdcc66d0c4b.txt",
+            axum::routing::get(webchat::verification_txt),
+        )
+        .route(
+            "/katex-fonts/{name}",
+            axum::routing::get(webchat::katex_font),
+        )
+        .with_state(state.clone());
+
+    let app = Router::new()
+        .merge(pages_router)
+        .merge(api_router)
+        .merge(static_router)
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(
             gcra_limiter,

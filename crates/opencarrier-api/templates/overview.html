@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}概览 — OpenCarrier{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h2>概览</h2>
+  <p>OpenCarrier 运行状态</p>
+</div>
+
+<div class="card-grid">
+  <div class="card stat-card">
+    <h3>分身数量</h3>
+    <div class="value">{{ agent_count }}</div>
+  </div>
+  <div class="card stat-card">
+    <h3>运行时长</h3>
+    <div class="value">{{ uptime }}</div>
+  </div>
+  <div class="card stat-card">
+    <h3>版本</h3>
+    <div class="value" style="font-size:18px">{{ version }}</div>
+  </div>
+  <div class="card stat-card">
+    <h3>默认模型</h3>
+    <div class="value" style="font-size:18px">{{ default_model }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="font-size:16px;margin-bottom:16px">最近活跃的分身</h3>
+  {% if agents %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>名称</th><th>状态</th><th>模型</th><th>创建时间</th></tr>
+      </thead>
+      <tbody>
+        {% for agent in agents %}
+        <tr>
+          <td><a href="/agents/{{ agent.id }}/chat">{{ agent.name }}</a></td>
+          <td>
+            {% if agent.ready %}
+            <span class="badge badge-green">运行中</span>
+            {% else %}
+            <span class="badge badge-yellow">{{ agent.state }}</span>
+            {% endif %}
+          </td>
+          <td>{{ agent.model_name }}</td>
+          <td style="color:var(--text-dim);font-size:13px">{{ agent.created_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p style="color:var(--text-dim)">暂无分身</p>
+  {% endif %}
+</div>
+{% endblock %}
