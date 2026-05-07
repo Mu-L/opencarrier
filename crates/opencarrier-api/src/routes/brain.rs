@@ -348,6 +348,7 @@ pub async fn set_brain_modality(
                 .collect()
         })
         .unwrap_or_default();
+    let description = body["description"].as_str().unwrap_or("").trim().to_string();
 
     if primary.is_empty() {
         return (
@@ -382,7 +383,7 @@ pub async fn set_brain_modality(
             opencarrier_types::brain::ModalityConfig {
                 primary,
                 fallbacks,
-                description: String::new(),
+                description,
             },
         );
     });

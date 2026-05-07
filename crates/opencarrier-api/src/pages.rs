@@ -234,15 +234,58 @@ pub async fn brain_page(
     request: Request<axum::body::Body>,
 ) -> Result<Html<String>, Html<String>> {
     let user = require_auth(&request, &state)?;
-    let (_, default_model) = state.kernel.resolve_model_label("chat");
+    let brain = state.kernel.brain_info();
+    let config = brain.config();
+    let ready = brain.ready_endpoints();
+
+    let providers: Vec<minijinja::Value> = config
+        .providers
+        .iter()
+        .map(|(name, p)| {
+            minijinja::context! {
+                name => name,
+                api_key_env => p.api_key_env.clone(),
+                auth_type => p.auth_type.clone(),
+                params => p.params.clone(),
+            }
+        })
+        .collect();
+
+    let endpoints: Vec<minijinja::Value> = config
+        .endpoints
+        .iter()
+        .map(|(name, ep)| {
+            minijinja::context! {
+                name => name,
+                provider => ep.provider.clone(),
+                model => ep.model.clone(),
+                base_url => ep.base_url.clone(),
+                format => ep.format.to_string(),
+                ready => ready.contains(name),
+            }
+        })
+        .collect();
+
+    let modalities: Vec<minijinja::Value> = config
+        .modalities
+        .iter()
+        .map(|(name, m)| {
+            minijinja::context! {
+                name => name,
+                primary => m.primary.clone(),
+                fallbacks => m.fallbacks.clone(),
+                description => m.description.clone(),
+            }
+        })
+        .collect();
+
     Ok(render("brain.html", minijinja::context! {
         page => "brain",
         session_user => user,
         version => env!("CARGO_PKG_VERSION"),
-        default_model => default_model,
-        default_modality => "chat",
-        config_path => state.kernel.config.brain.config.clone(),
-        data_dir => state.kernel.config.data_dir.display().to_string(),
-        log_level => state.kernel.config.log_level.clone(),
+        default_modality => config.default_modality.clone(),
+        providers => providers,
+        endpoints => endpoints,
+        modalities => modalities,
     }))
 }

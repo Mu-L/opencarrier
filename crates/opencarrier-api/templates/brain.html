@@ -5,27 +5,263 @@
 {% block content %}
 <div class="page-header">
   <h2>大脑配置</h2>
-  <p>AI 服务提供商和模型配置</p>
+  <p>管理 AI 服务提供商、端点和模态</p>
 </div>
 
-<div class="card">
-  <h3 style="font-size:16px;margin-bottom:16px">当前配置</h3>
+<!-- Modalities -->
+<div class="card" style="margin-bottom:24px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+    <h3 style="font-size:16px">模态 (Modalities)</h3>
+    <span style="font-size:12px;color:var(--text-dim)">默认: <b>{{ default_modality }}</b></span>
+  </div>
+  {% if modalities %}
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>键</th><th>值</th></tr>
+        <tr><th>名称</th><th>主端点</th><th>备用</th><th>描述</th><th style="width:120px">操作</th></tr>
       </thead>
       <tbody>
-        <tr><td>默认模型</td><td>{{ default_model }}</td></tr>
-        <tr><td>默认模态</td><td>{{ default_modality }}</td></tr>
-        <tr><td>配置路径</td><td>{{ config_path }}</td></tr>
-        <tr><td>数据目录</td><td>{{ data_dir }}</td></tr>
-        <tr><td>日志级别</td><td>{{ log_level }}</td></tr>
+        {% for m in modalities %}
+        <tr>
+          <td><b>{{ m.name }}</b></td>
+          <td>{{ m.primary }}</td>
+          <td>{{ m.fallbacks | join(", ") }}</td>
+          <td style="color:var(--text-dim);font-size:13px">{{ m.description }}</td>
+          <td>
+            <button class="btn btn-sm" onclick="editModality('{{ m.name }}','{{ m.primary }}','{{ m.fallbacks | join(',') }}','{{ m.description }}')">编辑</button>
+            <button class="btn btn-sm" style="color:var(--error)" onclick="del('/api/brain/modalities/{{ m.name }}')">删除</button>
+          </td>
+        </tr>
+        {% endfor %}
       </tbody>
     </table>
   </div>
-  <p style="margin-top:16px;color:var(--text-dim);font-size:13px">
-    编辑 ~/.opencarrier/config.toml 和 brain.json 来修改配置。
-  </p>
+  {% else %}
+  <p style="color:var(--text-dim)">暂无模态配置</p>
+  {% endif %}
+  <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="showForm('modality-form')">+ 添加模态</button>
 </div>
+
+<!-- Endpoints -->
+<div class="card" style="margin-bottom:24px">
+  <h3 style="font-size:16px;margin-bottom:16px">端点 (Endpoints)</h3>
+  {% if endpoints %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>名称</th><th>提供商</th><th>模型</th><th>地址</th><th>格式</th><th>状态</th><th style="width:120px">操作</th></tr>
+      </thead>
+      <tbody>
+        {% for ep in endpoints %}
+        <tr>
+          <td><b>{{ ep.name }}</b></td>
+          <td>{{ ep.provider }}</td>
+          <td>{{ ep.model }}</td>
+          <td style="font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis">{{ ep.base_url }}</td>
+          <td><span class="badge">{{ ep.format }}</span></td>
+          <td>{% if ep.ready %}<span class="badge badge-green">就绪</span>{% else %}<span class="badge badge-yellow">待检</span>{% endif %}</td>
+          <td>
+            <button class="btn btn-sm" onclick="editEndpoint('{{ ep.name }}','{{ ep.provider }}','{{ ep.model }}','{{ ep.base_url }}','{{ ep.format }}')">编辑</button>
+            <button class="btn btn-sm" style="color:var(--error)" onclick="del('/api/brain/endpoints/{{ ep.name }}')">删除</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p style="color:var(--text-dim)">暂无端点配置</p>
+  {% endif %}
+  <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="showForm('endpoint-form')">+ 添加端点</button>
+</div>
+
+<!-- Providers -->
+<div class="card" style="margin-bottom:24px">
+  <h3 style="font-size:16px;margin-bottom:16px">提供商 (Providers)</h3>
+  {% if providers %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>名称</th><th>密钥环境变量</th><th>认证类型</th><th>参数</th><th style="width:120px">操作</th></tr>
+      </thead>
+      <tbody>
+        {% for p in providers %}
+        <tr>
+          <td><b>{{ p.name }}</b></td>
+          <td>{{ p.api_key_env }}</td>
+          <td>{{ p.auth_type }}</td>
+          <td style="font-size:12px;color:var(--text-dim)">
+            {% for k, v in p.params %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
+          </td>
+          <td>
+            <button class="btn btn-sm" onclick="editProvider('{{ p.name }}','{{ p.api_key_env }}','{{ p.auth_type }}')">编辑</button>
+            <button class="btn btn-sm" style="color:var(--error)" onclick="del('/api/brain/providers/{{ p.name }}')">删除</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p style="color:var(--text-dim)">暂无提供商配置</p>
+  {% endif %}
+  <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="showForm('provider-form')">+ 添加提供商</button>
+</div>
+
+<!-- Raw JSON Editor -->
+<div class="card" style="margin-bottom:24px">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+    <h3 style="font-size:16px">原始配置 (brain.json)</h3>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm" onclick="loadRaw()">加载</button>
+      <button class="btn btn-sm btn-primary" onclick="saveRaw()">保存</button>
+      <button class="btn btn-sm" onclick="reloadBrain()">重新加载</button>
+    </div>
+  </div>
+  <textarea id="raw-json" rows="20" style="font-family:monospace;font-size:13px;resize:vertical"></textarea>
+  <div id="raw-msg" style="margin-top:8px;font-size:13px"></div>
+</div>
+
+<!-- Forms (hidden by default) -->
+<div id="provider-form" class="card" style="display:none;margin-bottom:24px">
+  <h3 style="font-size:16px;margin-bottom:16px">提供商</h3>
+  <input type="text" id="p-name" placeholder="名称 (如 openai)" style="margin-bottom:8px">
+  <input type="text" id="p-key" placeholder="API key 环境变量 (如 OPENAI_API_KEY)" style="margin-bottom:8px">
+  <input type="text" id="p-auth" placeholder="认证类型 (apikey / jwt)" value="apikey" style="margin-bottom:8px">
+  <div style="display:flex;gap:8px;margin-top:12px">
+    <button class="btn btn-primary" onclick="saveProvider()">保存</button>
+    <button class="btn" onclick="hideForm('provider-form')">取消</button>
+  </div>
+  <div id="p-msg" style="margin-top:8px;font-size:13px"></div>
+</div>
+
+<div id="endpoint-form" class="card" style="display:none;margin-bottom:24px">
+  <h3 style="font-size:16px;margin-bottom:16px">端点</h3>
+  <input type="text" id="e-name" placeholder="名称 (如 glm-chat)" style="margin-bottom:8px">
+  <input type="text" id="e-provider" placeholder="提供商名称" style="margin-bottom:8px">
+  <input type="text" id="e-model" placeholder="模型 (如 glm-5.1)" style="margin-bottom:8px">
+  <input type="text" id="e-url" placeholder="Base URL (https://...)" style="margin-bottom:8px">
+  <select id="e-format" style="margin-bottom:8px">
+    <option value="openai">openai</option>
+    <option value="anthropic">anthropic</option>
+    <option value="gemini">gemini</option>
+    <option value="dashscope_tts">dashscope_tts</option>
+    <option value="dashscope_image">dashscope_image</option>
+    <option value="dashscope_video">dashscope_video</option>
+    <option value="kling">kling</option>
+  </select>
+  <div style="display:flex;gap:8px;margin-top:12px">
+    <button class="btn btn-primary" onclick="saveEndpoint()">保存</button>
+    <button class="btn" onclick="hideForm('endpoint-form')">取消</button>
+  </div>
+  <div id="e-msg" style="margin-top:8px;font-size:13px"></div>
+</div>
+
+<div id="modality-form" class="card" style="display:none;margin-bottom:24px">
+  <h3 style="font-size:16px;margin-bottom:16px">模态</h3>
+  <input type="text" id="m-name" placeholder="名称 (如 chat / vision / tts)" style="margin-bottom:8px">
+  <input type="text" id="m-primary" placeholder="主端点名称" style="margin-bottom:8px">
+  <input type="text" id="m-fallbacks" placeholder="备用端点 (逗号分隔)" style="margin-bottom:8px">
+  <input type="text" id="m-desc" placeholder="描述" style="margin-bottom:8px">
+  <div style="display:flex;gap:8px;margin-top:12px">
+    <button class="btn btn-primary" onclick="saveModality()">保存</button>
+    <button class="btn" onclick="hideForm('modality-form')">取消</button>
+  </div>
+  <div id="m-msg" style="margin-top:8px;font-size:13px"></div>
+</div>
+
+<script>
+function showForm(id) { document.getElementById(id).style.display = 'block'; }
+function hideForm(id) { document.getElementById(id).style.display = 'none'; }
+function setMsg(id, text, ok) {
+  var el = document.getElementById(id);
+  el.textContent = text;
+  el.style.color = ok ? 'var(--success)' : 'var(--error)';
+}
+
+function api(method, path, body) {
+  var opts = { method: method, headers: {'Content-Type':'application/json'}, credentials: 'same-origin' };
+  if (body) opts.body = JSON.stringify(body);
+  return fetch(path, opts).then(function(r) { return r.json().then(function(d) { return {ok:r.ok, data:d}; }); });
+}
+
+function del(path) {
+  if (!confirm('确定删除？')) return;
+  api('DELETE', path).then(function(res) {
+    if (res.ok) location.reload();
+    else alert(res.data.error || '删除失败');
+  });
+}
+
+function saveProvider() {
+  var name = document.getElementById('p-name').value.trim();
+  var key = document.getElementById('p-key').value.trim();
+  var auth = document.getElementById('p-auth').value.trim() || 'apikey';
+  if (!name) { setMsg('p-msg', '名称必填', false); return; }
+  api('PUT', '/api/brain/providers/' + name, {api_key_env: key, auth_type: auth, params: {}})
+    .then(function(res) { if (res.ok) location.reload(); else setMsg('p-msg', res.data.error || '失败', false); });
+}
+function editProvider(name, key, auth) {
+  document.getElementById('p-name').value = name;
+  document.getElementById('p-key').value = key;
+  document.getElementById('p-auth').value = auth;
+  showForm('provider-form');
+}
+
+function saveEndpoint() {
+  var name = document.getElementById('e-name').value.trim();
+  var provider = document.getElementById('e-provider').value.trim();
+  var model = document.getElementById('e-model').value.trim();
+  var url = document.getElementById('e-url').value.trim();
+  var format = document.getElementById('e-format').value;
+  if (!name || !provider || !model || !url) { setMsg('e-msg', '所有字段必填', false); return; }
+  api('PUT', '/api/brain/endpoints/' + name, {provider: provider, model: model, base_url: url, format: format})
+    .then(function(res) { if (res.ok) location.reload(); else setMsg('e-msg', res.data.error || '失败', false); });
+}
+function editEndpoint(name, provider, model, url, format) {
+  document.getElementById('e-name').value = name;
+  document.getElementById('e-provider').value = provider;
+  document.getElementById('e-model').value = model;
+  document.getElementById('e-url').value = url;
+  document.getElementById('e-format').value = format;
+  showForm('endpoint-form');
+}
+
+function saveModality() {
+  var name = document.getElementById('m-name').value.trim();
+  var primary = document.getElementById('m-primary').value.trim();
+  var fallbacks = document.getElementById('m-fallbacks').value.trim().split(',').map(function(s){return s.trim()}).filter(Boolean);
+  var description = document.getElementById('m-desc').value.trim();
+  if (!name || !primary) { setMsg('m-msg', '名称和主端点必填', false); return; }
+  api('PUT', '/api/brain/modalities/' + name, {primary: primary, fallbacks: fallbacks, description: description})
+    .then(function(res) { if (res.ok) location.reload(); else setMsg('m-msg', res.data.error || '失败', false); });
+}
+function editModality(name, primary, fallbacks, description) {
+  document.getElementById('m-name').value = name;
+  document.getElementById('m-primary').value = primary;
+  document.getElementById('m-fallbacks').value = fallbacks;
+  document.getElementById('m-desc').value = description || '';
+  showForm('modality-form');
+}
+
+function loadRaw() {
+  fetch('/api/brain/config', {credentials:'same-origin'}).then(function(r){return r.json();}).then(function(d){
+    document.getElementById('raw-json').value = JSON.stringify(d, null, 2);
+    setMsg('raw-msg', '已加载', true);
+  });
+}
+function saveRaw() {
+  var text = document.getElementById('raw-json').value;
+  try { JSON.parse(text); } catch(e) { setMsg('raw-msg', 'JSON 格式错误: ' + e.message, false); return; }
+  api('PUT', '/api/brain/config', JSON.parse(text)).then(function(res){
+    if (res.ok) { setMsg('raw-msg', '保存成功', true); location.reload(); }
+    else setMsg('raw-msg', res.data.error || '保存失败', false);
+  });
+}
+function reloadBrain() {
+  api('POST', '/api/brain/reload').then(function(res){
+    setMsg('raw-msg', res.ok ? '重新加载成功' : (res.data.error || '失败'), res.ok);
+  });
+}
+</script>
 {% endblock %}
