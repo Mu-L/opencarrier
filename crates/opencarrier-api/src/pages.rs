@@ -242,11 +242,14 @@ pub async fn brain_page(
         .providers
         .iter()
         .map(|(name, p)| {
+            let has_key = !p.api_key_env.is_empty()
+                && std::env::var(&p.api_key_env).is_ok();
             minijinja::context! {
                 name => name,
                 api_key_env => p.api_key_env.clone(),
                 auth_type => p.auth_type.clone(),
                 params => p.params.clone(),
+                has_key => has_key,
             }
         })
         .collect();

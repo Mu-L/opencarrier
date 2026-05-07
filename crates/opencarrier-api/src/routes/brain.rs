@@ -110,6 +110,13 @@ pub async fn set_brain_provider(
         })
         .unwrap_or_default();
 
+    // If api_key is provided, set it in the current process environment
+    if let Some(api_key) = body["api_key"].as_str() {
+        if !api_key.is_empty() && !api_key_env.is_empty() {
+            std::env::set_var(&api_key_env, api_key);
+        }
+    }
+
     let result = state.kernel.update_brain(|config| {
         config.providers.insert(
             name.clone(),
