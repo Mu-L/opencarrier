@@ -110,10 +110,10 @@ pub async fn set_brain_provider(
         })
         .unwrap_or_default();
 
-    // If api_key is provided, set it in the current process environment
+    // If api_key is provided, persist to .env and set in current process
     if let Some(api_key) = body["api_key"].as_str() {
         if !api_key.is_empty() && !api_key_env.is_empty() {
-            std::env::set_var(&api_key_env, api_key);
+            let _ = opencarrier_kernel::dotenv::save_env_key(&api_key_env, api_key);
         }
     }
 
