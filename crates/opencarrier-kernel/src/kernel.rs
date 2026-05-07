@@ -1171,18 +1171,19 @@ impl OpenCarrierKernel {
         // MCP server list: use config directly (no extension merging)
         let all_mcp_servers = config.mcp_servers.clone();
 
-        // Initialize web tools (multi-provider search + SSRF-protected fetch + caching)
+        // Initialize web tools (free search + SSRF-protected fetch + caching)
         let cache_ttl = std::time::Duration::from_secs(config.web.cache_ttl_minutes * 60);
         let web_cache = Arc::new(opencarrier_runtime::web_cache::WebCache::new(cache_ttl));
+        let brain_arc: Arc<Brain> = Arc::new(brain);
         let web_ctx = opencarrier_runtime::web_search::WebToolsContext {
             search: opencarrier_runtime::web_search::WebSearchEngine::new(
-                config.web.clone(),
                 web_cache.clone(),
             ),
             fetch: opencarrier_runtime::web_fetch::WebFetchEngine::new(
                 config.web.fetch.clone(),
                 web_cache,
             ),
+            brain: Some(brain_arc.clone() as Arc<dyn opencarrier_runtime::llm_driver::Brain>),
         };
 
         let browser_ctx = opencarrier_runtime::browser::BrowserManager::new(config.browser.clone());
@@ -1218,7 +1219,7 @@ impl OpenCarrierKernel {
             metering,
             cron_scheduler,
             brain: KernelBrain {
-                brain: Arc::new(std::sync::RwLock::new(Arc::new(brain))),
+                brain: Arc::new(std::sync::RwLock::new(brain_arc)),
                 brain_path: brain_path.clone(),
                 model_catalog: std::sync::RwLock::new(model_catalog),
             },

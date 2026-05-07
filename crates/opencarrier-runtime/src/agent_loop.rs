@@ -13,6 +13,7 @@ use crate::llm_driver::{
 use crate::llm_errors;
 use crate::loop_guard::{LoopGuard, LoopGuardConfig, LoopGuardVerdict};
 use crate::mcp::McpConnection;
+use crate::tool_context::ToolContext;
 use crate::tool_runner;
 use crate::web_search::WebToolsContext;
 use opencarrier_memory::session::Session;
@@ -583,6 +584,28 @@ pub async fn run_agent_loop(
                     // Resolve effective exec policy (per-agent override or global)
                     let effective_exec_policy = manifest.exec_policy.as_ref();
 
+                    let tool_ctx = ToolContext {
+                        kernel: kernel.as_ref(),
+                        allowed_tools: Some(&allowed_tool_names),
+                        caller_agent_id: Some(&caller_id_str),
+                        mcp_connections,
+                        web_ctx,
+                        browser_ctx,
+                        allowed_env_vars: if hand_allowed_env.is_empty() {
+                            None
+                        } else {
+                            Some(&hand_allowed_env)
+                        },
+                        workspace_root,
+                        media_engine,
+                        brain: brain.as_ref(),
+                        exec_policy: effective_exec_policy,
+                        tts_engine,
+                        docker_config,
+                        process_manager,
+                        sender_id,
+                    };
+
                     // Timeout-wrapped execution
                     let result = match tokio::time::timeout(
                         Duration::from_secs(TOOL_TIMEOUT_SECS),
@@ -590,25 +613,7 @@ pub async fn run_agent_loop(
                             &tool_call.id,
                             &tool_call.name,
                             &tool_call.input,
-                            kernel.as_ref(),
-                            Some(&allowed_tool_names),
-                            Some(&caller_id_str),
-                            mcp_connections,
-                            web_ctx,
-                            browser_ctx,
-                            if hand_allowed_env.is_empty() {
-                                None
-                            } else {
-                                Some(&hand_allowed_env)
-                            },
-                            workspace_root,
-                            media_engine,
-                            brain.as_ref(),
-                            effective_exec_policy,
-                            tts_engine,
-                            docker_config,
-                            process_manager,
-                            sender_id,
+                            &tool_ctx,
                         ),
                     )
                     .await
@@ -1471,6 +1476,28 @@ pub async fn run_agent_loop_streaming(
                     // Resolve effective exec policy (per-agent override or global)
                     let effective_exec_policy = manifest.exec_policy.as_ref();
 
+                    let tool_ctx = ToolContext {
+                        kernel: kernel.as_ref(),
+                        allowed_tools: Some(&allowed_tool_names),
+                        caller_agent_id: Some(&caller_id_str),
+                        mcp_connections,
+                        web_ctx,
+                        browser_ctx,
+                        allowed_env_vars: if hand_allowed_env.is_empty() {
+                            None
+                        } else {
+                            Some(&hand_allowed_env)
+                        },
+                        workspace_root,
+                        media_engine,
+                        brain: brain.as_ref(),
+                        exec_policy: effective_exec_policy,
+                        tts_engine,
+                        docker_config,
+                        process_manager,
+                        sender_id,
+                    };
+
                     // Timeout-wrapped execution
                     let result = match tokio::time::timeout(
                         Duration::from_secs(TOOL_TIMEOUT_SECS),
@@ -1478,25 +1505,7 @@ pub async fn run_agent_loop_streaming(
                             &tool_call.id,
                             &tool_call.name,
                             &tool_call.input,
-                            kernel.as_ref(),
-                            Some(&allowed_tool_names),
-                            Some(&caller_id_str),
-                            mcp_connections,
-                            web_ctx,
-                            browser_ctx,
-                            if hand_allowed_env.is_empty() {
-                                None
-                            } else {
-                                Some(&hand_allowed_env)
-                            },
-                            workspace_root,
-                            media_engine,
-                            brain.as_ref(),
-                            effective_exec_policy,
-                            tts_engine,
-                            docker_config,
-                            process_manager,
-                            sender_id,
+                            &tool_ctx,
                         ),
                     )
                     .await

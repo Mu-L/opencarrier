@@ -1,280 +1,130 @@
-//! Multi-provider web search engine with auto-fallback.
+//! Multi-provider web search engine.
 //!
-//! Supports 5 providers: Tavily (AI-agent-native), Brave, Perplexity,
-//! Bing (zero-config, China-friendly), and DuckDuckGo.
-//! Auto mode cascades: Tavily → Brave → Perplexity → Bing.
+//! Two search modes:
+//! - **Free search** (`search_free`): Bing → 360 → Sogou, zero-config HTML scraping.
+//!   Always available, no API keys needed. Works in China.
+//! - **Brain search** (`search_brain`): `brain.complete("search", request)`.
+//!   Used when brain is configured with a search modality (Tavily, Brave, Perplexity, etc.).
 //!
-//! All API keys use `Zeroizing<String>` via `resolve_api_key()` to auto-wipe
-//! secrets from memory on drop.
+//! The public `search()` method tries brain first, then falls back to free search.
 
+use crate::llm_driver::Brain;
 use crate::web_cache::WebCache;
 use crate::web_content::wrap_external_content;
-use opencarrier_types::config::{SearchProvider, WebConfig};
+use crate::web_fetch::WebFetchEngine;
 use std::sync::Arc;
 use tracing::{debug, warn};
-use zeroize::Zeroizing;
 
-/// Multi-provider web search engine.
+/// Multi-provider web search engine (free search only — brain path uses Brain trait).
 pub struct WebSearchEngine {
-    config: WebConfig,
     client: reqwest::Client,
     cache: Arc<WebCache>,
 }
 
-/// Context that bundles both search and fetch engines for passing through the tool runner.
+/// Context that bundles search engine, fetch engine, and optional brain for tool execution.
 pub struct WebToolsContext {
     pub search: WebSearchEngine,
-    pub fetch: crate::web_fetch::WebFetchEngine,
+    pub fetch: WebFetchEngine,
+    pub brain: Option<Arc<dyn Brain>>,
 }
 
-impl WebSearchEngine {
-    /// Create a new search engine from config with a shared cache.
-    pub fn new(config: WebConfig, cache: Arc<WebCache>) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .unwrap_or_default();
-        Self {
-            config,
-            client,
-            cache,
-        }
-    }
-
-    /// Perform a web search using the configured provider (or auto-fallback).
+impl WebToolsContext {
+    /// Perform a web search: brain first (if configured), then free search as fallback.
     pub async fn search(&self, query: &str, max_results: usize) -> Result<String, String> {
         // Check cache first
         let cache_key = format!("search:{}:{}", query, max_results);
-        if let Some(cached) = self.cache.get(&cache_key) {
+        if let Some(cached) = self.search.cache.get(&cache_key) {
             debug!(query, "Search cache hit");
             return Ok(cached);
         }
 
-        let result = match self.config.search_provider {
-            SearchProvider::Brave => self.search_brave(query, max_results).await,
-            SearchProvider::Tavily => self.search_tavily(query, max_results).await,
-            SearchProvider::Perplexity => self.search_perplexity(query).await,
-            SearchProvider::Bing => self.search_bing(query, max_results).await,
-            SearchProvider::DuckDuckGo => self.search_duckduckgo(query, max_results).await,
-            SearchProvider::Auto => self.search_auto(query, max_results).await,
+        // Try brain-powered search first (if brain has search modality)
+        let result = if let Some(brain) = &self.brain {
+            match self.search_brain(brain, query, max_results).await {
+                Ok(r) => Ok(r),
+                Err(e) => {
+                    warn!("Brain search failed, falling back to free search: {e}");
+                    self.search.search_free(query, max_results).await
+                }
+            }
+        } else {
+            self.search.search_free(query, max_results).await
         };
 
-        // Cache successful results
         if let Ok(ref content) = result {
-            self.cache.put(cache_key, content.clone());
+            self.search.cache.put(cache_key, content.clone());
         }
 
         result
     }
 
-    /// Auto-select provider based on available API keys.
-    /// Priority: Tavily → Brave → Perplexity → Bing
-    async fn search_auto(&self, query: &str, max_results: usize) -> Result<String, String> {
-        // Tavily first (AI-agent-native)
-        if resolve_api_key(&self.config.tavily.api_key_env).is_some() {
-            debug!("Auto: trying Tavily");
-            match self.search_tavily(query, max_results).await {
-                Ok(result) => return Ok(result),
-                Err(e) => warn!("Tavily failed, falling back: {e}"),
-            }
+    /// Search via brain's search modality (API-key providers managed by brain).
+    async fn search_brain(
+        &self,
+        brain: &Arc<dyn Brain>,
+        query: &str,
+        max_results: usize,
+    ) -> Result<String, String> {
+        use crate::llm_driver::CompletionRequest;
+        use opencarrier_types::message::Message;
+
+        let request = CompletionRequest {
+            model: String::new(),
+            messages: vec![Message::user(query)],
+            tools: vec![],
+            max_tokens: (max_results as u32) * 500,
+            temperature: 0.0,
+            system: Some(format!(
+                "You are a search assistant. Return search results for the query. \
+                 Format as numbered list with title, URL, and description. \
+                 Return up to {max_results} results."
+            )),
+            thinking: None,
+        };
+
+        let response = brain
+            .complete("search", request)
+            .await
+            .map_err(|e| format!("Brain search error: {e}"))?;
+
+        let text = response.text();
+        if text.is_empty() {
+            return Err("Brain search returned empty response".to_string());
         }
 
-        // Brave second
-        if resolve_api_key(&self.config.brave.api_key_env).is_some() {
-            debug!("Auto: trying Brave");
-            match self.search_brave(query, max_results).await {
-                Ok(result) => return Ok(result),
-                Err(e) => warn!("Brave failed, falling back: {e}"),
-            }
-        }
-
-        // Perplexity third
-        if resolve_api_key(&self.config.perplexity.api_key_env).is_some() {
-            debug!("Auto: trying Perplexity");
-            match self.search_perplexity(query).await {
-                Ok(result) => return Ok(result),
-                Err(e) => warn!("Perplexity failed, falling back: {e}"),
-            }
-        }
-
-        // Bing always available as zero-config fallback (works in China)
-        debug!("Auto: falling back to Bing");
-        self.search_bing(query, max_results).await
+        Ok(wrap_external_content("brain-search", &text))
     }
+}
 
-    /// Search via Brave Search API.
-    async fn search_brave(&self, query: &str, max_results: usize) -> Result<String, String> {
-        let api_key =
-            resolve_api_key(&self.config.brave.api_key_env).ok_or("Brave API key not set")?;
-
-        let mut params = vec![("q", query.to_string()), ("count", max_results.to_string())];
-        if !self.config.brave.country.is_empty() {
-            params.push(("country", self.config.brave.country.clone()));
-        }
-        if !self.config.brave.search_lang.is_empty() {
-            params.push(("search_lang", self.config.brave.search_lang.clone()));
-        }
-        if !self.config.brave.freshness.is_empty() {
-            params.push(("freshness", self.config.brave.freshness.clone()));
-        }
-
-        let resp = self
-            .client
-            .get("https://api.search.brave.com/res/v1/web/search")
-            .query(&params)
-            .header("X-Subscription-Token", api_key.as_str())
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .map_err(|e| format!("Brave request failed: {e}"))?;
-
-        if !resp.status().is_success() {
-            return Err(format!("Brave API returned {}", resp.status()));
-        }
-
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Brave JSON parse failed: {e}"))?;
-
-        let results = body["web"]["results"]
-            .as_array()
-            .cloned()
+impl WebSearchEngine {
+    /// Create a new search engine with a shared cache.
+    pub fn new(cache: Arc<WebCache>) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
             .unwrap_or_default();
-
-        if results.is_empty() {
-            return Err(format!("No results found for '{query}' (Brave)."));
-        }
-
-        let mut output = format!("Search results for '{query}' (Brave):\n\n");
-        for (i, r) in results.iter().enumerate().take(max_results) {
-            let title = r["title"].as_str().unwrap_or("");
-            let url = r["url"].as_str().unwrap_or("");
-            let desc = r["description"].as_str().unwrap_or("");
-            output.push_str(&format!(
-                "{}. {}\n   URL: {}\n   {}\n\n",
-                i + 1,
-                title,
-                url,
-                desc
-            ));
-        }
-
-        Ok(wrap_external_content("brave-search", &output))
+        Self { client, cache }
     }
 
-    /// Search via Tavily API (AI-agent-native search).
-    async fn search_tavily(&self, query: &str, max_results: usize) -> Result<String, String> {
-        let api_key =
-            resolve_api_key(&self.config.tavily.api_key_env).ok_or("Tavily API key not set")?;
-
-        let body = serde_json::json!({
-            "api_key": api_key.as_str(),
-            "query": query,
-            "search_depth": self.config.tavily.search_depth,
-            "max_results": max_results,
-            "include_answer": self.config.tavily.include_answer,
-        });
-
-        let resp = self
-            .client
-            .post("https://api.tavily.com/search")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Tavily request failed: {e}"))?;
-
-        if !resp.status().is_success() {
-            return Err(format!("Tavily API returned {}", resp.status()));
+    /// Free search: Bing → 360 → Sogou fallback chain (zero-config, no API keys).
+    pub async fn search_free(&self, query: &str, max_results: usize) -> Result<String, String> {
+        // Bing first (most reliable in China)
+        debug!(query, "Free search: trying Bing");
+        match self.search_bing(query, max_results).await {
+            Ok(result) => return Ok(result),
+            Err(e) => warn!("Bing search failed, trying 360: {e}"),
         }
 
-        let data: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Tavily JSON parse failed: {e}"))?;
-
-        let mut output = format!("Search results for '{query}' (Tavily):\n\n");
-
-        // Include AI-generated answer if available
-        if let Some(answer) = data["answer"].as_str() {
-            if !answer.is_empty() {
-                output.push_str(&format!("AI Summary: {answer}\n\n"));
-            }
+        // 360 Search (popular in China)
+        debug!(query, "Free search: trying 360");
+        match self.search_360(query, max_results).await {
+            Ok(result) => return Ok(result),
+            Err(e) => warn!("360 search failed, trying Sogou: {e}"),
         }
 
-        let results = data["results"].as_array().cloned().unwrap_or_default();
-        for (i, r) in results.iter().enumerate().take(max_results) {
-            let title = r["title"].as_str().unwrap_or("");
-            let url = r["url"].as_str().unwrap_or("");
-            let content = r["content"].as_str().unwrap_or("");
-            output.push_str(&format!(
-                "{}. {}\n   URL: {}\n   {}\n\n",
-                i + 1,
-                title,
-                url,
-                content
-            ));
-        }
-
-        if results.is_empty() && !output.contains("AI Summary") {
-            return Err(format!("No results found for '{query}' (Tavily)."));
-        }
-
-        Ok(wrap_external_content("tavily-search", &output))
-    }
-
-    /// Search via Perplexity AI (chat completions endpoint).
-    async fn search_perplexity(&self, query: &str) -> Result<String, String> {
-        let api_key = resolve_api_key(&self.config.perplexity.api_key_env)
-            .ok_or("Perplexity API key not set")?;
-
-        let body = serde_json::json!({
-            "model": self.config.perplexity.model,
-            "messages": [
-                {"role": "user", "content": query}
-            ],
-        });
-
-        let resp = self
-            .client
-            .post("https://api.perplexity.ai/chat/completions")
-            .header("Authorization", format!("Bearer {}", api_key.as_str()))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Perplexity request failed: {e}"))?;
-
-        if !resp.status().is_success() {
-            return Err(format!("Perplexity API returned {}", resp.status()));
-        }
-
-        let data: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Perplexity JSON parse failed: {e}"))?;
-
-        let answer = data["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-
-        if answer.is_empty() {
-            return Ok(format!("No answer for '{query}' (Perplexity)."));
-        }
-
-        let mut output = format!("Search results for '{query}' (Perplexity AI):\n\n{answer}\n");
-
-        // Include citations if available
-        if let Some(citations) = data["citations"].as_array() {
-            output.push_str("\nSources:\n");
-            for (i, c) in citations.iter().enumerate() {
-                if let Some(url) = c.as_str() {
-                    output.push_str(&format!("  {}. {}\n", i + 1, url));
-                }
-            }
-        }
-
-        Ok(wrap_external_content("perplexity-search", &output))
+        // Sogou last resort
+        debug!(query, "Free search: trying Sogou");
+        self.search_sogou(query, max_results).await
     }
 
     /// Search via Bing HTML (no API key needed, works in China).
@@ -320,31 +170,73 @@ impl WebSearchEngine {
         Ok(output)
     }
 
-    /// Search via DuckDuckGo HTML (no API key needed).
-    async fn search_duckduckgo(&self, query: &str, max_results: usize) -> Result<String, String> {
-        debug!(query, "Searching via DuckDuckGo HTML");
+    /// Search via 360 Search HTML (popular in China, no API key needed).
+    async fn search_360(&self, query: &str, max_results: usize) -> Result<String, String> {
+        debug!(query, "Searching via 360 HTML");
 
+        let count = max_results.to_string();
         let resp = self
             .client
-            .get("https://html.duckduckgo.com/html/")
-            .query(&[("q", query)])
+            .get("https://www.so.com/s")
+            .query(&[("q", query), ("count", count.as_str())])
             .header(
                 "User-Agent",
-                "Mozilla/5.0 (compatible; OpenCarrierAgent/0.1)",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             )
             .send()
             .await
-            .map_err(|e| format!("DuckDuckGo request failed: {e}"))?;
+            .map_err(|e| format!("360 request failed: {e}"))?;
 
         let body = resp
             .text()
             .await
-            .map_err(|e| format!("Failed to read DDG response: {e}"))?;
+            .map_err(|e| format!("Failed to read 360 response: {e}"))?;
 
-        let results = parse_ddg_results(&body, max_results);
+        let results = parse_360_results(&body, max_results);
 
         if results.is_empty() {
-            return Err(format!("No results found for '{query}'."));
+            return Err(format!("No results found for '{query}' (360)."));
+        }
+
+        let mut output = format!("Search results for '{query}':\n\n");
+        for (i, (title, url, snippet)) in results.iter().enumerate() {
+            output.push_str(&format!(
+                "{}. {}\n   URL: {}\n   {}\n\n",
+                i + 1,
+                title,
+                url,
+                snippet
+            ));
+        }
+
+        Ok(output)
+    }
+
+    /// Search via Sogou HTML (Chinese search engine, no API key needed).
+    async fn search_sogou(&self, query: &str, max_results: usize) -> Result<String, String> {
+        debug!(query, "Searching via Sogou HTML");
+
+        let resp = self
+            .client
+            .get("https://www.sogou.com/web")
+            .query(&[("query", query)])
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            )
+            .send()
+            .await
+            .map_err(|e| format!("Sogou request failed: {e}"))?;
+
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read Sogou response: {e}"))?;
+
+        let results = parse_sogou_results(&body, max_results);
+
+        if results.is_empty() {
+            return Err(format!("No results found for '{query}' (Sogou)."));
         }
 
         let mut output = format!("Search results for '{query}':\n\n");
@@ -370,18 +262,15 @@ impl WebSearchEngine {
 pub fn parse_bing_results(html: &str, max: usize) -> Vec<(String, String, String)> {
     let mut results = Vec::new();
 
-    // Bing results live in <li class="b_algo"> blocks
     for block in html.split("<li class=\"b_algo\">") {
         if results.len() >= max {
             break;
         }
 
-        // Extract URL from <a href="...">
         let url = extract_between(block, "<a href=\"", "\"")
             .unwrap_or_default()
             .to_string();
 
-        // Extract title (text between > and </a> of the first link)
         let title = if let Some(href_end) = block.find("\">") {
             let after = &block[href_end + 2..];
             extract_between(after, "", "</a>")
@@ -391,7 +280,6 @@ pub fn parse_bing_results(html: &str, max: usize) -> Vec<(String, String, String
             String::new()
         };
 
-        // Extract snippet from <p> or class="b_caption" area
         let snippet = extract_bing_snippet(block);
 
         if !title.is_empty() && !url.is_empty() && !url.starts_with("javascript:") {
@@ -403,7 +291,6 @@ pub fn parse_bing_results(html: &str, max: usize) -> Vec<(String, String, String
 }
 
 fn extract_bing_snippet(block: &str) -> String {
-    // Try <div class="b_caption"><p>...</p> first
     if let Some(cap) = block.find("class=\"b_caption\"") {
         let after = &block[cap..];
         if let Some(p_start) = after.find("<p>") {
@@ -414,7 +301,6 @@ fn extract_bing_snippet(block: &str) -> String {
         }
     }
 
-    // Fallback: any <p> tag content
     if let Some(p_start) = block.find("<p>") {
         let after = &block[p_start + 3..];
         if let Some(p_end) = after.find("</p>") {
@@ -426,56 +312,107 @@ fn extract_bing_snippet(block: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// DuckDuckGo HTML parser (moved from tool_runner.rs)
+// 360 Search HTML parser
 // ---------------------------------------------------------------------------
 
-/// Parse DuckDuckGo HTML search results into (title, url, snippet) tuples.
-pub fn parse_ddg_results(html: &str, max: usize) -> Vec<(String, String, String)> {
+/// Parse 360 Search HTML results into (title, url, snippet) tuples.
+fn parse_360_results(html: &str, max: usize) -> Vec<(String, String, String)> {
     let mut results = Vec::new();
 
-    for chunk in html.split("class=\"result__a\"") {
+    // 360 results are in <li class="res-list"> blocks
+    for block in html.split("<li class=\"res-list") {
         if results.len() >= max {
             break;
         }
-        if !chunk.contains("href=") {
-            continue;
-        }
 
-        let url = extract_between(chunk, "href=\"", "\"")
+        let url = extract_between(block, "<a href=\"", "\"")
             .unwrap_or_default()
             .to_string();
 
-        let actual_url = if url.contains("uddg=") {
-            url.split("uddg=")
-                .nth(1)
-                .and_then(|u| u.split('&').next())
-                .map(urldecode)
-                .unwrap_or(url)
-        } else {
-            url
-        };
-
-        let title = extract_between(chunk, ">", "</a>")
-            .map(strip_html_tags)
-            .unwrap_or_default();
-
-        let snippet = if let Some(snip_start) = chunk.find("class=\"result__snippet\"") {
-            let after = &chunk[snip_start..];
-            extract_between(after, ">", "</a>")
-                .or_else(|| extract_between(after, ">", "</"))
+        let title = if let Some(href_end) = block.find("\">") {
+            let after = &block[href_end + 2..];
+            extract_between(after, "", "</a>")
                 .map(strip_html_tags)
                 .unwrap_or_default()
         } else {
             String::new()
         };
 
-        if !title.is_empty() && !actual_url.is_empty() {
-            results.push((title, actual_url, snippet));
+        // 360 snippets are in <p class="res-desc"> or class="res-desc-rich"
+        let snippet = if let Some(desc_start) = block.find("class=\"res-desc") {
+            let after = &block[desc_start..];
+            if let Some(content_start) = after.find(">") {
+                let content = &after[content_start + 1..];
+                if let Some(end) = content.find("</p>") {
+                    strip_html_tags(&content[..end])
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        if !title.is_empty() && !url.is_empty() {
+            results.push((title, url, snippet));
         }
     }
 
     results
 }
+
+// ---------------------------------------------------------------------------
+// Sogou HTML parser
+// ---------------------------------------------------------------------------
+
+/// Parse Sogou HTML results into (title, url, snippet) tuples.
+fn parse_sogou_results(html: &str, max: usize) -> Vec<(String, String, String)> {
+    let mut results = Vec::new();
+
+    // Sogou results are in <div class="vrwrap"> or <div class="rb"> blocks
+    for block in html.split("class=\"vrwrap\"") {
+        if results.len() >= max {
+            break;
+        }
+
+        let url = extract_between(block, "href=\"", "\"")
+            .unwrap_or_default()
+            .to_string();
+
+        let title = extract_between(block, ">", "</a>")
+            .map(strip_html_tags)
+            .unwrap_or_default();
+
+        // Sogou snippets are in <p class="str-text-info"> or <div class="str_info">
+        let snippet = if let Some(snip_start) = block.find("class=\"str-text-info\"") {
+            let after = &block[snip_start..];
+            if let Some(content_start) = after.find(">") {
+                let content = &after[content_start + 1..];
+                if let Some(end) = content.find("</p>") {
+                    strip_html_tags(&content[..end])
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        if !title.is_empty() && !url.is_empty() && !url.starts_with("javascript:") {
+            results.push((title, url, snippet));
+        }
+    }
+
+    results
+}
+
+// ---------------------------------------------------------------------------
+// HTML utilities
+// ---------------------------------------------------------------------------
 
 /// Extract text between two delimiters.
 pub fn extract_between<'a>(text: &'a str, start: &str, end: &str) -> Option<&'a str> {
@@ -529,49 +466,29 @@ pub fn urldecode(s: &str) -> String {
     result
 }
 
-/// Resolve an API key from an environment variable name.
-/// Returns `Zeroizing<String>` that auto-wipes from memory on drop.
-fn resolve_api_key(env_var: &str) -> Option<Zeroizing<String>> {
-    std::env::var(env_var)
-        .ok()
-        .filter(|v| !v.is_empty())
-        .map(Zeroizing::new)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_format_with_results() {
-        let html = r#"junk class="result__a" href="https://example.com">Example</a> class="result__snippet">A snippet</a>"#;
-        let results = parse_ddg_results(html, 5);
+    fn test_bing_parser_basic() {
+        let html = r#"junk <li class="b_algo"><a href="https://example.com">Example</a><div class="b_caption"><p>A test snippet</p></div>"#;
+        let results = parse_bing_results(html, 5);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "Example");
         assert_eq!(results[0].1, "https://example.com");
-        assert_eq!(results[0].2, "A snippet");
+        assert_eq!(results[0].2, "A test snippet");
     }
 
     #[test]
-    fn test_format_empty() {
-        let results = parse_ddg_results("<html><body>No results</body></html>", 5);
+    fn test_bing_parser_empty() {
+        let results = parse_bing_results("<html><body>No results</body></html>", 5);
         assert!(results.is_empty());
     }
 
     #[test]
-    fn test_format_with_answer() {
-        // Tavily-style answer formatting is tested via the DDG parser as basic coverage
-        let html = r#"before class="result__a" href="https://rust-lang.org">Rust</a> class="result__snippet">Systems programming</a> class="result__a" href="https://go.dev">Go</a> class="result__snippet">Another language</a>"#;
-        let results = parse_ddg_results(html, 10);
-        assert_eq!(results.len(), 2);
-    }
-
-    #[test]
-    fn test_ddg_parser_preserved() {
-        // Ensure the parser handles URL-encoded DDG redirect URLs
-        let html = r#"x class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com&rut=abc">Title</a> class="result__snippet">Desc</a>"#;
-        let results = parse_ddg_results(html, 5);
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].1, "https://example.com");
+    fn test_strip_html_tags() {
+        assert_eq!(strip_html_tags("<b>hello</b>"), "hello");
+        assert_eq!(strip_html_tags("&amp; &lt; &gt;"), "& < >");
     }
 }

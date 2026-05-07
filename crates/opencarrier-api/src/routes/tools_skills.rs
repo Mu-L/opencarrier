@@ -6,6 +6,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use opencarrier_runtime::tool_context::ToolContext;
 use opencarrier_runtime::tool_runner::builtin_tool_definitions;
 use std::sync::Arc;
 // ---------------------------------------------------------------------------
@@ -182,33 +183,36 @@ pub async fn mcp_http(
         // Execute the tool via the kernel's tool runner
         let kernel_handle: Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle> =
             state.kernel.clone() as Arc<dyn opencarrier_runtime::kernel_handle::KernelHandle>;
-        let result = opencarrier_runtime::tool_runner::execute_tool(
-            "mcp-http",
-            tool_name,
-            &arguments,
-            Some(&kernel_handle),
-            None,
-            None,
-            Some(&state.kernel.plugins.mcp_connections),
-            Some(&state.kernel.services.web_ctx),
-            Some(&state.kernel.services.browser_ctx),
-            None,
-            None,
-            Some(&state.kernel.services.media_engine),
-            None, // brain (MCP HTTP calls don't go through agent_loop)
-            Some(&state.kernel.config.exec_policy),
-            if state.kernel.config.tts.enabled {
+        let tool_ctx = ToolContext {
+            kernel: Some(&kernel_handle),
+            allowed_tools: None,
+            caller_agent_id: None,
+            mcp_connections: Some(&state.kernel.plugins.mcp_connections),
+            web_ctx: Some(&state.kernel.services.web_ctx),
+            browser_ctx: Some(&state.kernel.services.browser_ctx),
+            allowed_env_vars: None,
+            workspace_root: None,
+            media_engine: Some(&state.kernel.services.media_engine),
+            brain: None,
+            exec_policy: Some(&state.kernel.config.exec_policy),
+            tts_engine: if state.kernel.config.tts.enabled {
                 Some(&state.kernel.services.tts_engine)
             } else {
                 None
             },
-            if state.kernel.config.docker.enabled {
+            docker_config: if state.kernel.config.docker.enabled {
                 Some(&state.kernel.config.docker)
             } else {
                 None
             },
-            Some(&*state.kernel.coordination.process_manager),
-            None, // sender_id (MCP HTTP calls have no sender context)
+            process_manager: Some(&*state.kernel.coordination.process_manager),
+            sender_id: None,
+        };
+        let result = opencarrier_runtime::tool_runner::execute_tool(
+            "mcp-http",
+            tool_name,
+            &arguments,
+            &tool_ctx,
         )
         .await;
 

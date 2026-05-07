@@ -32,39 +32,12 @@ pub enum KernelMode {
     Dev,
 }
 
-/// Web search provider selection.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SearchProvider {
-    /// Brave Search API.
-    Brave,
-    /// Tavily AI-agent-native search.
-    Tavily,
-    /// Perplexity AI search.
-    Perplexity,
-    /// Bing HTML scraping (no API key needed, works in China).
-    Bing,
-    /// DuckDuckGo HTML (no API key needed).
-    DuckDuckGo,
-    /// Auto-select based on available API keys (Tavily → Brave → Perplexity → Bing).
-    #[default]
-    Auto,
-}
-
 /// Web tools configuration (search + fetch).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WebConfig {
-    /// Which search provider to use.
-    pub search_provider: SearchProvider,
     /// Cache TTL in minutes (0 = disabled).
     pub cache_ttl_minutes: u64,
-    /// Brave Search configuration.
-    pub brave: BraveSearchConfig,
-    /// Tavily Search configuration.
-    pub tavily: TavilySearchConfig,
-    /// Perplexity Search configuration.
-    pub perplexity: PerplexitySearchConfig,
     /// Web fetch configuration.
     pub fetch: WebFetchConfig,
 }
@@ -72,84 +45,8 @@ pub struct WebConfig {
 impl Default for WebConfig {
     fn default() -> Self {
         Self {
-            search_provider: SearchProvider::default(),
             cache_ttl_minutes: 15,
-            brave: BraveSearchConfig::default(),
-            tavily: TavilySearchConfig::default(),
-            perplexity: PerplexitySearchConfig::default(),
             fetch: WebFetchConfig::default(),
-        }
-    }
-}
-
-/// Brave Search API configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct BraveSearchConfig {
-    /// Env var name holding the API key.
-    pub api_key_env: String,
-    /// Maximum results to return.
-    pub max_results: usize,
-    /// Country code for search localization (e.g., "US").
-    pub country: String,
-    /// Search language (e.g., "en").
-    pub search_lang: String,
-    /// Freshness filter (e.g., "pd" = past day, "pw" = past week).
-    pub freshness: String,
-}
-
-impl Default for BraveSearchConfig {
-    fn default() -> Self {
-        Self {
-            api_key_env: "BRAVE_API_KEY".to_string(),
-            max_results: 5,
-            country: String::new(),
-            search_lang: String::new(),
-            freshness: String::new(),
-        }
-    }
-}
-
-/// Tavily Search API configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TavilySearchConfig {
-    /// Env var name holding the API key.
-    pub api_key_env: String,
-    /// Search depth: "basic" or "advanced".
-    pub search_depth: String,
-    /// Maximum results to return.
-    pub max_results: usize,
-    /// Include AI-generated answer summary.
-    pub include_answer: bool,
-}
-
-impl Default for TavilySearchConfig {
-    fn default() -> Self {
-        Self {
-            api_key_env: "TAVILY_API_KEY".to_string(),
-            search_depth: "basic".to_string(),
-            max_results: 5,
-            include_answer: true,
-        }
-    }
-}
-
-/// Perplexity Search API configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PerplexitySearchConfig {
-    /// Env var name holding the API key.
-    pub api_key_env: String,
-    /// Model to use for search (e.g., "sonar").
-    pub model: String,
-}
-
-impl Default for PerplexitySearchConfig {
-    fn default() -> Self {
-        Self {
-            api_key_env: "PERPLEXITY_API_KEY".to_string(),
-            model: "sonar".to_string(),
         }
     }
 }
@@ -1307,49 +1204,9 @@ impl Default for MemoryConfig {
 impl KernelConfig {
     /// Validate the configuration, returning a list of warnings.
     pub fn validate(&self) -> Vec<String> {
-        let mut warnings = Vec::new();
-
-        // Web search provider validation
-        match self.web.search_provider {
-            SearchProvider::Brave => {
-                if std::env::var(&self.web.brave.api_key_env)
-                    .unwrap_or_default()
-                    .is_empty()
-                {
-                    warnings.push(format!(
-                        "Brave search selected but {} is not set",
-                        self.web.brave.api_key_env
-                    ));
-                }
-            }
-            SearchProvider::Tavily => {
-                if std::env::var(&self.web.tavily.api_key_env)
-                    .unwrap_or_default()
-                    .is_empty()
-                {
-                    warnings.push(format!(
-                        "Tavily search selected but {} is not set",
-                        self.web.tavily.api_key_env
-                    ));
-                }
-            }
-            SearchProvider::Perplexity => {
-                if std::env::var(&self.web.perplexity.api_key_env)
-                    .unwrap_or_default()
-                    .is_empty()
-                {
-                    warnings.push(format!(
-                        "Perplexity search selected but {} is not set",
-                        self.web.perplexity.api_key_env
-                    ));
-                }
-            }
-            SearchProvider::DuckDuckGo | SearchProvider::Bing | SearchProvider::Auto => {}
-        }
-
         // --- Production bounds validation ---
         // Clamp dangerous zero/extreme values to safe defaults instead of crashing.
-        warnings
+        Vec::new()
     }
 
     /// Clamp configuration values to safe production bounds.
