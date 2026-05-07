@@ -1091,10 +1091,38 @@ pub async fn verify_clone_access(
 // ---------------------------------------------------------------------------
 
 /// Build a router with all routes for this module.
+/// GET /api/share/agents — Public agent list for the share page.
+///
+/// Returns a minimal subset (name, display_name, profile, identity)
+/// so the share page can show a picker without authentication.
+pub async fn share_list_agents(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let all_agents = state.kernel.registry.list();
+    let agents: Vec<serde_json::Value> = all_agents
+        .into_iter()
+        .filter(|e| matches!(e.state, opencarrier_types::agent::AgentState::Running))
+        .map(|e| {
+            serde_json::json!({
+                "name": e.name,
+                "display_name": e.manifest.display_name,
+                "profile": e.manifest.profile,
+                "description": e.manifest.description,
+                "identity": {
+                    "emoji": e.identity.emoji,
+                    "avatar_url": e.identity.avatar_url,
+                },
+            })
+        })
+        .collect();
+    Json(serde_json::json!({"agents": agents}))
+}
+
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
     axum::Router::new()
         .route("/api/agents", routing::post(spawn_agent).get(list_agents))
+        .route("/api/share/agents", routing::get(share_list_agents))
         .route(
             "/api/agents/{id}",
             routing::delete(kill_agent)

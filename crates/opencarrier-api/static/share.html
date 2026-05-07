@@ -202,14 +202,54 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       return;
     }
 
-    // In a platform browser — show clone info + auth button
+    // Clone name specified via URL — show that clone directly
+    if (cloneName) {
+      showCloneHero(el, cloneName);
+      return;
+    }
+
+    // No clone specified — fetch agent list and let user pick
     el.innerHTML =
-      '<div class="logo">' + emoji(cloneName || 'bot') + '</div>' +
+      '<div class="logo">🤖</div>' +
+      '<h1>Open<span>Carrier</span></h1>' +
+      '<p class="tagline">选择一个 AI 分身开始使用</p>' +
+      '<div class="agent-list" id="agent-list"><p style="font-size:14px;color:#999">加载中...</p></div>';
+    api('GET', '/api/share/agents').then(function(res){
+      var agents = res.agents || [];
+      var listEl = document.getElementById('agent-list');
+      if (!agents.length) {
+        listEl.innerHTML = '<p style="font-size:14px;color:#999">暂无可用分身</p>';
+        return;
+      }
+      listEl.innerHTML = '<h3>可用分身</h3>';
+      agents.forEach(function(a){
+        var card = document.createElement('div');
+        card.className = 'agent-card';
+        var name = a.display_name || a.name || a.id || '';
+        var desc = a.description || a.profile || '';
+        card.innerHTML =
+          '<div class="agent-avatar">' + emoji(name) + '</div>' +
+          '<div class="info"><h4>' + esc(name) + '</h4><p>' + esc(desc) + '</p></div>';
+        card.onclick = function(){
+          targetAgentName = name;
+          showPhase(2);
+          switchPlatform(activePlatform);
+        };
+        listEl.appendChild(card);
+      });
+    }).catch(function(e){
+      document.getElementById('agent-list').innerHTML = '<p style="font-size:14px;color:#e08838">加载失败</p>';
+    });
+  }
+
+  function showCloneHero(el, name) {
+    el.innerHTML =
+      '<div class="logo">' + emoji(name) + '</div>' +
       '<h1>Open<span>Carrier</span></h1>' +
       '<p class="tagline">获取你的专属 AI 分身</p>' +
       '<div class="clone-hero">' +
-        '<div class="avatar">' + emoji(cloneName || 'bot') + '</div>' +
-        '<h2 id="clone-display-name">' + esc(cloneName || 'AI 助理') + '</h2>' +
+        '<div class="avatar">' + emoji(name) + '</div>' +
+        '<h2 id="clone-display-name">' + esc(name) + '</h2>' +
         '<p class="desc">点击开始使用</p>' +
       '</div>' +
       '<div id="password-area" style="display:none;margin-bottom:16px;width:100%;max-width:340px">' +
@@ -217,22 +257,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         '<p id="password-error" style="color:#e08838;font-size:13px;margin-top:8px;display:none"></p>' +
       '</div>' +
       '<button class="btn-primary" id="btn-start" onclick="startAuth()">开始使用</button>';
-    // Check clone access if name specified
-    if (cloneName) {
-      api('GET', '/api/clones/' + encodeURIComponent(cloneName) + '/access').then(function(data){
-        if (data.error) {
-          el.querySelector('.clone-hero .desc').textContent = '分身不存在';
-          document.getElementById('btn-start').disabled = true;
-          return;
-        }
-        cloneAccess = data.access || 'public';
-        if (data.requires_password) {
-          document.getElementById('password-area').style.display = 'block';
-          document.getElementById('btn-start').textContent = '验证密码';
-          document.getElementById('btn-start').onclick = function(){ verifyPassword(); };
-        }
-      }).catch(function(){});
-    }
+    api('GET', '/api/clones/' + encodeURIComponent(name) + '/access').then(function(data){
+      if (data.error) {
+        el.querySelector('.clone-hero .desc').textContent = '分身不存在';
+        document.getElementById('btn-start').disabled = true;
+        return;
+      }
+      cloneAccess = data.access || 'public';
+      if (data.requires_password) {
+        document.getElementById('password-area').style.display = 'block';
+        document.getElementById('btn-start').textContent = '验证密码';
+        document.getElementById('btn-start').onclick = function(){ verifyPassword(); };
+      }
+    }).catch(function(){});
+  }
   }
 
   // ── Phase 2: Platform Auth ──

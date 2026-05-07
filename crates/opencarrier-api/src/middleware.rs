@@ -94,6 +94,7 @@ pub async fn auth(
         || path == "/api/health"
         || path == "/api/auth/check"
         || path == "/api/auth/login"
+        || path == "/api/share/agents"
         // Share-page platform auth flows (pre-onboarding)
         || path == "/api/weixin/qrcode"
         || path == "/api/weixin/qrcode-status"
