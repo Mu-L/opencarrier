@@ -89,6 +89,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   <div class="auth-status" id="auth-polling">
     <div class="spinner"></div>
     <p id="auth-status-text">正在获取授权链接...</p>
+    <p id="auth-debug" style="font-size:11px;color:#bbb;margin-top:8px;word-break:break-all"></p>
   </div>
   <div id="auth-qr" class="hidden">
     <div class="qr-area"><div id="qr-img"></div></div>
@@ -427,6 +428,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     document.getElementById('auth-polling').classList.remove('hidden');
     document.getElementById('auth-success').classList.add('hidden');
     document.getElementById('auth-status-text').textContent = '正在验证' + cfg.label + '授权结果...';
+    var dbgEl = document.getElementById('auth-debug');
+    if (dbgEl) dbgEl.textContent = 'resume platform=' + pending.platform + ' age=' + (pending.ts ? Math.round((Date.now()-pending.ts)/1000) + 's' : 'old');
 
     var sd = pending.sessionData || {};
     if (pending.platform === 'weixin') {
@@ -489,8 +492,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   function pollFeishu(sessionId) {
     var interval = 3000;
     var started = Date.now();
+    var pollCount = 0;
     function doPoll() {
+      pollCount++;
+      var dbgEl = document.getElementById('auth-debug');
+      if (dbgEl) dbgEl.textContent = '#' + pollCount + ' polling...';
       api('GET', '/api/bots/feishu/device-auth/poll?session_id=' + encodeURIComponent(sessionId)).then(function(res){
+        var elapsed = Math.round((Date.now() - started) / 1000);
+        if (dbgEl) dbgEl.textContent = '#' + pollCount + ' (' + elapsed + 's) ' + JSON.stringify(res).substring(0, 200);
         if (res.status === 'success') {
           stopPoll(); clearPendingAuth(); showAuthSuccess('飞书授权成功');
           platformCredentials.feishu = { app_id: res.app_id || '', app_secret: res.app_secret || '' };
@@ -503,7 +512,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
           interval = Math.min(interval + 2000, 10000); stopPoll();
           pollTimer = setInterval(doPoll, interval);
         }
-      }).catch(function(){});
+      }).catch(function(e){
+        if (dbgEl) dbgEl.textContent = '#' + pollCount + ' ERR: ' + (e.message || e);
+      });
     }
     doPoll();
     pollTimer = setInterval(doPoll, interval);
