@@ -5,7 +5,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::Request;
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::response::{Html, IntoResponse, Redirect};
 use std::sync::Arc;
 
 use crate::routes::state::AppState;
@@ -54,16 +54,14 @@ fn get_session_user(request: &Request<axum::body::Body>, state: &AppState) -> Op
     })
 }
 
-#[allow(clippy::result_large_err)]
-fn require_auth(request: &Request<axum::body::Body>, state: &AppState) -> Result<String, Response> {
+fn require_auth(request: &Request<axum::body::Body>, state: &AppState) -> Result<String, Html<String>> {
     match get_session_user(request, state) {
         Some(user) => Ok(user),
         None => {
-            let html = render("login.html", minijinja::context! {
+            Err(render("login.html", minijinja::context! {
                 hide_sidebar => true,
                 version => env!("CARGO_PKG_VERSION"),
-            });
-            Err((axum::http::StatusCode::UNAUTHORIZED, html).into_response())
+            }))
         }
     }
 }
@@ -94,7 +92,7 @@ pub async fn logout_page() -> impl IntoResponse {
 pub async fn overview_page(
     State(state): State<Arc<AppState>>,
     request: Request<axum::body::Body>,
-) -> Result<Html<String>, Response> {
+) -> Result<Html<String>, Html<String>> {
     let user = require_auth(&request, &state)?;
     let all_agents = state.kernel.registry.list();
     let agent_count = all_agents.len();
@@ -133,7 +131,7 @@ pub async fn overview_page(
 pub async fn agents_page(
     State(state): State<Arc<AppState>>,
     request: Request<axum::body::Body>,
-) -> Result<Html<String>, Response> {
+) -> Result<Html<String>, Html<String>> {
     let user = require_auth(&request, &state)?;
     let all_agents = state.kernel.registry.list();
 
@@ -170,7 +168,7 @@ pub async fn chat_page(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     request: Request<axum::body::Body>,
-) -> Result<Html<String>, Response> {
+) -> Result<Html<String>, Html<String>> {
     let user = require_auth(&request, &state)?;
 
     let agent_id = match uuid::Uuid::parse_str(&id) {
@@ -221,7 +219,7 @@ pub async fn chat_page(
 pub async fn tasks_page(
     State(state): State<Arc<AppState>>,
     request: Request<axum::body::Body>,
-) -> Result<Html<String>, Response> {
+) -> Result<Html<String>, Html<String>> {
     let user = require_auth(&request, &state)?;
     Ok(render("tasks.html", minijinja::context! {
         page => "tasks",
@@ -234,7 +232,7 @@ pub async fn tasks_page(
 pub async fn brain_page(
     State(state): State<Arc<AppState>>,
     request: Request<axum::body::Body>,
-) -> Result<Html<String>, Response> {
+) -> Result<Html<String>, Html<String>> {
     let user = require_auth(&request, &state)?;
     let (_, default_model) = state.kernel.resolve_model_label("chat");
     Ok(render("brain.html", minijinja::context! {
