@@ -5,47 +5,14 @@
 
 use crate::kernel_handle::KernelHandle;
 use crate::mcp;
-use crate::web_search::WebToolsContext;
+use crate::tool_context::ToolContext;
 use opencarrier_types::taint::{TaintLabel, TaintSink, TaintedValue};
 use opencarrier_types::tool::{ToolDefinition, ToolResult};
 use opencarrier_types::tool_compat::normalize_tool_name;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::{debug, warn};
-
-/// Maximum inter-agent call depth to prevent infinite recursion (A->B->C->...).
-const MAX_AGENT_CALL_DEPTH: u32 = 5;
-
-/// Check if a shell command should be blocked by taint tracking.
-///
-/// Layer 1: Shell metacharacter injection (backticks, `$(`, `${`, etc.)
-/// Layer 2: Heuristic patterns for injected external data (piped curl, base64, eval)
-///
-/// This implements the TaintSink::shell_exec() policy from SOTA 2.
-fn check_taint_shell_exec(command: &str) -> Option<String> {
-    // Layer 1: Block shell metacharacters that enable command injection.
-    // Uses the same validator as subprocess_sandbox and docker_sandbox.
-    if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(command) {
-        return Some(format!("Shell metacharacter injection blocked: {reason}"));
-    }
-
-    // Layer 2: Heuristic patterns for injected external URLs / base64 payloads
-    let suspicious_patterns = ["curl ", "wget ", "| sh", "| bash", "base64 -d", "eval "];
-    for pattern in &suspicious_patterns {
-        if command.contains(pattern) {
-            let mut labels = HashSet::new();
-            labels.insert(TaintLabel::ExternalNetwork);
-            let tainted = TaintedValue::new(command, labels, "llm_tool_call");
-            if let Err(violation) = tainted.check_sink(&TaintSink::shell_exec()) {
-                warn!(command = crate::str_utils::safe_truncate_str(command, 80), %violation, "Shell taint check failed");
-                return Some(violation.to_string());
-            }
-        }
-    }
-    None
-}
 
 /// Check if a URL should be blocked by taint tracking before network fetch.
 ///
@@ -76,16 +43,20 @@ fn check_taint_net_fetch(url: &str) -> Option<String> {
 
 tokio::task_local! {
     /// Tracks the current inter-agent call depth within a task.
-    static AGENT_CALL_DEPTH: std::cell::Cell<u32>;
+    pub(crate) static AGENT_CALL_DEPTH: std::cell::Cell<u32>;
     /// Canvas max HTML size in bytes (set from kernel config at loop start).
-    static CANVAS_MAX_BYTES: usize;
+    pub(crate) static CANVAS_MAX_BYTES: usize;
 }
+
+/// Maximum inter-agent call depth (used by agent tools).
+pub(crate) const MAX_AGENT_CALL_DEPTH: u32 = 5;
 
 /// Execute a tool by name with the given input, returning a ToolResult.
 ///
 /// The optional `kernel` handle enables inter-agent tools. If `None`,
 /// agent tools will return an error indicating the kernel is not available.
 /// Dispatch a browser tool, handling the `None` (no browser) case uniformly.
+#[macro_export]
 macro_rules! browser_dispatch {
     ($input:expr, $browser_ctx:expr, $caller_agent_id:expr, $func:path) => {
         match $browser_ctx {
@@ -104,33 +75,37 @@ macro_rules! browser_dispatch {
 /// `allowed_tools` enforces capability-based security: if provided, only
 /// tools in the list may execute. This prevents an LLM from hallucinating
 /// tool names outside the agent's capability grants.
-#[allow(clippy::too_many_arguments)]
 pub async fn execute_tool(
     tool_use_id: &str,
     tool_name: &str,
     input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    allowed_tools: Option<&[String]>,
-    caller_agent_id: Option<&str>,
-    mcp_connections: Option<&dashmap::DashMap<String, mcp::McpConnection>>,
-    web_ctx: Option<&WebToolsContext>,
-    browser_ctx: Option<&crate::browser::BrowserManager>,
-    allowed_env_vars: Option<&[String]>,
-    workspace_root: Option<&Path>,
-    media_engine: Option<&crate::media_understanding::MediaEngine>,
-    brain: Option<&Arc<dyn crate::llm_driver::Brain>>,
-    exec_policy: Option<&opencarrier_types::config::ExecPolicy>,
-    tts_engine: Option<&crate::tts::TtsEngine>,
-    docker_config: Option<&opencarrier_types::config::DockerSandboxConfig>,
-    process_manager: Option<&crate::process_manager::ProcessManager>,
-    sender_id: Option<&str>,
+    ctx: &ToolContext<'_>,
 ) -> ToolResult {
+    // Unpack context into local bindings matching the old parameter names.
+    let ToolContext {
+        kernel,
+        allowed_tools,
+        caller_agent_id,
+        mcp_connections,
+        web_ctx,
+        browser_ctx,
+        allowed_env_vars: _,
+        workspace_root,
+        media_engine: _,
+        brain: _,
+        exec_policy: _,
+        tts_engine: _,
+        docker_config: _,
+        process_manager: _,
+        sender_id,
+    } = *ctx;
+
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
     // (e.g. "fs-write" → "file_write") resolve to the canonical OpenCarrier name.
     let tool_name = normalize_tool_name(tool_name);
 
     // Capability enforcement: reject tools not in the allowed list
-    if let Some(allowed) = allowed_tools {
+    if let Some(allowed) = ctx.allowed_tools {
         if !allowed.iter().any(|t| t == tool_name) {
             warn!(tool_name, "Capability denied: tool not in allowed list");
             return ToolResult {
@@ -144,36 +119,28 @@ pub async fn execute_tool(
     }
 
     debug!(tool_name, "Executing tool");
-    let result = match tool_name {
-        // Filesystem tools
-        "file_read" => tool_file_read(input, workspace_root, sender_id).await,
-        "file_write" => tool_file_write(input, workspace_root, sender_id).await,
-        "file_list" => tool_file_list(input, workspace_root, sender_id).await,
-        "file_convert" => tool_file_convert(input, workspace_root, sender_id).await,
 
-        // Knowledge tools (clone-specific, safe access to data/knowledge/)
-        "knowledge_list" => tool_knowledge_list(workspace_root).await,
-        "knowledge_read" => tool_knowledge_read(input, workspace_root).await,
-        "apply_patch" => tool_apply_patch(input, workspace_root).await,
-
-        // Lifecycle system tools (clone knowledge management)
-        "knowledge_lint" => tool_knowledge_lint(workspace_root).await,
-        "knowledge_heal" => tool_knowledge_heal(workspace_root).await,
-        "knowledge_add" => tool_knowledge_add(input, workspace_root).await,
-        "knowledge_remove" => tool_knowledge_remove(input, workspace_root).await,
-        "knowledge_import" => tool_knowledge_import(input, workspace_root).await,
-        "clone_evaluate" => tool_clone_evaluate(workspace_root).await,
-
-        // Evolution tools (self-driven knowledge and skill management)
-        "knowledge_extract" => tool_knowledge_extract(input, workspace_root).await,
-        "knowledge_index" => tool_knowledge_index(workspace_root).await,
-        "skill_create" => tool_skill_create(input, workspace_root).await,
-        "skill_update" => tool_skill_update(input, workspace_root).await,
-        "skill_load" => tool_skill_load(input, workspace_root).await,
-        "session_summarize" => {
-            tool_session_summarize(input, kernel, caller_agent_id, sender_id).await
+    // Phase 1: Try extracted tool modules (filesystem, shell, misc, ...)
+    let modules = crate::tools::builtin_modules();
+    for module in &modules {
+        if let Some(result) = module.execute(tool_name, input, ctx).await {
+            return match result {
+                Ok(content) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error: false,
+                },
+                Err(err) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {err}"),
+                    is_error: true,
+                },
+            };
         }
+    }
 
+    // Phase 2: Remaining tools not yet extracted to modules
+    let result = match tool_name {
         // Cross-workspace training tools (for trainer agents like clone-trainer)
         "train_read" => tool_train_read(input, kernel, caller_agent_id).await,
         "train_write" => tool_train_write(input, kernel, caller_agent_id).await,
@@ -194,9 +161,8 @@ pub async fn execute_tool(
         "clone_export" => tool_clone_export(input, kernel, caller_agent_id).await,
         "clone_publish" => tool_clone_publish(input, kernel, caller_agent_id).await,
 
-        // Web tools (upgraded: multi-provider search, SSRF-protected fetch)
+        // Web tools
         "web_fetch" => {
-            // Taint check: block URLs containing secrets/PII from being exfiltrated
             let url = input["url"].as_str().unwrap_or("");
             if let Some(violation) = check_taint_net_fetch(url) {
                 return ToolResult {
@@ -205,80 +171,27 @@ pub async fn execute_tool(
                     is_error: true,
                 };
             }
-            let method = input["method"].as_str().unwrap_or("GET");
-            let headers = input.get("headers").and_then(|v| v.as_object());
-            let body = input["body"].as_str();
-            if let Some(ctx) = web_ctx {
-                ctx.fetch
-                    .fetch_with_options(url, method, headers, body)
-                    .await
-            } else {
-                tool_web_fetch_legacy(input).await
+            match web_ctx {
+                Some(ctx) => {
+                    let method = input["method"].as_str().unwrap_or("GET");
+                    let headers = input.get("headers").and_then(|v| v.as_object());
+                    let body = input["body"].as_str();
+                    ctx.fetch
+                        .fetch_with_options(url, method, headers, body)
+                        .await
+                }
+                None => Err("Web fetch not available".to_string()),
             }
         }
         "web_search" => {
-            if let Some(ctx) = web_ctx {
-                let query = input["query"].as_str().unwrap_or("");
-                let max_results = input["max_results"].as_u64().unwrap_or(5) as usize;
-                ctx.search.search(query, max_results).await
-            } else {
-                tool_web_search_legacy(input).await
-            }
-        }
-
-        // Shell tool — metacharacter check + exec policy + taint check
-        "shell_exec" => {
-            let command = input["command"].as_str().unwrap_or("");
-
-            // SECURITY: Always check for shell metacharacters, even in Full mode.
-            // These enable command injection regardless of exec policy.
-            if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(command)
-            {
-                return ToolResult {
-                    tool_use_id: tool_use_id.to_string(),
-                    content: format!(
-                        "shell_exec blocked: command contains {reason}. \
-                         Shell metacharacters are never allowed."
-                    ),
-                    is_error: true,
-                };
-            }
-
-            // Exec policy enforcement (allowlist / deny / full)
-            if let Some(policy) = exec_policy {
-                if let Err(reason) =
-                    crate::subprocess_sandbox::validate_command_allowlist(command, policy)
-                {
-                    return ToolResult {
-                        tool_use_id: tool_use_id.to_string(),
-                        content: format!(
-                            "shell_exec blocked: {reason}. Current exec_policy.mode = '{:?}'. \
-                             To allow shell commands, set exec_policy.mode = 'full' in the agent manifest or config.toml.",
-                            policy.mode
-                        ),
-                        is_error: true,
-                    };
+            match web_ctx {
+                Some(ctx) => {
+                    let query = input["query"].as_str().unwrap_or("");
+                    let max_results = input["max_results"].as_u64().unwrap_or(5) as usize;
+                    ctx.search(query, max_results).await
                 }
+                None => Err("Web search not available".to_string()),
             }
-            // Skip heuristic taint patterns for Full exec policy (e.g. hand agents that need curl)
-            let is_full_exec = exec_policy
-                .is_some_and(|p| p.mode == opencarrier_types::config::ExecSecurityMode::Full);
-            if !is_full_exec {
-                if let Some(violation) = check_taint_shell_exec(command) {
-                    return ToolResult {
-                        tool_use_id: tool_use_id.to_string(),
-                        content: format!("Taint violation: {violation}"),
-                        is_error: true,
-                    };
-                }
-            }
-            tool_shell_exec(
-                input,
-                allowed_env_vars.unwrap_or(&[]),
-                workspace_root,
-                exec_policy,
-            )
-            .await
         }
 
         // Inter-agent tools (require kernel handle)
@@ -313,42 +226,10 @@ pub async fn execute_tool(
         }
         "knowledge_query" => tool_knowledge_query(input, kernel, caller_agent_id).await,
 
-        // Image analysis tool
-        "image_analyze" => tool_image_analyze(input).await,
-
-        // Media understanding tools
-        "media_describe" => tool_media_describe(input, brain).await,
-        "media_transcribe" => tool_media_transcribe(input, media_engine).await,
-
-        // Image generation tool
-        "image_generate" => tool_image_generate(input, workspace_root, sender_id).await,
-
-        // TTS/STT tools
-        "text_to_speech" => tool_text_to_speech(input, tts_engine, workspace_root, sender_id).await,
-        "speech_to_text" => tool_speech_to_text(input, media_engine, workspace_root).await,
-
-        // Docker sandbox tool
-        "docker_exec" => {
-            tool_docker_exec(input, docker_config, workspace_root, caller_agent_id).await
-        }
-
-        // Location tool
-        "location_get" => tool_location_get().await,
-
-        // System time tool
-        "system_time" => Ok(tool_system_time()),
-
         // Cron scheduling tools
         "cron_create" => tool_cron_create(input, kernel, caller_agent_id).await,
         "cron_list" => tool_cron_list(kernel, caller_agent_id).await,
         "cron_cancel" => tool_cron_cancel(input, kernel, caller_agent_id).await,
-
-        // Persistent process tools
-        "process_start" => tool_process_start(input, process_manager, caller_agent_id).await,
-        "process_poll" => tool_process_poll(input, process_manager, caller_agent_id).await,
-        "process_write" => tool_process_write(input, process_manager, caller_agent_id).await,
-        "process_kill" => tool_process_kill(input, process_manager, caller_agent_id).await,
-        "process_list" => tool_process_list(process_manager, caller_agent_id).await,
 
         // A2A outbound tools (cross-instance agent communication)
         "a2a_discover" => tool_a2a_discover(input).await,
@@ -425,9 +306,6 @@ pub async fn execute_tool(
             caller_agent_id,
             crate::browser::tool_browser_back
         ),
-
-        // Canvas / A2UI tool
-        "canvas_present" => tool_canvas_present(input, workspace_root, sender_id).await,
 
         other => {
             // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
@@ -515,193 +393,17 @@ pub async fn execute_tool(
 
 /// Get definitions for all built-in tools.
 pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
-    vec![
-        // --- Filesystem tools ---
-        ToolDefinition {
-            name: "file_read".to_string(),
-            description: "Read the contents of a file. Paths are relative to the agent workspace.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "The file path to read" }
-                },
-                "required": ["path"]
-            }),
-        },
-        ToolDefinition {
-            name: "file_write".to_string(),
-            description: "Write content to a file. Paths are relative to the agent workspace.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "The file path to write to" },
-                    "content": { "type": "string", "description": "The content to write" }
-                },
-                "required": ["path", "content"]
-            }),
-        },
-        ToolDefinition {
-            name: "file_list".to_string(),
-            description: "List files in a directory. Paths are relative to the agent workspace.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "The directory path to list" }
-                },
-                "required": ["path"]
-            }),
-        },
+    // Collect definitions from extracted modules
+    let mut defs: Vec<ToolDefinition> = crate::tools::builtin_modules()
+        .into_iter()
+        .flat_map(|m| m.definitions())
+        .collect();
+
+    // Append remaining definitions not yet extracted to modules
+    defs.extend(vec![
         // --- Knowledge tools (safe access to data/knowledge/) ---
-        ToolDefinition {
-            name: "knowledge_list".to_string(),
-            description: "List available knowledge files in the agent's knowledge base. Returns filenames with descriptions.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        },
-        ToolDefinition {
-            name: "knowledge_read".to_string(),
-            description: "Read a specific knowledge file from the agent's knowledge base. Only files in data/knowledge/ are accessible.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "filename": { "type": "string", "description": "The knowledge file name (e.g., 'refund-policy.md')" }
-                },
-                "required": ["filename"]
-            }),
-        },
-        ToolDefinition {
-            name: "apply_patch".to_string(),
-            description: "Apply a multi-hunk diff patch to add, update, move, or delete files. Use this for targeted edits instead of full file overwrites.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "patch": {
-                        "type": "string",
-                        "description": "The patch in *** Begin Patch / *** End Patch format. Use *** Add File:, *** Update File:, *** Delete File: markers. Hunks use @@ headers with space (context), - (remove), + (add) prefixed lines."
-                    }
-                },
-                "required": ["patch"]
-            }),
-        },
         // --- Lifecycle system tools (clone knowledge management) ---
-        ToolDefinition {
-            name: "knowledge_lint".to_string(),
-            description: "Check the health of the clone's knowledge base. Reports missing frontmatter, empty files, placeholder content, and other issues.".to_string(),
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-        },
-        ToolDefinition {
-            name: "knowledge_heal".to_string(),
-            description: "Automatically fix knowledge base issues: remove empty files, rebuild MEMORY.md index, add missing frontmatter templates.".to_string(),
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-        },
-        ToolDefinition {
-            name: "knowledge_add".to_string(),
-            description: "Add a new knowledge entry to the clone's knowledge base.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Short title for the knowledge entry"},
-                    "content": {"type": "string", "description": "The knowledge content (markdown)"},
-                },
-                "required": ["title", "content"],
-            }),
-        },
-        ToolDefinition {
-            name: "knowledge_remove".to_string(),
-            description: "Remove a knowledge entry by filename (supports fuzzy matching).".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "filename": {"type": "string", "description": "Filename or title to remove (fuzzy matched)"},
-                },
-                "required": ["filename"],
-            }),
-        },
-        ToolDefinition {
-            name: "knowledge_import".to_string(),
-            description: "Import data into the clone's knowledge base. Supports FAQ (CSV/TSV), chat logs (JSON), and document text.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "data": {"type": "string", "description": "Raw data content to import"},
-                    "data_type": {"type": "string", "description": "Data format: 'faq', 'chat', 'document', or 'auto' (default: auto)"},
-                },
-                "required": ["data"],
-            }),
-        },
-        ToolDefinition {
-            name: "clone_evaluate".to_string(),
-            description: "Evaluate the clone's quality with deterministic metrics. Returns a score (0-100) based on identity completeness, knowledge richness, skills, and knowledge quality.".to_string(),
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-        },
         // --- Evolution tools (self-driven knowledge and skill management) ---
-        ToolDefinition {
-            name: "knowledge_extract".to_string(),
-            description: "Extract new knowledge from a conversation and save it to the knowledge base. Uses dual-layer format with timeline tracking and rebuilds MEMORY.md index. Use when you discover facts, rules, or preferences worth remembering.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Short title for the knowledge (English or pinyin preferred, used as filename)"},
-                    "content": {"type": "string", "description": "The knowledge content to save (markdown)"},
-                },
-                "required": ["title", "content"],
-            }),
-        },
-        ToolDefinition {
-            name: "knowledge_index".to_string(),
-            description: "Rebuild the knowledge index file (MEMORY.md) by scanning all knowledge files in data/knowledge/. Use after manually adding or removing knowledge files.".to_string(),
-            input_schema: serde_json::json!({"type": "object", "properties": {}}),
-        },
-        ToolDefinition {
-            name: "skill_create".to_string(),
-            description: "Create a new skill file in the workspace skills/ directory. Skills define reusable workflows with steps and tool requirements.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Skill name (used as filename)"},
-                    "when_to_use": {"type": "string", "description": "Brief description of when to activate this skill"},
-                    "body": {"type": "string", "description": "The skill content: workflow steps, instructions, and examples (markdown)"},
-                    "allowed_tools": {"type": "string", "description": "Comma-separated list of tools this skill needs (optional)"},
-                },
-                "required": ["name", "body"],
-            }),
-        },
-        ToolDefinition {
-            name: "skill_update".to_string(),
-            description: "Update the body of an existing skill. Preserves the skill's frontmatter (name, when_to_use, allowed_tools).".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Skill name to update"},
-                    "body": {"type": "string", "description": "New skill body content (replaces existing)"},
-                },
-                "required": ["name", "body"],
-            }),
-        },
-        ToolDefinition {
-            name: "skill_load".to_string(),
-            description: "Load the full content of a skill by name. Returns the complete skill file including frontmatter and body.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Skill name to load"},
-                },
-                "required": ["name"],
-            }),
-        },
-        ToolDefinition {
-            name: "session_summarize".to_string(),
-            description: "Save a summary of the current conversation for future recall. Use after long or important conversations to preserve key points, decisions, and outcomes.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "summary": {"type": "string", "description": "Key points, decisions, and outcomes from this conversation"},
-                },
-                "required": ["summary"],
-            }),
-        },
         // --- Cross-workspace training tools (for trainer agents) ---
         ToolDefinition {
             name: "train_read".to_string(),
@@ -860,19 +562,6 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "max_results": { "type": "integer", "description": "Maximum number of results to return (default: 5, max: 20)" }
                 },
                 "required": ["query"]
-            }),
-        },
-        // --- Shell tool ---
-        ToolDefinition {
-            name: "shell_exec".to_string(),
-            description: "Execute a shell command and return its output.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string", "description": "The command to execute" },
-                    "timeout_seconds": { "type": "integer", "description": "Timeout in seconds (default: 30)" }
-                },
-                "required": ["command"]
             }),
         },
         // --- Inter-agent tools ---
@@ -1107,27 +796,6 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         // --- Image analysis tool ---
-        ToolDefinition {
-            name: "image_analyze".to_string(),
-            description: "Analyze an image file — returns format, dimensions, file size, and a base64 preview. For vision-model analysis, include a prompt.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Path to the image file" },
-                    "prompt": { "type": "string", "description": "Optional prompt for vision analysis (e.g., 'Describe what you see')" }
-                },
-                "required": ["path"]
-            }),
-        },
-        // --- Location tool ---
-        ToolDefinition {
-            name: "location_get".to_string(),
-            description: "Get approximate geographic location based on IP address. Returns city, country, coordinates, and timezone.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        },
         // --- Browser automation tools ---
         ToolDefinition {
             name: "browser_navigate".to_string(),
@@ -1230,46 +898,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         // --- Media understanding tools ---
-        ToolDefinition {
-            name: "media_describe".to_string(),
-            description: "Describe an image using a vision-capable LLM. Auto-selects the best available provider (Anthropic, OpenAI, or Gemini). Returns a text description of the image content.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Path to the image file (relative to workspace)" },
-                    "prompt": { "type": "string", "description": "Optional prompt to guide the description (e.g., 'Extract all text from this image')" }
-                },
-                "required": ["path"]
-            }),
-        },
-        ToolDefinition {
-            name: "media_transcribe".to_string(),
-            description: "Transcribe audio to text using speech-to-text. Auto-selects the best available provider (Groq Whisper or OpenAI Whisper). Returns the transcript.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Path to the audio file (relative to workspace). Supported: mp3, wav, ogg, flac, m4a, webm." },
-                    "language": { "type": "string", "description": "Optional ISO-639-1 language code (e.g., 'en', 'es', 'ja')" }
-                },
-                "required": ["path"]
-            }),
-        },
         // --- Image generation tool ---
-        ToolDefinition {
-            name: "image_generate".to_string(),
-            description: "Generate images from a text prompt using DALL-E 3, DALL-E 2, or GPT-Image-1. Requires OPENAI_API_KEY. Generated images are saved to the user's output directory.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "prompt": { "type": "string", "description": "Text description of the image to generate (max 4000 chars)" },
-                    "model": { "type": "string", "description": "Model to use: 'dall-e-3' (default), 'dall-e-2', or 'gpt-image-1'" },
-                    "size": { "type": "string", "description": "Image size: '1024x1024' (default), '1024x1792', '1792x1024', '256x256', '512x512'" },
-                    "quality": { "type": "string", "description": "Quality: 'hd' (default for dall-e-3) or 'standard'" },
-                    "count": { "type": "integer", "description": "Number of images to generate (1-4, default: 1). DALL-E 3 only supports 1." }
-                },
-                "required": ["prompt"]
-            }),
-        },
         // --- Cron scheduling tools ---
         ToolDefinition {
             name: "cron_create".to_string(),
@@ -1341,112 +970,8 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         // --- TTS/STT tools ---
-        ToolDefinition {
-            name: "text_to_speech".to_string(),
-            description: "Convert text to speech audio. Auto-selects OpenAI or ElevenLabs. Saves audio to the user's output directory.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "text": { "type": "string", "description": "The text to convert to speech (max 4096 chars)" },
-                    "voice": { "type": "string", "description": "Voice name: 'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer' (default: 'alloy')" },
-                    "format": { "type": "string", "description": "Output format: 'mp3', 'opus', 'aac', 'flac' (default: 'mp3')" }
-                },
-                "required": ["text"]
-            }),
-        },
-        ToolDefinition {
-            name: "speech_to_text".to_string(),
-            description: "Transcribe audio to text using speech-to-text. Auto-selects Groq Whisper or OpenAI Whisper. Supported formats: mp3, wav, ogg, flac, m4a, webm.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Path to the audio file (relative to workspace)" },
-                    "language": { "type": "string", "description": "Optional ISO-639-1 language code (e.g., 'en', 'es', 'ja')" }
-                },
-                "required": ["path"]
-            }),
-        },
         // --- Docker sandbox tool ---
-        ToolDefinition {
-            name: "docker_exec".to_string(),
-            description: "Execute a command inside a Docker container sandbox. Provides OS-level isolation with resource limits, network isolation, and capability dropping. Requires Docker to be installed and docker.enabled=true.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string", "description": "The command to execute inside the container" }
-                },
-                "required": ["command"]
-            }),
-        },
         // --- Persistent process tools ---
-        ToolDefinition {
-            name: "process_start".to_string(),
-            description: "Start a long-running process (REPL, server, watcher). Returns a process_id for subsequent poll/write/kill operations. Max 5 processes per agent.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": { "type": "string", "description": "The executable to run (e.g. 'python', 'node', 'npm')" },
-                    "args": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Command-line arguments (e.g. ['-i'] for interactive Python)"
-                    }
-                },
-                "required": ["command"]
-            }),
-        },
-        ToolDefinition {
-            name: "process_poll".to_string(),
-            description: "Read accumulated stdout/stderr from a running process. Non-blocking: returns whatever output has buffered since the last poll.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "process_id": { "type": "string", "description": "The process ID returned by process_start" }
-                },
-                "required": ["process_id"]
-            }),
-        },
-        ToolDefinition {
-            name: "process_write".to_string(),
-            description: "Write data to a running process's stdin. A newline is appended automatically if not present.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "process_id": { "type": "string", "description": "The process ID returned by process_start" },
-                    "data": { "type": "string", "description": "The data to write to stdin" }
-                },
-                "required": ["process_id", "data"]
-            }),
-        },
-        ToolDefinition {
-            name: "process_kill".to_string(),
-            description: "Terminate a running process and clean up its resources.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "process_id": { "type": "string", "description": "The process ID returned by process_start" }
-                },
-                "required": ["process_id"]
-            }),
-        },
-        ToolDefinition {
-            name: "process_list".to_string(),
-            description: "List all running processes for the current agent, including their IDs, commands, uptime, and alive status.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {}
-            }),
-        },
-        // --- System time tool ---
-        ToolDefinition {
-            name: "system_time".to_string(),
-            description: "Get the current date, time, and timezone. Returns ISO 8601 timestamp, Unix epoch seconds, and timezone info.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-        },
         // --- Clone management tools (system-level install/export) ---
         ToolDefinition {
             name: "clone_install".to_string(),
@@ -1487,18 +1012,6 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         // --- Canvas / A2UI tool ---
-        ToolDefinition {
-            name: "canvas_present".to_string(),
-            description: "Present an interactive HTML canvas to the user. The HTML is sanitized (no scripts, no event handlers) and saved to the workspace. The dashboard will render it in a panel. Use for rich data visualizations, formatted reports, or interactive UI.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "html": { "type": "string", "description": "The HTML content to present. Must not contain <script> tags, event handlers, or javascript: URLs." },
-                    "title": { "type": "string", "description": "Optional title for the canvas panel" }
-                },
-                "required": ["html"]
-            }),
-        },
         // --- File conversion tool ---
         ToolDefinition {
             name: "file_convert".to_string(),
@@ -1513,761 +1026,26 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "required": ["input_path", "output_format"]
             }),
         },
-    ]
+    ]);
+    defs
 }
 
 // ---------------------------------------------------------------------------
 // Filesystem tools
 // ---------------------------------------------------------------------------
 
-/// SECURITY: Reject path traversal attempts and absolute paths.
-/// Forbids `..` components, absolute paths (leading `/`), and root references.
+// Path validation helpers — delegates to shared utilities in tools/mod.rs
 fn validate_path(path: &str) -> Result<&str, String> {
-    for component in std::path::Path::new(path).components() {
-        match component {
-            std::path::Component::ParentDir => {
-                return Err("Path traversal denied: '..' components are forbidden".to_string());
-            }
-            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
-                return Err("Absolute paths are forbidden".to_string());
-            }
-            _ => {}
-        }
-    }
-    Ok(path)
+    crate::tools::validate_path(path)
 }
-
-/// SECURITY: Sanitize a string before using it as a single path component.
-/// Rejects empty strings, path separators, `..`, and other dangerous characters.
 fn sanitize_path_component(name: &str) -> Result<&str, String> {
-    if name.is_empty() {
-        return Err("Empty path component".to_string());
-    }
-    // Reject path separators and parent directory references
-    if name.contains('/') || name.contains('\\') || name == ".." || name.contains("..") {
-        return Err(format!("Invalid path component: {:?}", name));
-    }
-    // Reject any component that would be interpreted specially
-    for component in std::path::Path::new(name).components() {
-        match component {
-            std::path::Component::ParentDir => {
-                return Err(format!("Path traversal denied in component: {:?}", name));
-            }
-            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
-                return Err(format!("Absolute path denied in component: {:?}", name));
-            }
-            _ => {}
-        }
-    }
-    Ok(name)
+    crate::tools::sanitize_path_component(name)
 }
-
-/// Validate a clone name: only lowercase alphanumeric and hyphens allowed.
-/// Rejects empty names, names starting/ending with hyphens, and names with path separators.
 fn validate_clone_name(name: &str) -> Result<&str, String> {
-    if name.is_empty() {
-        return Err("Clone name cannot be empty".to_string());
-    }
-    if name.len() > 64 {
-        return Err("Clone name too long (max 64 characters)".to_string());
-    }
-    if name.starts_with('-') || name.ends_with('-') {
-        return Err("Clone name cannot start or end with a hyphen".to_string());
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-    {
-        return Err(
-            "Clone name must contain only lowercase letters, digits, and hyphens (e.g. 'customer-support')".to_string()
-        );
-    }
-    Ok(name)
+    crate::tools::validate_clone_name(name)
 }
-
-/// Validate a file path key inside clone files map — no traversal, no absolute paths.
 fn validate_clone_file_path(path: &str) -> Result<&str, String> {
-    if path.is_empty() {
-        return Err("File path cannot be empty".to_string());
-    }
-    if path.starts_with('/') || path.starts_with("..") {
-        return Err(format!(
-            "Invalid file path '{}': must be relative and not escape the archive",
-            path
-        ));
-    }
-    validate_path(path)
-}
-
-/// Resolve a file path through the workspace sandbox (if available) or legacy validation.
-fn resolve_file_path(raw_path: &str, workspace_root: Option<&Path>) -> Result<PathBuf, String> {
-    if let Some(root) = workspace_root {
-        crate::workspace_sandbox::resolve_sandbox_path(raw_path, root)
-    } else {
-        let _ = validate_path(raw_path)?;
-        Ok(PathBuf::from(raw_path))
-    }
-}
-
-/// Resolve a file read path through the workspace sandbox with sender_id-aware rewriting.
-fn resolve_file_path_for_read(
-    raw_path: &str,
-    workspace_root: Option<&Path>,
-    sender_id: Option<&str>,
-) -> Result<PathBuf, String> {
-    if let Some(root) = workspace_root {
-        crate::workspace_sandbox::resolve_sandbox_path_for_read(raw_path, root, sender_id)
-    } else {
-        let _ = validate_path(raw_path)?;
-        Ok(PathBuf::from(raw_path))
-    }
-}
-
-async fn tool_file_read(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-    sender_id: Option<&str>,
-) -> Result<String, String> {
-    let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = resolve_file_path_for_read(raw_path, workspace_root, sender_id)?;
-    tokio::fs::read_to_string(&resolved)
-        .await
-        .map_err(|e| format!("Failed to read file: {e}"))
-}
-
-async fn tool_file_write(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-    sender_id: Option<&str>,
-) -> Result<String, String> {
-    let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = if let Some(root) = workspace_root {
-        crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, sender_id)?
-    } else {
-        let _ = validate_path(raw_path)?;
-        PathBuf::from(raw_path)
-    };
-    let content = input["content"]
-        .as_str()
-        .ok_or("Missing 'content' parameter")?;
-    if let Some(parent) = resolved.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("Failed to create directories: {e}"))?;
-    }
-    tokio::fs::write(&resolved, content)
-        .await
-        .map_err(|e| format!("Failed to write file: {e}"))?;
-    Ok(format!(
-        "Successfully wrote {} bytes to {}",
-        content.len(),
-        resolved.display()
-    ))
-}
-
-async fn tool_file_list(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-    sender_id: Option<&str>,
-) -> Result<String, String> {
-    let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = resolve_file_path_for_read(raw_path, workspace_root, sender_id)?;
-    let mut entries = tokio::fs::read_dir(&resolved)
-        .await
-        .map_err(|e| format!("Failed to list directory: {e}"))?;
-    let mut files = Vec::new();
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| format!("Failed to read entry: {e}"))?
-    {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let metadata = entry.metadata().await;
-        let suffix = match metadata {
-            Ok(m) if m.is_dir() => "/",
-            _ => "",
-        };
-        files.push(format!("{name}{suffix}"));
-    }
-    files.sort();
-    Ok(files.join("\n"))
-}
-
-// ---------------------------------------------------------------------------
-// File conversion tool (Pandoc)
-// ---------------------------------------------------------------------------
-
-async fn tool_file_convert(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-    sender_id: Option<&str>,
-) -> Result<String, String> {
-    let raw_input_path = input["input_path"]
-        .as_str()
-        .ok_or("Missing 'input_path' parameter")?;
-    let output_format = input["output_format"]
-        .as_str()
-        .ok_or("Missing 'output_format' parameter")?;
-    let raw_output_path = input["output_path"].as_str();
-
-    // Resolve input path through workspace sandbox
-    let input_path = resolve_file_path(raw_input_path, workspace_root)?;
-    if !input_path.exists() {
-        return Err(format!("Input file not found: {}", input_path.display()));
-    }
-    let metadata = std::fs::metadata(&input_path)
-        .map_err(|e| format!("Cannot read input file metadata: {e}"))?;
-    if metadata.len() > 50 * 1024 * 1024 {
-        return Err(format!(
-            "Input file too large: {} bytes (max 50MB)",
-            metadata.len()
-        ));
-    }
-
-    // Determine output path
-    let output_path = if let Some(op) = raw_output_path {
-        if let Some(root) = workspace_root {
-            crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, sender_id)?
-        } else {
-            let _ = validate_path(op)?;
-            PathBuf::from(op)
-        }
-    } else {
-        // Auto-generate output path in users/<sender_id>/output/
-        let input_stem = input_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("converted");
-        let sender = sender_id.unwrap_or("unknown");
-        let output_dir = if let Some(root) = workspace_root {
-            root.join("users").join(sender).join("output")
-        } else {
-            PathBuf::from("output")
-        };
-        let _ = std::fs::create_dir_all(&output_dir);
-        let filename = format!("{input_stem}.{output_format}");
-        output_dir.join(filename)
-    };
-
-    // Build pandoc command: pandoc <input> -t <format> -o <output>
-    let mut cmd = tokio::process::Command::new("pandoc");
-    cmd.arg(&input_path)
-        .arg("-t")
-        .arg(output_format)
-        .arg("-o")
-        .arg(&output_path)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to run pandoc (is it installed?): {e}"))?;
-
-    let output = tokio::time::timeout(Duration::from_secs(60), child.wait_with_output())
-        .await
-        .map_err(|_| "Pandoc timed out after 60 seconds".to_string())
-        .and_then(|r| r.map_err(|e| format!("Pandoc process error: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(format!("Pandoc conversion failed: {stderr}"));
-    }
-
-    if !output_path.exists() {
-        return Err("Pandoc completed but no output file was produced".to_string());
-    }
-
-    let out_size = std::fs::metadata(&output_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
-
-    Ok(format!(
-        "Successfully converted {} → {}\nInput: {} ({} bytes)\nOutput: {} ({} bytes)",
-        raw_input_path,
-        output_format,
-        input_path.display(),
-        metadata.len(),
-        output_path.display(),
-        out_size,
-    ))
-}
-
-// ---------------------------------------------------------------------------
-// Knowledge tools (safe access to data/knowledge/)
-// ---------------------------------------------------------------------------
-
-async fn tool_knowledge_list(workspace_root: Option<&Path>) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_list requires a workspace root")?;
-    let knowledge_dir = root.join("data/knowledge");
-
-    if !knowledge_dir.exists() {
-        return Ok("No knowledge files found (data/knowledge/ does not exist).".to_string());
-    }
-
-    let mut entries = tokio::fs::read_dir(&knowledge_dir)
-        .await
-        .map_err(|e| format!("Failed to read knowledge directory: {e}"))?;
-
-    let mut files = Vec::new();
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(|e| format!("Failed to read entry: {e}"))?
-    {
-        let path = entry.path();
-        if path.extension().map(|e| e == "md").unwrap_or(false) {
-            let name = entry.file_name().to_string_lossy().to_string();
-            // Try to extract title from frontmatter
-            let title = tokio::fs::read_to_string(&path)
-                .await
-                .ok()
-                .and_then(|content| extract_knowledge_title(&content));
-            match title {
-                Some(t) => files.push(format!("- {} ({})", t, name)),
-                None => files.push(format!("- {}", name)),
-            }
-        }
-    }
-
-    files.sort();
-    if files.is_empty() {
-        Ok("No knowledge files found.".to_string())
-    } else {
-        Ok(format!(
-            "Knowledge files ({}):\n{}",
-            files.len(),
-            files.join("\n")
-        ))
-    }
-}
-
-async fn tool_knowledge_read(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let filename = input["filename"]
-        .as_str()
-        .ok_or("Missing 'filename' parameter")?;
-    let root = workspace_root.ok_or("knowledge_read requires a workspace root")?;
-
-    // Security: validate filename (no path traversal)
-    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
-        return Err("Invalid filename: path separators and '..' are forbidden".to_string());
-    }
-    if !filename.ends_with(".md") {
-        return Err("Only .md knowledge files can be read".to_string());
-    }
-
-    let path = root.join("data/knowledge").join(filename);
-
-    if !path.exists() {
-        return Err(format!("Knowledge file not found: {}", filename));
-    }
-
-    tokio::fs::read_to_string(&path)
-        .await
-        .map_err(|e| format!("Failed to read knowledge file: {e}"))
-}
-
-/// Extract `name` from YAML frontmatter of a knowledge file.
-fn extract_knowledge_title(content: &str) -> Option<String> {
-    let content = content.strip_prefix("---")?;
-    let end = content.find("---")?;
-    let frontmatter = &content[..end];
-
-    for line in frontmatter.lines() {
-        if let Some(value) = line.strip_prefix("name:") {
-            let value = value.trim().trim_matches('"').trim_matches('\'');
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
-        }
-    }
-    None
-}
-
-// ---------------------------------------------------------------------------
-// Patch tool
-// ---------------------------------------------------------------------------
-
-async fn tool_apply_patch(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let patch_str = input["patch"].as_str().ok_or("Missing 'patch' parameter")?;
-    let root = workspace_root.ok_or("apply_patch requires a workspace root")?;
-    let ops = crate::apply_patch::parse_patch(patch_str)?;
-    let result = crate::apply_patch::apply_patch(&ops, root).await;
-    if result.is_ok() {
-        Ok(result.summary())
-    } else {
-        Err(format!(
-            "Patch partially applied: {}. Errors: {}",
-            result.summary(),
-            result.errors.join("; ")
-        ))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Lifecycle system tools (clone knowledge management)
-// ---------------------------------------------------------------------------
-
-async fn tool_knowledge_lint(workspace_root: Option<&Path>) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_lint requires a workspace root")?;
-    let report = opencarrier_lifecycle::health::check_health(root);
-    if report.issues.is_empty() {
-        Ok("All knowledge files are healthy.".to_string())
-    } else {
-        let mut out = format!("Found {} issue(s):\n", report.issues.len());
-        for issue in &report.issues {
-            out.push_str(&format!(
-                "- [{:?}] {}: {}\n",
-                issue.severity, issue.filename, issue.message
-            ));
-        }
-        Ok(out)
-    }
-}
-
-async fn tool_knowledge_heal(workspace_root: Option<&Path>) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_heal requires a workspace root")?;
-    let report = opencarrier_lifecycle::health::check_health(root);
-    let fixes = opencarrier_lifecycle::health::auto_fix(root, &report);
-    Ok(format!("Fixed {} issue(s).", fixes))
-}
-
-/// Core logic for adding a knowledge file. Shared by tool and train versions.
-async fn knowledge_add_core(
-    root: &Path,
-    title: &str,
-    content: &str,
-    source_label: &str,
-) -> Result<String, String> {
-    let filename = opencarrier_lifecycle::evolution::sanitize_filename(title);
-    let knowledge_dir = root.join("data/knowledge");
-    tokio::fs::create_dir_all(&knowledge_dir)
-        .await
-        .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
-    let path = knowledge_dir.join(format!("{filename}.md"));
-    let full = format!(
-        "---\nname: {}\ndescription: {}\nconfidence: EXTRACTED\n---\n{}\n---\n",
-        title, title, content
-    );
-    tokio::fs::write(&path, &full)
-        .await
-        .map_err(|e| format!("Failed to write knowledge file: {e}"))?;
-    let _ = opencarrier_lifecycle::version::record_version(
-        root,
-        "create",
-        &format!("{filename}.md"),
-        None,
-        Some(&full),
-        source_label,
-    );
-    Ok(filename)
-}
-
-/// Core logic for importing knowledge entries. Shared by tool and train versions.
-async fn knowledge_import_core(
-    root: &Path,
-    data: &str,
-    data_type: &str,
-) -> Result<(Vec<String>, opencarrier_lifecycle::parsers::ParseQuality), String> {
-    let result = opencarrier_lifecycle::parsers::parse_import_data(data, data_type)
-        .map_err(|e| format!("Parse failed: {e}"))?;
-    let knowledge_dir = root.join("data/knowledge");
-    tokio::fs::create_dir_all(&knowledge_dir)
-        .await
-        .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
-    let mut saved = Vec::new();
-    for entry in &result.entries {
-        let filename = opencarrier_lifecycle::evolution::sanitize_filename(&entry.title);
-        let path = knowledge_dir.join(format!("{filename}.md"));
-        let full = format!(
-            "---\nname: {}\ndescription: {}\nconfidence: INFERRED\n---\n{}\n---\n",
-            entry.title, entry.title, entry.content
-        );
-        tokio::fs::write(&path, &full)
-            .await
-            .map_err(|e| format!("Failed to write {}: {e}", filename))?;
-        saved.push(filename);
-    }
-    Ok((saved, result.quality))
-}
-
-async fn tool_knowledge_add(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_add requires a workspace root")?;
-    let title = input["title"].as_str().ok_or("Missing 'title' parameter")?;
-    let content = input["content"]
-        .as_str()
-        .ok_or("Missing 'content' parameter")?;
-    let filename = knowledge_add_core(root, title, content, "tool").await?;
-    Ok(format!("Knowledge added: {filename}.md"))
-}
-
-async fn tool_knowledge_extract(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_extract requires a workspace root")?;
-    let title = input["title"]
-        .as_str()
-        .ok_or("Missing 'title' parameter")?;
-    let content = input["content"]
-        .as_str()
-        .ok_or("Missing 'content' parameter")?;
-
-    let candidate = opencarrier_lifecycle::evolution::KnowledgeCandidate {
-        title: title.to_string(),
-        content: content.to_string(),
-    };
-    let analysis = opencarrier_lifecycle::evolution::EvolutionAnalysis {
-        knowledge: vec![candidate],
-        gaps: vec![],
-        trivial: false,
-    };
-    let saved = opencarrier_lifecycle::evolution::apply_evolution(root, &analysis);
-    match saved.len() {
-        0 => Ok("No knowledge extracted (nothing new to save).".to_string()),
-        n => Ok(format!("Extracted {n} knowledge item(s) and updated index.")),
-    }
-}
-
-async fn tool_knowledge_index(workspace_root: Option<&Path>) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_index requires a workspace root")?;
-    opencarrier_lifecycle::evolution::update_memory_index(root)
-        .map_err(|e| format!("Failed to rebuild index: {e}"))?;
-    Ok("Knowledge index (MEMORY.md) rebuilt successfully.".to_string())
-}
-
-async fn tool_skill_create(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("skill_create requires a workspace root")?;
-    let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
-    let when_to_use = input["when_to_use"].as_str().unwrap_or("");
-    let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
-    let allowed_tools = input["allowed_tools"].as_str().unwrap_or("");
-
-    let skills_dir = root.join("skills");
-    tokio::fs::create_dir_all(&skills_dir)
-        .await
-        .map_err(|e| format!("Failed to create skills dir: {e}"))?;
-
-    let filename = opencarrier_lifecycle::evolution::sanitize_filename(name);
-    let path = skills_dir.join(format!("{filename}.md"));
-
-    if path.exists() {
-        return Err(format!(
-            "Skill '{name}' already exists. Use skill_update to modify it."
-        ));
-    }
-
-    let mut frontmatter = format!("---\nname: {name}\n");
-    if !when_to_use.is_empty() {
-        frontmatter.push_str(&format!("when_to_use: {when_to_use}\n"));
-    }
-    if !allowed_tools.is_empty() {
-        frontmatter.push_str(&format!("allowed_tools: {allowed_tools}\n"));
-    }
-    frontmatter.push_str("---\n");
-
-    let full = format!("{frontmatter}\n{body}");
-    tokio::fs::write(&path, &full)
-        .await
-        .map_err(|e| format!("Failed to write skill: {e}"))?;
-
-    Ok(format!("Skill '{name}' created successfully."))
-}
-
-async fn tool_skill_update(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("skill_update requires a workspace root")?;
-    let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
-    let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
-
-    let skills_dir = root.join("skills");
-    let filename = opencarrier_lifecycle::evolution::sanitize_filename(name);
-    let flat_path = skills_dir.join(format!("{filename}.md"));
-    let dir_path = skills_dir.join(&filename).join("SKILL.md");
-
-    let target = if flat_path.exists() {
-        flat_path
-    } else if dir_path.exists() {
-        dir_path
-    } else {
-        return Err(format!("Skill '{name}' not found."));
-    };
-
-    let existing = tokio::fs::read_to_string(&target)
-        .await
-        .map_err(|e| format!("Failed to read skill: {e}"))?;
-
-    let updated = if let Some(rest) = existing.strip_prefix("---") {
-        if let Some(end) = rest.find("---") {
-            let fm_end = end + 6;
-            format!("{}\n{}", &existing[..fm_end].trim_end(), body)
-        } else {
-            body.to_string()
-        }
-    } else {
-        body.to_string()
-    };
-
-    tokio::fs::write(&target, &updated)
-        .await
-        .map_err(|e| format!("Failed to write skill: {e}"))?;
-
-    Ok(format!("Skill '{name}' updated successfully."))
-}
-
-async fn tool_skill_load(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("skill_load requires a workspace root")?;
-    let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
-
-    let skills_dir = root.join("skills");
-    let filename = opencarrier_lifecycle::evolution::sanitize_filename(name);
-    let flat_path = skills_dir.join(format!("{filename}.md"));
-    let dir_path = skills_dir.join(&filename).join("SKILL.md");
-
-    if flat_path.exists() {
-        return tokio::fs::read_to_string(&flat_path)
-            .await
-            .map_err(|e| format!("Failed to read skill: {e}"));
-    }
-    if dir_path.exists() {
-        return tokio::fs::read_to_string(&dir_path)
-            .await
-            .map_err(|e| format!("Failed to read skill: {e}"));
-    }
-
-    // Fuzzy match
-    if skills_dir.exists() {
-        let mut entries = tokio::fs::read_dir(&skills_dir)
-            .await
-            .map_err(|e| format!("Failed to read skills dir: {e}"))?;
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| format!("Read error: {e}"))?
-        {
-            let entry_name = entry.file_name().to_string_lossy().to_string();
-            if entry_name
-                .to_lowercase()
-                .contains(&name.to_lowercase())
-            {
-                if entry_name.ends_with(".md") {
-                    return tokio::fs::read_to_string(entry.path())
-                        .await
-                        .map_err(|e| format!("Failed to read skill: {e}"));
-                } else if entry.path().is_dir() {
-                    let skill_md = entry.path().join("SKILL.md");
-                    if skill_md.exists() {
-                        return tokio::fs::read_to_string(&skill_md)
-                            .await
-                            .map_err(|e| format!("Failed to read skill: {e}"));
-                    }
-                }
-            }
-        }
-    }
-
-    Err(format!("Skill '{name}' not found."))
-}
-
-async fn tool_session_summarize(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
-    sender_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = kernel.ok_or("session_summarize requires kernel access")?;
-    let agent_id = caller_agent_id.ok_or("session_summarize requires caller agent ID")?;
-    let sid = sender_id.unwrap_or("");
-    let summary = input["summary"]
-        .as_str()
-        .ok_or("Missing 'summary' parameter")?;
-
-    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let key = format!("session_summary:{date}");
-
-    kh.memory_store(agent_id, sid, &key, serde_json::Value::String(summary.to_string()))
-        .map_err(|e| format!("Failed to store summary: {e}"))?;
-
-    Ok(format!("Session summary stored for {date}."))
-}
-
-async fn tool_knowledge_remove(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_remove requires a workspace root")?;
-    let query = input["filename"]
-        .as_str()
-        .ok_or("Missing 'filename' parameter")?;
-    let knowledge_dir = root.join("data/knowledge");
-    let target = find_knowledge_file(&knowledge_dir, query)?;
-    let before = tokio::fs::read_to_string(&target).await.ok();
-    tokio::fs::remove_file(&target)
-        .await
-        .map_err(|e| format!("Failed to delete: {e}"))?;
-    let name = target
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let _ = opencarrier_lifecycle::version::record_version(
-        root,
-        "delete",
-        &name,
-        before.as_deref(),
-        None,
-        "tool",
-    );
-    let _ = opencarrier_lifecycle::evolution::update_memory_index(root);
-    Ok(format!("Knowledge removed: {name}"))
-}
-
-async fn tool_knowledge_import(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_import requires a workspace root")?;
-    let data = input["data"].as_str().ok_or("Missing 'data' parameter")?;
-    let data_type = input["data_type"].as_str().unwrap_or("auto");
-    let (saved, quality) = knowledge_import_core(root, data, data_type).await?;
-    Ok(format!(
-        "Imported {} entries as knowledge files. Quality: {:?}",
-        saved.len(),
-        quality
-    ))
-}
-
-async fn tool_clone_evaluate(workspace_root: Option<&Path>) -> Result<String, String> {
-    let root = workspace_root.ok_or("clone_evaluate requires a workspace root")?;
-    let metrics = opencarrier_lifecycle::evaluate::compute_deterministic_metrics(root);
-    Ok(format!(
-        "Quality Score: {}/100 ({})\nKnowledge: {} files, {} bytes\nSkills: {}\nIdentity: SOUL={}, SP={}, MEMORY={}",
-        metrics.score,
-        metrics.grade,
-        metrics.knowledge_files,
-        metrics.knowledge_total_bytes,
-        metrics.skill_count,
-        metrics.has_soul,
-        metrics.has_system_prompt,
-        metrics.has_memory,
-    ))
+    crate::tools::validate_clone_file_path(path)
 }
 
 // ---------------------------------------------------------------------------
@@ -2393,7 +1171,7 @@ async fn tool_train_knowledge_add(
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
-    let filename = knowledge_add_core(&target_root, title, content, "train").await?;
+    let filename = crate::tools::knowledge::knowledge_add_core(&target_root, title, content, "train").await?;
     Ok(format!("Knowledge added to target: {filename}.md"))
 }
 
@@ -2405,7 +1183,7 @@ async fn tool_train_knowledge_import(
     let target_root = resolve_target_workspace(input, kernel)?;
     let data = input["data"].as_str().ok_or("Missing 'data' parameter")?;
     let data_type = input["data_type"].as_str().unwrap_or("auto");
-    let (saved, quality) = knowledge_import_core(&target_root, data, data_type).await?;
+    let (saved, quality) = crate::tools::knowledge::knowledge_import_core(&target_root, data, data_type).await?;
     Ok(format!(
         "Imported {} entries to target. Quality: {:?}",
         saved.len(),
@@ -2419,7 +1197,7 @@ async fn tool_train_knowledge_list(
     _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let target_root = resolve_target_workspace(input, kernel)?;
-    tool_knowledge_list(Some(&target_root)).await
+    crate::tools::knowledge::tool_knowledge_list(Some(&target_root)).await
 }
 
 async fn tool_train_knowledge_read(
@@ -2428,7 +1206,7 @@ async fn tool_train_knowledge_read(
     _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let target_root = resolve_target_workspace(input, kernel)?;
-    tool_knowledge_read(input, Some(&target_root)).await
+    crate::tools::knowledge::tool_knowledge_read(input, Some(&target_root)).await
 }
 
 async fn tool_train_knowledge_lint(
@@ -2437,7 +1215,7 @@ async fn tool_train_knowledge_lint(
     _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let target_root = resolve_target_workspace(input, kernel)?;
-    tool_knowledge_lint(Some(&target_root)).await
+    crate::tools::knowledge::tool_knowledge_lint(Some(&target_root)).await
 }
 
 async fn tool_train_knowledge_heal(
@@ -2446,7 +1224,7 @@ async fn tool_train_knowledge_heal(
     _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let target_root = resolve_target_workspace(input, kernel)?;
-    tool_knowledge_heal(Some(&target_root)).await
+    crate::tools::knowledge::tool_knowledge_heal(Some(&target_root)).await
 }
 
 async fn tool_train_evaluate(
@@ -2455,7 +1233,7 @@ async fn tool_train_evaluate(
     _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let target_root = resolve_target_workspace(input, kernel)?;
-    tool_clone_evaluate(Some(&target_root)).await
+    crate::tools::knowledge::tool_clone_evaluate(Some(&target_root)).await
 }
 
 // ---------------------------------------------------------------------------
@@ -2775,283 +1553,6 @@ async fn tool_clone_publish(
     ))
 }
 
-/// Fuzzy-match a knowledge file by name (exact → prefix → substring).
-fn find_knowledge_file(knowledge_dir: &Path, query: &str) -> Result<PathBuf, String> {
-    let entries = std::fs::read_dir(knowledge_dir).map_err(|e| e.to_string())?;
-    let query_lower = query.to_lowercase();
-    let query_no_ext = query_lower.trim_end_matches(".md");
-
-    let candidates: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|ext| ext == "md").unwrap_or(false))
-        .map(|e| e.path())
-        .collect();
-
-    // Exact match
-    if let Some(exact) = candidates.iter().find(|p| {
-        p.file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_lowercase()
-            == query_lower
-            || p.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_lowercase()
-                == format!("{query_no_ext}.md")
-    }) {
-        return Ok(exact.clone());
-    }
-
-    // Prefix match
-    if let Some(prefix) = candidates.iter().find(|p| {
-        p.file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_lowercase()
-            .starts_with(query_no_ext)
-    }) {
-        return Ok(prefix.clone());
-    }
-
-    // Substring match
-    if let Some(sub) = candidates.iter().find(|p| {
-        p.file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_lowercase()
-            .contains(query_no_ext)
-    }) {
-        return Ok(sub.clone());
-    }
-
-    Err(format!("No knowledge file matching '{}' found", query))
-}
-
-// ---------------------------------------------------------------------------
-// Web tools
-// ---------------------------------------------------------------------------
-
-/// Legacy web fetch (no SSRF protection, no readability). Used when WebToolsContext is unavailable.
-async fn tool_web_fetch_legacy(input: &serde_json::Value) -> Result<String, String> {
-    let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
-    // SECURITY: SSRF check — block internal/metadata URLs
-    crate::web_fetch::check_ssrf(url)?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
-    let status = resp.status();
-    // Reject responses larger than 10MB to prevent memory exhaustion
-    if let Some(len) = resp.content_length() {
-        if len > 10 * 1024 * 1024 {
-            return Err(format!("Response too large: {len} bytes (max 10MB)"));
-        }
-    }
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response body: {e}"))?;
-    let max_len = 50_000;
-    let truncated = if body.len() > max_len {
-        format!(
-            "{}... [truncated, {} total bytes]",
-            crate::str_utils::safe_truncate_str(&body, max_len),
-            body.len()
-        )
-    } else {
-        body
-    };
-    Ok(format!("HTTP {status}\n\n{truncated}"))
-}
-
-/// Legacy web search via DuckDuckGo HTML only. Used when WebToolsContext is unavailable.
-async fn tool_web_search_legacy(input: &serde_json::Value) -> Result<String, String> {
-    let query = input["query"].as_str().ok_or("Missing 'query' parameter")?;
-    let max_results = input["max_results"].as_u64().unwrap_or(5) as usize;
-
-    debug!(query, "Executing web search via Bing HTML");
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
-
-    let count = max_results.to_string();
-    let resp = client
-        .get("https://www.bing.com/search")
-        .query(&[("q", query), ("count", count.as_str())])
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        )
-        .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-        .send()
-        .await
-        .map_err(|e| format!("Search request failed: {e}"))?;
-
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read search response: {e}"))?;
-
-    let results = crate::web_search::parse_bing_results(&body, max_results);
-
-    if results.is_empty() {
-        return Ok(format!("No results found for '{query}'."));
-    }
-
-    let mut output = format!("Search results for '{query}':\n\n");
-    for (i, (title, url, snippet)) in results.iter().enumerate() {
-        output.push_str(&format!(
-            "{}. {}\n   URL: {}\n   {}\n\n",
-            i + 1,
-            title,
-            url,
-            snippet
-        ));
-    }
-
-    Ok(output)
-}
-
-// ---------------------------------------------------------------------------
-// Shell tool
-// ---------------------------------------------------------------------------
-
-async fn tool_shell_exec(
-    input: &serde_json::Value,
-    allowed_env: &[String],
-    workspace_root: Option<&Path>,
-    exec_policy: Option<&opencarrier_types::config::ExecPolicy>,
-) -> Result<String, String> {
-    let command = input["command"]
-        .as_str()
-        .ok_or("Missing 'command' parameter")?;
-    // Use LLM-specified timeout, or fall back to exec policy timeout, or default 30s
-    let policy_timeout = exec_policy.map(|p| p.timeout_secs).unwrap_or(30);
-    let timeout_secs = input["timeout_seconds"].as_u64().unwrap_or(policy_timeout);
-
-    // SECURITY: Determine execution strategy based on exec policy.
-    //
-    // In Allowlist mode (default): Use direct execution via shlex argv splitting.
-    // This avoids invoking a shell interpreter, which eliminates an entire class
-    // of injection attacks (encoding tricks, $IFS, glob expansion, etc.).
-    //
-    // In Full mode: User explicitly opted into unrestricted shell access,
-    // so we use sh -c / cmd /C as before.
-    let use_direct_exec = exec_policy
-        .map(|p| p.mode == opencarrier_types::config::ExecSecurityMode::Allowlist)
-        .unwrap_or(true); // Default to safe mode
-
-    let mut cmd = if use_direct_exec {
-        // SAFE PATH: Split command into argv using POSIX shell lexer rules,
-        // then execute the binary directly — no shell interpreter involved.
-        let argv = shlex::split(command).ok_or_else(|| {
-            "Command contains unmatched quotes or invalid shell syntax".to_string()
-        })?;
-        if argv.is_empty() {
-            return Err("Empty command after parsing".to_string());
-        }
-        let mut c = tokio::process::Command::new(&argv[0]);
-        if argv.len() > 1 {
-            c.args(&argv[1..]);
-        }
-        c
-    } else {
-        // UNSAFE PATH: Full mode — user explicitly opted in to shell interpretation.
-        // Shell resolution: prefer sh (Git Bash/MSYS2) on Windows.
-        #[cfg(windows)]
-        let git_sh: Option<&str> = {
-            const SH_PATHS: &[&str] = &[
-                "C:\\Program Files\\Git\\usr\\bin\\sh.exe",
-                "C:\\Program Files (x86)\\Git\\usr\\bin\\sh.exe",
-            ];
-            SH_PATHS
-                .iter()
-                .copied()
-                .find(|p| std::path::Path::new(p).exists())
-        };
-        let (shell, shell_arg) = if cfg!(windows) {
-            #[cfg(windows)]
-            {
-                if let Some(sh) = git_sh {
-                    (sh, "-c")
-                } else {
-                    ("cmd", "/C")
-                }
-            }
-            #[cfg(not(windows))]
-            {
-                ("sh", "-c")
-            }
-        } else {
-            ("sh", "-c")
-        };
-        let mut c = tokio::process::Command::new(shell);
-        c.arg(shell_arg).arg(command);
-        c
-    };
-
-    // Set working directory to agent workspace so files are created there
-    if let Some(ws) = workspace_root {
-        cmd.current_dir(ws);
-    }
-
-    // SECURITY: Isolate environment to prevent credential leakage.
-    // Hand settings may grant access to specific provider API keys.
-    crate::subprocess_sandbox::sandbox_command(&mut cmd, allowed_env);
-
-    // Ensure UTF-8 output on Windows
-    #[cfg(windows)]
-    cmd.env("PYTHONIOENCODING", "utf-8");
-
-    // Prevent child from inheriting stdin (avoids blocking on Windows)
-    cmd.stdin(std::process::Stdio::null());
-
-    let result =
-        tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output()).await;
-
-    match result {
-        Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let exit_code = output.status.code().unwrap_or(-1);
-
-            // Truncate very long outputs to prevent memory issues
-            let max_output = 100_000;
-            let stdout_str = if stdout.len() > max_output {
-                format!(
-                    "{}...\n[truncated, {} total bytes]",
-                    crate::str_utils::safe_truncate_str(&stdout, max_output),
-                    stdout.len()
-                )
-            } else {
-                stdout.to_string()
-            };
-            let stderr_str = if stderr.len() > max_output {
-                format!(
-                    "{}...\n[truncated, {} total bytes]",
-                    crate::str_utils::safe_truncate_str(&stderr, max_output),
-                    stderr.len()
-                )
-            } else {
-                stderr.to_string()
-            };
-
-            Ok(format!(
-                "Exit code: {exit_code}\n\nSTDOUT:\n{stdout_str}\nSTDERR:\n{stderr_str}"
-            ))
-        }
-        Ok(Err(e)) => Err(format!("Failed to execute command: {e}")),
-        Err(_) => Err(format!("Command timed out after {timeout_secs}s")),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Inter-agent tools
@@ -3788,846 +2289,31 @@ async fn tool_a2a_send(
     serde_json::to_string_pretty(&task).map_err(|e| format!("Serialization error: {e}"))
 }
 
-// ---------------------------------------------------------------------------
-// Image analysis tool
-// ---------------------------------------------------------------------------
-
-async fn tool_image_analyze(input: &serde_json::Value) -> Result<String, String> {
-    let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let prompt = input["prompt"].as_str().unwrap_or("");
-
-    let data = tokio::fs::read(path)
-        .await
-        .map_err(|e| format!("Failed to read image '{path}': {e}"))?;
-
-    let file_size = data.len();
-
-    // Detect image format from magic bytes
-    let format = detect_image_format(&data);
-
-    // Extract dimensions for common formats
-    let dimensions = extract_image_dimensions(&data, &format);
-
-    // Base64-encode (truncate for very large images in the response)
-    let base64_preview = if file_size <= 512 * 1024 {
-        // Under 512KB — include full base64
-        use base64::Engine;
-        base64::engine::general_purpose::STANDARD.encode(&data)
-    } else {
-        // Over 512KB — include first 64KB preview
-        use base64::Engine;
-        let preview_bytes = &data[..64 * 1024];
-        format!(
-            "{}... [truncated, {} total bytes]",
-            base64::engine::general_purpose::STANDARD.encode(preview_bytes),
-            file_size
-        )
-    };
-
-    let mut result = serde_json::json!({
-        "path": path,
-        "format": format,
-        "file_size_bytes": file_size,
-        "file_size_human": format_file_size(file_size),
-    });
-
-    if let Some((w, h)) = dimensions {
-        result["width"] = serde_json::json!(w);
-        result["height"] = serde_json::json!(h);
-    }
-
-    if !prompt.is_empty() {
-        result["prompt"] = serde_json::json!(prompt);
-        result["note"] = serde_json::json!(
-            "Vision analysis requires a vision-capable LLM. The base64 data is included for downstream processing."
-        );
-    }
-
-    result["base64_preview"] = serde_json::json!(base64_preview);
-
-    serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
-}
-
-/// Detect image format from magic bytes.
-fn detect_image_format(data: &[u8]) -> String {
-    if data.len() < 4 {
-        return "unknown".to_string();
-    }
-    if data.starts_with(b"\x89PNG") {
-        "png".to_string()
-    } else if data.starts_with(b"\xFF\xD8\xFF") {
-        "jpeg".to_string()
-    } else if data.starts_with(b"GIF8") {
-        "gif".to_string()
-    } else if data.starts_with(b"RIFF") && data.len() > 12 && &data[8..12] == b"WEBP" {
-        "webp".to_string()
-    } else if data.starts_with(b"BM") {
-        "bmp".to_string()
-    } else if data.starts_with(b"\x00\x00\x01\x00") {
-        "ico".to_string()
-    } else {
-        "unknown".to_string()
-    }
-}
-
-/// Extract image dimensions from common formats.
-fn extract_image_dimensions(data: &[u8], format: &str) -> Option<(u32, u32)> {
-    match format {
-        "png" => {
-            // PNG: IHDR chunk starts at byte 16, width at 16-19, height at 20-23
-            if data.len() >= 24 {
-                let w = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
-                let h = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
-                Some((w, h))
-            } else {
-                None
-            }
-        }
-        "gif" => {
-            // GIF: width at bytes 6-7, height at bytes 8-9 (little-endian)
-            if data.len() >= 10 {
-                let w = u16::from_le_bytes([data[6], data[7]]) as u32;
-                let h = u16::from_le_bytes([data[8], data[9]]) as u32;
-                Some((w, h))
-            } else {
-                None
-            }
-        }
-        "bmp" => {
-            // BMP: width at bytes 18-21, height at bytes 22-25 (little-endian)
-            if data.len() >= 26 {
-                let w = u32::from_le_bytes([data[18], data[19], data[20], data[21]]);
-                let h = u32::from_le_bytes([data[22], data[23], data[24], data[25]]);
-                Some((w, h))
-            } else {
-                None
-            }
-        }
-        "jpeg" => {
-            // JPEG: scan for SOF0 marker (0xFF 0xC0) to find dimensions
-            extract_jpeg_dimensions(data)
-        }
-        _ => None,
-    }
-}
-
-/// Extract JPEG dimensions by scanning for SOF markers.
-fn extract_jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
-    let mut i = 2; // Skip SOI marker
-    while i + 1 < data.len() {
-        if data[i] != 0xFF {
-            i += 1;
-            continue;
-        }
-        let marker = data[i + 1];
-        // SOF0-SOF3 markers contain dimensions
-        if (0xC0..=0xC3).contains(&marker) && i + 9 < data.len() {
-            let h = u16::from_be_bytes([data[i + 5], data[i + 6]]) as u32;
-            let w = u16::from_be_bytes([data[i + 7], data[i + 8]]) as u32;
-            return Some((w, h));
-        }
-        if i + 3 < data.len() {
-            let seg_len = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
-            i += 2 + seg_len;
-        } else {
-            break;
-        }
-    }
-    None
-}
-
-/// Format file size in human-readable form.
-fn format_file_size(bytes: usize) -> String {
-    if bytes < 1024 {
-        format!("{bytes} B")
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Location tool
-// ---------------------------------------------------------------------------
-
-async fn tool_location_get() -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
-
-    // Use ip-api.com (free, no API key, JSON response)
-    let resp = client
-        .get("https://ip-api.com/json/?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,query")
-        .header("User-Agent", format!("OpenCarrier/{}", env!("CARGO_PKG_VERSION")))
-        .send()
-        .await
-        .map_err(|e| format!("Location request failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("Location API returned {}", resp.status()));
-    }
-
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse location response: {e}"))?;
-
-    if body["status"].as_str() != Some("success") {
-        let msg = body["message"].as_str().unwrap_or("Unknown error");
-        return Err(format!("Location lookup failed: {msg}"));
-    }
-
-    let result = serde_json::json!({
-        "lat": body["lat"],
-        "lon": body["lon"],
-        "city": body["city"],
-        "region": body["regionName"],
-        "country": body["country"],
-        "zip": body["zip"],
-        "timezone": body["timezone"],
-        "isp": body["isp"],
-        "ip": body["query"],
-    });
-
-    serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
-}
-
-// ---------------------------------------------------------------------------
-// System time tool
-// ---------------------------------------------------------------------------
-
-/// Return current date, time, timezone, and Unix epoch.
-fn tool_system_time() -> String {
-    let now_utc = chrono::Utc::now();
-    let now_local = chrono::Local::now();
-    let result = serde_json::json!({
-        "utc": now_utc.to_rfc3339(),
-        "local": now_local.to_rfc3339(),
-        "unix_epoch": now_utc.timestamp(),
-        "timezone": now_local.format("%Z").to_string(),
-        "utc_offset": now_local.format("%:z").to_string(),
-        "date": now_local.format("%Y-%m-%d").to_string(),
-        "time": now_local.format("%H:%M:%S").to_string(),
-        "day_of_week": now_local.format("%A").to_string(),
-    });
-    serde_json::to_string_pretty(&result).unwrap_or_else(|_| now_utc.to_rfc3339())
-}
-
-// ---------------------------------------------------------------------------
-// Media understanding tools
-// ---------------------------------------------------------------------------
-
-/// Describe an image using a vision-capable LLM through the Brain fallback chain.
-async fn tool_media_describe(
-    input: &serde_json::Value,
-    brain: Option<&Arc<dyn crate::llm_driver::Brain>>,
-) -> Result<String, String> {
-    use base64::Engine;
-    let brain = brain.ok_or("Brain not available. Check configuration.")?;
-    let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let prompt = input["prompt"].as_str().unwrap_or("Describe this image in detail.");
-    let _ = validate_path(path)?;
-
-    // Read image file
-    let data = tokio::fs::read(path)
-        .await
-        .map_err(|e| format!("Failed to read image file: {e}"))?;
-
-    // Detect MIME type from extension
-    let ext = std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let mime = match ext.as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
-        _ => return Err(format!("Unsupported image format: .{ext}")),
-    };
-
-    // Validate image size
-    let max_bytes = 5 * 1024 * 1024; // 5 MB
-    if data.len() > max_bytes {
-        return Err(format!(
-            "Image too large: {} bytes (max {} MB)",
-            data.len(),
-            max_bytes / (1024 * 1024)
-        ));
-    }
-
-    let base64_data = base64::engine::general_purpose::STANDARD.encode(&data);
-
-    // Build a CompletionRequest with the image for the vision modality
-    let request = crate::llm_driver::CompletionRequest {
-        model: String::new(), // brain sets this from the resolved endpoint
-        messages: vec![opencarrier_types::message::Message {
-            role: opencarrier_types::message::Role::User,
-            content: opencarrier_types::message::MessageContent::Blocks(vec![
-                opencarrier_types::message::ContentBlock::Image {
-                    media_type: mime.to_string(),
-                    data: base64_data,
-                },
-                opencarrier_types::message::ContentBlock::Text {
-                    text: prompt.to_string(),
-                    provider_metadata: None,
-                },
-            ]),
-        }],
-        tools: vec![],
-        max_tokens: 1024,
-        temperature: 0.3,
-        system: None,
-        thinking: None,
-    };
-
-    let response = brain
-        .complete("vision", request)
-        .await
-        .map_err(|e| format!("Vision LLM call failed: {e}"))?;
-
-    let description = response.text();
-    if description.is_empty() {
-        return Err("Vision model returned empty response".into());
-    }
-
-    let result = serde_json::json!({
-        "description": description,
-        "usage": {
-            "input_tokens": response.usage.input_tokens,
-            "output_tokens": response.usage.output_tokens,
-        },
-    });
-    serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
-}
-
-/// Transcribe audio to text using speech-to-text.
-async fn tool_media_transcribe(
-    input: &serde_json::Value,
-    media_engine: Option<&crate::media_understanding::MediaEngine>,
-) -> Result<String, String> {
-    use base64::Engine;
-    let engine = media_engine.ok_or("Media engine not available. Check media configuration.")?;
-    let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let _ = validate_path(path)?;
-
-    // Read audio file
-    let data = tokio::fs::read(path)
-        .await
-        .map_err(|e| format!("Failed to read audio file: {e}"))?;
-
-    // Detect MIME type from extension
-    let ext = std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let mime = match ext.as_str() {
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "ogg" => "audio/ogg",
-        "flac" => "audio/flac",
-        "m4a" => "audio/mp4",
-        "webm" => "audio/webm",
-        _ => return Err(format!("Unsupported audio format: .{ext}")),
-    };
-
-    let attachment = opencarrier_types::media::MediaAttachment {
-        media_type: opencarrier_types::media::MediaType::Audio,
-        mime_type: mime.to_string(),
-        source: opencarrier_types::media::MediaSource::Base64 {
-            data: base64::engine::general_purpose::STANDARD.encode(&data),
-            mime_type: mime.to_string(),
-        },
-        size_bytes: data.len() as u64,
-    };
-
-    let understanding = engine.transcribe_audio(&attachment).await?;
-    serde_json::to_string_pretty(&understanding).map_err(|e| format!("Serialize error: {e}"))
-}
-
-// ---------------------------------------------------------------------------
-// Image generation tool
-// ---------------------------------------------------------------------------
-
-/// Generate images from a text prompt.
-async fn tool_image_generate(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-    sender_id: Option<&str>,
-) -> Result<String, String> {
-    let prompt = input["prompt"]
-        .as_str()
-        .ok_or("Missing 'prompt' parameter")?;
-
-    let model_str = input["model"].as_str().unwrap_or("dall-e-3");
-    let model = match model_str {
-        "dall-e-3" | "dalle3" | "dalle-3" => opencarrier_types::media::ImageGenModel::DallE3,
-        "dall-e-2" | "dalle2" | "dalle-2" => opencarrier_types::media::ImageGenModel::DallE2,
-        "gpt-image-1" | "gpt_image_1" => opencarrier_types::media::ImageGenModel::GptImage1,
-        _ => {
-            return Err(format!(
-                "Unknown image model: {model_str}. Use 'dall-e-3', 'dall-e-2', or 'gpt-image-1'."
-            ))
-        }
-    };
-
-    let size = input["size"].as_str().unwrap_or("1024x1024").to_string();
-    let quality = input["quality"].as_str().unwrap_or("hd").to_string();
-    let count = input["count"].as_u64().unwrap_or(1).min(4) as u8;
-
-    let request = opencarrier_types::media::ImageGenRequest {
-        prompt: prompt.to_string(),
-        model,
-        size,
-        quality,
-        count,
-    };
-
-    let result = crate::image_gen::generate_image(&request).await?;
-
-    // Save images to workspace if available
-    let saved_paths = if let Some(workspace) = workspace_root {
-        match crate::image_gen::save_images_to_workspace(&result, workspace, sender_id) {
-            Ok(paths) => paths,
-            Err(e) => {
-                warn!("Failed to save images to workspace: {e}");
-                Vec::new()
-            }
-        }
-    } else {
-        Vec::new()
-    };
-
-    // Also save to the uploads temp dir so the web UI can serve them via
-    // GET /api/uploads/{file_id}.  Each image gets a UUID filename.
-    let mut image_urls: Vec<String> = Vec::new();
-    {
-        use base64::Engine;
-        let upload_dir = std::env::temp_dir().join("opencarrier_uploads");
-        let _ = std::fs::create_dir_all(&upload_dir);
-        for img in &result.images {
-            let file_id = uuid::Uuid::new_v4().to_string();
-            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&img.data_base64)
-            {
-                let path = upload_dir.join(&file_id);
-                if std::fs::write(&path, &decoded).is_ok() {
-                    image_urls.push(format!("/api/uploads/{file_id}"));
-                }
-            }
-        }
-    }
-
-    // Build response — include image_urls so the dashboard can render <img> tags
-    let response = serde_json::json!({
-        "model": result.model,
-        "images_generated": result.images.len(),
-        "saved_to": saved_paths,
-        "revised_prompt": result.revised_prompt,
-        "image_urls": image_urls,
-    });
-
-    serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
-}
-
-// ---------------------------------------------------------------------------
-// TTS / STT tools
-// ---------------------------------------------------------------------------
-
-async fn tool_text_to_speech(
-    input: &serde_json::Value,
-    tts_engine: Option<&crate::tts::TtsEngine>,
-    workspace_root: Option<&Path>,
-    sender_id: Option<&str>,
-) -> Result<String, String> {
-    let engine =
-        tts_engine.ok_or("TTS engine not available. Ensure tts.enabled=true in config.")?;
-    let text = input["text"].as_str().ok_or("Missing 'text' parameter")?;
-    let voice = input["voice"].as_str();
-    let format = input["format"].as_str();
-
-    let result = engine.synthesize(text, voice, format).await?;
-
-    // Save audio to per-user output directory
-    let saved_path = if let Some(workspace) = workspace_root {
-        let sid = sender_id.ok_or("Cannot save audio: no sender context")?;
-        let output_dir = workspace.join("users").join(sid).join("output");
-        tokio::fs::create_dir_all(&output_dir)
-            .await
-            .map_err(|e| format!("Failed to create output dir: {e}"))?;
-
-        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
-        let filename = format!("tts_{timestamp}.{}", result.format);
-        let path = output_dir.join(&filename);
-
-        tokio::fs::write(&path, &result.audio_data)
-            .await
-            .map_err(|e| format!("Failed to write audio file: {e}"))?;
-
-        Some(path.display().to_string())
-    } else {
-        None
-    };
-
-    let response = serde_json::json!({
-        "saved_to": saved_path,
-        "format": result.format,
-        "provider": result.provider,
-        "duration_estimate_ms": result.duration_estimate_ms,
-        "size_bytes": result.audio_data.len(),
-    });
-
-    serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
-}
-
-async fn tool_speech_to_text(
-    input: &serde_json::Value,
-    media_engine: Option<&crate::media_understanding::MediaEngine>,
-    workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let engine = media_engine.ok_or("Media engine not available for speech-to-text")?;
-    let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let _language = input["language"].as_str();
-
-    let resolved = resolve_file_path(raw_path, workspace_root)?;
-
-    // Read the audio file
-    let data = tokio::fs::read(&resolved)
-        .await
-        .map_err(|e| format!("Failed to read audio file: {e}"))?;
-
-    // Determine MIME type from extension
-    let ext = resolved
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("mp3");
-    let mime_type = match ext {
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "ogg" => "audio/ogg",
-        "flac" => "audio/flac",
-        "m4a" => "audio/mp4",
-        "webm" => "audio/webm",
-        _ => "audio/mpeg",
-    };
-
-    use opencarrier_types::media::{MediaAttachment, MediaSource, MediaType};
-    let attachment = MediaAttachment {
-        media_type: MediaType::Audio,
-        mime_type: mime_type.to_string(),
-        source: MediaSource::Base64 {
-            data: {
-                use base64::Engine;
-                base64::engine::general_purpose::STANDARD.encode(&data)
-            },
-            mime_type: mime_type.to_string(),
-        },
-        size_bytes: data.len() as u64,
-    };
-
-    let understanding = engine.transcribe_audio(&attachment).await?;
-
-    let response = serde_json::json!({
-        "transcript": understanding.description,
-        "provider": understanding.provider,
-        "model": understanding.model,
-    });
-
-    serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
-}
-
-// ---------------------------------------------------------------------------
-// Docker sandbox tool
-// ---------------------------------------------------------------------------
-
-async fn tool_docker_exec(
-    input: &serde_json::Value,
-    docker_config: Option<&opencarrier_types::config::DockerSandboxConfig>,
-    workspace_root: Option<&Path>,
-    caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let config = docker_config.ok_or("Docker sandbox not configured")?;
-
-    if !config.enabled {
-        return Err("Docker sandbox is disabled. Set docker.enabled=true in config.".into());
-    }
-
-    let command = input["command"]
-        .as_str()
-        .ok_or("Missing 'command' parameter")?;
-
-    let workspace = workspace_root.ok_or("Docker exec requires a workspace directory")?;
-    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
-
-    // Check Docker availability
-    if !crate::docker_sandbox::is_docker_available().await {
-        return Err(
-            "Docker is not available on this system. Install Docker to use docker_exec.".into(),
-        );
-    }
-
-    // Create sandbox container
-    let container = crate::docker_sandbox::create_sandbox(config, agent_id, workspace).await?;
-
-    // Execute command with timeout
-    let timeout = std::time::Duration::from_secs(config.timeout_secs);
-    let result = crate::docker_sandbox::exec_in_sandbox(&container, command, timeout).await;
-
-    // Always destroy the container after execution
-    if let Err(e) = crate::docker_sandbox::destroy_sandbox(&container).await {
-        warn!("Failed to destroy Docker sandbox: {e}");
-    }
-
-    let exec_result = result?;
-
-    let response = serde_json::json!({
-        "exit_code": exec_result.exit_code,
-        "stdout": exec_result.stdout,
-        "stderr": exec_result.stderr,
-        "container_id": container.container_id,
-    });
-
-    serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
-}
-
-// ---------------------------------------------------------------------------
-// Persistent process tools
-// ---------------------------------------------------------------------------
-
-/// Start a long-running process (REPL, server, watcher).
-async fn tool_process_start(
-    input: &serde_json::Value,
-    pm: Option<&crate::process_manager::ProcessManager>,
-    caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let pm = pm.ok_or("Process manager not available")?;
-    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
-    let command = input["command"]
-        .as_str()
-        .ok_or("Missing 'command' parameter")?;
-    let args: Vec<String> = input["args"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let proc_id = pm.start(agent_id, command, &args).await?;
-    Ok(serde_json::json!({
-        "process_id": proc_id,
-        "status": "started"
-    })
-    .to_string())
-}
-
-/// Read accumulated stdout/stderr from a process (non-blocking drain).
-async fn tool_process_poll(
-    input: &serde_json::Value,
-    pm: Option<&crate::process_manager::ProcessManager>,
-    caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let pm = pm.ok_or("Process manager not available")?;
-    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
-    let proc_id = input["process_id"]
-        .as_str()
-        .ok_or("Missing 'process_id' parameter")?;
-    // Ownership: verify the process belongs to the caller
-    if !pm.list(agent_id).iter().any(|p| p.id == proc_id) {
-        return Err("Process not found or does not belong to you".to_string());
-    }
-    let (stdout, stderr) = pm.read(proc_id).await?;
-    Ok(serde_json::json!({
-        "stdout": stdout,
-        "stderr": stderr,
-    })
-    .to_string())
-}
-
-/// Write data to a process's stdin.
-async fn tool_process_write(
-    input: &serde_json::Value,
-    pm: Option<&crate::process_manager::ProcessManager>,
-    caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let pm = pm.ok_or("Process manager not available")?;
-    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
-    let proc_id = input["process_id"]
-        .as_str()
-        .ok_or("Missing 'process_id' parameter")?;
-    // Ownership: verify the process belongs to the caller
-    if !pm.list(agent_id).iter().any(|p| p.id == proc_id) {
-        return Err("Process not found or does not belong to you".to_string());
-    }
-    let data = input["data"].as_str().ok_or("Missing 'data' parameter")?;
-    // Always append newline if not present (common expectation for REPLs)
-    let data = if data.ends_with('\n') {
-        data.to_string()
-    } else {
-        format!("{data}\n")
-    };
-    pm.write(proc_id, &data).await?;
-    Ok(r#"{"status": "written"}"#.to_string())
-}
-
-/// Terminate a process.
-async fn tool_process_kill(
-    input: &serde_json::Value,
-    pm: Option<&crate::process_manager::ProcessManager>,
-    caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let pm = pm.ok_or("Process manager not available")?;
-    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
-    let proc_id = input["process_id"]
-        .as_str()
-        .ok_or("Missing 'process_id' parameter")?;
-    // Ownership: verify the process belongs to the caller
-    if !pm.list(agent_id).iter().any(|p| p.id == proc_id) {
-        return Err("Process not found or does not belong to you".to_string());
-    }
-    pm.kill(proc_id).await?;
-    Ok(r#"{"status": "killed"}"#.to_string())
-}
-
-/// List processes for the current agent.
-async fn tool_process_list(
-    pm: Option<&crate::process_manager::ProcessManager>,
-    caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let pm = pm.ok_or("Process manager not available")?;
-    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
-    let procs = pm.list(agent_id);
-    let list: Vec<serde_json::Value> = procs
-        .iter()
-        .map(|p| {
-            serde_json::json!({
-                "id": p.id,
-                "command": p.command,
-                "alive": p.alive,
-                "uptime_secs": p.uptime_secs,
-            })
-        })
-        .collect();
-    Ok(serde_json::Value::Array(list).to_string())
-}
-
-// ---------------------------------------------------------------------------
-// Canvas / A2UI tool
-// ---------------------------------------------------------------------------
-
-/// Sanitize HTML for canvas presentation.
-///
-/// SECURITY: Strips dangerous elements and attributes to prevent XSS:
-/// - Rejects <script>, <iframe>, <object>, <embed>, <applet> tags
-/// - Strips all on* event attributes (onclick, onload, onerror, etc.)
-/// - Strips javascript:, data:text/html, vbscript: URLs
-/// - Enforces size limit
-fn sanitize_canvas_html(html: &str, max_bytes: usize) -> Result<String, String> {
-    if html.is_empty() {
-        return Err("Empty HTML content".to_string());
-    }
-    if html.len() > max_bytes {
-        return Err(format!(
-            "HTML too large: {} bytes (max {})",
-            html.len(),
-            max_bytes
-        ));
-    }
-
-    let lower = html.to_lowercase();
-
-    // Reject dangerous tags
-    let dangerous_tags = [
-        "<script", "</script", "<iframe", "</iframe", "<object", "</object", "<embed", "<applet",
-        "</applet",
-    ];
-    for tag in &dangerous_tags {
-        if lower.contains(tag) {
-            return Err(format!("Forbidden HTML tag detected: {tag}"));
-        }
-    }
-
-    // Reject event handler attributes (on*)
-    // Match patterns like: onclick=, onload=, onerror=, onmouseover=, etc.
-    static EVENT_PATTERN: std::sync::LazyLock<regex_lite::Regex> =
-        std::sync::LazyLock::new(|| regex_lite::Regex::new(r"(?i)\bon[a-z]+\s*=").unwrap());
-    if EVENT_PATTERN.is_match(html) {
-        return Err(
-            "Forbidden event handler attribute detected (on* attributes are not allowed)"
-                .to_string(),
-        );
-    }
-
-    // Reject dangerous URL schemes
-    let dangerous_schemes = ["javascript:", "vbscript:", "data:text/html"];
-    for scheme in &dangerous_schemes {
-        if lower.contains(scheme) {
-            return Err(format!("Forbidden URL scheme detected: {scheme}"));
-        }
-    }
-
-    Ok(html.to_string())
-}
-
-/// Canvas presentation tool handler.
-async fn tool_canvas_present(
-    input: &serde_json::Value,
-    workspace_root: Option<&Path>,
-    sender_id: Option<&str>,
-) -> Result<String, String> {
-    let html = input["html"].as_str().ok_or("Missing 'html' parameter")?;
-    let title = input["title"].as_str().unwrap_or("Canvas");
-
-    // Use configured max from task-local (set by agent_loop from KernelConfig), or default 512KB.
-    let max_bytes = CANVAS_MAX_BYTES.try_with(|v| *v).unwrap_or(512 * 1024);
-    let sanitized = sanitize_canvas_html(html, max_bytes)?;
-
-    // Generate canvas ID
-    let canvas_id = uuid::Uuid::new_v4().to_string();
-
-    // Save to per-user output directory
-    let output_dir = if let Some(root) = workspace_root {
-        let sid = sender_id.ok_or("Cannot save canvas: no sender context")?;
-        root.join("users").join(sid).join("output")
-    } else {
-        return Err("Cannot save canvas: no workspace".into());
-    };
-    let _ = tokio::fs::create_dir_all(&output_dir).await;
-
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let filename = format!(
-        "canvas_{timestamp}_{}.html",
-        crate::str_utils::safe_truncate_str(&canvas_id, 8)
-    );
-    let filepath = output_dir.join(&filename);
-
-    // Write the full HTML document
-    let full_html = format!(
-        "<!DOCTYPE html>\n<html>\n<head><meta charset=\"utf-8\"><title>{title}</title></head>\n<body>\n{sanitized}\n</body>\n</html>"
-    );
-    tokio::fs::write(&filepath, &full_html)
-        .await
-        .map_err(|e| format!("Failed to save canvas: {e}"))?;
-
-    let response = serde_json::json!({
-        "canvas_id": canvas_id,
-        "title": title,
-        "saved_to": filepath.to_string_lossy(),
-        "size_bytes": full_html.len(),
-    });
-
-    serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Helper: empty ToolContext for tests that don't need any services.
+    fn noop_ctx() -> ToolContext<'static> {
+        ToolContext {
+            kernel: None,
+            allowed_tools: None,
+            caller_agent_id: None,
+            mcp_connections: None,
+            web_ctx: None,
+            browser_ctx: None,
+            allowed_env_vars: None,
+            workspace_root: None,
+            media_engine: None,
+            brain: None,
+            exec_policy: None,
+            tts_engine: None,
+            docker_config: None,
+            process_manager: None,
+            sender_id: None,
+        }
+    }
 
     #[test]
     fn test_builtin_tool_definitions() {
@@ -4740,21 +2426,7 @@ mod tests {
             "test-id",
             "file_read",
             &serde_json::json!({"path": bad_path.to_str().unwrap()}),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
+            &noop_ctx(),
         )
         .await;
         assert!(
@@ -4770,21 +2442,7 @@ mod tests {
             "test-id",
             "file_read",
             &serde_json::json!({"path": "../../etc/passwd"}),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
+            &noop_ctx(),
         )
         .await;
         assert!(result.is_error);
@@ -4797,21 +2455,7 @@ mod tests {
             "test-id",
             "file_write",
             &serde_json::json!({"path": "../../../tmp/evil.txt", "content": "pwned"}),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
+            &noop_ctx(),
         )
         .await;
         assert!(result.is_error);
@@ -4824,21 +2468,7 @@ mod tests {
             "test-id",
             "file_list",
             &serde_json::json!({"path": "/foo/../../etc"}),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
+            &noop_ctx(),
         )
         .await;
         assert!(result.is_error);
@@ -4855,21 +2485,7 @@ mod tests {
             "test-id",
             "web_search",
             &serde_json::json!({"query": "rust programming"}),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
+            &noop_ctx(),
         )
         .await;
         // web_search now attempts a real fetch; may succeed or fail depending on network
@@ -4882,21 +2498,7 @@ mod tests {
             "test-id",
             "nonexistent_tool",
             &serde_json::json!({}),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
+            &noop_ctx(),
         )
         .await;
         assert!(result.is_error);
@@ -4909,21 +2511,7 @@ mod tests {
             "test-id",
             "agent_list",
             &serde_json::json!({}),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
+            &noop_ctx(),
         )
         .await;
         assert!(result.is_error);
@@ -4933,25 +2521,15 @@ mod tests {
     #[tokio::test]
     async fn test_capability_enforcement_denied() {
         let allowed = vec!["file_read".to_string(), "file_list".to_string()];
+        let ctx = ToolContext {
+            allowed_tools: Some(&allowed),
+            ..noop_ctx()
+        };
         let result = execute_tool(
             "test-id",
             "shell_exec",
             &serde_json::json!({"command": "ls"}),
-            None,
-            Some(&allowed),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
+            &ctx,
         )
         .await;
         assert!(result.is_error);
@@ -4964,25 +2542,15 @@ mod tests {
         // Use a relative nonexistent path — workspace_root is None so validate_path
         // will check for traversal/absolute, and this relative path passes that check,
         // then fails at the actual read (file-not-found).
+        let ctx = ToolContext {
+            allowed_tools: Some(&allowed),
+            ..noop_ctx()
+        };
         let result = execute_tool(
             "test-id",
             "file_read",
             &serde_json::json!({"path": "opencarrier_test_nonexistent_12345/file.txt"}),
-            None,
-            Some(&allowed),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
+            &ctx,
         )
         .await;
         // Should fail for file-not-found, NOT for permission denied
@@ -5010,25 +2578,15 @@ mod tests {
             "file_list".to_string(),
             "shell_exec".to_string(),
         ];
+        let ctx = ToolContext {
+            allowed_tools: Some(&allowed),
+            ..noop_ctx()
+        };
         let result = execute_tool(
             "test-id",
             "fs-write", // LLM-hallucinated alias
             &serde_json::json!({"path": "/nonexistent/file.txt", "content": "hello"}),
-            None,
-            Some(&allowed),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
+            &ctx,
         )
         .await;
         // Should NOT be "Permission denied" — it should normalize to file_write
@@ -5044,25 +2602,15 @@ mod tests {
     async fn test_capability_enforcement_aliased_denied() {
         // Agent does NOT have file_write, and LLM calls "fs-write" — should be denied.
         let allowed = vec!["file_read".to_string()];
+        let ctx = ToolContext {
+            allowed_tools: Some(&allowed),
+            ..noop_ctx()
+        };
         let result = execute_tool(
             "test-id",
             "fs-write",
             &serde_json::json!({"path": "/tmp/test.txt", "content": "hello"}),
-            None,
-            Some(&allowed),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
+            &ctx,
         )
         .await;
         assert!(result.is_error);
@@ -5155,89 +2703,8 @@ mod tests {
         assert!(parse_schedule_to_cron("every 0 minutes").is_err());
     }
 
-    // --- Image format detection tests ---
-    #[test]
-    fn test_detect_image_format_png() {
-        let data = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x10\x00\x00\x00\x10";
-        assert_eq!(detect_image_format(data), "png");
-    }
 
-    #[test]
-    fn test_detect_image_format_jpeg() {
-        let data = b"\xFF\xD8\xFF\xE0\x00\x10JFIF";
-        assert_eq!(detect_image_format(data), "jpeg");
-    }
 
-    #[test]
-    fn test_detect_image_format_gif() {
-        let data = b"GIF89a\x10\x00\x10\x00";
-        assert_eq!(detect_image_format(data), "gif");
-    }
-
-    #[test]
-    fn test_detect_image_format_bmp() {
-        let data = b"BM\x00\x00\x00\x00";
-        assert_eq!(detect_image_format(data), "bmp");
-    }
-
-    #[test]
-    fn test_detect_image_format_unknown() {
-        let data = b"\x00\x00\x00\x00";
-        assert_eq!(detect_image_format(data), "unknown");
-    }
-
-    #[test]
-    fn test_extract_png_dimensions() {
-        // Minimal PNG header: signature (8) + IHDR length (4) + "IHDR" (4) + width (4) + height (4)
-        let mut data = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]; // signature
-        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x0D]); // IHDR length
-        data.extend_from_slice(b"IHDR"); // chunk type
-        data.extend_from_slice(&640u32.to_be_bytes()); // width
-        data.extend_from_slice(&480u32.to_be_bytes()); // height
-        assert_eq!(extract_image_dimensions(&data, "png"), Some((640, 480)));
-    }
-
-    #[test]
-    fn test_extract_gif_dimensions() {
-        let mut data = b"GIF89a".to_vec();
-        data.extend_from_slice(&320u16.to_le_bytes()); // width
-        data.extend_from_slice(&240u16.to_le_bytes()); // height
-        assert_eq!(extract_image_dimensions(&data, "gif"), Some((320, 240)));
-    }
-
-    #[test]
-    fn test_format_file_size() {
-        assert_eq!(format_file_size(500), "500 B");
-        assert_eq!(format_file_size(1536), "1.5 KB");
-        assert_eq!(format_file_size(2 * 1024 * 1024), "2.0 MB");
-    }
-
-    #[tokio::test]
-    async fn test_image_analyze_missing_file() {
-        let result = execute_tool(
-            "test-id",
-            "image_analyze",
-            &serde_json::json!({"path": "/nonexistent/image.png"}),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
-        )
-        .await;
-        assert!(result.is_error);
-        assert!(result.content.contains("Failed to read"));
-    }
 
     #[test]
     fn test_depth_limit_constant() {
@@ -5264,112 +2731,11 @@ mod tests {
             "test-id",
             "schedule_list",
             &serde_json::json!({}),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None, // media_engine
-            None, // exec_policy
-            None, // tts_engine
-            None, // docker_config
-            None, // process_manager
-            None, // sender_id
+            &noop_ctx(),
         )
         .await;
         assert!(result.is_error);
         assert!(result.content.contains("Kernel handle not available"));
     }
 
-    // ─── Canvas / A2UI tests ────────────────────────────────────────
-
-    #[test]
-    fn test_sanitize_canvas_basic_html() {
-        let html = "<h1>Hello World</h1><p>This is a test.</p>";
-        let result = sanitize_canvas_html(html, 512 * 1024);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), html);
-    }
-
-    #[test]
-    fn test_sanitize_canvas_rejects_script() {
-        let html = "<div><script>alert('xss')</script></div>";
-        let result = sanitize_canvas_html(html, 512 * 1024);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("script"));
-    }
-
-    #[test]
-    fn test_sanitize_canvas_rejects_iframe() {
-        let html = "<iframe src='https://evil.com'></iframe>";
-        let result = sanitize_canvas_html(html, 512 * 1024);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("iframe"));
-    }
-
-    #[test]
-    fn test_sanitize_canvas_rejects_event_handler() {
-        let html = "<div onclick=\"alert('xss')\">click me</div>";
-        let result = sanitize_canvas_html(html, 512 * 1024);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("event handler"));
-    }
-
-    #[test]
-    fn test_sanitize_canvas_rejects_onload() {
-        let html = "<img src='x' onerror = \"alert(1)\">";
-        let result = sanitize_canvas_html(html, 512 * 1024);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_sanitize_canvas_rejects_javascript_url() {
-        let html = "<a href=\"javascript:alert('xss')\">click</a>";
-        let result = sanitize_canvas_html(html, 512 * 1024);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("javascript:"));
-    }
-
-    #[test]
-    fn test_sanitize_canvas_rejects_data_html() {
-        let html = "<a href=\"data:text/html,<script>alert(1)</script>\">x</a>";
-        let result = sanitize_canvas_html(html, 512 * 1024);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_sanitize_canvas_rejects_empty() {
-        let result = sanitize_canvas_html("", 512 * 1024);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Empty"));
-    }
-
-    #[test]
-    fn test_sanitize_canvas_size_limit() {
-        let html = "x".repeat(1024);
-        let result = sanitize_canvas_html(&html, 100);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("too large"));
-    }
-
-    #[tokio::test]
-    async fn test_canvas_present_tool() {
-        let input = serde_json::json!({
-            "html": "<h1>Test Canvas</h1><p>Hello world</p>",
-            "title": "Test"
-        });
-        let tmp = std::env::temp_dir().join("opencarrier_canvas_test");
-        let _ = std::fs::create_dir_all(&tmp);
-        let result = tool_canvas_present(&input, Some(tmp.as_path()), Some("test-user")).await;
-        assert!(result.is_ok());
-        let output: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
-        assert!(output["canvas_id"].is_string());
-        assert_eq!(output["title"], "Test");
-        // Cleanup
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
 }
