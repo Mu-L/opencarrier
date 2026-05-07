@@ -3,11 +3,16 @@
 //! Contains drivers for Anthropic Claude, Google Gemini, OpenAI-compatible APIs, and more.
 //! Supports: Anthropic, Gemini, OpenAI, Groq, OpenRouter, DeepSeek, Together,
 //! Mistral, Fireworks, Ollama, vLLM, Chutes.ai, Cloud Proxy, and any OpenAI-compatible endpoint.
+//! Also: DashScope (TTS/image/video) and Kling (video/image with JWT auth).
 
 pub mod anthropic;
 pub mod claude_code;
+pub mod dashscope_image;
+pub mod dashscope_tts;
+pub mod dashscope_video;
 pub mod fallback;
 pub mod gemini;
+pub mod kling;
 pub mod openai;
 pub mod qwen_code;
 
@@ -77,12 +82,59 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
                 config.auth_header,
             )))
         }
-        ApiFormat::DashScopeTts
-        | ApiFormat::DashScopeImage
-        | ApiFormat::DashScopeVideo
-        | ApiFormat::Kling => Err(LlmError::Config(format!(
-            "Format '{format}' driver not yet implemented"
-        ))),
+        ApiFormat::DashScopeTts => {
+            let api_key = config.api_key.clone().ok_or_else(|| {
+                LlmError::MissingApiKey("API key required for DashScope TTS format".to_string())
+            })?;
+            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
+                status: 0,
+                message: "base_url required for DashScope TTS format".to_string(),
+            })?;
+            Ok(Arc::new(dashscope_tts::DashScopeTtsDriver::new(api_key, base_url)))
+        }
+        ApiFormat::DashScopeImage => {
+            let api_key = config.api_key.clone().ok_or_else(|| {
+                LlmError::MissingApiKey("API key required for DashScope image format".to_string())
+            })?;
+            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
+                status: 0,
+                message: "base_url required for DashScope image format".to_string(),
+            })?;
+            Ok(Arc::new(dashscope_image::DashScopeImageDriver::new(api_key, base_url)))
+        }
+        ApiFormat::DashScopeVideo => {
+            let api_key = config.api_key.clone().ok_or_else(|| {
+                LlmError::MissingApiKey("API key required for DashScope video format".to_string())
+            })?;
+            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
+                status: 0,
+                message: "base_url required for DashScope video format".to_string(),
+            })?;
+            Ok(Arc::new(dashscope_video::DashScopeVideoDriver::new(api_key, base_url)))
+        }
+        ApiFormat::Kling => {
+            // Kling needs access_key + secret_key for JWT auth, passed via DriverConfig
+            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
+                status: 0,
+                message: "base_url required for Kling format".to_string(),
+            })?;
+            // access_key and secret_key are passed in api_key field as "ak:sk" format
+            // or separately if the kernel supports it
+            let combined = config.api_key.clone().ok_or_else(|| {
+                LlmError::MissingApiKey(
+                    "Kling requires access_key:secret_key in api_key field".to_string(),
+                )
+            })?;
+            let mut parts = combined.splitn(2, ':');
+            let access_key = parts.next().unwrap_or_default().to_string();
+            let secret_key = parts.next().unwrap_or_default().to_string();
+            if access_key.is_empty() || secret_key.is_empty() {
+                return Err(LlmError::Config(
+                    "Kling api_key must be in 'access_key:secret_key' format".to_string(),
+                ));
+            }
+            Ok(Arc::new(kling::KlingDriver::new(access_key, secret_key, base_url)))
+        }
     }
 }
 

@@ -2420,6 +2420,7 @@ dependencies = [
  "dirs",
  "futures",
  "hex",
+ "hmac",
  "libloading",
  "md-5",
  "opencarrier-clone",

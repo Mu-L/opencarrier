@@ -82,14 +82,17 @@ fn default_format() -> ApiFormat {
 
 /// API protocol format.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "lowercase")]
 pub enum ApiFormat {
     #[default]
     OpenAI,
     Anthropic,
     Gemini,
+    #[serde(rename = "dashscope_tts")]
     DashScopeTts,
+    #[serde(rename = "dashscope_image")]
     DashScopeImage,
+    #[serde(rename = "dashscope_video")]
     DashScopeVideo,
     Kling,
 }
