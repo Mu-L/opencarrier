@@ -1,29 +1,26 @@
 <body x-data="app">
 
 <!-- Auth Prompt -->
-<div x-show="$store.app.showAuthPrompt" x-cloak
+<div x-show="$store.app.showAuthPrompt" x-cloak x-data="{ u:'', p:'', k:'', err:'' }"
      style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:2rem;max-width:400px;width:90%">
-    <div x-show="$store.app.authMode === 'session'">
+    <form x-show="$store.app.authMode === 'session'" @submit.prevent="$store.app.sessionLogin(u,p); err=''">
       <h3 style="margin:0 0 0.5rem;font-size:1.1rem">登录</h3>
       <p style="color:var(--text-dim);font-size:0.85rem;margin:0 0 1rem">请输入管理面板的账号密码。</p>
-      <input type="text" x-model="$store.app._loginUser" placeholder="用户名" autocomplete="username"
+      <input type="text" x-model="u" placeholder="用户名" autocomplete="username" required
              style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.5rem">
-      <input type="password" x-model="$store.app._loginPass" placeholder="密码" autocomplete="current-password"
-             @keydown.enter="$store.app.sessionLogin($store.app._loginUser, $store.app._loginPass)"
+      <input type="password" x-model="p" placeholder="密码" autocomplete="current-password" required
              style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
-      <button @click="$store.app.sessionLogin($store.app._loginUser, $store.app._loginPass)"
-              style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">登录</button>
-    </div>
-    <div x-show="$store.app.authMode === 'apikey'">
+      <button type="submit" style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">登录</button>
+      <p x-show="err" x-text="err" style="color:var(--error);font-size:0.8rem;margin:0.5rem 0 0"></p>
+    </form>
+    <form x-show="$store.app.authMode === 'apikey'" @submit.prevent="$store.app.submitApiKey(k)">
       <h3 style="margin:0 0 0.5rem;font-size:1.1rem">需要 API 密钥</h3>
       <p style="color:var(--text-dim);font-size:0.85rem;margin:0 0 1rem">请输入 API 密钥。</p>
-      <input type="password" x-model="$store.app._apiKey" placeholder="输入 API 密钥..."
-             @keydown.enter="$store.app.submitApiKey($store.app._apiKey)"
+      <input type="password" x-model="k" placeholder="输入 API 密钥..." required
              style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
-      <button @click="$store.app.submitApiKey($store.app._apiKey)"
-              style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">解锁</button>
-    </div>
+      <button type="submit" style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">解锁</button>
+    </form>
   </div>
 </div>
 

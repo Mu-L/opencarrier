@@ -162,9 +162,6 @@ document.addEventListener('alpine:init', function() {
     sessionUser: null,
     userRole: null,
     tenantId: null,
-    _loginUser: '',
-    _loginPass: '',
-    _apiKey: '',
 
     isAdmin() {
       return this.userRole === 'admin';
