@@ -157,7 +157,7 @@ document.addEventListener('alpine:init', function() {
     pendingAgent: null,
     focusMode: localStorage.getItem('opencarrier-focus') === 'true',
     showOnboarding: false,
-    showAuthPrompt: true,
+    showAuthPrompt: false,
     authMode: 'session',
     sessionUser: null,
     userRole: null,
@@ -398,8 +398,6 @@ function app() {
       });
 
       // Initial data load
-      // Show auth prompt immediately — checkAuth() will hide it if already authenticated
-      Alpine.store('app').showAuthPrompt = true;
       this.pollStatus();
       Alpine.store('app').checkOnboarding();
       Alpine.store('app').checkAuth();
