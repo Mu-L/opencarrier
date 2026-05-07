@@ -413,11 +413,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       api('POST', '/api/bots/dingtalk/device-auth', {}).then(function(res){
         if (!res.auth_url) throw new Error('未返回授权链接');
         savePendingAuth({ platform: 'dingtalk', agentName: targetAgentName, sessionData: { session_id: res.session_id } });
-        // Show clickable auth link on page, don't navigate away
-        document.getElementById('auth-polling').innerHTML =
-          '<a href="' + esc(res.auth_url) + '" target="_blank" class="btn-primary" style="display:inline-block;text-decoration:none;margin-bottom:16px">点击完成钉钉授权</a>' +
-          '<p id="auth-status-text" style="font-size:14px;color:#666">授权完成后此页面会自动检测</p>' +
-          '<p id="auth-debug" style="font-size:11px;color:#bbb;margin-top:8px"></p>';
+        document.getElementById('auth-status-text').textContent = '正在等待钉钉授权...';
         pollDingtalk(res.session_id);
       }).catch(function(e){
         document.getElementById('auth-status-text').textContent = '错误: ' + (e.message || '生成链接失败');
