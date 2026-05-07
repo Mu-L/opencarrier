@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 .btn-primary:active{transform:translateY(0)}
 .btn-primary:disabled{background:#ccc;box-shadow:none;cursor:not-allowed;transform:none}
 
-/* Agent list (when no clone specified) */
+/* Agent list */
 .agent-list{width:100%;max-width:360px;margin-bottom:24px}
 .agent-list h3{font-size:14px;font-weight:600;color:#333;margin-bottom:12px}
 .agent-card{background:#fff;border-radius:14px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.05);cursor:pointer;transition:all .2s;display:flex;gap:14px;align-items:center;margin-bottom:10px}
@@ -36,26 +36,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 .agent-card .info h4{font-size:14px;font-weight:600;color:#333;margin-bottom:2px}
 .agent-card .info p{font-size:12px;color:#999;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-/* ── Phase 2: Platform Auth ── */
-.auth{align-items:center;justify-content:flex-start;padding:32px 24px;text-align:center;background:#fff}
+/* ── Phase 2: Auth (polling) ── */
+.auth{align-items:center;justify-content:center;padding:32px 24px;text-align:center;background:#fff}
 .auth h2{font-size:20px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
-.auth .sub{font-size:14px;color:#888;margin-bottom:20px}
-.auth-panel{display:none;width:100%;max-width:360px;margin:0 auto}
-.auth-panel.active{display:block}
-.qr-wrap{background:#fff;border-radius:16px;padding:24px;box-shadow:0 2px 12px rgba(0,0,0,.08);display:inline-block;margin-bottom:16px}
-.qr-wrap img{width:200px;height:200px;border-radius:8px;display:block}
-.qr-wrap canvas{border-radius:8px;display:block}
-.qr-hint{font-size:13px;color:#999;display:flex;align-items:center;justify-content:center;gap:6px}
-.qr-hint .pulse-dot{width:8px;height:8px;border-radius:50%;background:#07c160;animation:pulse 1.5s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.auth .sub{font-size:14px;color:#888;margin-bottom:24px}
+.auth-status{width:100%;max-width:300px;margin:0 auto}
+.spinner{width:40px;height:40px;border:3px solid #e0e0e0;border-top-color:#07c160;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.auth-status p{font-size:14px;color:#666;line-height:1.6}
 .auth-success{color:#07c160;font-size:16px;font-weight:600}
 .auth-success .check{font-size:48px;margin-bottom:8px;display:block}
-.auth-link{display:inline-block;margin:12px 0;padding:12px 20px;background:#f5f5f5;border-radius:12px;color:#333;font-size:14px;text-decoration:none;word-break:break-all;max-width:100%}
-.auth-link:hover{background:#eee}
-.status-feishu .pulse-dot{background:#3370ff}
-.status-dingtalk .pulse-dot{background:#0089ff}
-.status-wecom .pulse-dot{background:#07c160}
-.status-weixin .pulse-dot{background:#07c160}
 
 /* ── Phase 3: Done ── */
 .done{align-items:center;justify-content:center;padding:32px 24px;text-align:center;background:linear-gradient(160deg,#f0faf3 0%,#e8f5eb 50%,#f8faf9 100%)}
@@ -71,31 +61,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 </head>
 <body>
 
-<!-- === Phase 1: Clone Landing === -->
+<!-- === Phase 1: Landing === -->
 <div id="p1" class="phase landing active">
   <div id="p1-content"></div>
 </div>
 
-<!-- === Phase 2: Platform Auth === -->
+<!-- === Phase 2: Auth === -->
 <div id="p2" class="phase auth">
   <h2 id="auth-title">授权绑定</h2>
   <p class="sub" id="auth-sub">按提示完成授权，绑定你的 AI 分身</p>
-
-  <div class="auth-panel active" id="panel-weixin">
-    <div id="weixin-qr-area"><div class="qr-wrap"><div id="weixin-qr-img"></div></div><p class="qr-hint status-weixin" id="weixin-hint"><span class="pulse-dot"></span>请用微信扫描二维码</p></div>
-    <div id="weixin-success" class="auth-success hidden"><span class="check">✅</span><p>微信授权成功</p></div>
+  <div class="auth-status" id="auth-polling">
+    <div class="spinner"></div>
+    <p id="auth-status-text">正在获取授权链接...</p>
   </div>
-  <div class="auth-panel" id="panel-wecom">
-    <div id="wecom-qr-area"><div class="qr-wrap"><div id="wecom-qr-img"></div></div><p class="qr-hint status-wecom" id="wecom-hint"><span class="pulse-dot"></span>请用企业微信扫描或点击授权</p><a href="#" class="auth-link hidden" id="wecom-auth-link" target="_blank"></a></div>
-    <div id="wecom-success" class="auth-success hidden"><span class="check">✅</span><p>企业微信授权成功</p></div>
-  </div>
-  <div class="auth-panel" id="panel-feishu">
-    <div id="feishu-qr-area"><div class="qr-wrap"><div id="feishu-qr-img"></div></div><p class="qr-hint status-feishu" id="feishu-hint"><span class="pulse-dot"></span>请用飞书扫描或点击授权</p><a href="#" class="auth-link hidden" id="feishu-auth-link" target="_blank"></a></div>
-    <div id="feishu-success" class="auth-success hidden"><span class="check">✅</span><p>飞书授权成功</p></div>
-  </div>
-  <div class="auth-panel" id="panel-dingtalk">
-    <div id="dingtalk-qr-area"><div class="qr-wrap"><div id="dingtalk-qr-img"></div></div><p class="qr-hint status-dingtalk" id="dingtalk-hint"><span class="pulse-dot"></span>请用钉钉扫描或点击授权</p><a href="#" class="auth-link hidden" id="dingtalk-auth-link" target="_blank"></a></div>
-    <div id="dingtalk-success" class="auth-success hidden"><span class="check">✅</span><p>钉钉授权成功</p></div>
+  <div id="auth-success" class="auth-success hidden">
+    <span class="check">✅</span>
+    <p id="auth-success-text">授权成功</p>
   </div>
 </div>
 
@@ -114,21 +95,21 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   var cloneName = params.get('clone') || '';
   var activePlatform = '';
 
-  // Auto-detect platform from User-Agent
+  // UA detection — wxwork must come before MicroMessenger (WeChat Work UA has both)
   var ua = navigator.userAgent;
-  if (/MicroMessenger/i.test(ua)) activePlatform = 'weixin';
-  else if (/Feishu|Lark/i.test(ua)) activePlatform = 'feishu';
+  if (/wxwork/i.test(ua)) activePlatform = 'wecom';
+  else if (/MicroMessenger/i.test(ua)) activePlatform = 'weixin';
   else if (/DingTalk/i.test(ua)) activePlatform = 'dingtalk';
-  else if (/wxwork/i.test(ua)) activePlatform = 'wecom';
+  else if (/Feishu|Lark/i.test(ua)) activePlatform = 'feishu';
   else { try { activePlatform = localStorage.getItem('oc_active_platform') || ''; } catch(e) {} }
   if (!activePlatform) activePlatform = 'weixin';
-  var detectedPlatform = activePlatform; // remember what we auto-detected
 
   var currentBotId = '';
   var platformCredentials = {};
-  var targetAgentName = cloneName; // agent name to bind to
-  var cloneAccess = 'public'; // 'public' or 'private'
+  var targetAgentName = cloneName;
+  var cloneAccess = 'public';
   var accessVerified = false;
+  var pollTimer = null;
 
   var platformConfig = {
     weixin:  { label: '微信',     color: '#07c160' },
@@ -136,6 +117,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     feishu:  { label: '飞书',     color: '#3370ff' },
     dingtalk:{ label: '钉钉',     color: '#0089ff' },
   };
+
+  // ── localStorage ──
+  function savePendingAuth(state) {
+    try { localStorage.setItem('oc_pending_auth', JSON.stringify(state)); } catch(e) {}
+  }
+  function loadPendingAuth() {
+    try { var s = localStorage.getItem('oc_pending_auth'); return s ? JSON.parse(s) : null; } catch(e) { return null; }
+  }
+  function clearPendingAuth() {
+    try { localStorage.removeItem('oc_pending_auth'); } catch(e) {}
+  }
 
   // ── Helpers ──
   function esc(s) { var d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
@@ -168,13 +160,23 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     }).catch(function(e){ clearTimeout(timeout); throw e; });
   }
 
-  // ── Phase 1: Show clone info ──
+  function stopPoll() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
+
+  // ── Phase 1: Landing ──
   function initLanding() {
+    // Resume pending auth (user came back from platform auth page)
+    var pending = loadPendingAuth();
+    if (pending) {
+      targetAgentName = pending.agentName;
+      activePlatform = pending.platform;
+      resumeAuth(pending);
+      return;
+    }
+
     var el = document.getElementById('p1-content');
     var isPlatformBrowser = /MicroMessenger|Feishu|Lark|DingTalk|wxwork/i.test(ua);
 
     if (!isPlatformBrowser) {
-      // Not in a platform app browser — tell user to open on phone
       el.innerHTML =
         '<div class="logo">📱</div>' +
         '<h1>Open<span>Carrier</span></h1>' +
@@ -187,13 +189,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       return;
     }
 
-    // Clone name specified via URL — show that clone directly
     if (cloneName) {
       showCloneHero(el, cloneName);
       return;
     }
 
-    // No clone specified — fetch agent list and let user pick
     el.innerHTML =
       '<div class="logo">🤖</div>' +
       '<h1>Open<span>Carrier</span></h1>' +
@@ -256,23 +256,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     }).catch(function(){});
   }
 
-  // ── Phase 2: Platform Auth ──
-  var weixinStarted = false, weixinPollTimer = null, weixinHandled = false, weixinQrRaw = '';
-  var wecomStarted = false, wecomScode = '', wecomPollTimer = null, wecomHandled = false;
-  var feishuStarted = false, feishuSessionId = '', feishuPollTimer = null, feishuHandled = false, feishuPollInterval = 5000;
-  var dingtalkStarted = false, dingtalkSessionId = '', dingtalkPollTimer = null, dingtalkHandled = false, dingtalkPollInterval = 5000;
-
-  window.startAuth = function() {
-    if (!targetAgentName && !cloneName) { alert('分身名称缺失'); return; }
-    if (!targetAgentName) targetAgentName = cloneName;
-    if (cloneAccess === 'private' && !accessVerified) {
-      verifyPassword();
-      return;
-    }
-    showPhase(2);
-    startPlatformAuth(activePlatform);
-  };
-
+  // ── Password ──
   window.verifyPassword = function() {
     var pw = document.getElementById('clone-password').value.trim();
     if (!pw) return;
@@ -303,232 +287,163 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     });
   };
 
-  function stopPoll(t) { if (t) clearInterval(t); return null; }
+  // ── Auth ──
+  window.startAuth = function() {
+    if (!targetAgentName && !cloneName) { alert('分身名称缺失'); return; }
+    if (!targetAgentName) targetAgentName = cloneName;
+    if (cloneAccess === 'private' && !accessVerified) {
+      verifyPassword();
+      return;
+    }
+    beginAuth(activePlatform);
+  };
 
-  function startPlatformAuth(platform) {
-    activePlatform = platform;
+  function beginAuth(platform) {
+    showPhase(2);
     var cfg = platformConfig[platform] || {};
     document.getElementById('auth-title').textContent = cfg.label + '授权绑定';
-    document.getElementById('auth-sub').textContent = '按提示完成' + cfg.label + '授权，绑定你的 AI 分身';
-    document.querySelectorAll('.auth-panel').forEach(function(p){ p.classList.toggle('active', p.id === 'panel-' + platform); });
-    if (platform !== 'weixin') weixinPollTimer = stopPoll(weixinPollTimer);
-    if (platform !== 'wecom') wecomPollTimer = stopPoll(wecomPollTimer);
-    if (platform !== 'feishu') feishuPollTimer = stopPoll(feishuPollTimer);
-    if (platform !== 'dingtalk') dingtalkPollTimer = stopPoll(dingtalkPollTimer);
-    if (platform === 'weixin' && !weixinStarted) startWeixinAuth();
-    if (platform === 'wecom' && !wecomStarted) startWecomAuth();
-    if (platform === 'feishu' && !feishuStarted) startFeishuAuth();
-    if (platform === 'dingtalk' && !dingtalkStarted) startDingtalkAuth();
-  }
+    document.getElementById('auth-polling').classList.remove('hidden');
+    document.getElementById('auth-success').classList.add('hidden');
+    document.getElementById('auth-status-text').textContent = '正在获取授权链接...';
 
-  function renderQR(containerId, data) {
-    var container = document.getElementById(containerId);
-    container.innerHTML = '';
-    var qrContent = (data.data || {}).qrcode_img_content || '';
-    if (!qrContent) { container.textContent = '获取二维码失败'; return; }
-    if (typeof qrcode === 'function') {
-      try {
-        var qr = qrcode(0, 'M');
-        qr.addData(qrContent);
-        qr.make();
-        container.innerHTML = qr.createImgTag(6, 8);
-        var img = container.querySelector('img');
-        if (img) { img.style.width = '200px'; img.style.height = '200px'; img.style.imageRendering = 'pixelated'; img.style.borderRadius = '8px'; }
-      } catch(e) { container.innerHTML = '<p style="color:#999;font-size:13px">二维码生成失败</p>'; }
+    if (platform === 'weixin') {
+      api('GET', '/api/weixin/qrcode').then(function(data){
+        if (data.error) throw new Error(data.error);
+        var qrContent = (data.data || {}).qrcode_img_content || '';
+        var qrcodeToken = (data.data || {}).qrcode || '';
+        var tenant = data.tenant || 'share';
+        savePendingAuth({ platform: 'weixin', agentName: targetAgentName, sessionData: { qrcode: qrcodeToken, tenant: tenant } });
+        location.href = qrContent;
+      }).catch(function(e){
+        document.getElementById('auth-status-text').textContent = '错误: ' + e.message;
+      });
+    } else if (platform === 'wecom') {
+      api('POST', '/api/bots/wecom/smartbot/generate', {}).then(function(res){
+        if (!res.auth_url) throw new Error('未返回授权链接');
+        savePendingAuth({ platform: 'wecom', agentName: targetAgentName, sessionData: { scode: res.scode } });
+        location.href = res.auth_url;
+      }).catch(function(e){
+        document.getElementById('auth-status-text').textContent = '错误: ' + (e.message || '生成链接失败');
+      });
+    } else if (platform === 'feishu') {
+      api('POST', '/api/bots/feishu/device-auth', {}).then(function(res){
+        if (!res.auth_url) throw new Error('未返回授权链接');
+        savePendingAuth({ platform: 'feishu', agentName: targetAgentName, sessionData: { session_id: res.session_id } });
+        location.href = res.auth_url;
+      }).catch(function(e){
+        document.getElementById('auth-status-text').textContent = '错误: ' + (e.message || '生成链接失败');
+      });
+    } else if (platform === 'dingtalk') {
+      api('POST', '/api/bots/dingtalk/device-auth', {}).then(function(res){
+        if (!res.auth_url) throw new Error('未返回授权链接');
+        savePendingAuth({ platform: 'dingtalk', agentName: targetAgentName, sessionData: { session_id: res.session_id } });
+        location.href = res.auth_url;
+      }).catch(function(e){
+        document.getElementById('auth-status-text').textContent = '错误: ' + (e.message || '生成链接失败');
+      });
     }
   }
 
-  function renderAuthLink(containerId, url) {
-    var container = document.getElementById(containerId);
-    if (!container || !url) return;
-    if (typeof qrcode === 'function') {
-      try {
-        var qr = qrcode(0, 'M');
-        qr.addData(url);
-        qr.make();
-        container.innerHTML = qr.createImgTag(6, 8);
-        var img = container.querySelector('img');
-        if (img) { img.style.width = '200px'; img.style.height = '200px'; img.style.imageRendering = 'pixelated'; img.style.borderRadius = '8px'; }
-      } catch(e) { container.innerHTML = '<p style="color:#999;font-size:13px">二维码生成失败</p>'; }
-    }
+  // ── Resume auth (user came back from platform auth page) ──
+  function resumeAuth(pending) {
+    showPhase(2);
+    var cfg = platformConfig[pending.platform] || {};
+    document.getElementById('auth-title').textContent = cfg.label + '授权绑定';
+    document.getElementById('auth-polling').classList.remove('hidden');
+    document.getElementById('auth-success').classList.add('hidden');
+    document.getElementById('auth-status-text').textContent = '正在验证' + cfg.label + '授权结果...';
+
+    var sd = pending.sessionData || {};
+    if (pending.platform === 'weixin') pollWeixin(sd.qrcode, sd.tenant);
+    else if (pending.platform === 'wecom') pollWecom(sd.scode);
+    else if (pending.platform === 'feishu') pollFeishu(sd.session_id);
+    else if (pending.platform === 'dingtalk') pollDingtalk(sd.session_id);
   }
 
-  // ── WeChat Auth ──
-  function startWeixinAuth() {
-    if (weixinStarted) return;
-    weixinStarted = true;
-    api('GET', '/api/weixin/qrcode').then(function(data){
-      if (data.error) throw new Error(data.error);
-      renderQR('weixin-qr-img', data);
-      weixinQrRaw = (data.data || {}).qrcode || '';
-      pollWeixinStatus(data);
-    }).catch(function(e){
-      document.getElementById('weixin-hint').textContent = '错误: ' + e.message;
-    });
-  }
-
-  function pollWeixinStatus(data) {
-    weixinPollTimer = stopPoll(weixinPollTimer);
-    weixinHandled = false;
-    // Use the bot name from qrcode response for tenant param (channel-level, not removed)
-    var botName = data.tenant || 'share';
-    weixinPollTimer = setInterval(function(){
-      var url = '/api/weixin/qrcode-status?tenant=' + encodeURIComponent(botName);
-      if (weixinQrRaw) url += '&qrcode=' + encodeURIComponent(weixinQrRaw);
+  // ── WeChat poll ──
+  function pollWeixin(qrcode, tenant) {
+    pollTimer = setInterval(function(){
+      var url = '/api/weixin/qrcode-status?tenant=' + encodeURIComponent(tenant);
+      if (qrcode) url += '&qrcode=' + encodeURIComponent(qrcode);
       api('GET', url).then(function(data){
         var status = data.status || (data.data && data.data.status);
         if (status === 'confirmed' || status === 'scaned_confirmed') {
-          if (weixinHandled) return;
-          weixinHandled = true;
-          weixinPollTimer = stopPoll(weixinPollTimer);
-          document.getElementById('weixin-qr-area').classList.add('hidden');
-          document.getElementById('weixin-success').classList.remove('hidden');
-          // Save ilink data and create bot, then bind
-          var ilinkData = {
-            ilink_bot_id: data.ilink_bot_id || '',
-            ilink_user_id: data.ilink_user_id || '',
-            bot_token: data.bot_token || '',
-            baseurl: data.baseurl || ''
-          };
-          createBotAndBind('weixin', botName, ilinkData);
-        } else if (status === 'scaned') {
-          document.getElementById('weixin-hint').innerHTML = '<span class="pulse-dot"></span>已扫码，请在手机上确认';
+          stopPoll(); clearPendingAuth(); showAuthSuccess('微信授权成功');
+          createBotAndBind('weixin', tenant, {
+            ilink_bot_id: data.ilink_bot_id || '', ilink_user_id: data.ilink_user_id || '',
+            bot_token: data.bot_token || '', baseurl: data.baseurl || ''
+          });
         } else if (status === 'expired') {
-          weixinPollTimer = stopPoll(weixinPollTimer);
-          document.getElementById('weixin-hint').textContent = '二维码已过期，请刷新页面重试';
+          stopPoll(); clearPendingAuth();
+          document.getElementById('auth-status-text').textContent = '授权已过期，请刷新页面重试';
         }
       }).catch(function(){});
     }, 3000);
   }
 
-  // ── WeCom Auth ──
-  function startWecomAuth() {
-    if (wecomStarted) return;
-    wecomStarted = true;
-    api('POST', '/api/bots/wecom/smartbot/generate', {}).then(function(res){
-      wecomScode = res.scode;
-      renderAuthLink('wecom-qr-img', res.auth_url);
-      var linkEl = document.getElementById('wecom-auth-link');
-      linkEl.href = res.auth_url;
-      linkEl.textContent = res.auth_url;
-      linkEl.classList.remove('hidden');
-      document.getElementById('wecom-hint').innerHTML = '<span class="pulse-dot"></span>请用企业微信扫描或点击链接授权';
-      pollWecomStatus();
-    }).catch(function(e){
-      document.getElementById('wecom-hint').textContent = '错误: ' + (e.message || '生成链接失败');
-    });
-  }
-
-  function pollWecomStatus() {
-    wecomPollTimer = stopPoll(wecomPollTimer);
-    wecomHandled = false;
-    wecomPollTimer = setInterval(function(){
-      api('GET', '/api/bots/wecom/smartbot/poll?scode=' + encodeURIComponent(wecomScode)).then(function(res){
+  // ── WeCom poll ──
+  function pollWecom(scode) {
+    pollTimer = setInterval(function(){
+      api('GET', '/api/bots/wecom/smartbot/poll?scode=' + encodeURIComponent(scode)).then(function(res){
         if (res.status === 'success') {
-          if (wecomHandled) return;
-          wecomHandled = true;
-          wecomPollTimer = stopPoll(wecomPollTimer);
-          document.getElementById('wecom-qr-area').classList.add('hidden');
-          document.getElementById('wecom-success').classList.remove('hidden');
+          stopPoll(); clearPendingAuth(); showAuthSuccess('企业微信授权成功');
           platformCredentials.wecom = { bot_id: res.bot_id || '', secret: res.secret || '' };
           createBotAndBind('wecom');
         } else if (res.status === 'expired') {
-          wecomPollTimer = stopPoll(wecomPollTimer);
-          document.getElementById('wecom-hint').textContent = '链接已过期，请刷新页面重试';
+          stopPoll(); clearPendingAuth();
+          document.getElementById('auth-status-text').textContent = '授权已过期，请刷新页面重试';
         }
       }).catch(function(){});
     }, 3000);
   }
 
-  // ── Feishu Auth ──
-  function startFeishuAuth() {
-    if (feishuStarted) return;
-    feishuStarted = true;
-    api('POST', '/api/bots/feishu/device-auth', {}).then(function(res){
-      feishuSessionId = res.session_id;
-      renderAuthLink('feishu-qr-img', res.auth_url);
-      var linkEl = document.getElementById('feishu-auth-link');
-      linkEl.href = res.auth_url;
-      linkEl.textContent = res.auth_url;
-      linkEl.classList.remove('hidden');
-      document.getElementById('feishu-hint').innerHTML = '<span class="pulse-dot"></span>请用飞书扫描或点击链接授权';
-      pollFeishuStatus();
-    }).catch(function(e){
-      document.getElementById('feishu-hint').textContent = '错误: ' + (e.message || '生成链接失败');
-    });
-  }
-
-  function pollFeishuStatus() {
-    feishuPollTimer = stopPoll(feishuPollTimer);
-    feishuHandled = false;
-    feishuPollInterval = 5000;
-    feishuPollTimer = setInterval(function(){
-      api('GET', '/api/bots/feishu/device-auth/poll?session_id=' + encodeURIComponent(feishuSessionId)).then(function(res){
+  // ── Feishu poll ──
+  function pollFeishu(sessionId) {
+    var interval = 5000;
+    pollTimer = setInterval(function(){
+      api('GET', '/api/bots/feishu/device-auth/poll?session_id=' + encodeURIComponent(sessionId)).then(function(res){
         if (res.status === 'success') {
-          if (feishuHandled) return;
-          feishuHandled = true;
-          feishuPollTimer = stopPoll(feishuPollTimer);
-          document.getElementById('feishu-qr-area').classList.add('hidden');
-          document.getElementById('feishu-success').classList.remove('hidden');
+          stopPoll(); clearPendingAuth(); showAuthSuccess('飞书授权成功');
           platformCredentials.feishu = { app_id: res.app_id || '', app_secret: res.app_secret || '' };
           createBotAndBind('feishu');
         } else if (res.status === 'expired') {
-          feishuPollTimer = stopPoll(feishuPollTimer);
-          document.getElementById('feishu-hint').textContent = '授权已过期，请刷新页面重试';
+          stopPoll(); clearPendingAuth();
+          document.getElementById('auth-status-text').textContent = '授权已过期，请刷新页面重试';
         } else if (res.raw_feishu && res.raw_feishu.error === 'slow_down') {
-          feishuPollInterval += 5000;
-          feishuPollTimer = stopPoll(feishuPollTimer);
-          feishuPollTimer = setInterval(arguments.callee, feishuPollInterval);
+          interval += 5000; stopPoll();
+          pollTimer = setInterval(arguments.callee, interval);
         }
       }).catch(function(){});
-    }, feishuPollInterval);
+    }, interval);
   }
 
-  // ── DingTalk Auth ──
-  function startDingtalkAuth() {
-    if (dingtalkStarted) return;
-    dingtalkStarted = true;
-    api('POST', '/api/bots/dingtalk/device-auth', {}).then(function(res){
-      dingtalkSessionId = res.session_id;
-      renderAuthLink('dingtalk-qr-img', res.auth_url);
-      var linkEl = document.getElementById('dingtalk-auth-link');
-      linkEl.href = res.auth_url;
-      linkEl.textContent = res.auth_url;
-      linkEl.classList.remove('hidden');
-      document.getElementById('dingtalk-hint').innerHTML = '<span class="pulse-dot"></span>请用钉钉扫描或点击链接授权';
-      pollDingtalkStatus();
-    }).catch(function(e){
-      document.getElementById('dingtalk-hint').textContent = '错误: ' + (e.message || '生成链接失败');
-    });
-  }
-
-  function pollDingtalkStatus() {
-    dingtalkPollTimer = stopPoll(dingtalkPollTimer);
-    dingtalkHandled = false;
-    dingtalkPollInterval = 5000;
-    dingtalkPollTimer = setInterval(function(){
-      api('GET', '/api/bots/dingtalk/device-auth/poll?session_id=' + encodeURIComponent(dingtalkSessionId)).then(function(res){
+  // ── DingTalk poll ──
+  function pollDingtalk(sessionId) {
+    var interval = 5000;
+    pollTimer = setInterval(function(){
+      api('GET', '/api/bots/dingtalk/device-auth/poll?session_id=' + encodeURIComponent(sessionId)).then(function(res){
         if (res.status === 'success') {
-          if (dingtalkHandled) return;
-          dingtalkHandled = true;
-          dingtalkPollTimer = stopPoll(dingtalkPollTimer);
-          document.getElementById('dingtalk-qr-area').classList.add('hidden');
-          document.getElementById('dingtalk-success').classList.remove('hidden');
+          stopPoll(); clearPendingAuth(); showAuthSuccess('钉钉授权成功');
           platformCredentials.dingtalk = { client_id: res.client_id || '', client_secret: res.client_secret || '' };
           createBotAndBind('dingtalk');
         } else if (res.status === 'expired') {
-          dingtalkPollTimer = stopPoll(dingtalkPollTimer);
-          document.getElementById('dingtalk-hint').textContent = '授权已过期，请刷新页面重试';
+          stopPoll(); clearPendingAuth();
+          document.getElementById('auth-status-text').textContent = '授权已过期，请刷新页面重试';
         } else if (res.raw_dingtalk && res.raw_dingtalk.error === 'slow_down') {
-          dingtalkPollInterval += 5000;
-          dingtalkPollTimer = stopPoll(dingtalkPollTimer);
-          dingtalkPollTimer = setInterval(arguments.callee, dingtalkPollInterval);
+          interval += 5000; stopPoll();
+          pollTimer = setInterval(arguments.callee, interval);
         }
       }).catch(function(){});
-    }, dingtalkPollInterval);
+    }, interval);
   }
 
-  // ── Create bot and bind to target clone ──
+  function showAuthSuccess(text) {
+    document.getElementById('auth-polling').classList.add('hidden');
+    document.getElementById('auth-success').classList.remove('hidden');
+    document.getElementById('auth-success-text').textContent = text;
+  }
+
+  // ── Create bot and bind ──
   function createBotAndBind(platform, weixinBotName, ilinkData) {
     var botName = targetAgentName + '-' + platform;
     var payload = { name: botName, platform: platform };
@@ -553,23 +468,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       if (dc.client_secret) payload.app_secret = dc.client_secret;
     }
 
-    // Save WeChat ilink token if applicable
     if (platform === 'weixin' && ilinkData && ilinkData.bot_token) {
       api('POST', '/api/weixin/save-token', {
-        tenant_name: weixinBotName,
-        bot_token: ilinkData.bot_token,
-        ilink_bot_id: ilinkData.ilink_bot_id,
-        ilink_user_id: ilinkData.ilink_user_id,
+        tenant_name: weixinBotName, bot_token: ilinkData.bot_token,
+        ilink_bot_id: ilinkData.ilink_bot_id, ilink_user_id: ilinkData.ilink_user_id,
         baseurl: ilinkData.baseurl
       }).catch(function(){});
     }
 
     api('POST', '/api/bots', payload).then(function(res){
       currentBotId = res.bot_id || '';
-      // Bind the bot to the target agent/clone
       bindClone(platform, weixinBotName);
-    }).catch(function(err){
-      // Bot might already exist, try binding anyway
+    }).catch(function(){
       bindClone(platform, weixinBotName);
     });
   }
@@ -582,24 +492,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     } else if (currentBotId) {
       bindUrl = '/api/bots/' + encodeURIComponent(currentBotId) + '/bind';
       method = 'PUT';
-    } else {
-      showDone();
-      return;
-    }
+    } else { showDone(); return; }
 
     api(method, bindUrl, { agent_name: targetAgentName }).then(function(){
       showDone();
-    }).catch(function(){
-      // Bind failed but auth succeeded — still show done
-      showDone();
-    });
+    }).catch(function(){ showDone(); });
   }
 
   function showDone() {
     document.getElementById('done-title').textContent = '绑定成功！';
     document.getElementById('done-desc').innerHTML =
       '你已成功绑定分身 <span class="highlight">' + esc(targetAgentName) + '</span>';
-
     var hints = {
       weixin: '返回微信聊天窗口，给机器人发条消息，分身就会回复你。<br><span style="color:#e08838">微信需每 24 小时内至少发一条消息保持在线</span>',
       wecom: '返回企业微信聊天窗口，给机器人发条消息开始对话',
@@ -607,7 +510,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       dingtalk: '返回钉钉聊天窗口，给机器人发条消息开始对话',
     };
     document.getElementById('done-platform-hint').innerHTML = hints[activePlatform] || '';
-
     setTimeout(function(){ showPhase(3); }, 800);
   }
 
