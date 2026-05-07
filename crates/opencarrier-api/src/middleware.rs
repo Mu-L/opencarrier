@@ -195,7 +195,6 @@ pub async fn auth(
 
     Response::builder()
         .status(StatusCode::UNAUTHORIZED)
-        .header("www-authenticate", "Bearer")
         .body(Body::from(
             serde_json::json!({"error": error_msg}).to_string(),
         ))
