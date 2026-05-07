@@ -304,6 +304,7 @@ pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse 
 // ---------------------------------------------------------------------------
 
 pub async fn wecom_smartbot_generate(
+    State(state): State<Arc<AppState>>,
     Json(req_body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let agent_name = req_body
@@ -345,6 +346,8 @@ pub async fn wecom_smartbot_generate(
                             .lock()
                             .unwrap()
                             .insert(scode.to_string(), name.clone());
+                        // Background poll: server proactively checks WeCom result
+                        spawn_background_wecom_poll(state, scode.to_string(), name.clone());
                     }
                     (
                         StatusCode::OK,
@@ -505,6 +508,291 @@ fn cleanup_expired_sessions() {
     sessions.retain(|_, v| v.expires_at > now);
 }
 
+/// Spawn a background task that polls DingTalk/Feishu for auth result
+/// and auto-creates + binds the bot when auth succeeds.
+fn spawn_background_device_poll(
+    state: Arc<AppState>,
+    session_id: String,
+) {
+    let session = {
+        let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+        match sessions.get(&session_id).cloned() {
+            Some(s) => s,
+            None => return,
+        }
+    };
+
+    let agent_name = match session.agent_name {
+        Some(ref n) if !n.is_empty() => n.clone(),
+        _ => return, // no agent to bind, skip background poll
+    };
+
+    let platform = session.platform.clone();
+    let device_code = session.device_code.clone();
+    let client = session.client.clone();
+    let expires_at = session.expires_at;
+    let sid = session_id.clone();
+
+    tokio::spawn(async move {
+        let poll_interval = std::time::Duration::from_secs(3);
+        let mut interval = tokio::time::interval(poll_interval);
+        interval.tick().await; // first tick is immediate
+
+        loop {
+            interval.tick().await;
+
+            if std::time::Instant::now() > expires_at {
+                tracing::info!(session_id = %sid, platform = %platform, "Background poll: session expired");
+                return;
+            }
+
+            // Check if credentials were already stored (client poll got there first)
+            {
+                let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+                if let Some(s) = sessions.get(&sid) {
+                    if s.credentials.is_some() {
+                        tracing::info!(session_id = %sid, "Background poll: already resolved");
+                        return;
+                    }
+                }
+            }
+
+            let result = match platform.as_str() {
+                "dingtalk" => poll_dingtalk(&client, &device_code).await,
+                "feishu" => {
+                    let base_url = if session.platform == "lark" {
+                        "https://accounts.larksuite.com"
+                    } else {
+                        "https://accounts.feishu.cn"
+                    };
+                    poll_feishu(&client, &device_code, base_url).await
+                }
+                _ => return,
+            };
+
+            match result {
+                PollResult::Success(creds) => {
+                    // Store credentials in session
+                    {
+                        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+                        if let Some(s) = sessions.get_mut(&sid) {
+                            s.credentials = Some(creds.clone());
+                        }
+                    }
+
+                    tracing::info!(
+                        session_id = %sid,
+                        platform = %platform,
+                        agent = %agent_name,
+                        "Background poll: auth succeeded, auto-creating bot"
+                    );
+
+                    // Auto-create and bind
+                    if let Err(e) = auto_create_and_bind_bot(
+                        &state, &platform, &creds, &agent_name,
+                    ).await {
+                        tracing::warn!(
+                            session_id = %sid,
+                            agent = %agent_name,
+                            error = %e,
+                            "Background poll: auto-create/bind failed"
+                        );
+                    }
+                    return;
+                }
+                PollResult::Expired => {
+                    tracing::info!(session_id = %sid, "Background poll: platform returned expired");
+                    return;
+                }
+                PollResult::Pending => continue,
+            }
+        }
+    });
+}
+
+/// Spawn a background task that polls WeCom smartbot creation result.
+fn spawn_background_wecom_poll(
+    state: Arc<AppState>,
+    scode: String,
+    agent_name: String,
+) {
+    tokio::spawn(async move {
+        let poll_interval = std::time::Duration::from_secs(2);
+        let mut interval = tokio::time::interval(poll_interval);
+        interval.tick().await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+
+        loop {
+            interval.tick().await;
+
+            if std::time::Instant::now() > deadline {
+                tracing::info!(scode = %scode, "WeCom background poll: timed out");
+                WECOM_PENDING_AGENTS.lock().unwrap().remove(&scode);
+                return;
+            }
+
+            let http = reqwest::Client::builder()
+                .cookie_store(true)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
+            let url = format!(
+                "https://work.weixin.qq.com/ai/qc/query_result?scode={}",
+                scode
+            );
+
+            let resp = match http.get(&url).send().await {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let body = match resp.text().await {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let data = match serde_json::from_str::<serde_json::Value>(&body) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let inner = data.get("data").unwrap_or(&data);
+            let status = inner
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+
+            if status == "success" {
+                if let Some(bot_info) = inner.get("bot_info") {
+                    let bot_id = bot_info
+                        .get("botid")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let secret = bot_info
+                        .get("secret")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+
+                    if !bot_id.is_empty() {
+                        tracing::info!(
+                            scode = %scode,
+                            agent = %agent_name,
+                            bot_id = %bot_id,
+                            "WeCom background poll: auth succeeded, auto-creating bot"
+                        );
+                        let creds = serde_json::json!({
+                            "bot_id": bot_id,
+                            "secret": secret,
+                        });
+                        if let Err(e) = auto_create_and_bind_bot(
+                            &state, "wecom", &creds, &agent_name,
+                        ).await {
+                            tracing::warn!(
+                                agent = %agent_name,
+                                error = %e,
+                                "WeCom background poll: auto-create/bind failed"
+                            );
+                        }
+                    }
+                }
+                WECOM_PENDING_AGENTS.lock().unwrap().remove(&scode);
+                return;
+            }
+
+            if status == "expired" || status == "fail" {
+                tracing::info!(scode = %scode, status = %status, "WeCom background poll: terminal status");
+                WECOM_PENDING_AGENTS.lock().unwrap().remove(&scode);
+                return;
+            }
+        }
+    });
+}
+
+enum PollResult {
+    Success(serde_json::Value),
+    Expired,
+    Pending,
+}
+
+async fn poll_dingtalk(client: &reqwest::Client, device_code: &str) -> PollResult {
+    let res = match client
+        .post("https://oapi.dingtalk.com/app/registration/poll")
+        .json(&serde_json::json!({"device_code": device_code}))
+        .send()
+        .await
+    {
+        Ok(r) => match r.json::<serde_json::Value>().await {
+            Ok(v) => v,
+            Err(_) => return PollResult::Pending,
+        },
+        Err(_) => return PollResult::Pending,
+    };
+
+    let status = res
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_uppercase();
+
+    if status == "SUCCESS" {
+        let client_id = res.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
+        let client_secret = res.get("client_secret").and_then(|v| v.as_str()).unwrap_or("");
+        if !client_id.is_empty() && !client_secret.is_empty() {
+            return PollResult::Success(serde_json::json!({
+                "client_id": client_id,
+                "client_secret": client_secret,
+            }));
+        }
+    }
+
+    if status == "EXPIRED" || status == "FAIL" {
+        return PollResult::Expired;
+    }
+
+    PollResult::Pending
+}
+
+async fn poll_feishu(client: &reqwest::Client, device_code: &str, base_url: &str) -> PollResult {
+    let poll_url = format!("{}/oauth/v1/app/registration", base_url);
+    let poll_body = format!("action=poll&device_code={}", device_code);
+
+    let res = match client
+        .post(&poll_url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(poll_body)
+        .send()
+        .await
+    {
+        Ok(r) => match r.json::<serde_json::Value>().await {
+            Ok(v) => v,
+            Err(_) => return PollResult::Pending,
+        },
+        Err(_) => return PollResult::Pending,
+    };
+
+    let status = res
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let app_id = res.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
+    let client_id = res.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
+    let app_secret = res.get("app_secret").and_then(|v| v.as_str()).unwrap_or("");
+    let client_secret = res.get("client_secret").and_then(|v| v.as_str()).unwrap_or("");
+
+    let id = if !app_id.is_empty() { app_id } else { client_id };
+    let secret = if !app_secret.is_empty() { app_secret } else { client_secret };
+
+    if !id.is_empty() && !secret.is_empty() {
+        return PollResult::Success(serde_json::json!({
+            "app_id": id,
+            "app_secret": secret,
+        }));
+    }
+
+    if status.eq_ignore_ascii_case("EXPIRED") || status.eq_ignore_ascii_case("FAIL") {
+        return PollResult::Expired;
+    }
+
+    PollResult::Pending
+}
+
 // ---------------------------------------------------------------------------
 // Feishu device-auth: POST /api/bots/feishu/device-auth
 // ---------------------------------------------------------------------------
@@ -518,6 +806,7 @@ pub struct FeishuDeviceAuthBeginBody {
 }
 
 pub async fn feishu_device_auth_begin(
+    State(state): State<Arc<AppState>>,
     Json(body): Json<FeishuDeviceAuthBeginBody>,
 ) -> impl IntoResponse {
     cleanup_expired_sessions();
@@ -647,6 +936,9 @@ pub async fn feishu_device_auth_begin(
         let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
         sessions.insert(session_id.clone(), session);
     }
+
+    // Background poll: server proactively checks auth result
+    spawn_background_device_poll(state, session_id.clone());
 
     (
         StatusCode::OK,
@@ -833,6 +1125,7 @@ pub struct DingtalkDeviceAuthPollQuery {
 }
 
 pub async fn dingtalk_device_auth_begin(
+    State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     cleanup_expired_sessions();
@@ -940,6 +1233,9 @@ pub async fn dingtalk_device_auth_begin(
         let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
         sessions.insert(session_id.clone(), session);
     }
+
+    // Background poll: server proactively checks auth result
+    spawn_background_device_poll(state, session_id.clone());
 
     (
         StatusCode::OK,
