@@ -140,10 +140,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 
   // ── localStorage ──
   function savePendingAuth(state) {
+    state.ts = Date.now();
     try { localStorage.setItem('oc_pending_auth', JSON.stringify(state)); } catch(e) {}
   }
   function loadPendingAuth() {
-    try { var s = localStorage.getItem('oc_pending_auth'); return s ? JSON.parse(s) : null; } catch(e) { return null; }
+    try {
+      var s = localStorage.getItem('oc_pending_auth');
+      if (!s) return null;
+      var p = JSON.parse(s);
+      // Expire after 10 minutes
+      if (p.ts && Date.now() - p.ts > 600000) { clearPendingAuth(); return null; }
+      return p;
+    } catch(e) { return null; }
   }
   function clearPendingAuth() {
     try { localStorage.removeItem('oc_pending_auth'); } catch(e) {}
@@ -432,7 +440,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 
   // ── WeChat poll ──
   function pollWeixin(qrcode, tenant) {
-    pollTimer = setInterval(function(){
+    var started = Date.now();
+    function doPoll() {
       var url = '/api/weixin/qrcode-status?tenant=' + encodeURIComponent(tenant);
       if (qrcode) url += '&qrcode=' + encodeURIComponent(qrcode);
       api('GET', url).then(function(data){
@@ -445,66 +454,83 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
           });
         } else if (status === 'expired') {
           stopPoll(); clearPendingAuth();
-          document.getElementById('auth-status-text').textContent = '授权已过期，请刷新页面重试';
+          showAuthTimeout('授权已过期');
+        } else if (Date.now() - started > 120000) {
+          stopPoll(); clearPendingAuth();
+          showAuthTimeout('等待超时');
         }
       }).catch(function(){});
-    }, 3000);
+    }
+    doPoll(); // immediate first poll
+    pollTimer = setInterval(doPoll, 2000);
   }
 
   // ── WeCom poll ──
   function pollWecom(scode) {
-    pollTimer = setInterval(function(){
+    var started = Date.now();
+    function doPoll() {
       api('GET', '/api/bots/wecom/smartbot/poll?scode=' + encodeURIComponent(scode)).then(function(res){
         if (res.status === 'success') {
           stopPoll(); clearPendingAuth(); showAuthSuccess('企业微信授权成功');
           platformCredentials.wecom = { bot_id: res.bot_id || '', secret: res.secret || '' };
           createBotAndBind('wecom');
         } else if (res.status === 'expired') {
-          stopPoll(); clearPendingAuth();
-          document.getElementById('auth-status-text').textContent = '授权已过期，请刷新页面重试';
+          stopPoll(); clearPendingAuth(); showAuthTimeout('授权已过期');
+        } else if (Date.now() - started > 120000) {
+          stopPoll(); clearPendingAuth(); showAuthTimeout('等待超时');
         }
       }).catch(function(){});
-    }, 3000);
+    }
+    doPoll();
+    pollTimer = setInterval(doPoll, 2000);
   }
 
   // ── Feishu poll ──
   function pollFeishu(sessionId) {
-    var interval = 5000;
-    pollTimer = setInterval(function(){
+    var interval = 3000;
+    var started = Date.now();
+    function doPoll() {
       api('GET', '/api/bots/feishu/device-auth/poll?session_id=' + encodeURIComponent(sessionId)).then(function(res){
         if (res.status === 'success') {
           stopPoll(); clearPendingAuth(); showAuthSuccess('飞书授权成功');
           platformCredentials.feishu = { app_id: res.app_id || '', app_secret: res.app_secret || '' };
           createBotAndBind('feishu');
         } else if (res.status === 'expired') {
-          stopPoll(); clearPendingAuth();
-          document.getElementById('auth-status-text').textContent = '授权已过期，请刷新页面重试';
+          stopPoll(); clearPendingAuth(); showAuthTimeout('授权已过期');
+        } else if (Date.now() - started > 120000) {
+          stopPoll(); clearPendingAuth(); showAuthTimeout('等待超时');
         } else if (res.raw_feishu && res.raw_feishu.error === 'slow_down') {
-          interval += 5000; stopPoll();
-          pollTimer = setInterval(arguments.callee, interval);
+          interval = Math.min(interval + 2000, 10000); stopPoll();
+          pollTimer = setInterval(doPoll, interval);
         }
       }).catch(function(){});
-    }, interval);
+    }
+    doPoll();
+    pollTimer = setInterval(doPoll, interval);
   }
 
   // ── DingTalk poll ──
   function pollDingtalk(sessionId) {
-    var interval = 5000;
-    pollTimer = setInterval(function(){
+    var interval = 3000;
+    var started = Date.now();
+    function doPoll() {
       api('GET', '/api/bots/dingtalk/device-auth/poll?session_id=' + encodeURIComponent(sessionId)).then(function(res){
         if (res.status === 'success') {
           stopPoll(); clearPendingAuth(); showAuthSuccess('钉钉授权成功');
           platformCredentials.dingtalk = { client_id: res.client_id || '', client_secret: res.client_secret || '' };
           createBotAndBind('dingtalk');
         } else if (res.status === 'expired') {
-          stopPoll(); clearPendingAuth();
-          document.getElementById('auth-status-text').textContent = '授权已过期，请刷新页面重试';
+          stopPoll(); clearPendingAuth(); showAuthTimeout('授权已过期');
+        } else if (Date.now() - started > 120000) {
+          stopPoll(); clearPendingAuth(); showAuthTimeout('等待超时');
         } else if (res.raw_dingtalk && res.raw_dingtalk.error === 'slow_down') {
-          interval += 5000; stopPoll();
-          pollTimer = setInterval(arguments.callee, interval);
+          interval = Math.min(interval + 2000, 10000); stopPoll();
+          pollTimer = setInterval(doPoll, interval);
         }
       }).catch(function(){});
-    }, interval);
+    }
+    doPoll();
+    pollTimer = setInterval(doPoll, interval);
   }
 
   function showAuthSuccess(text) {
@@ -513,6 +539,33 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     document.getElementById('auth-success').classList.remove('hidden');
     document.getElementById('auth-success-text').textContent = text;
   }
+
+  function showAuthTimeout(reason) {
+    document.getElementById('auth-polling').classList.add('hidden');
+    document.getElementById('auth-qr').classList.add('hidden');
+    document.getElementById('auth-success').classList.remove('hidden');
+    document.getElementById('auth-success').innerHTML =
+      '<span style="font-size:48px;display:block;margin-bottom:8px">⏳</span>' +
+      '<p style="color:#e08838;font-size:16px;font-weight:600">' + reason + '</p>' +
+      '<p style="color:#999;font-size:13px;margin-top:8px">点击下方按钮重新授权</p>' +
+      '<button class="btn-primary" style="margin-top:16px" onclick="clearPendingAuth();showPhase(1);initLandingClean();">重新开始</button>';
+  }
+
+  // Re-init without checking stale pending auth
+  window.initLandingClean = function() {
+    var el = document.getElementById('p1-content');
+    var isPlatformBrowser = /MicroMessenger|Feishu|Lark|DingTalk|wxwork/i.test(navigator.userAgent);
+    if (cloneName && isPlatformBrowser) {
+      showCloneHero(el, cloneName);
+    } else if (cloneName) {
+      showCloneHero(el, cloneName);
+    } else {
+      el.innerHTML =
+        '<div class="logo">🤖</div>' +
+        '<h1>Open<span>Carrier</span></h1>' +
+        '<p class="tagline">获取你的专属 AI 分身</p>';
+    }
+  };
 
   // ── Create bot and bind ──
   function createBotAndBind(platform, weixinBotName, ilinkData) {
