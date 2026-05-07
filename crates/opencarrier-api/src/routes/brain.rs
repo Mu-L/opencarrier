@@ -95,14 +95,28 @@ pub async fn set_brain_provider(
         .unwrap_or("")
         .trim()
         .to_string();
+    let auth_type = body["auth_type"]
+        .as_str()
+        .unwrap_or("apikey")
+        .trim()
+        .to_string();
+    let params: std::collections::HashMap<String, String> = body
+        .get("params")
+        .and_then(|p| p.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let result = state.kernel.update_brain(|config| {
         config.providers.insert(
             name.clone(),
             opencarrier_types::brain::ProviderConfig {
                 api_key_env,
-                auth_type: "apikey".to_string(),
-                params: std::collections::HashMap::new(),
+                auth_type,
+                params,
             },
         );
     });
