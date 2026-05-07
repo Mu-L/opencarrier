@@ -156,7 +156,7 @@ var OpenCarrierAPI = (function() {
   function onConnectionChange(fn) { _connectionListeners.push(fn); }
 
   function request(method, path, body) {
-    var opts = { method: method, headers: headers() };
+    var opts = { method: method, headers: headers(), credentials: 'same-origin' };
     if (body !== undefined) opts.body = JSON.stringify(body);
     return fetch(BASE + path, opts).then(function(r) {
       if (_connectionState !== 'connected') setConnectionState('connected');
