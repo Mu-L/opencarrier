@@ -325,9 +325,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         // Render QR on page — user long-presses to scan in WeChat
         document.getElementById('auth-polling').classList.add('hidden');
         document.getElementById('auth-qr').classList.remove('hidden');
-        if (qrContent && typeof QRCode === 'function') {
+        if (qrContent && typeof qrcode === 'function') {
           try {
-            new QRCode(document.getElementById('qr-img'), { text: qrContent, width: 200, height: 200, correctLevel: QRCode.CorrectLevel.M });
+            var qr = qrcode(0, 'M');
+            qr.addData(qrContent);
+            qr.make();
+            document.getElementById('qr-img').innerHTML = qr.createImgTag(6, 8);
+            var img = document.getElementById('qr-img').querySelector('img');
+            if (img) { img.style.width = '200px'; img.style.height = '200px'; img.style.imageRendering = 'pixelated'; img.style.borderRadius = '8px'; }
           } catch(e) {
             document.getElementById('qr-img').innerHTML = '<p style="color:#999;font-size:13px">二维码生成失败</p>';
           }
