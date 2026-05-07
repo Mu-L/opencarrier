@@ -1,7 +1,7 @@
 <body x-data="app">
 
 <!-- Auth Prompt — pure JS, no Alpine dependency -->
-<div id="auth-overlay" style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)">
+<div id="auth-overlay" style="display:none;position:fixed;inset:0;z-index:9999;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:2rem;max-width:400px;width:90%">
     <h3 style="margin:0 0 0.5rem;font-size:1.1rem">登录</h3>
     <p style="color:var(--text-dim);font-size:0.85rem;margin:0 0 1rem">请输入管理面板的账号密码。</p>
@@ -20,6 +20,19 @@
   var passEl = document.getElementById('auth-pass');
   var submitBtn = document.getElementById('auth-submit');
   var errorEl = document.getElementById('auth-error');
+
+  // Check if already authenticated — skip login
+  fetch('/api/auth/check').then(function(r) { return r.json(); }).then(function(info) {
+    if (info.authenticated) {
+      overlay.style.display = 'none';
+    } else {
+      overlay.style.display = 'flex';
+      userEl.focus();
+    }
+  }).catch(function() {
+    overlay.style.display = 'flex';
+    userEl.focus();
+  });
 
   function doLogin() {
     var u = userEl.value.trim();
