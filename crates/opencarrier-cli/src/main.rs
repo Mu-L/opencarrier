@@ -3062,10 +3062,6 @@ fn cmd_providers() {
         // Save
         match opencarrier_kernel::dotenv::save_env_key(&env_var, &key) {
             Ok(()) => {
-                // Update in-memory env so status reflects immediately.
-                // CLI runs single-threaded at this point; no concurrent env access.
-                std::env::set_var(&env_var, &key);
-
                 // Test
                 print!("  Testing... ");
                 io::stdout().flush().unwrap();

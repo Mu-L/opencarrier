@@ -251,9 +251,6 @@ pub fn read_api_key(env_var: &str) -> Result<String> {
                 if let Some(value) = trimmed.strip_prefix(&format!("{}=", env_var)) {
                     let value = value.trim().to_string();
                     if !value.is_empty() {
-                        // Cache in process env so subsequent lookups skip the file read.
-                        // (Best-effort; env mutation may race but consequence is a stale read.)
-                        std::env::set_var(env_var, &value);
                         return Ok(value);
                     }
                 }
