@@ -393,6 +393,8 @@ function app() {
       });
 
       // Initial data load
+      // Show auth prompt immediately — checkAuth() will hide it if already authenticated
+      Alpine.store('app').showAuthPrompt = true;
       this.pollStatus();
       Alpine.store('app').checkOnboarding();
       Alpine.store('app').checkAuth();
