@@ -17,7 +17,7 @@
     <form x-show="$store.app.authMode === 'apikey'" @submit.prevent="$store.app.submitApiKey(k)">
       <h3 style="margin:0 0 0.5rem;font-size:1.1rem">需要 API 密钥</h3>
       <p style="color:var(--text-dim);font-size:0.85rem;margin:0 0 1rem">请输入 API 密钥。</p>
-      <input type="password" x-model="k" placeholder="输入 API 密钥..." required
+      <input type="password" x-model="k" placeholder="输入 API 密钥..." autocomplete="new-password" required
              style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
       <button type="submit" style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">解锁</button>
     </form>

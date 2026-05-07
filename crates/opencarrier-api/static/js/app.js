@@ -293,7 +293,9 @@ document.addEventListener('alpine:init', function() {
           this.userRole = data.role || null;
           this.tenantId = data.tenant_id || null;
           this.showAuthPrompt = false;
-                    this.refreshAgents();
+          this.checkStatus();
+          this.checkOnboarding();
+          this.refreshAgents();
         } else {
           OpenCarrierToast.error(data.error || 'Login failed');
         }
