@@ -40,14 +40,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 .auth{align-items:center;justify-content:flex-start;padding:32px 24px;text-align:center;background:#fff}
 .auth h2{font-size:20px;font-weight:700;margin-bottom:6px;color:#1a1a1a}
 .auth .sub{font-size:14px;color:#888;margin-bottom:20px}
-.platform-tabs{display:flex;gap:8px;justify-content:center;margin-bottom:24px;flex-wrap:wrap}
-.platform-tab{padding:8px 18px;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer;border:2px solid transparent;background:#f0f0f0;color:#666;transition:all .2s;display:flex;align-items:center;gap:6px}
-.platform-tab:hover{background:#e8e8e8}
-.platform-tab.active{background:#07c160;color:#fff;border-color:#07c160}
-.platform-tab[data-platform="feishu"].active{background:#3370ff;border-color:#3370ff}
-.platform-tab[data-platform="dingtalk"].active{background:#0089ff;border-color:#0089ff}
-.platform-tab .dot{width:8px;height:8px;border-radius:50%;background:currentColor;opacity:.5}
-.platform-tab.active .dot{opacity:1}
 .auth-panel{display:none;width:100%;max-width:360px;margin:0 auto}
 .auth-panel.active{display:block}
 .qr-wrap{background:#fff;border-radius:16px;padding:24px;box-shadow:0 2px 12px rgba(0,0,0,.08);display:inline-block;margin-bottom:16px}
@@ -86,15 +78,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 
 <!-- === Phase 2: Platform Auth === -->
 <div id="p2" class="phase auth">
-  <h2>选择平台并授权</h2>
-  <p class="sub">扫码或点击授权，绑定你的 AI 分身</p>
-
-  <div class="platform-tabs">
-    <button class="platform-tab active" data-platform="weixin" onclick="switchPlatform('weixin')"><span class="dot"></span>微信</button>
-    <button class="platform-tab" data-platform="wecom" onclick="switchPlatform('wecom')"><span class="dot"></span>企业微信</button>
-    <button class="platform-tab" data-platform="feishu" onclick="switchPlatform('feishu')"><span class="dot"></span>飞书</button>
-    <button class="platform-tab" data-platform="dingtalk" onclick="switchPlatform('dingtalk')"><span class="dot"></span>钉钉</button>
-  </div>
+  <h2 id="auth-title">授权绑定</h2>
+  <p class="sub" id="auth-sub">按提示完成授权，绑定你的 AI 分身</p>
 
   <div class="auth-panel active" id="panel-weixin">
     <div id="weixin-qr-area"><div class="qr-wrap"><div id="weixin-qr-img"></div></div><p class="qr-hint status-weixin" id="weixin-hint"><span class="pulse-dot"></span>请用微信扫描二维码</p></div>
@@ -232,8 +217,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
           '<div class="info"><h4>' + esc(name) + '</h4><p>' + esc(desc) + '</p></div>';
         card.onclick = function(){
           targetAgentName = name;
-          showPhase(2);
-          switchPlatform(activePlatform);
+          startAuth();
         };
         listEl.appendChild(card);
       });
@@ -286,7 +270,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       return;
     }
     showPhase(2);
-    switchPlatform(activePlatform);
+    startPlatformAuth(activePlatform);
   };
 
   window.verifyPassword = function() {
@@ -300,13 +284,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     api('POST', '/api/clones/' + encodeURIComponent(cloneName) + '/verify-access', {password: pw}).then(function(data){
       if (data.ok) {
         accessVerified = true;
-        cloneAccess = 'public'; // verified, treat as public now
+        cloneAccess = 'public';
         document.getElementById('password-area').style.display = 'none';
-        btn.textContent = '选择平台并绑定';
+        btn.textContent = '开始使用';
         btn.disabled = false;
         btn.onclick = function(){ startAuth(); };
-        showPhase(2);
-        switchPlatform(activePlatform);
       } else {
         errEl.textContent = data.error || '密码错误';
         errEl.style.display = 'block';
@@ -323,9 +305,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 
   function stopPoll(t) { if (t) clearInterval(t); return null; }
 
-  window.switchPlatform = function(platform) {
+  function startPlatformAuth(platform) {
     activePlatform = platform;
-    document.querySelectorAll('.platform-tab').forEach(function(t){ t.classList.toggle('active', t.dataset.platform === platform); });
+    var cfg = platformConfig[platform] || {};
+    document.getElementById('auth-title').textContent = cfg.label + '授权绑定';
+    document.getElementById('auth-sub').textContent = '按提示完成' + cfg.label + '授权，绑定你的 AI 分身';
     document.querySelectorAll('.auth-panel').forEach(function(p){ p.classList.toggle('active', p.id === 'panel-' + platform); });
     if (platform !== 'weixin') weixinPollTimer = stopPoll(weixinPollTimer);
     if (platform !== 'wecom') wecomPollTimer = stopPoll(wecomPollTimer);
@@ -335,7 +319,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     if (platform === 'wecom' && !wecomStarted) startWecomAuth();
     if (platform === 'feishu' && !feishuStarted) startFeishuAuth();
     if (platform === 'dingtalk' && !dingtalkStarted) startDingtalkAuth();
-  };
+  }
 
   function renderQR(containerId, data) {
     var container = document.getElementById(containerId);
