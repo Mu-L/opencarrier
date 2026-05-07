@@ -53,6 +53,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 .qr-hint .pulse-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#07c160;animation:pulse 1.5s infinite;vertical-align:middle}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 
+/* Hub agent card (desktop) */
+.hub-list{width:100%;max-width:720px;margin-bottom:24px}
+.hub-card{background:#fff;border-radius:16px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.06);display:flex;gap:20px;align-items:center;margin-bottom:14px;text-align:left}
+.hub-card .info{flex:1;min-width:0}
+.hub-card .info h4{font-size:16px;font-weight:600;color:#333;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.hub-card .info p{font-size:13px;color:#999;line-height:1.5}
+.hub-card .qr-box{flex-shrink:0;text-align:center}
+.hub-card .qr-box img{width:100px;height:100px;border-radius:8px;image-rendering:pixelated;display:block}
+.hub-card .qr-box span{display:block;font-size:11px;color:#bbb;margin-top:4px}
+
 /* ── Phase 3: Done ── */
 .done{align-items:center;justify-content:center;padding:32px 24px;text-align:center;background:linear-gradient(160deg,#f0faf3 0%,#e8f5eb 50%,#f8faf9 100%)}
 .done .big-check{font-size:72px;margin-bottom:16px}
@@ -188,14 +198,47 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 
     if (!isPlatformBrowser) {
       el.innerHTML =
-        '<div class="logo">📱</div>' +
+        '<div class="logo">🤖</div>' +
         '<h1>Open<span>Carrier</span></h1>' +
-        '<p class="tagline" style="margin-bottom:24px">请在手机上用以下任一 App 扫码打开此页面</p>' +
-        '<div class="features">' +
-          '<div class="feat"><div class="icon">💬</div><div><h3>微信</h3><p>扫码或长按识别二维码</p></div></div>' +
-          '<div class="feat"><div class="icon">📘</div><div><h3>飞书</h3><p>扫码打开链接</p></div></div>' +
-          '<div class="feat"><div class="icon">📌</div><div><h3>钉钉</h3><p>扫码打开链接</p></div></div>' +
-        '</div>';
+        '<p class="tagline">用手机扫码，绑定你的 AI 分身</p>' +
+        '<div class="hub-list" id="hub-list"><p style="font-size:14px;color:#999">加载中...</p></div>';
+      api('GET', '/api/share/agents').then(function(res){
+        var agents = res.agents || [];
+        var listEl = document.getElementById('hub-list');
+        if (!agents.length) {
+          listEl.innerHTML = '<p style="font-size:14px;color:#999">暂无可用分身</p>';
+          return;
+        }
+        listEl.innerHTML = '';
+        var base = location.origin + '/share';
+        agents.forEach(function(a){
+          var name = a.name || a.id || '';
+          var displayName = a.display_name || name;
+          var desc = a.description || a.profile || '';
+          var shareUrl = base + '?clone=' + encodeURIComponent(name);
+          var card = document.createElement('div');
+          card.className = 'hub-card';
+          card.innerHTML =
+            '<div class="agent-avatar">' + emoji(displayName) + '</div>' +
+            '<div class="info"><h4>' + esc(displayName) + '</h4><p>' + esc(desc) + '</p></div>' +
+            '<div class="qr-box"><div id="hub-qr-' + name.replace(/[^a-zA-Z0-9]/g,'_') + '"></div><span>扫码使用</span></div>';
+          listEl.appendChild(card);
+          // Render QR code
+          var qrContainer = document.getElementById('hub-qr-' + name.replace(/[^a-zA-Z0-9]/g,'_'));
+          if (qrContainer && typeof qrcode === 'function') {
+            try {
+              var qr = qrcode(0, 'M');
+              qr.addData(shareUrl);
+              qr.make();
+              qrContainer.innerHTML = qr.createImgTag(3, 4);
+              var img = qrContainer.querySelector('img');
+              if (img) { img.style.width = '100px'; img.style.height = '100px'; img.style.imageRendering = 'pixelated'; img.style.borderRadius = '8px'; }
+            } catch(e) {}
+          }
+        });
+      }).catch(function(e){
+        document.getElementById('hub-list').innerHTML = '<p style="font-size:14px;color:#e08838">加载失败</p>';
+      });
       return;
     }
 
