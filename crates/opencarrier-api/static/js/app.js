@@ -232,6 +232,7 @@ document.addEventListener('alpine:init', function() {
             this.userRole = authInfo.role || null;
             this.tenantId = authInfo.tenant_id || null;
             this.showAuthPrompt = false;
+            document.getElementById('auth-overlay').style.display = 'none';
             this.refreshAgents();
             return;
           }
@@ -252,6 +253,7 @@ document.addEventListener('alpine:init', function() {
             this.userRole = authInfo.role || null;
             this.tenantId = authInfo.tenant_id || null;
             this.showAuthPrompt = false;
+            document.getElementById('auth-overlay').style.display = 'none';
             return;
           }
           // Session auth enabled but not authenticated — show login prompt
@@ -264,6 +266,7 @@ document.addEventListener('alpine:init', function() {
       try {
         await OpenCarrierAPI.get('/api/tools');
         this.showAuthPrompt = false;
+        document.getElementById('auth-overlay').style.display = 'none';
       } catch(e) {
         if (e.message && (e.message.indexOf('Not authorized') >= 0 || e.message.indexOf('401') >= 0 || e.message.indexOf('Missing Authorization') >= 0 || e.message.indexOf('Unauthorized') >= 0)) {
           var saved = localStorage.getItem('opencarrier-api-key');
@@ -281,6 +284,7 @@ document.addEventListener('alpine:init', function() {
       OpenCarrierAPI.setAuthToken(key.trim());
       localStorage.setItem('opencarrier-api-key', key.trim());
       this.showAuthPrompt = false;
+      document.getElementById('auth-overlay').style.display = 'none';
       this.refreshAgents();
     },
 
@@ -293,6 +297,7 @@ document.addEventListener('alpine:init', function() {
           this.userRole = data.role || null;
           this.tenantId = data.tenant_id || null;
           this.showAuthPrompt = false;
+          document.getElementById('auth-overlay').style.display = 'none';
           this.refreshAgents();
         } else {
           OpenCarrierToast.error(data.error || 'Login failed');

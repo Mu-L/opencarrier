@@ -1,33 +1,59 @@
 <body x-data="app">
 
-<!-- Auth Prompt — login dialog -->
-<div x-show="$store.app.showAuthPrompt" x-data="{ user: '', pass: '', key: '' }"
-     style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)">
+<!-- Auth Prompt — pure JS, no Alpine dependency -->
+<div id="auth-overlay" style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:2rem;max-width:400px;width:90%">
-    <!-- Session login -->
-    <div x-show="$store.app.authMode === 'session'">
-      <h3 style="margin:0 0 0.5rem;font-size:1.1rem">登录</h3>
-      <p style="color:var(--text-dim);font-size:0.85rem;margin:0 0 1rem">请输入管理面板的账号密码。</p>
-      <input type="text" x-model="user" placeholder="用户名" autocomplete="username"
-             style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.5rem">
-      <input type="password" x-model="pass" placeholder="密码" autocomplete="current-password"
-             @keydown.enter="$store.app.sessionLogin(user, pass)"
-             style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
-      <button @click="$store.app.sessionLogin(user, pass)"
-              style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">登录</button>
-    </div>
-    <!-- API key login -->
-    <div x-show="$store.app.authMode === 'apikey'">
-      <h3 style="margin:0 0 0.5rem;font-size:1.1rem">需要 API 密钥</h3>
-      <p style="color:var(--text-dim);font-size:0.85rem;margin:0 0 1rem">请输入 API 密钥。</p>
-      <input type="password" x-model="key" placeholder="输入 API 密钥..."
-             @keydown.enter="$store.app.submitApiKey(key)"
-             style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
-      <button @click="$store.app.submitApiKey(key)"
-              style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">解锁</button>
-    </div>
+    <h3 style="margin:0 0 0.5rem;font-size:1.1rem">登录</h3>
+    <p style="color:var(--text-dim);font-size:0.85rem;margin:0 0 1rem">请输入管理面板的账号密码。</p>
+    <input id="auth-user" type="text" placeholder="用户名" autocomplete="username"
+           style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.5rem">
+    <input id="auth-pass" type="password" placeholder="密码" autocomplete="current-password"
+           style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
+    <button id="auth-submit" style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">登录</button>
+    <p id="auth-error" style="color:var(--error);font-size:0.8rem;margin:0.5rem 0 0;display:none"></p>
   </div>
 </div>
+<script>
+(function() {
+  var overlay = document.getElementById('auth-overlay');
+  var userEl = document.getElementById('auth-user');
+  var passEl = document.getElementById('auth-pass');
+  var submitBtn = document.getElementById('auth-submit');
+  var errorEl = document.getElementById('auth-error');
+
+  function doLogin() {
+    var u = userEl.value.trim();
+    var p = passEl.value;
+    if (!u || !p) return;
+    submitBtn.textContent = '登录中...';
+    submitBtn.disabled = true;
+    errorEl.style.display = 'none';
+    fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: p })
+    }).then(function(r) {
+      return r.json();
+    }).then(function(data) {
+      if (data.status === 'ok' && data.token) {
+        document.cookie = 'opencarrier_session=' + data.token + '; Path=/; SameSite=Strict; Max-Age=604800';
+        overlay.style.display = 'none';
+        location.reload();
+      } else {
+        throw new Error(data.error || '登录失败');
+      }
+    }).catch(function(e) {
+      errorEl.textContent = e.message;
+      errorEl.style.display = 'block';
+      submitBtn.textContent = '登录';
+      submitBtn.disabled = false;
+    });
+  }
+
+  submitBtn.addEventListener('click', doLogin);
+  passEl.addEventListener('keydown', function(e) { if (e.key === 'Enter') doLogin(); });
+})();
+</script>
 
 <div class="app-layout" :class="{ 'focus-mode': $store.app.focusMode }">
   <!-- Sidebar -->
