@@ -1,28 +1,31 @@
 <body x-data="app">
 
-<!-- Auth Prompt (API Key or Username/Password) -->
-<div x-show="$store.app.showAuthPrompt" style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)" x-data="{ apiKeyInput: '', loginUser: '', loginPass: '' }">
-  <div style="background:var(--bg-card,#1e1e2e);border:1px solid var(--border,#333);border-radius:12px;padding:2rem;max-width:400px;width:90%">
-    <!-- Session login mode -->
-    <template x-if="$store.app.authMode === 'session'">
-      <div>
-        <h3 style="margin:0 0 0.5rem;font-size:1.1rem">登录</h3>
-        <p style="color:var(--text-dim,#888);font-size:0.85rem;margin:0 0 1rem">请输入管理面板的账号密码。</p>
-        <input type="text" x-model="loginUser" placeholder="用户名" autocomplete="username" style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg-input,#151520);color:var(--text,#e0e0e0);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.5rem">
-        <input type="password" x-model="loginPass" placeholder="密码" autocomplete="current-password" @keydown.enter="$store.app.sessionLogin(loginUser, loginPass)" style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg-input,#151520);color:var(--text,#e0e0e0);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
-        <button @click="$store.app.sessionLogin(loginUser, loginPass)" style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent,#7c3aed);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">登录</button>
-      </div>
-    </template>
-    <!-- API key mode -->
-    <template x-if="$store.app.authMode === 'apikey'">
-      <div>
-        <h3 style="margin:0 0 0.5rem;font-size:1.1rem">需要 API 密钥</h3>
-        <p style="color:var(--text-dim,#888);font-size:0.85rem;margin:0 0 0.5rem">此实例需要 API 密钥，请输入 <code>config.toml</code> 中的密钥。</p>
-        <p style="color:var(--text-dim,#666);font-size:0.75rem;margin:0 0 1rem">在 <code>~/.opencarrier/config.toml</code> 顶部添加 <code style="color:var(--accent-light,#a78bfa);background:var(--bg,#111);padding:1px 4px;border-radius:2px">api_key = "your-key"</code>（不要放在任何 [section] 下）。</p>
-        <input type="password" x-model="apiKeyInput" placeholder="输入 API 密钥..." @keydown.enter="$store.app.submitApiKey(apiKeyInput)" style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border,#333);background:var(--bg-input,#151520);color:var(--text,#e0e0e0);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
-        <button @click="$store.app.submitApiKey(apiKeyInput)" style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent,#7c3aed);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">解锁</button>
-      </div>
-    </template>
+<!-- Auth Prompt — login dialog -->
+<div x-show="$store.app.showAuthPrompt" x-data="{ user: '', pass: '', key: '' }"
+     style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:2rem;max-width:400px;width:90%">
+    <!-- Session login -->
+    <div x-show="$store.app.authMode === 'session'">
+      <h3 style="margin:0 0 0.5rem;font-size:1.1rem">登录</h3>
+      <p style="color:var(--text-dim);font-size:0.85rem;margin:0 0 1rem">请输入管理面板的账号密码。</p>
+      <input type="text" x-model="user" placeholder="用户名" autocomplete="username"
+             style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.5rem">
+      <input type="password" x-model="pass" placeholder="密码" autocomplete="current-password"
+             @keydown.enter="$store.app.sessionLogin(user, pass)"
+             style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
+      <button @click="$store.app.sessionLogin(user, pass)"
+              style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">登录</button>
+    </div>
+    <!-- API key login -->
+    <div x-show="$store.app.authMode === 'apikey'">
+      <h3 style="margin:0 0 0.5rem;font-size:1.1rem">需要 API 密钥</h3>
+      <p style="color:var(--text-dim);font-size:0.85rem;margin:0 0 1rem">请输入 API 密钥。</p>
+      <input type="password" x-model="key" placeholder="输入 API 密钥..."
+             @keydown.enter="$store.app.submitApiKey(key)"
+             style="width:100%;padding:0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:0.9rem;box-sizing:border-box;margin-bottom:0.75rem">
+      <button @click="$store.app.submitApiKey(key)"
+              style="width:100%;padding:0.6rem;border-radius:6px;border:none;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;font-size:0.9rem">解锁</button>
+    </div>
   </div>
 </div>
 
