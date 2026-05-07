@@ -1283,7 +1283,7 @@
                   <input class="form-input" style="font-size:12px;margin-top:6px;width:100%" placeholder="Base URL (如 https://dashscope.aliyuncs.com/...)" x-model="newEndpoint.base_url">
                   <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:6px">
                     <button class="btn btn-ghost btn-sm" @click="showAddEndpoint = false">取消</button>
-                    <button class="btn btn-primary btn-sm" @click="addEndpoint()">添加</button>
+                    <button class="btn btn-primary btn-sm" @click="saveEndpoint()">保存</button>
                   </div>
                 </div>
                 <table style="width:100%;font-size:12px;border-collapse:collapse">
@@ -1311,7 +1311,10 @@
                           <span class="badge" :class="ep.ready ? 'badge-success' : 'badge-warning'" style="font-size:10px" x-text="ep.ready ? 'Ready' : 'Idle'"></span>
                         </td>
                         <td style="padding:6px 4px;text-align:right">
-                          <button class="btn btn-ghost btn-sm" style="color:var(--error);padding:2px 6px" @click="deleteEndpoint(ep.name)">
+                          <button class="btn btn-ghost btn-sm" style="padding:2px 6px" @click="editEndpoint(ep)" title="编辑">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                          </button>
+                          <button class="btn btn-ghost btn-sm" style="color:var(--error);padding:2px 6px" @click="deleteEndpoint(ep.name)" title="删除">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                           </button>
                         </td>
@@ -1338,7 +1341,7 @@
                   <input class="form-input" style="font-size:12px;margin-top:6px;width:100%" placeholder="备用端点 (逗号分隔, 如 keling_image)" x-model="newModality.fallbacks">
                   <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:6px">
                     <button class="btn btn-ghost btn-sm" @click="showAddModality = false">取消</button>
-                    <button class="btn btn-primary btn-sm" @click="addModality()">添加</button>
+                    <button class="btn btn-primary btn-sm" @click="saveModality()">保存</button>
                   </div>
                 </div>
                 <table style="width:100%;font-size:12px;border-collapse:collapse">
@@ -1371,14 +1374,13 @@
                           </template>
                         </td>
                         <td style="padding:6px 4px;text-align:right">
-                          <button class="btn btn-ghost btn-sm" style="color:var(--error);padding:2px 6px" @click="deleteModality(m.name)">
+                          <button class="btn btn-ghost btn-sm" style="padding:2px 6px" @click="editModality(m)" title="编辑">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                          </button>
+                          <button class="btn btn-ghost btn-sm" style="color:var(--error);padding:2px 6px" @click="deleteModality(m.name)" title="删除">
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                           </button>
                         </td>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
               </div>
             </div>
 
@@ -1399,6 +1401,28 @@
             <button class="btn btn-ghost btn-sm" @click="loadSecurity()">重试</button>
           </div>
           <div x-show="!loading && !loadError">
+            <!-- Credentials -->
+            <div class="card" style="border-left:3px solid var(--error)">
+              <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+                <span style="color:var(--error)">登录凭证</span>
+              </div>
+              <div class="card-body" style="padding-top:8px">
+                <p style="font-size:12px;color:var(--text-dim);margin:0 0 8px">修改后台登录的用户名和密码。默认凭证不安全，请立即更改。</p>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">
+                  <input class="form-input" type="password" style="font-size:12px" placeholder="当前密码 *" x-model="credCurrentPass" autocomplete="current-password">
+                  <div></div>
+                  <input class="form-input" style="font-size:12px" placeholder="新用户名 (留空不修改)" x-model="credNewUser" autocomplete="off">
+                  <input class="form-input" type="password" style="font-size:12px" placeholder="新密码 (留空不修改, 至少 6 位)" x-model="credNewPass" autocomplete="new-password">
+                </div>
+                <div style="display:flex;justify-content:flex-end;margin-top:8px">
+                  <button class="btn btn-primary btn-sm" :disabled="credSaving || !credCurrentPass" @click="saveCredentials()">
+                    <span x-show="!credSaving">保存</span>
+                    <span x-show="credSaving">保存中...</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <!-- Raw JSON fallback -->
             <div class="card mt-4" style="border-left:3px solid var(--border)">
               <div class="card-header" style="font-size:12px;cursor:pointer" @click="$el.nextElementSibling.style.display = $el.nextElementSibling.style.display === 'none' ? 'block' : 'none'">Raw Config JSON (click to toggle)</div>

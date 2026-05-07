@@ -72,7 +72,12 @@ function brainPage() {
       } catch(e) { OpenCarrierToast.error('删除失败: ' + (e.message || e)); }
     },
 
-    async addEndpoint() {
+    editEndpoint(ep) {
+      this.newEndpoint = { name: ep.name, provider: ep.provider, model: ep.model, base_url: ep.base_url, format: ep.format };
+      this.showAddEndpoint = true;
+    },
+
+    async saveEndpoint() {
       var ep = this.newEndpoint;
       if (!ep.name || !ep.provider || !ep.model || !ep.base_url) {
         OpenCarrierToast.error('请填写所有必填字段');
@@ -85,8 +90,8 @@ function brainPage() {
         this.showAddEndpoint = false;
         this.newEndpoint = { name: '', provider: '', model: '', base_url: '', format: 'openai' };
         await Promise.all([this.loadBrainInfo(), this.loadBrainStatus()]);
-        OpenCarrierToast.success('已添加端点 ' + ep.name);
-      } catch(e) { OpenCarrierToast.error('添加失败: ' + (e.message || e)); }
+        OpenCarrierToast.success('已保存端点 ' + ep.name);
+      } catch(e) { OpenCarrierToast.error('保存失败: ' + (e.message || e)); }
     },
 
     async deleteModality(name) {
@@ -98,7 +103,12 @@ function brainPage() {
       } catch(e) { OpenCarrierToast.error('删除失败: ' + (e.message || e)); }
     },
 
-    async addModality() {
+    editModality(m) {
+      this.newModality = { name: m.name, primary: m.primary, fallbacks: (m.fallbacks || []).join(', ') };
+      this.showAddModality = true;
+    },
+
+    async saveModality() {
       var m = this.newModality;
       if (!m.name || !m.primary) {
         OpenCarrierToast.error('请填写名称和主端点');
@@ -112,8 +122,8 @@ function brainPage() {
         this.showAddModality = false;
         this.newModality = { name: '', primary: '', fallbacks: '' };
         await this.loadBrainInfo();
-        OpenCarrierToast.success('已添加模态 ' + m.name);
-      } catch(e) { OpenCarrierToast.error('添加失败: ' + (e.message || e)); }
+        OpenCarrierToast.success('已保存模态 ' + m.name);
+      } catch(e) { OpenCarrierToast.error('保存失败: ' + (e.message || e)); }
     },
 
     async loadProviderKeys() {
