@@ -29,7 +29,7 @@ pub struct WebToolsContext {
 }
 
 impl WebToolsContext {
-    /// Perform a web search: brain first (if configured), then free search as fallback.
+    /// Perform a web search: free search (Bing/360/Sogou) first, brain as fallback.
     pub async fn search(&self, query: &str, max_results: usize) -> Result<String, String> {
         // Check cache first
         let cache_key = format!("search:{}:{}", query, max_results);
@@ -38,17 +38,18 @@ impl WebToolsContext {
             return Ok(cached);
         }
 
-        // Try brain-powered search first (if brain has search modality)
-        let result = if let Some(brain) = &self.brain {
-            match self.search_brain(brain, query, max_results).await {
-                Ok(r) => Ok(r),
-                Err(e) => {
-                    warn!("Brain search failed, falling back to free search: {e}");
-                    self.search.search_free(query, max_results).await
+        // Free search (Bing → 360 → Sogou) is real-time web scraping — always prefer it
+        let result = match self.search.search_free(query, max_results).await {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                warn!("Free search failed, trying brain search: {e}");
+                // Fallback to brain if configured
+                if let Some(brain) = &self.brain {
+                    self.search_brain(brain, query, max_results).await
+                } else {
+                    Err(e)
                 }
             }
-        } else {
-            self.search.search_free(query, max_results).await
         };
 
         if let Ok(ref content) = result {
