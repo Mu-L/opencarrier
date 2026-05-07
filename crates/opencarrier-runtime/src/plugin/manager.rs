@@ -289,6 +289,33 @@ impl PluginManager {
         Err(format!("Channel not found for bot: {bot_uuid}"))
     }
 
+    /// Dynamically start a channel for a newly created bot (no restart needed).
+    ///
+    /// Registers the bot with the platform's token/tenant manager and spawns
+    /// a WebSocket connection so it can immediately receive messages.
+    pub fn start_dynamic_channel(
+        &self,
+        platform: &str,
+        tenant_name: &str,
+        bot_id: &str,
+        secret: &str,
+    ) {
+        let sender = self.message_tx.clone();
+        match platform {
+            "wecom" => {
+                crate::plugin::channels::wecom::register_and_start_smartbot(
+                    sender,
+                    tenant_name.to_string(),
+                    bot_id.to_string(),
+                    secret.to_string(),
+                );
+            }
+            other => {
+                info!(platform = %other, "Dynamic channel start not yet implemented for this platform");
+            }
+        }
+    }
+
     /// Get status of all loaded plugins.
     pub fn status(&self) -> Vec<opencarrier_types::plugin::PluginStatus> {
         self.loaded_plugins

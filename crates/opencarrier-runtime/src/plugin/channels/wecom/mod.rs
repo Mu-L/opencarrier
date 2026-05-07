@@ -16,6 +16,8 @@ use opencarrier_types::plugin::PluginMessage;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use crate::plugin::BuiltinChannel;
+
 pub mod channel;
 pub mod crypto;
 pub mod mcp;
@@ -487,4 +489,38 @@ impl crate::plugin::BuiltinChannel for WeComSmartBotWatcher {
     fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
     }
+}
+
+/// Dynamically register and start a smartbot channel (no restart needed).
+pub fn register_and_start_smartbot(
+    sender: tokio::sync::mpsc::Sender<PluginMessage>,
+    tenant_name: String,
+    bot_id: String,
+    secret: String,
+) {
+    let entry = token::TenantEntry::new_smartbot(
+        tenant_name.clone(),
+        String::new(),
+        bot_id.clone(),
+        secret.clone(),
+    );
+    TOKEN_MANAGER.add_tenant(entry);
+    tracing::info!(tenant = %tenant_name, bot_id = %bot_id, "Dynamically registered WeCom smartbot");
+
+    let tx = sender;
+    let tn = tenant_name.clone();
+    let bid = bot_id;
+    let sec = secret;
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create tokio runtime for SmartBot");
+        rt.block_on(async {
+            let mut ch = smartbot::SmartBotChannel::new(tn.clone(), String::new(), bid, sec);
+            if let Err(e) = ch.start(tx) {
+                tracing::warn!(tenant = %tn, "Dynamic SmartBot channel start error: {e}");
+            }
+        });
+    });
 }

@@ -2129,7 +2129,7 @@ async fn auto_create_and_bind_bot(
                             toml::Value::String(agent_uuid.clone()),
                         );
                     })?;
-                    add_dynamic_binding(state, platform, &tenant_name, &existing_id, &agent_uuid)
+                    add_dynamic_binding(state, platform, &tenant_name, &existing_id, &agent_uuid, credentials)
                         .await;
                     return Ok(existing_id);
                 }
@@ -2154,7 +2154,7 @@ async fn auto_create_and_bind_bot(
         toml::to_string_pretty(&toml::Value::Table(bot_fields)).map_err(|e| format!("序列化失败: {e}"))?;
     std::fs::write(&bot_toml_path, &content).map_err(|e| format!("写入失败: {e}"))?;
 
-    add_dynamic_binding(state, platform, &tenant_name, &bot_uuid, &agent_uuid).await;
+    add_dynamic_binding(state, platform, &tenant_name, &bot_uuid, &agent_uuid, credentials).await;
 
     Ok(bot_uuid)
 }
@@ -2166,6 +2166,7 @@ async fn add_dynamic_binding(
     tenant_name: &str,
     bot_uuid: &str,
     agent_uuid: &str,
+    credentials: &serde_json::Value,
 ) {
     let channel_type = match platform {
         "weixin" => "weixin",
@@ -2184,6 +2185,14 @@ async fn add_dynamic_binding(
                 pm.add_channel_binding(channel_type, tenant_name, agent_uuid);
             }
             pm.map_channel_tenant(channel_type, tenant_name, bot_uuid);
+            // Dynamically start channel for the new bot (no restart needed)
+            if platform == "wecom" {
+                let bot_id = credentials.get("bot_id").and_then(|v| v.as_str()).unwrap_or("");
+                let secret = credentials.get("secret").and_then(|v| v.as_str()).unwrap_or("");
+                if !bot_id.is_empty() {
+                    pm.start_dynamic_channel("wecom", tenant_name, bot_id, secret);
+                }
+            }
             tracing::info!(
                 platform = %platform,
                 tenant = %tenant_name,
