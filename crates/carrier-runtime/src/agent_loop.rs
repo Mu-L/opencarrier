@@ -130,667 +130,13 @@ pub async fn run_agent_loop(
     brain: Option<Arc<dyn Brain>>,
     sender_id: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
-    info!(agent = %manifest.name, "Starting agent loop");
-
-    // Extract hand-allowed env vars from manifest metadata (set by kernel for hand settings)
-    let hand_allowed_env: Vec<String> = manifest
-        .metadata
-        .get("hand_allowed_env")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-
-    // Recall relevant memories via text search
-    let memories = memory
-        .recall(
-            user_message,
-            5,
-            Some(MemoryFilter {
-                agent_id: Some(session.agent_id),
-                ..Default::default()
-            }),
-        )
-        .await
-        .unwrap_or_default();
-
-    // Fire BeforePromptBuild hook
-    let agent_id_str = session.agent_id.0.to_string();
-    if let Some(hook_reg) = hooks {
-        let ctx = crate::hooks::HookContext {
-            agent_name: &manifest.name,
-            agent_id: agent_id_str.as_str(),
-            event: carrier_types::agent::HookEvent::BeforePromptBuild,
-            data: serde_json::json!({
-                "system_prompt": &manifest.model.system_prompt,
-                "user_message": user_message,
-            }),
-        };
-        let _ = hook_reg.fire(&ctx);
-    }
-
-    // Build the system prompt — base prompt comes from kernel (prompt_builder),
-    // we append recalled memories here since they are resolved at loop time.
-    let mut system_prompt = manifest.model.system_prompt.clone();
-    if !memories.is_empty() {
-        let mem_pairs: Vec<(String, String)> = memories
-            .iter()
-            .map(|m| (String::new(), m.content.clone()))
-            .collect();
-        system_prompt.push_str("\n\n");
-        system_prompt.push_str(&crate::prompt_builder::build_memory_section(&mem_pairs));
-    }
-
-    // Add the user message to session history.
-    // When content blocks are provided (e.g. text + image from a channel),
-    // use multimodal message format so the LLM receives the image for vision.
-    if let Some(blocks) = user_content_blocks {
-        session.messages.push(Message::user_with_blocks(blocks));
-    } else {
-        session.messages.push(Message::user(user_message));
-    }
-
-    // Build the messages for the LLM, filtering system messages
-    // System prompt goes into the separate `system` field
-    let llm_messages: Vec<Message> = session
-        .messages
-        .iter()
-        .filter(|m| m.role != Role::System)
-        .cloned()
-        .collect();
-
-    // Validate and repair session history (drop orphans, merge consecutive)
-    let mut messages = crate::session_repair::validate_and_repair(&llm_messages);
-
-    // Inject canonical context as the first user message (not in system prompt)
-    // to keep the system prompt stable across turns for provider prompt caching.
-    if let Some(cc_msg) = manifest
-        .metadata
-        .get("canonical_context_msg")
-        .and_then(|v| v.as_str())
-    {
-        if !cc_msg.is_empty() {
-            messages.insert(0, Message::user(cc_msg));
-        }
-    }
-
-    let mut total_usage = TokenUsage::default();
-    let final_response;
-
-    // Safety valve: trim excessively long message histories to prevent context overflow.
-    // The full compaction system handles sophisticated summarization, but this prevents
-    // the catastrophic case where 200+ messages cause instant context overflow.
-    if messages.len() > MAX_HISTORY_MESSAGES {
-        let trim_count = messages.len() - MAX_HISTORY_MESSAGES;
-        warn!(
-            agent = %manifest.name,
-            total_messages = messages.len(),
-            trimming = trim_count,
-            "Trimming old messages to prevent context overflow"
-        );
-        messages.drain(..trim_count);
-        // Re-validate after trimming: the drain may have split a ToolUse/ToolResult
-        // pair across the cut boundary, leaving orphaned blocks that cause the LLM
-        // to return empty responses (input_tokens=0).
-        messages = crate::session_repair::validate_and_repair(&messages);
-    }
-
-    // Use autonomous config max_iterations if set, else default
-    let max_iterations = manifest
-        .autonomous
-        .as_ref()
-        .map(|a| a.max_iterations)
-        .unwrap_or(MAX_ITERATIONS);
-
-    // Initialize loop guard — scale circuit breaker for autonomous agents
-    let loop_guard_config = {
-        let mut cfg = LoopGuardConfig::default();
-        if max_iterations > cfg.global_circuit_breaker {
-            cfg.global_circuit_breaker = max_iterations * 3;
-        }
-        cfg
-    };
-    let mut loop_guard = LoopGuard::new(loop_guard_config);
-    let mut consecutive_max_tokens: u32 = 0;
-
-    // Build context budget from model's actual context window (or fallback to default)
-    let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
-    let context_budget = ContextBudget::new(ctx_window);
-    let mut any_tools_executed = false;
-
-    // Shadow with an owned Vec so we can refresh mid-loop when skills are installed
-    let mut tools_owned: Vec<ToolDefinition> = available_tools.to_vec();
-    let mut available_tools: &[ToolDefinition] = &tools_owned;
-
-    for iteration in 0..max_iterations {
-        debug!(iteration, "Agent loop iteration");
-
-        // Context overflow recovery pipeline (replaces emergency_trim_messages)
-        let recovery =
-            recover_from_overflow(&mut messages, &system_prompt, available_tools, ctx_window);
-        if recovery == RecoveryStage::FinalError {
-            warn!("Context overflow unrecoverable — suggest /reset or /compact");
-        }
-
-        // Re-validate tool_call/tool_result pairing after overflow drains
-        // which may have broken assistant→tool ordering invariants.
-        if recovery != RecoveryStage::None {
-            messages = crate::session_repair::validate_and_repair(&messages);
-        }
-
-        // Context guard: compact oversized tool results before LLM call
-        apply_context_guard(&mut messages, &context_budget, available_tools);
-
-        let request = CompletionRequest {
-            model: String::new(), // Model set by Brain/endpoint, not agent
-            messages: messages.clone(),
-            tools: available_tools.to_vec(),
-            max_tokens: manifest.model.max_tokens,
-            temperature: manifest.model.temperature,
-            system: Some(system_prompt.clone()),
-            thinking: None,
-            extra: Default::default(),
-        };
-
-        // Notify phase: Thinking
-        if let Some(cb) = on_phase {
-            cb(LoopPhase::Thinking);
-        }
-
-        // Call LLM with unified fallback across Brain endpoints
-        let modality = if manifest.model.modality.is_empty() {
-            "chat"
-        } else {
-            &manifest.model.modality
-        };
-        let mut response =
-            call_with_fallback(brain.as_ref(), &*driver, modality, request, None).await?;
-
-        total_usage.input_tokens += response.usage.input_tokens;
-        total_usage.output_tokens += response.usage.output_tokens;
-
-        // Recover tool calls output as text by models that don't use the tool_calls API field
-        // (e.g. Groq/Llama, DeepSeek emit `<function=name>{json}</function>` in text)
-        if matches!(
-            response.stop_reason,
-            StopReason::EndTurn | StopReason::StopSequence
-        ) && response.tool_calls.is_empty()
-        {
-            let recovered = recover_text_tool_calls(&response.text(), available_tools);
-            if !recovered.is_empty() {
-                info!(
-                    count = recovered.len(),
-                    "Recovered text-based tool calls → promoting to ToolUse"
-                );
-                response.tool_calls = recovered;
-                response.stop_reason = StopReason::ToolUse;
-                // Build ToolUse content blocks from recovered calls
-                let mut new_blocks: Vec<ContentBlock> = Vec::new();
-                for tc in &response.tool_calls {
-                    new_blocks.push(ContentBlock::ToolUse {
-                        id: tc.id.clone(),
-                        name: tc.name.clone(),
-                        input: tc.input.clone(),
-                        provider_metadata: None,
-                    });
-                }
-                response.content = new_blocks;
-            }
-        }
-
-        match response.stop_reason {
-            StopReason::EndTurn | StopReason::StopSequence => {
-                // LLM is done — extract text and save
-                let text = response.text();
-
-                // Parse reply directives from the response text
-                let (cleaned_text, parsed_directives) =
-                    crate::reply_directives::parse_directives(&text);
-                let text = cleaned_text;
-
-                // NO_REPLY: agent intentionally chose not to reply
-                if text.trim() == "NO_REPLY" || parsed_directives.silent {
-                    debug!(agent = %manifest.name, "Agent chose NO_REPLY/silent — silent completion");
-                    session
-                        .messages
-                        .push(Message::assistant("[no reply needed]".to_string()));
-                    memory
-                        .save_session_async(session)
-                        .await
-                        .map_err(|e| CarrierError::Memory(e.to_string()))?;
-                    return Ok(AgentLoopResult {
-                        response: String::new(),
-                        total_usage,
-                        iterations: iteration + 1,
-                        silent: true,
-                        directives: carrier_types::message::ReplyDirectives {
-                            reply_to: parsed_directives.reply_to,
-                            current_thread: parsed_directives.current_thread,
-                            silent: true,
-                        },
-                    });
-                }
-
-                // One-shot retry: if the LLM returns empty text with no tool use,
-                // try once more before accepting the empty result.
-                // Triggers on first call OR when input_tokens=0 (silently failed request).
-                if text.trim().is_empty() && response.tool_calls.is_empty() {
-                    let is_silent_failure =
-                        response.usage.input_tokens == 0 && response.usage.output_tokens == 0;
-                    if iteration == 0 || is_silent_failure {
-                        warn!(
-                            agent = %manifest.name,
-                            iteration,
-                            input_tokens = response.usage.input_tokens,
-                            output_tokens = response.usage.output_tokens,
-                            silent_failure = is_silent_failure,
-                            "Empty response, retrying once"
-                        );
-                        // Re-validate messages before retry — the history may have
-                        // broken tool_use/tool_result pairs that caused the failure.
-                        if is_silent_failure {
-                            messages = crate::session_repair::validate_and_repair(&messages);
-                        }
-                        messages.push(Message::assistant("[no response]".to_string()));
-                        messages.push(Message::user("Please provide your response.".to_string()));
-                        continue;
-                    }
-                }
-
-                // Guard against empty response — covers both iteration 0 and post-tool cycles
-                let text = if text.trim().is_empty() {
-                    warn!(
-                        agent = %manifest.name,
-                        iteration,
-                        input_tokens = total_usage.input_tokens,
-                        output_tokens = total_usage.output_tokens,
-                        messages_count = messages.len(),
-                        "Empty response from LLM — guard activated"
-                    );
-                    if any_tools_executed {
-                        "[Task completed — the agent executed tools but did not produce a text summary.]".to_string()
-                    } else {
-                        "[The model returned an empty response. This usually means the model is overloaded, the context is too large, or the API key lacks credits. Try again or check /status.]".to_string()
-                    }
-                } else {
-                    text
-                };
-                final_response = text.clone();
-                session.messages.push(Message::assistant(text));
-
-                // Prune NO_REPLY heartbeat turns to save context budget
-                crate::session_repair::prune_heartbeat_turns(&mut session.messages, 10);
-
-                // Save session
-                memory
-                    .save_session_async(session)
-                    .await
-                    .map_err(|e| CarrierError::Memory(e.to_string()))?;
-
-                // Remember this interaction
-                let interaction_text = format!(
-                    "User asked: {}\nI responded: {}",
-                    user_message, final_response
-                );
-                let _ = memory
-                    .remember(
-                        session.agent_id,
-                        &interaction_text,
-                        MemorySource::Conversation,
-                        "episodic",
-                        HashMap::new(),
-                    )
-                    .await;
-
-                // Notify phase: Done
-                if let Some(cb) = on_phase {
-                    cb(LoopPhase::Done);
-                }
-
-                info!(
-                    agent = %manifest.name,
-                    iterations = iteration + 1,
-                    tokens = total_usage.total(),
-                    "Agent loop completed"
-                );
-
-                // Fire AgentLoopEnd hook
-                if let Some(hook_reg) = hooks {
-                    let ctx = crate::hooks::HookContext {
-                        agent_name: &manifest.name,
-                        agent_id: agent_id_str.as_str(),
-                        event: carrier_types::agent::HookEvent::AgentLoopEnd,
-                        data: serde_json::json!({
-                            "iterations": iteration + 1,
-                            "response_length": final_response.len(),
-                        }),
-                    };
-                    let _ = hook_reg.fire(&ctx);
-                }
-
-                return Ok(AgentLoopResult {
-                    response: final_response,
-                    total_usage,
-                    iterations: iteration + 1,
-
-                    silent: false,
-                    directives: Default::default(),
-                });
-            }
-            StopReason::ToolUse => {
-                // Reset MaxTokens continuation counter on tool use
-                consecutive_max_tokens = 0;
-                any_tools_executed = true;
-
-                // Execute tool calls
-                let assistant_blocks = response.content.clone();
-
-                // Add assistant message with tool use blocks
-                session.messages.push(Message {
-                    role: Role::Assistant,
-                    content: MessageContent::Blocks(assistant_blocks.clone()),
-                });
-                messages.push(Message {
-                    role: Role::Assistant,
-                    content: MessageContent::Blocks(assistant_blocks),
-                });
-
-                // Build allowed tool names list for capability enforcement
-                let allowed_tool_names: Vec<String> =
-                    available_tools.iter().map(|t| t.name.clone()).collect();
-                let caller_id_str = session.agent_id.to_string();
-
-                // Execute each tool call with loop guard, timeout, and truncation
-                let mut tool_result_blocks = Vec::new();
-                for tool_call in &response.tool_calls {
-                    // Loop guard check
-                    let verdict = loop_guard.check(&tool_call.name, &tool_call.input);
-                    match &verdict {
-                        LoopGuardVerdict::CircuitBreak(msg) => {
-                            warn!(tool = %tool_call.name, "Circuit breaker triggered");
-                            // Save session before bailing
-                            if let Err(e) = memory.save_session_async(session).await {
-                                warn!("Failed to save session on circuit break: {e}");
-                            }
-                            // Fire AgentLoopEnd hook on circuit break
-                            if let Some(hook_reg) = hooks {
-                                let ctx = crate::hooks::HookContext {
-                                    agent_name: &manifest.name,
-                                    agent_id: agent_id_str.as_str(),
-                                    event: carrier_types::agent::HookEvent::AgentLoopEnd,
-                                    data: serde_json::json!({
-                                        "reason": "circuit_break",
-                                        "error": msg.as_str(),
-                                    }),
-                                };
-                                let _ = hook_reg.fire(&ctx);
-                            }
-                            return Err(CarrierError::Internal(msg.clone()));
-                        }
-                        LoopGuardVerdict::Block(msg) => {
-                            warn!(tool = %tool_call.name, "Tool call blocked by loop guard");
-                            tool_result_blocks.push(ContentBlock::ToolResult {
-                                tool_use_id: tool_call.id.clone(),
-                                tool_name: tool_call.name.clone(),
-                                content: msg.clone(),
-                                is_error: true,
-                            });
-                            continue;
-                        }
-                        _ => {} // Allow or Warn — proceed with execution
-                    }
-
-                    debug!(tool = %tool_call.name, id = %tool_call.id, "Executing tool");
-
-                    // Notify phase: ToolUse
-                    if let Some(cb) = on_phase {
-                        let sanitized: String = tool_call
-                            .name
-                            .chars()
-                            .filter(|c| !c.is_control())
-                            .take(64)
-                            .collect();
-                        cb(LoopPhase::ToolUse {
-                            tool_name: sanitized,
-                        });
-                    }
-
-                    // Fire BeforeToolCall hook (can block execution)
-                    if let Some(hook_reg) = hooks {
-                        let ctx = crate::hooks::HookContext {
-                            agent_name: &manifest.name,
-                            agent_id: &caller_id_str,
-                            event: carrier_types::agent::HookEvent::BeforeToolCall,
-                            data: serde_json::json!({
-                                "tool_name": &tool_call.name,
-                                "input": &tool_call.input,
-                            }),
-                        };
-                        if let Err(reason) = hook_reg.fire(&ctx) {
-                            tool_result_blocks.push(ContentBlock::ToolResult {
-                                tool_use_id: tool_call.id.clone(),
-                                tool_name: tool_call.name.clone(),
-                                content: format!(
-                                    "Hook blocked tool '{}': {}",
-                                    tool_call.name, reason
-                                ),
-                                is_error: true,
-                            });
-                            continue;
-                        }
-                    }
-
-                    // Resolve effective exec policy (per-agent override or global)
-                    let effective_exec_policy = manifest.exec_policy.as_ref();
-
-                    let tool_ctx = ToolContext {
-                        kernel: kernel.as_ref(),
-                        allowed_tools: Some(&allowed_tool_names),
-                        caller_agent_id: Some(&caller_id_str),
-                        mcp_connections,
-                        web_ctx,
-                        browser_ctx,
-                        allowed_env_vars: if hand_allowed_env.is_empty() {
-                            None
-                        } else {
-                            Some(&hand_allowed_env)
-                        },
-                        workspace_root,
-                        brain: brain.as_ref(),
-                        exec_policy: effective_exec_policy,
-
-                        docker_config,
-                        process_manager,
-                        sender_id,
-                    };
-
-                    // Timeout-wrapped execution
-                    let result = match tokio::time::timeout(
-                        Duration::from_secs(TOOL_TIMEOUT_SECS),
-                        tool_runner::execute_tool(
-                            &tool_call.id,
-                            &tool_call.name,
-                            &tool_call.input,
-                            &tool_ctx,
-                        ),
-                    )
-                    .await
-                    {
-                        Ok(result) => result,
-                        Err(_) => {
-                            warn!(tool = %tool_call.name, "Tool execution timed out after {}s", TOOL_TIMEOUT_SECS);
-                            carrier_types::tool::ToolResult {
-                                tool_use_id: tool_call.id.clone(),
-                                content: format!(
-                                    "Tool '{}' timed out after {}s.",
-                                    tool_call.name, TOOL_TIMEOUT_SECS
-                                ),
-                                is_error: true,
-                            }
-                        }
-                    };
-
-                    // Fire AfterToolCall hook
-                    if let Some(hook_reg) = hooks {
-                        let ctx = crate::hooks::HookContext {
-                            agent_name: &manifest.name,
-                            agent_id: caller_id_str.as_str(),
-                            event: carrier_types::agent::HookEvent::AfterToolCall,
-                            data: serde_json::json!({
-                                "tool_name": &tool_call.name,
-                                "result": &result.content,
-                                "is_error": result.is_error,
-                            }),
-                        };
-                        let _ = hook_reg.fire(&ctx);
-                    }
-
-                    // Dynamic truncation based on context budget (replaces flat MAX_TOOL_RESULT_CHARS)
-                    let content = truncate_tool_result_dynamic(&result.content, &context_budget);
-
-                    // Append warning if verdict was Warn
-                    let final_content = if let LoopGuardVerdict::Warn(ref warn_msg) = verdict {
-                        format!("{content}\n\n[LOOP GUARD] {warn_msg}")
-                    } else {
-                        content
-                    };
-
-                    tool_result_blocks.push(ContentBlock::ToolResult {
-                        tool_use_id: result.tool_use_id,
-                        tool_name: tool_call.name.clone(),
-                        content: final_content,
-                        is_error: result.is_error,
-                    });
-                }
-
-                append_tool_error_guidance(&mut tool_result_blocks);
-
-                // Detect tool errors and inject guidance to prevent fabrication
-                let error_count = tool_result_blocks
-                    .iter()
-                    .filter(|b| matches!(b, ContentBlock::ToolResult { is_error: true, .. }))
-                    .count();
-                if error_count > 0 {
-                    tool_result_blocks.push(ContentBlock::Text {
-                        text: format!(
-                            "[System: {} tool(s) returned errors. Report the error honestly \
-                             to the user. Do NOT fabricate results or pretend the tool succeeded. \
-                             If a search or fetch failed, tell the user it failed and suggest \
-                             alternatives instead of making up data.]",
-                            error_count
-                        ),
-                        provider_metadata: None,
-                    });
-                }
-
-                // Add tool results as a user message (Anthropic API requirement)
-                let tool_results_msg = Message {
-                    role: Role::User,
-                    content: MessageContent::Blocks(tool_result_blocks.clone()),
-                };
-                session.messages.push(tool_results_msg.clone());
-                messages.push(tool_results_msg);
-
-                // Dynamic tool refresh: if tools that install/modify skills were called,
-                // rebuild the tool list so the LLM can use new tools in the next iteration.
-                let tools_may_have_changed = response.tool_calls.iter().any(|tc| {
-                    matches!(
-                        tc.name.as_str(),
-                        "train_write" | "clone_install" | "file_write"
-                    )
-                });
-                if tools_may_have_changed {
-                    if let Some(ref kernel) = kernel {
-                        let agent_id_str = session.agent_id.to_string();
-                        if let Some(new_tools) = kernel.refresh_tools(&agent_id_str) {
-                            if new_tools.len() != available_tools.len() {
-                                let added = new_tools.len().saturating_sub(available_tools.len());
-                                info!(
-                                    added,
-                                    total = new_tools.len(),
-                                    "Tool list refreshed after skill installation"
-                                );
-                                tools_owned = new_tools;
-                                available_tools = &tools_owned;
-                            }
-                        }
-                    }
-                }
-
-                // Interim save after tool execution to prevent data loss on crash
-                if let Err(e) = memory.save_session_async(session).await {
-                    warn!("Failed to interim-save session: {e}");
-                }
-            }
-            StopReason::MaxTokens => {
-                consecutive_max_tokens += 1;
-                if consecutive_max_tokens >= MAX_CONTINUATIONS {
-                    // Return partial response instead of continuing forever
-                    let text = response.text();
-                    let text = if text.trim().is_empty() {
-                        "[Partial response — token limit reached with no text output.]".to_string()
-                    } else {
-                        text
-                    };
-                    session.messages.push(Message::assistant(&text));
-                    if let Err(e) = memory.save_session_async(session).await {
-                        warn!("Failed to save session on max continuations: {e}");
-                    }
-                    warn!(
-                        iteration,
-                        consecutive_max_tokens,
-                        "Max continuations reached, returning partial response"
-                    );
-                    // Fire AgentLoopEnd hook
-                    if let Some(hook_reg) = hooks {
-                        let ctx = crate::hooks::HookContext {
-                            agent_name: &manifest.name,
-                            agent_id: agent_id_str.as_str(),
-                            event: carrier_types::agent::HookEvent::AgentLoopEnd,
-                            data: serde_json::json!({
-                                "iterations": iteration + 1,
-                                "reason": "max_continuations",
-                            }),
-                        };
-                        let _ = hook_reg.fire(&ctx);
-                    }
-                    return Ok(AgentLoopResult {
-                        response: text,
-                        total_usage,
-                        iterations: iteration + 1,
-                        silent: false,
-                        directives: Default::default(),
-                    });
-                }
-                // Model hit token limit — add partial response and continue
-                let text = response.text();
-                session.messages.push(Message::assistant(&text));
-                messages.push(Message::assistant(&text));
-                session.messages.push(Message::user("Please continue."));
-                messages.push(Message::user("Please continue."));
-                warn!(iteration, "Max tokens hit, continuing");
-            }
-        }
-    }
-
-    // Save session before failing so conversation history is preserved
-    if let Err(e) = memory.save_session_async(session).await {
-        warn!("Failed to save session on max iterations: {e}");
-    }
-
-    // Fire AgentLoopEnd hook on max iterations exceeded
-    if let Some(hook_reg) = hooks {
-        let ctx = crate::hooks::HookContext {
-            agent_name: &manifest.name,
-            agent_id: agent_id_str.as_str(),
-            event: carrier_types::agent::HookEvent::AgentLoopEnd,
-            data: serde_json::json!({
-                "reason": "max_iterations_exceeded",
-                "iterations": max_iterations,
-            }),
-        };
-        let _ = hook_reg.fire(&ctx);
-    }
-
-    Err(CarrierError::MaxIterationsExceeded(max_iterations))
+    run_agent_loop_impl(
+        manifest, user_message, session, memory, driver, available_tools,
+        kernel, None, mcp_connections, web_ctx, browser_ctx, workspace_root,
+        on_phase, docker_config, hooks, context_window_tokens, process_manager,
+        user_content_blocks, brain, sender_id,
+    )
+    .await
 }
 
 /// Call an LLM driver with automatic retry on rate-limit and overload errors.
@@ -985,7 +331,7 @@ async fn call_with_fallback(
 /// as tokens arrive from the LLM. Tool execution happens between LLM calls
 /// and is not streamed.
 #[allow(clippy::too_many_arguments)]
-pub async fn run_agent_loop_streaming(
+async fn run_agent_loop_impl(
     manifest: &AgentManifest,
     user_message: &str,
     session: &mut Session,
@@ -993,7 +339,7 @@ pub async fn run_agent_loop_streaming(
     driver: Arc<dyn LlmDriver>,
     available_tools: &[ToolDefinition],
     kernel: Option<Arc<dyn KernelHandle>>,
-    stream_tx: mpsc::Sender<StreamEvent>,
+    stream_tx: Option<mpsc::Sender<StreamEvent>>,
     mcp_connections: Option<&dashmap::DashMap<String, McpConnection>>,
     web_ctx: Option<&WebToolsContext>,
     browser_ctx: Option<&crate::browser::BrowserManager>,
@@ -1007,7 +353,7 @@ pub async fn run_agent_loop_streaming(
     brain: Option<Arc<dyn Brain>>,
     sender_id: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
-    info!(agent = %manifest.name, "Starting streaming agent loop");
+    info!(agent = %manifest.name, "Starting agent loop");
 
     // Extract hand-allowed env vars from manifest metadata (set by kernel for hand settings)
     let hand_allowed_env: Vec<String> = manifest
@@ -1097,13 +443,9 @@ pub async fn run_agent_loop_streaming(
             agent = %manifest.name,
             total_messages = messages.len(),
             trimming = trim_count,
-            "Trimming old messages to prevent context overflow (streaming)"
+            "Trimming old messages to prevent context overflow "
         );
-        messages.drain(..trim_count);
-        // Re-validate after trimming: the drain may have split a ToolUse/ToolResult
-        // pair across the cut boundary, leaving orphaned blocks that cause the LLM
-        // to return empty responses (input_tokens=0).
-        messages = crate::session_repair::validate_and_repair(&messages);
+        crate::context_overflow::pair_aware_drain(&mut messages, trim_count);
     }
 
     // Use autonomous config max_iterations if set, else default
@@ -1130,8 +472,8 @@ pub async fn run_agent_loop_streaming(
     let mut any_tools_executed = false;
 
     // Shadow with an owned Vec so we can refresh mid-loop when skills are installed
-    let mut tools_owned_streaming: Vec<ToolDefinition> = available_tools.to_vec();
-    let mut available_tools: &[ToolDefinition] = &tools_owned_streaming;
+    let mut tools_owned: Vec<ToolDefinition> = available_tools.to_vec();
+    let mut available_tools: &[ToolDefinition] = &tools_owned;
 
     for iteration in 0..max_iterations {
         debug!(iteration, "Streaming agent loop iteration");
@@ -1142,19 +484,24 @@ pub async fn run_agent_loop_streaming(
         match &recovery {
             RecoveryStage::None => {}
             RecoveryStage::FinalError => {
-                if stream_tx.send(StreamEvent::PhaseChange {
-                    phase: "context_warning".to_string(),
-                    detail: Some("Context overflow unrecoverable. Use /reset or /compact.".to_string()),
-                }).await.is_err() {
-                    warn!("Stream consumer disconnected while sending context overflow warning");
+                warn!("Context overflow unrecoverable — suggest /reset or /compact");
+                if let Some(tx) = &stream_tx {
+                    if tx.send(StreamEvent::PhaseChange {
+                        phase: "context_warning".to_string(),
+                        detail: Some("Context overflow unrecoverable. Use /reset or /compact.".to_string()),
+                    }).await.is_err() {
+                        warn!("Stream consumer disconnected while sending context overflow warning");
+                    }
                 }
             }
             _ => {
-                if stream_tx.send(StreamEvent::PhaseChange {
-                    phase: "context_warning".to_string(),
-                    detail: Some("Older messages trimmed to stay within context limits. Use /compact for smarter summarization.".to_string()),
-                }).await.is_err() {
-                    warn!("Stream consumer disconnected while sending context trim warning");
+                if let Some(tx) = &stream_tx {
+                    if tx.send(StreamEvent::PhaseChange {
+                        phase: "context_warning".to_string(),
+                        detail: Some("Older messages trimmed to stay within context limits. Use /compact for smarter summarization.".to_string()),
+                    }).await.is_err() {
+                        warn!("Stream consumer disconnected while sending context trim warning");
+                    }
                 }
             }
         }
@@ -1173,11 +520,8 @@ pub async fn run_agent_loop_streaming(
             extra: Default::default(),
         };
 
-        // Notify phase: on first iteration emit Streaming; on subsequent
-        // iterations (after tool execution) emit Thinking so the UI shows
-        // "Thinking..." instead of overwriting streamed text with "streaming".
         if let Some(cb) = on_phase {
-            if iteration == 0 {
+            if stream_tx.is_some() && iteration == 0 {
                 cb(LoopPhase::Streaming);
             } else {
                 cb(LoopPhase::Thinking);
@@ -1198,7 +542,7 @@ pub async fn run_agent_loop_streaming(
             &*driver,
             modality,
             request,
-            Some(stream_tx.clone()),
+            stream_tx.clone(),
         )
         .await?;
 
@@ -1215,7 +559,7 @@ pub async fn run_agent_loop_streaming(
             if !recovered.is_empty() {
                 info!(
                     count = recovered.len(),
-                    "Recovered text-based tool calls (streaming) → promoting to ToolUse"
+                    "Recovered text-based tool calls  → promoting to ToolUse"
                 );
                 response.tool_calls = recovered;
                 response.stop_reason = StopReason::ToolUse;
@@ -1243,7 +587,7 @@ pub async fn run_agent_loop_streaming(
 
                 // NO_REPLY: agent intentionally chose not to reply
                 if text.trim() == "NO_REPLY" || parsed_directives_s.silent {
-                    debug!(agent = %manifest.name, "Agent chose NO_REPLY/silent (streaming) — silent completion");
+                    debug!(agent = %manifest.name, "Agent chose NO_REPLY/silent  — silent completion");
                     session
                         .messages
                         .push(Message::assistant("[no reply needed]".to_string()));
@@ -1277,7 +621,7 @@ pub async fn run_agent_loop_streaming(
                             input_tokens = response.usage.input_tokens,
                             output_tokens = response.usage.output_tokens,
                             silent_failure = is_silent_failure,
-                            "Empty response (streaming), retrying once"
+                            "Empty response , retrying once"
                         );
                         // Re-validate messages before retry — the history may have
                         // broken tool_use/tool_result pairs that caused the failure.
@@ -1298,7 +642,7 @@ pub async fn run_agent_loop_streaming(
                         input_tokens = total_usage.input_tokens,
                         output_tokens = total_usage.output_tokens,
                         messages_count = messages.len(),
-                        "Empty response from LLM (streaming) — guard activated"
+                        "Empty response from LLM  — guard activated"
                     );
                     if any_tools_executed {
                         "[Task completed — the agent executed tools but did not produce a text summary.]".to_string()
@@ -1396,7 +740,7 @@ pub async fn run_agent_loop_streaming(
                     let verdict = loop_guard.check(&tool_call.name, &tool_call.input);
                     match &verdict {
                         LoopGuardVerdict::CircuitBreak(msg) => {
-                            warn!(tool = %tool_call.name, "Circuit breaker triggered (streaming)");
+                            warn!(tool = %tool_call.name, "Circuit breaker triggered ");
                             if let Err(e) = memory.save_session_async(session).await {
                                 warn!("Failed to save session on circuit break: {e}");
                             }
@@ -1416,7 +760,7 @@ pub async fn run_agent_loop_streaming(
                             return Err(CarrierError::Internal(msg.clone()));
                         }
                         LoopGuardVerdict::Block(msg) => {
-                            warn!(tool = %tool_call.name, "Tool call blocked by loop guard (streaming)");
+                            warn!(tool = %tool_call.name, "Tool call blocked by loop guard ");
                             tool_result_blocks.push(ContentBlock::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 tool_name: tool_call.name.clone(),
@@ -1428,7 +772,7 @@ pub async fn run_agent_loop_streaming(
                         _ => {} // Allow or Warn — proceed with execution
                     }
 
-                    debug!(tool = %tool_call.name, id = %tool_call.id, "Executing tool (streaming)");
+                    debug!(tool = %tool_call.name, id = %tool_call.id, "Executing tool ");
 
                     // Notify phase: ToolUse
                     if let Some(cb) = on_phase {
@@ -1506,7 +850,7 @@ pub async fn run_agent_loop_streaming(
                     {
                         Ok(result) => result,
                         Err(_) => {
-                            warn!(tool = %tool_call.name, "Tool execution timed out after {}s (streaming)", TOOL_TIMEOUT_SECS);
+                            warn!(tool = %tool_call.name, "Tool execution timed out after {}s ", TOOL_TIMEOUT_SECS);
                             carrier_types::tool::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 content: format!(
@@ -1544,18 +888,20 @@ pub async fn run_agent_loop_streaming(
                     };
 
                     // Notify client of tool execution result (detect dead consumer)
-                    let preview: String = final_content.chars().take(300).collect();
-                    if stream_tx
-                        .send(StreamEvent::ToolExecutionResult {
-                            id: tool_call.id.clone(),
-                            name: tool_call.name.clone(),
-                            result_preview: preview,
-                            is_error: result.is_error,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        warn!(agent = %manifest.name, "Stream consumer disconnected — continuing tool loop but will not stream further");
+                    if let Some(tx) = &stream_tx {
+                        let preview: String = final_content.chars().take(300).collect();
+                        if tx
+                            .send(StreamEvent::ToolExecutionResult {
+                                id: tool_call.id.clone(),
+                                name: tool_call.name.clone(),
+                                result_preview: preview,
+                                is_error: result.is_error,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            warn!(agent = %manifest.name, "Stream consumer disconnected — continuing tool loop but will not stream further");
+                        }
                     }
 
                     tool_result_blocks.push(ContentBlock::ToolResult {
@@ -1609,10 +955,10 @@ pub async fn run_agent_loop_streaming(
                                 info!(
                                     added,
                                     total = new_tools.len(),
-                                    "Tool list refreshed after skill installation (streaming)"
+                                    "Tool list refreshed after skill installation "
                                 );
-                                tools_owned_streaming = new_tools;
-                                available_tools = &tools_owned_streaming;
+                                tools_owned = new_tools;
+                                available_tools = &tools_owned;
                             }
                         }
                     }
@@ -1638,7 +984,7 @@ pub async fn run_agent_loop_streaming(
                     warn!(
                         iteration,
                         consecutive_max_tokens,
-                        "Max continuations reached (streaming), returning partial response"
+                        "Max continuations reached , returning partial response"
                     );
                     // Fire AgentLoopEnd hook
                     if let Some(hook_reg) = hooks {
@@ -1666,7 +1012,7 @@ pub async fn run_agent_loop_streaming(
                 messages.push(Message::assistant(&text));
                 session.messages.push(Message::user("Please continue."));
                 messages.push(Message::user("Please continue."));
-                warn!(iteration, "Max tokens hit (streaming), continuing");
+                warn!(iteration, "Max tokens hit , continuing");
             }
         }
     }
@@ -1690,6 +1036,38 @@ pub async fn run_agent_loop_streaming(
     }
 
     Err(CarrierError::MaxIterationsExceeded(max_iterations))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run_agent_loop_streaming(
+    manifest: &AgentManifest,
+    user_message: &str,
+    session: &mut Session,
+    memory: &MemorySubstrate,
+    driver: Arc<dyn LlmDriver>,
+    available_tools: &[ToolDefinition],
+    kernel: Option<Arc<dyn KernelHandle>>,
+    stream_tx: mpsc::Sender<StreamEvent>,
+    mcp_connections: Option<&dashmap::DashMap<String, McpConnection>>,
+    web_ctx: Option<&WebToolsContext>,
+    browser_ctx: Option<&crate::browser::BrowserManager>,
+    workspace_root: Option<&Path>,
+    on_phase: Option<&PhaseCallback>,
+    docker_config: Option<&carrier_types::config::DockerSandboxConfig>,
+    hooks: Option<&crate::hooks::HookRegistry>,
+    context_window_tokens: Option<usize>,
+    process_manager: Option<&crate::process_manager::ProcessManager>,
+    user_content_blocks: Option<Vec<ContentBlock>>,
+    brain: Option<Arc<dyn Brain>>,
+    sender_id: Option<&str>,
+) -> CarrierResult<AgentLoopResult> {
+    run_agent_loop_impl(
+        manifest, user_message, session, memory, driver, available_tools,
+        kernel, Some(stream_tx), mcp_connections, web_ctx, browser_ctx, workspace_root,
+        on_phase, docker_config, hooks, context_window_tokens, process_manager,
+        user_content_blocks, brain, sender_id,
+    )
+    .await
 }
 
 /// Recover tool calls that LLMs output as plain text instead of the proper

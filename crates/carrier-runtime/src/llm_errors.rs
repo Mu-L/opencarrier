@@ -128,7 +128,6 @@ const FORBIDDEN_NON_AUTH_PATTERNS: &[&str] = &[
     "restricted",
     "not enabled",
     "does not exist",
-    "model", // model-level 403 (e.g., "model access forbidden")
 ];
 
 /// Rate-limit patterns.
@@ -309,26 +308,14 @@ pub fn classify_error(message: &str, status: Option<u16>) -> ClassifiedError {
     if matches_any(&lower, BILLING_PATTERNS) {
         return build(LlmErrorCategory::Billing);
     }
-    if status == Some(402) {
-        return build(LlmErrorCategory::Billing);
-    }
 
     // 3. Auth
     if matches_any(&lower, AUTH_PATTERNS) {
         return build(LlmErrorCategory::Auth);
     }
-    // Note: 403 is NOT included here because it's fully handled in the
-    // status-code fast-path above (where FORBIDDEN_NON_AUTH_PATTERNS can
-    // redirect it to the general pipeline for non-auth 403s).
-    if status == Some(401) {
-        return build(LlmErrorCategory::Auth);
-    }
 
     // 4. Rate limit
     if matches_any(&lower, RATE_LIMIT_PATTERNS) {
-        return build(LlmErrorCategory::RateLimit);
-    }
-    if status == Some(429) {
         return build(LlmErrorCategory::RateLimit);
     }
 

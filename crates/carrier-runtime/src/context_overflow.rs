@@ -10,7 +10,69 @@
 
 use carrier_types::message::{ContentBlock, Message, MessageContent};
 use carrier_types::tool::ToolDefinition;
+use std::collections::HashSet;
 use tracing::{debug, warn};
+
+/// Drain `count` messages from the front, ensuring no ToolUse/ToolResult pairs
+/// are split at the cut boundary.
+///
+/// After draining, removes orphaned ToolResult blocks at the front of the
+/// remaining messages whose matching ToolUse was in the drained portion.
+pub fn pair_aware_drain(messages: &mut Vec<Message>, count: usize) {
+    if count == 0 || messages.is_empty() {
+        return;
+    }
+    let cut = count.min(messages.len());
+    messages.drain(..cut);
+
+    // Collect ToolUse IDs still present in remaining messages
+    let valid_tool_uses: HashSet<String> = messages
+        .iter()
+        .flat_map(|m| match &m.content {
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            _ => vec![],
+        })
+        .collect();
+
+    // Remove orphaned ToolResults from the front until we hit a clean message
+    let mut i = 0;
+    while i < messages.len() {
+        let changed = match &mut messages[i].content {
+            MessageContent::Blocks(blocks) => {
+                let before = blocks.len();
+                blocks.retain(|b| match b {
+                    ContentBlock::ToolResult { tool_use_id, .. } => {
+                        valid_tool_uses.contains(tool_use_id)
+                    }
+                    _ => true,
+                });
+                before != blocks.len()
+            }
+            _ => false,
+        };
+
+        // Remove message if now empty
+        let is_empty = match &messages[i].content {
+            MessageContent::Text(s) => s.is_empty(),
+            MessageContent::Blocks(b) => b.is_empty(),
+        };
+
+        if is_empty {
+            messages.remove(i);
+        } else if !changed {
+            // No orphaned blocks at this position — past the boundary
+            break;
+        } else {
+            i += 1;
+        }
+    }
+}
 
 /// Recovery stage that was applied.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,7 +122,7 @@ pub fn recover_from_overflow(
                 removing = remove,
                 "Stage 1: moderate trim to last {keep} messages"
             );
-            messages.drain(..remove);
+            pair_aware_drain(messages, remove);
             // Re-check after trim
             let new_est = estimate_tokens(messages, system_prompt, tools);
             if new_est <= threshold_70 {
@@ -84,7 +146,7 @@ pub fn recover_from_overflow(
                  The conversation continues from here. Use /compact for smarter summarization.]",
                 remove
             ));
-            messages.drain(..remove);
+            pair_aware_drain(messages, remove);
             messages.insert(0, summary);
 
             let new_est = estimate_tokens(messages, system_prompt, tools);

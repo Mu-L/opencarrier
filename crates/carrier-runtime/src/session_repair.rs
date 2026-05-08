@@ -1,9 +1,8 @@
 //! Session history validation and repair.
 //!
-//! Before sending message history to the LLM, this module validates and
-//! repairs common issues:
+//! Safety net for message history before sending to the LLM.
+//! Handles issues from interrupted sessions, crashes, or edge cases:
 //! - Orphaned ToolResult blocks (no matching ToolUse)
-//! - Misplaced ToolResults (not immediately after their matching ToolUse)
 //! - Missing ToolResults for ToolUse blocks (synthetic error insertion)
 //! - Duplicate ToolResults for the same tool_use_id
 //! - Empty messages with no content
@@ -24,8 +23,6 @@ pub struct RepairStats {
     pub empty_messages_removed: usize,
     /// Number of consecutive same-role messages merged.
     pub messages_merged: usize,
-    /// Number of ToolResults reordered to follow their ToolUse.
-    pub results_reordered: usize,
     /// Number of synthetic error results inserted for unmatched ToolUse.
     pub synthetic_results_inserted: usize,
     /// Number of duplicate ToolResults removed.
@@ -113,10 +110,6 @@ pub fn validate_and_repair_with_stats(messages: &[Message]) -> (Vec<Message>, Re
         });
     }
 
-    // Phase 2b: Reorder misplaced ToolResults
-    let reordered_count = reorder_tool_results(&mut cleaned);
-    stats.results_reordered = reordered_count;
-
     // Phase 2c: Insert synthetic error results for unmatched ToolUse blocks
     let synthetic_count = insert_synthetic_results(&mut cleaned);
     stats.synthetic_results_inserted = synthetic_count;
@@ -167,7 +160,6 @@ pub fn validate_and_repair_with_stats(messages: &[Message]) -> (Vec<Message>, Re
             orphaned = stats.orphaned_results_removed,
             empty = stats.empty_messages_removed,
             merged = stats.messages_merged,
-            reordered = stats.results_reordered,
             synthetic = stats.synthetic_results_inserted,
             duplicates = stats.duplicates_removed,
             "Session repair applied fixes"
@@ -175,148 +167,6 @@ pub fn validate_and_repair_with_stats(messages: &[Message]) -> (Vec<Message>, Re
     }
 
     (merged, stats)
-}
-
-/// Phase 2b: Reorder misplaced ToolResults -- ensure each result follows its use.
-///
-/// Builds a map of tool_use_id to the index of the assistant message containing it.
-/// For each user message containing ToolResults, checks if the previous message is
-/// the correct assistant message. If not, moves the ToolResult to the correct position.
-fn reorder_tool_results(messages: &mut Vec<Message>) -> usize {
-    // Build map: tool_use_id → index of the assistant message containing it
-    let mut tool_use_index: HashMap<String, usize> = HashMap::new();
-    for (idx, msg) in messages.iter().enumerate() {
-        if msg.role == Role::Assistant {
-            if let MessageContent::Blocks(blocks) = &msg.content {
-                for block in blocks {
-                    if let ContentBlock::ToolUse { id, .. } = block {
-                        tool_use_index.insert(id.clone(), idx);
-                    }
-                }
-            }
-        }
-    }
-
-    // Collect misplaced ToolResult blocks that need to move.
-    // Track (msg_idx, tool_use_id, block, target_assistant_idx).
-    let mut misplaced: Vec<(usize, String, ContentBlock, usize)> = Vec::new();
-
-    for (msg_idx, msg) in messages.iter().enumerate() {
-        if msg.role != Role::User {
-            continue;
-        }
-        if let MessageContent::Blocks(blocks) = &msg.content {
-            for block in blocks {
-                if let ContentBlock::ToolResult { tool_use_id, .. } = block {
-                    if let Some(&assistant_idx) = tool_use_index.get(tool_use_id) {
-                        let expected_idx = assistant_idx + 1;
-                        if msg_idx != expected_idx {
-                            misplaced.push((
-                                msg_idx,
-                                tool_use_id.clone(),
-                                block.clone(),
-                                assistant_idx,
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if misplaced.is_empty() {
-        return 0;
-    }
-
-    let reorder_count = misplaced.len();
-
-    // Build a set of (msg_idx, tool_use_id) pairs that are misplaced,
-    // so we only remove blocks from the specific messages they came from.
-    let misplaced_sources: HashSet<(usize, String)> = misplaced
-        .iter()
-        .map(|(msg_idx, id, _, _)| (*msg_idx, id.clone()))
-        .collect();
-
-    // Remove misplaced blocks from their specific source messages only
-    for (msg_idx, msg) in messages.iter_mut().enumerate() {
-        if msg.role != Role::User {
-            continue;
-        }
-        if let MessageContent::Blocks(blocks) = &mut msg.content {
-            blocks.retain(|b| {
-                if let ContentBlock::ToolResult { tool_use_id, .. } = b {
-                    // Only remove if this specific (msg_idx, tool_use_id) is misplaced
-                    !misplaced_sources.contains(&(msg_idx, tool_use_id.clone()))
-                } else {
-                    true
-                }
-            });
-        }
-    }
-
-    // Remove any now-empty messages
-    messages.retain(|m| match &m.content {
-        MessageContent::Text(s) => !s.is_empty(),
-        MessageContent::Blocks(b) => !b.is_empty(),
-    });
-
-    // Group misplaced results by their target assistant index.
-    let mut insertions: HashMap<usize, Vec<ContentBlock>> = HashMap::new();
-    for (_msg_idx, _id, block, assistant_idx) in misplaced {
-        insertions.entry(assistant_idx).or_default().push(block);
-    }
-
-    // Re-index after removals: find current positions of assistant messages by
-    // looking up their tool_use blocks.
-    let mut current_assistant_positions: HashMap<usize, usize> = HashMap::new();
-    for (idx, msg) in messages.iter().enumerate() {
-        if msg.role == Role::Assistant {
-            if let MessageContent::Blocks(blocks) = &msg.content {
-                for block in blocks {
-                    if let ContentBlock::ToolUse { id, .. } = block {
-                        if let Some(&orig_idx) = tool_use_index.get(id) {
-                            current_assistant_positions.insert(orig_idx, idx);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Insert in reverse order so indices remain valid
-    let mut sorted_insertions: Vec<(usize, Vec<ContentBlock>)> = insertions.into_iter().collect();
-    sorted_insertions.sort_by(|a, b| b.0.cmp(&a.0));
-
-    for (orig_assistant_idx, blocks) in sorted_insertions {
-        if let Some(&current_idx) = current_assistant_positions.get(&orig_assistant_idx) {
-            let insert_pos = (current_idx + 1).min(messages.len());
-            // Check if there's already a user message at insert_pos with ToolResults
-            // If so, append to it; otherwise create a new message.
-            if insert_pos < messages.len() && messages[insert_pos].role == Role::User {
-                if let MessageContent::Blocks(existing) = &mut messages[insert_pos].content {
-                    existing.extend(blocks);
-                } else {
-                    let text_content = std::mem::replace(
-                        &mut messages[insert_pos].content,
-                        MessageContent::Text(String::new()),
-                    );
-                    let mut new_blocks = content_to_blocks(text_content);
-                    new_blocks.extend(blocks);
-                    messages[insert_pos].content = MessageContent::Blocks(new_blocks);
-                }
-            } else {
-                messages.insert(
-                    insert_pos,
-                    Message {
-                        role: Role::User,
-                        content: MessageContent::Blocks(blocks),
-                    },
-                );
-            }
-        }
-    }
-
-    reorder_count
 }
 
 /// Phase 2c: Insert synthetic error results for unmatched ToolUse blocks.
@@ -780,61 +630,6 @@ mod tests {
     }
 
     // --- New tests ---
-
-    #[test]
-    fn test_reorder_misplaced_tool_result() {
-        // ToolUse in message 1 (assistant), but ToolResult in message 3 (user)
-        // with an unrelated user message in between.
-        let messages = vec![
-            Message::user("Search for rust"),
-            Message {
-                role: Role::Assistant,
-                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
-                    id: "tu-reorder".to_string(),
-                    name: "web_search".to_string(),
-                    input: serde_json::json!({"query": "rust"}),
-                    provider_metadata: None,
-                }]),
-            },
-            Message::user("While you search, I have another question"),
-            Message {
-                role: Role::User,
-                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
-                    tool_use_id: "tu-reorder".to_string(),
-                    tool_name: String::new(),
-                    content: "Search results".to_string(),
-                    is_error: false,
-                }]),
-            },
-            Message::assistant("Here are results"),
-        ];
-
-        let (repaired, stats) = validate_and_repair_with_stats(&messages);
-
-        // The ToolResult should have been moved to immediately follow the assistant ToolUse
-        assert_eq!(stats.results_reordered, 1);
-
-        // Find the assistant message with ToolUse
-        let assistant_idx = repaired
-            .iter()
-            .position(|m| {
-                m.role == Role::Assistant
-                    && matches!(&m.content, MessageContent::Blocks(b) if b.iter().any(|bl| matches!(bl, ContentBlock::ToolUse { .. })))
-            })
-            .expect("Should have assistant with ToolUse");
-
-        // The next message should contain the ToolResult
-        assert!(assistant_idx + 1 < repaired.len());
-        let next = &repaired[assistant_idx + 1];
-        assert_eq!(next.role, Role::User);
-        let has_result = match &next.content {
-            MessageContent::Blocks(blocks) => blocks.iter().any(|b| {
-                matches!(b, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "tu-reorder")
-            }),
-            _ => false,
-        };
-        assert!(has_result, "ToolResult should follow its ToolUse");
-    }
 
     #[test]
     fn test_synthetic_result_for_orphaned_use() {
