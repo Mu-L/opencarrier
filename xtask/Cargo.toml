@@ -3,14 +3,14 @@ name = "xtask"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Build automation for the OpenCarrier workspace"
+description = "Build automation for the Carrier workspace"
 
 [[bin]]
 name = "reencode_manifest"
 path = "src/bin/reencode_manifest.rs"
 
 [dependencies]
-opencarrier-types = { path = "../crates/opencarrier-types" }
+carrier-types = { path = "../crates/carrier-types" }
 toml = { workspace = true }
 rmp-serde = { workspace = true }
 rusqlite = { workspace = true }

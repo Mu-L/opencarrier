@@ -1,15 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/opencarrier-types",
-    "crates/opencarrier-memory",
-    "crates/opencarrier-runtime",
-    "crates/opencarrier-api",
-    "crates/opencarrier-kernel",
-    "crates/opencarrier-cli",
-    "crates/opencarrier-clone",
-    "crates/opencarrier-lifecycle",
-    "crates/opencarrier-plugin-sdk",
+    "crates/carrier-types",
+    "crates/carrier-memory",
+    "crates/carrier-runtime",
+    "crates/carrier-api",
+    "crates/carrier-kernel",
+    "crates/carrier-cli",
+    "crates/carrier-clone",
+    "crates/carrier-lifecycle",
+    "crates/carrier-plugin-sdk",
     "xtask",
     "tools/mcp-common",
     "tools/bilibili-mcp",
@@ -24,7 +24,7 @@ members = [
 version = "0.3.0"
 edition = "2021"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/yinnho/opencarrier"
+repository = "https://github.com/yinnho/carrier"
 rust-version = "1.75"
 
 [workspace.dependencies]
@@ -142,14 +142,14 @@ tokio-test = "0.4"
 tempfile = "3"
 
 # Internal crates
-opencarrier-types = { path = "crates/opencarrier-types" }
-opencarrier-memory = { path = "crates/opencarrier-memory" }
-opencarrier-runtime = { path = "crates/opencarrier-runtime" }
-opencarrier-api = { path = "crates/opencarrier-api" }
-opencarrier-kernel = { path = "crates/opencarrier-kernel" }
-opencarrier-cli = { path = "crates/opencarrier-cli" }
-opencarrier-clone = { path = "crates/opencarrier-clone" }
-opencarrier-lifecycle = { path = "crates/opencarrier-lifecycle" }
+carrier-types = { path = "crates/carrier-types" }
+carrier-memory = { path = "crates/carrier-memory" }
+carrier-runtime = { path = "crates/carrier-runtime" }
+carrier-api = { path = "crates/carrier-api" }
+carrier-kernel = { path = "crates/carrier-kernel" }
+carrier-cli = { path = "crates/carrier-cli" }
+carrier-clone = { path = "crates/carrier-clone" }
+carrier-lifecycle = { path = "crates/carrier-lifecycle" }
 [profile.release]
 lto = true
 codegen-units = 1

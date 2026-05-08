@@ -363,6 +363,250 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
+name = "carrier-api"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "async-trait",
+ "axum",
+ "base64",
+ "carrier-clone",
+ "carrier-kernel",
+ "carrier-lifecycle",
+ "carrier-memory",
+ "carrier-runtime",
+ "carrier-types",
+ "chrono",
+ "dashmap",
+ "fs4",
+ "futures",
+ "governor",
+ "hex",
+ "hmac",
+ "lazy_static",
+ "minijinja",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "socket2 0.5.10",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tokio-test",
+ "toml 0.8.2",
+ "tower",
+ "tower-http",
+ "tracing",
+ "urlencoding",
+ "uuid",
+]
+
+[[package]]
+name = "carrier-cli"
+version = "0.3.0"
+dependencies = [
+ "carrier-api",
+ "carrier-clone",
+ "carrier-kernel",
+ "carrier-memory",
+ "carrier-runtime",
+ "carrier-types",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "colored",
+ "dirs",
+ "rand 0.8.5",
+ "ratatui",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "toml 0.8.2",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "carrier-clone"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "carrier-types",
+ "chrono",
+ "flate2",
+ "getrandom 0.3.4",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tar",
+ "toml 0.8.2",
+ "tracing",
+ "urlencoding",
+ "uuid",
+]
+
+[[package]]
+name = "carrier-kernel"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64",
+ "carrier-clone",
+ "carrier-lifecycle",
+ "carrier-memory",
+ "carrier-runtime",
+ "carrier-types",
+ "chrono",
+ "chrono-tz",
+ "cron",
+ "crossbeam",
+ "dashmap",
+ "dirs",
+ "futures",
+ "hex",
+ "hmac",
+ "libc",
+ "rand 0.8.5",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-test",
+ "toml 0.8.2",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "carrier-lifecycle"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "carrier-types",
+ "chrono",
+ "notify",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "carrier-memory"
+version = "0.3.0"
+dependencies = [
+ "async-trait",
+ "carrier-types",
+ "chrono",
+ "rmp-serde",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "carrier-plugin-sdk"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "carrier-runtime"
+version = "0.3.0"
+dependencies = [
+ "aes",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64",
+ "bytes",
+ "carrier-clone",
+ "carrier-lifecycle",
+ "carrier-memory",
+ "carrier-plugin-sdk",
+ "carrier-types",
+ "cbc",
+ "chrono",
+ "dashmap",
+ "dirs",
+ "futures",
+ "hex",
+ "hmac",
+ "libloading",
+ "md-5",
+ "rand 0.8.5",
+ "regex-lite",
+ "reqwest",
+ "roxmltree",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "shlex",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-test",
+ "tokio-tungstenite 0.24.0",
+ "toml 0.8.2",
+ "tracing",
+ "urlencoding",
+ "uuid",
+ "wasmtime",
+ "zeroize",
+]
+
+[[package]]
+name = "carrier-types"
+version = "0.3.0"
+dependencies = [
+ "async-trait",
+ "carrier-plugin-sdk",
+ "chrono",
+ "dirs",
+ "ed25519-dalek",
+ "hex",
+ "rand 0.8.5",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "toml 0.8.2",
+ "uuid",
+]
+
+[[package]]
 name = "cassowary"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2245,250 +2489,6 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
-name = "opencarrier-api"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "argon2",
- "async-trait",
- "axum",
- "base64",
- "chrono",
- "dashmap",
- "fs4",
- "futures",
- "governor",
- "hex",
- "hmac",
- "lazy_static",
- "minijinja",
- "opencarrier-clone",
- "opencarrier-kernel",
- "opencarrier-lifecycle",
- "opencarrier-memory",
- "opencarrier-runtime",
- "opencarrier-types",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "socket2 0.5.10",
- "subtle",
- "tempfile",
- "tokio",
- "tokio-stream",
- "tokio-test",
- "toml 0.8.2",
- "tower",
- "tower-http",
- "tracing",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
-name = "opencarrier-cli"
-version = "0.3.0"
-dependencies = [
- "chrono",
- "clap",
- "clap_complete",
- "colored",
- "dirs",
- "opencarrier-api",
- "opencarrier-clone",
- "opencarrier-kernel",
- "opencarrier-memory",
- "opencarrier-runtime",
- "opencarrier-types",
- "rand 0.8.5",
- "ratatui",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "toml 0.8.2",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "opencarrier-clone"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "base64",
- "chrono",
- "flate2",
- "getrandom 0.3.4",
- "opencarrier-types",
- "reqwest",
- "serde",
- "serde_json",
- "tar",
- "toml 0.8.2",
- "tracing",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
-name = "opencarrier-kernel"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64",
- "chrono",
- "chrono-tz",
- "cron",
- "crossbeam",
- "dashmap",
- "dirs",
- "futures",
- "hex",
- "hmac",
- "libc",
- "opencarrier-clone",
- "opencarrier-lifecycle",
- "opencarrier-memory",
- "opencarrier-runtime",
- "opencarrier-types",
- "rand 0.8.5",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "subtle",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-test",
- "toml 0.8.2",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "opencarrier-lifecycle"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "chrono",
- "notify",
- "opencarrier-types",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "opencarrier-memory"
-version = "0.3.0"
-dependencies = [
- "async-trait",
- "chrono",
- "opencarrier-types",
- "rmp-serde",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-test",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "opencarrier-plugin-sdk"
-version = "0.3.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "opencarrier-runtime"
-version = "0.3.0"
-dependencies = [
- "aes",
- "anyhow",
- "async-trait",
- "axum",
- "base64",
- "bytes",
- "cbc",
- "chrono",
- "dashmap",
- "dirs",
- "futures",
- "hex",
- "hmac",
- "libloading",
- "md-5",
- "opencarrier-clone",
- "opencarrier-lifecycle",
- "opencarrier-memory",
- "opencarrier-plugin-sdk",
- "opencarrier-types",
- "rand 0.8.5",
- "regex-lite",
- "reqwest",
- "roxmltree",
- "rusqlite",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "shlex",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tokio-test",
- "tokio-tungstenite 0.24.0",
- "toml 0.8.2",
- "tracing",
- "urlencoding",
- "uuid",
- "wasmtime",
- "zeroize",
-]
-
-[[package]]
-name = "opencarrier-types"
-version = "0.3.0"
-dependencies = [
- "async-trait",
- "chrono",
- "dirs",
- "ed25519-dalek",
- "hex",
- "opencarrier-plugin-sdk",
- "rand 0.8.5",
- "rmp-serde",
- "serde",
- "serde_json",
- "sha2",
- "thiserror 2.0.18",
- "toml 0.8.2",
- "uuid",
-]
 
 [[package]]
 name = "openssl"
@@ -5367,7 +5367,7 @@ dependencies = [
 name = "xtask"
 version = "0.3.0"
 dependencies = [
- "opencarrier-types",
+ "carrier-types",
  "rmp-serde",
  "rusqlite",
  "serde",
