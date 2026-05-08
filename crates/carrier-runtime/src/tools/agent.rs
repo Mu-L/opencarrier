@@ -1704,7 +1704,7 @@ impl ToolModule for AgentTools {
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "url": { "type": "string", "description": "Base URL of the remote Carrier/A2A-compatible agent (e.g., 'https://agent.example.com')" }
+                        "url": { "type": "string", "description": "Base URL of the remote OpenCarrier/A2A-compatible agent (e.g., 'https://agent.example.com')" }
                     },
                     "required": ["url"]
                 }),

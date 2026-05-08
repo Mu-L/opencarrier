@@ -1,7 +1,7 @@
 //! Token storage and management for the WeChat iLink Bot plugin.
 //!
 //! Manages per-tenant bot_tokens (24h expiry) and per-user context_tokens.
-//! Tokens are persisted to `~/.carrier/weixin-tokens/<name>.json`.
+//! Tokens are persisted to `~/.opencarrier/weixin-tokens/<name>.json`.
 
 use dashmap::DashMap;
 use reqwest::Client;
@@ -128,7 +128,7 @@ pub struct WeixinState {
 
 impl WeixinState {
     fn new() -> Self {
-        let token_dir = dirs_home().join(".carrier").join("weixin-tokens");
+        let token_dir = carrier_types::config::home_dir().join("weixin-tokens");
         Self {
             tenants: DashMap::new(),
             token_dir,
@@ -371,14 +371,6 @@ impl WeixinState {
             })
             .collect()
     }
-}
-
-/// Get the home directory.
-fn dirs_home() -> PathBuf {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
 }
 
 /// Global singleton for iLink state management.

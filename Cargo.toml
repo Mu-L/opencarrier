@@ -117,7 +117,6 @@ zeroize = { version = "1", features = ["derive"] }
 governor = "0.8"
 
 # Interactive CLI
-ratatui = "0.29"
 colored = "3"
 
 argon2 = "0.5"

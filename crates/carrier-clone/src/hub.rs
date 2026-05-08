@@ -205,7 +205,7 @@ pub async fn install(
 }
 
 /// Generate or load a persistent device ID.
-/// Stored in ~/.carrier/device_id as a simple hex string.
+/// Stored in ~/.opencarrier/device_id as a simple hex string.
 pub fn get_or_create_device_id(carrier_dir: &Path) -> Result<String> {
     let path = carrier_dir.join("device_id");
     if path.exists() {
@@ -230,7 +230,7 @@ pub fn get_or_create_device_id(carrier_dir: &Path) -> Result<String> {
     Ok(id)
 }
 
-/// Read API key from the configured env var. Falls back to reading ~/.carrier/.env directly.
+/// Read API key from the configured env var. Falls back to reading ~/.opencarrier/.env directly.
 pub fn read_api_key(env_var: &str) -> Result<String> {
     // Try env var first (set by dotenv::load_dotenv or std::env::set_var)
     if let Ok(v) = std::env::var(env_var) {
@@ -238,13 +238,9 @@ pub fn read_api_key(env_var: &str) -> Result<String> {
             return Ok(v);
         }
     }
-    // Fallback: read ~/.carrier/.env directly
-    let home = std::env::var("CARRIER_HOME")
-        .map(std::path::PathBuf::from)
-        .ok()
-        .or_else(|| std::env::var("HOME").ok().map(std::path::PathBuf::from));
-    if let Some(home) = home {
-        let env_path = home.join(".carrier").join(".env");
+    // Fallback: read ~/.opencarrier/.env directly
+    {
+        let env_path = carrier_types::config::home_dir().join(".env");
         if let Ok(content) = std::fs::read_to_string(&env_path) {
             for line in content.lines() {
                 let trimmed = line.trim();
@@ -263,16 +259,10 @@ pub fn read_api_key(env_var: &str) -> Result<String> {
     )
 }
 
-/// Resolve device_id from ~/.carrier/device_id, or generate a new one.
-/// Returns "unknown" if neither CARRIER_HOME nor HOME is set.
+/// Resolve device_id from ~/.opencarrier/device_id, or generate a new one.
 pub fn resolve_device_id() -> String {
-    let carrier_dir = std::env::var("CARRIER_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|_| std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".carrier")));
-    match carrier_dir {
-        Ok(dir) => get_or_create_device_id(&dir).unwrap_or_else(|_| "unknown".to_string()),
-        Err(_) => "unknown".to_string(),
-    }
+    let carrier_dir = carrier_types::config::home_dir();
+    get_or_create_device_id(&carrier_dir).unwrap_or_else(|_| "unknown".to_string())
 }
 
 /// Build an authenticated reqwest request builder with both Bearer token and X-Device-ID.

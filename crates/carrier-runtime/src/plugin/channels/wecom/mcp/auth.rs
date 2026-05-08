@@ -45,6 +45,6 @@ pub fn build_config_request(bot_id: &str, secret: &str) -> serde_json::Value {
         "nonce": nonce,
         "signature": signature,
         "bind_source": 2,  // Qrcode
-        "cli_version": format!("Carrier/{}", env!("CARGO_PKG_VERSION"))
+        "cli_version": format!("OpenCarrier/{}", env!("CARGO_PKG_VERSION"))
     })
 }

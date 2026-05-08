@@ -274,11 +274,7 @@ impl ToolProvider for QrCodeTool {
 // ---------------------------------------------------------------------------
 
 fn find_plugin_dir() -> Result<std::path::PathBuf, PluginError> {
-    let home = std::env::var("CARRIER_HOME")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .or_else(|| dirs_home().map(|h| h.join(".carrier")))
-        .ok_or_else(|| PluginError::tool("Cannot determine Carrier home directory"))?;
+    let home = carrier_types::config::home_dir();
 
     // Try new built-in path first, then legacy path
     for dir_name in ["wecom", "carrier-plugin-wecom"] {
@@ -290,10 +286,6 @@ fn find_plugin_dir() -> Result<std::path::PathBuf, PluginError> {
 
     // Default to wecom even if not existing yet
     Ok(home.join("plugins").join("wecom"))
-}
-
-fn dirs_home() -> Option<std::path::PathBuf> {
-    std::env::var("HOME").ok().map(std::path::PathBuf::from)
 }
 
 fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()> {

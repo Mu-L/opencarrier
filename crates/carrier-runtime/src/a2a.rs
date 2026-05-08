@@ -420,7 +420,7 @@ impl A2aClient {
             .get(&agent_json_url)
             .header(
                 "User-Agent",
-                format!("Carrier/{} A2A", env!("CARGO_PKG_VERSION")),
+                format!("OpenCarrier/{} A2A", env!("CARGO_PKG_VERSION")),
             )
             .send()
             .await

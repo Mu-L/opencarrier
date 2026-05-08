@@ -1,6 +1,6 @@
 //! Local MCP server installation registry.
 //!
-//! Manages `~/.carrier/mcp-servers/installed.json` and the per-server
+//! Manages `~/.opencarrier/mcp-servers/installed.json` and the per-server
 //! directory structure for installed MCP servers. Generates a single config
 //! snippet file that can be included from config.toml.
 
@@ -8,20 +8,14 @@ use carrier_types::mcp_manifest::{McpInstalledRecord, McpServerManifest};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-/// Base directory for MCP server data: `~/.carrier/mcp-servers/`.
+/// Base directory for MCP server data: `~/.opencarrier/mcp-servers/`.
 pub fn mcp_base_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".carrier")
-        .join("mcp-servers")
+    carrier_types::config::home_dir().join("mcp-servers")
 }
 
-/// Config snippets directory: `~/.carrier/mcp-servers.d/`.
+/// Config snippets directory: `~/.opencarrier/mcp-servers.d/`.
 pub fn mcp_config_snippets_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".carrier")
-        .join("mcp-servers.d")
+    carrier_types::config::home_dir().join("mcp-servers.d")
 }
 
 /// Path to the unified MCP config snippet (included by config.toml).
@@ -77,7 +71,7 @@ pub fn find_installed(name: &str) -> Option<McpInstalledRecord> {
 
 /// Install an MCP server from a manifest.
 ///
-/// 1. Creates `~/.carrier/mcp-servers/{name}/` directory
+/// 1. Creates `~/.opencarrier/mcp-servers/{name}/` directory
 /// 2. Copies the manifest as `mcp.json`
 /// 3. Regenerates the unified config snippet
 /// 4. Updates `installed.json`
@@ -225,10 +219,7 @@ fn regenerate_config_snippet() -> Result<(), String> {
 /// Ensure config.toml has the include entry for MCP servers.
 /// Call this once during init or first install.
 pub fn ensure_config_include() -> Result<(), String> {
-    let config_path = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".carrier")
-        .join("config.toml");
+    let config_path = carrier_types::config::home_dir().join("config.toml");
 
     if !config_path.exists() {
         return Err("config.toml not found".to_string());

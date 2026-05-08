@@ -1,6 +1,6 @@
-//! Shared UI primitives for non-TUI subcommands (doctor, status, etc.).
+//! Shared UI primitives for CLI subcommands (doctor, status, etc.).
 //!
-//! Uses `colored` for terminal output. The interactive TUI uses ratatui instead.
+//! Uses `colored` for terminal output.
 
 use colored::Colorize;
 

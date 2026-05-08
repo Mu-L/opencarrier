@@ -40,7 +40,7 @@ pub async fn call_tool(
         .header("Accept", "application/json")
         .header(
             "User-Agent",
-            format!("Carrier/{}", env!("CARGO_PKG_VERSION")),
+            format!("OpenCarrier/{}", env!("CARGO_PKG_VERSION")),
         )
         .json(&request_body)
         .timeout(Duration::from_millis(timeout))

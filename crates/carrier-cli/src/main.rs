@@ -1,6 +1,6 @@
-//! Carrier CLI — command-line interface for the Carrier Agent OS.
+//! OpenCarrier CLI — command-line interface for the OpenCarrier Agent OS.
 //!
-//! When a daemon is running (`carrier start`), the CLI talks to it over HTTP.
+//! When a daemon is running (`opencarrier start`), the CLI talks to it over HTTP.
 //! Otherwise, commands boot an in-process kernel (single-shot mode).
 
 mod acp;
@@ -8,7 +8,6 @@ mod mcp;
 pub mod serve;
 mod setup;
 mod templates;
-mod tui;
 mod ui;
 
 use carrier_api::server::read_daemon_info;
@@ -65,8 +64,8 @@ fn print_json(value: &serde_json::Value) {
     );
 }
 
-/// Default config.toml content written to ~/.carrier/config.toml when missing.
-const DEFAULT_CONFIG_TOML: &str = r#"# Carrier Agent OS configuration
+/// Default config.toml content written to ~/.opencarrier/config.toml when missing.
+const DEFAULT_CONFIG_TOML: &str = r#"# OpenCarrier Agent OS configuration
 # See https://github.com/yinnho/carrier for documentation
 
 # For Docker, change to "0.0.0.0:4200" or set OPENCARRIER_LISTEN env var.
@@ -81,23 +80,23 @@ decay_rate = 0.05
 
 const AFTER_HELP: &str = "\
 \x1b[1mQuick Start:\x1b[0m
-  carrier                    直接启动
+  opencarrier                    直接启动
 
 \x1b[1;36mExamples:\x1b[0m
-  carrier agent new coder      创建新的 coder agent
-  carrier models list          查看可用模型
-  carrier doctor               运行诊断检查
+  opencarrier agent new coder      创建新的 coder agent
+  opencarrier models list          查看可用模型
+  opencarrier doctor               运行诊断检查
 
 \x1b[1;36mMore:\x1b[0m
   Dashboard:  http://127.0.0.1:4200/ (when running)";
 
-/// Carrier — the open-source Agent Operating System.
+/// OpenCarrier — the open-source Agent Operating System.
 #[derive(Parser)]
 #[command(
-    name = "carrier",
+    name = "opencarrier",
     version,
-    about = "\u{1F40D} Carrier \u{2014} Open-source Agent Operating System",
-    long_about = "\u{1F40D} Carrier \u{2014} Open-source Agent Operating System\n\n\
+    about = "\u{1F40D} OpenCarrier \u{2014} Open-source Agent Operating System",
+    long_about = "\u{1F40D} OpenCarrier \u{2014} Open-source Agent Operating System\n\n\
                   Deploy, manage, and orchestrate AI agents from your terminal.\n\
                   50+ models \u{00b7} infinite possibilities.",
     after_help = AFTER_HELP,
@@ -113,15 +112,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the carrier (default command).
+    /// Start the opencarrier daemon (default command).
     #[command(name = "start", alias = "s")]
     Start,
-    /// Initialize Carrier (create ~/.carrier/ and default config).
-    Init {
-        /// Quick mode: no prompts, just write config + .env (for CI/scripts).
-        #[arg(long)]
-        quick: bool,
-    },
     /// Stop the running daemon.
     Stop,
     /// Manage agents (new, list, kill, spawn) [*].
@@ -130,21 +123,6 @@ enum Commands {
     /// Show or edit configuration (show, edit, get, set, unset, providers) [*].
     #[command(subcommand)]
     Config(ConfigCommands),
-    /// Chat with a specific agent (分身). Use -m for one-shot messages.
-    Chat {
-        /// Agent name or ID to chat with.
-        agent: String,
-        /// Send a single message non-interactively, print the response, and exit.
-        #[arg(short, long)]
-        message: Option<String>,
-        /// Read file content and prepend to message. Use "-" for stdin.
-        /// Can be specified multiple times.
-        #[arg(short, long)]
-        file: Vec<String>,
-        /// Output as JSON for scripting (when using -m).
-        #[arg(long)]
-        json: bool,
-    },
     /// Show kernel status.
     Status {
         /// Output as JSON for scripting.
@@ -188,7 +166,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Tail the Carrier log file.
+    /// Tail the OpenCarrier log file.
     Logs {
         /// Number of lines to show.
         #[arg(long, default_value = "50")]
@@ -219,7 +197,7 @@ enum Commands {
         #[arg(long)]
         confirm: bool,
     },
-    /// Completely uninstall Carrier from your system.
+    /// Completely uninstall OpenCarrier from your system.
     Uninstall {
         /// Skip confirmation prompt (also --yes).
         #[arg(long, alias = "yes")]
@@ -506,14 +484,7 @@ enum MemoryCommands {
 }
 
 fn config_log_level() -> String {
-    let config_path = if let Ok(home) = std::env::var("CARRIER_HOME") {
-        std::path::PathBuf::from(home).join("config.toml")
-    } else {
-        dirs::home_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join(".carrier")
-            .join("config.toml")
-    };
+    let config_path = carrier_types::config::home_dir().join("config.toml");
     if let Ok(content) = std::fs::read_to_string(config_path) {
         for line in content.lines() {
             let trimmed = line.trim();
@@ -540,63 +511,21 @@ fn init_tracing_stderr() {
         .init();
 }
 
-/// Get the Carrier home directory, respecting CARRIER_HOME env var.
+/// Get the OpenCarrier home directory, respecting OPENCARRIER_HOME env var.
 fn cli_carrier_home() -> std::path::PathBuf {
-    if let Ok(home) = std::env::var("CARRIER_HOME") {
-        return std::path::PathBuf::from(home);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join(".carrier")
-}
-
-/// Redirect tracing to a log file so it doesn't corrupt the ratatui TUI.
-fn init_tracing_file() {
-    let log_dir = cli_carrier_home();
-    let _ = std::fs::create_dir_all(&log_dir);
-    let log_path = log_dir.join("tui.log");
-
-    match std::fs::File::create(&log_path) {
-        Ok(file) => {
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(config_log_level())),
-                )
-                .with_writer(std::sync::Mutex::new(file))
-                .with_ansi(false)
-                .init();
-        }
-        Err(_) => {
-            // Fallback: suppress all output rather than corrupt the TUI
-            tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::ERROR)
-                .with_writer(std::io::sink)
-                .init();
-        }
-    }
+    carrier_types::config::home_dir()
 }
 
 fn main() {
-    // Load ~/.carrier/.env into process environment (system env takes priority).
+    // Load ~/.opencarrier/.env into process environment (system env takes priority).
     carrier_kernel::dotenv::load_dotenv();
 
     let cli = Cli::parse();
 
-    // Determine if this invocation launches a ratatui TUI.
-    // TUI modes must NOT install the Ctrl+C handler (it calls process::exit
-    // which bypasses ratatui::restore and leaves the terminal in raw mode).
-    // TUI modes also need file-based tracing (stderr output corrupts the TUI).
-    let is_tui_mode = matches!(cli.command.as_ref(), Some(Commands::Chat { .. }));
-
-    if is_tui_mode {
-        init_tracing_file();
-    } else {
-        // CLI subcommands: install Ctrl+C handler for clean interrupt of
-        // blocking read_line calls, and trace to stderr.
-        install_ctrlc_handler();
-        init_tracing_stderr();
-    }
+    // CLI subcommands: install Ctrl+C handler for clean interrupt of
+    // blocking read_line calls, and trace to stderr.
+    install_ctrlc_handler();
+    init_tracing_stderr();
 
     // 默认命令：根据 stdin 类型自动选择
     // - stdin 是 pipe（被外部 spawn）→ ACP 模式
@@ -610,7 +539,6 @@ fn main() {
     });
 
     match command {
-        Commands::Init { quick } => cmd_init(quick),
         Commands::Start => cmd_start(cli.config),
         Commands::Stop => cmd_stop(),
         Commands::Agent(sub) => match sub {
@@ -627,19 +555,6 @@ fn main() {
             ConfigCommands::Unset { key } => cmd_config_unset(&key),
             ConfigCommands::Providers => cmd_providers(),
         },
-        Commands::Chat {
-            agent,
-            message,
-            file,
-            json,
-        } => {
-            if message.is_some() || !file.is_empty() {
-                let msg = message.unwrap_or_default();
-                cmd_chat_once(cli.config, &agent, &msg, &file, json)
-            } else {
-                cmd_chat_interactive(cli.config, &agent)
-            }
-        }
         Commands::Status { json } => cmd_status(cli.config, json),
         Commands::Doctor { json, repair } => cmd_doctor(json, repair),
         Commands::Dashboard => cmd_dashboard(),
@@ -813,7 +728,7 @@ pub(crate) fn daemon_json(
             if status.is_server_error() {
                 ui::error_with_fix(
                     &format!("Daemon returned error ({})", status),
-                    "Check daemon logs: ~/.carrier/tui.log",
+                    &format!("Check daemon logs: {}", cli_carrier_home().join("opencarrier.log").display()),
                 );
             }
             body
@@ -823,17 +738,17 @@ pub(crate) fn daemon_json(
             if msg.contains("timed out") || msg.contains("Timeout") {
                 ui::error_with_fix(
                     "Request timed out",
-                    "The agent may be processing a complex request. Try again, or check `carrier status`",
+                    "The agent may be processing a complex request. Try again, or check `opencarrier status`",
                 );
             } else if msg.contains("Connection refused") || msg.contains("connect") {
                 ui::error_with_fix(
                     "Cannot connect to daemon",
-                    "Is the daemon running? Start it with: carrier start",
+                    "Is the daemon running? Start it with: opencarrier start",
                 );
             } else {
                 ui::error_with_fix(
                     &format!("Daemon communication error: {msg}"),
-                    "Check `carrier status` or restart: carrier start",
+                    "Check `opencarrier status` or restart: opencarrier start",
                 );
             }
             std::process::exit(1);
@@ -845,129 +760,7 @@ pub(crate) fn daemon_json(
 // Commands
 // ---------------------------------------------------------------------------
 
-fn cmd_init(quick: bool) {
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => {
-            ui::error("Could not determine home directory");
-            std::process::exit(1);
-        }
-    };
-
-    let carrier_dir = cli_carrier_home();
-
-    // --- Ensure directories exist ---
-    if !carrier_dir.exists() {
-        std::fs::create_dir_all(&carrier_dir).unwrap_or_else(|e| {
-            ui::error_with_fix(
-                &format!("Failed to create {}", carrier_dir.display()),
-                &format!("Check permissions on {}", home.display()),
-            );
-            eprintln!("  {e}");
-            std::process::exit(1);
-        });
-        restrict_dir_permissions(&carrier_dir);
-    }
-
-    for sub in ["data", "agents"] {
-        let dir = carrier_dir.join(sub);
-        if !dir.exists() {
-            std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
-                eprintln!("Error creating {sub} dir: {e}");
-                std::process::exit(1);
-            });
-        }
-    }
-
-    if quick {
-        cmd_init_quick(&carrier_dir);
-    } else if !std::io::IsTerminal::is_terminal(&std::io::stdin())
-        || !std::io::IsTerminal::is_terminal(&std::io::stdout())
-    {
-        ui::hint("Non-interactive terminal detected — running in quick mode");
-        ui::hint("For the interactive wizard, run: carrier init (in a terminal)");
-        cmd_init_quick(&carrier_dir);
-    } else {
-        cmd_init_interactive(&carrier_dir);
-    }
-}
-
-/// Quick init: no prompts, auto-detect, write config + .env, print next steps.
-fn cmd_init_quick(carrier_dir: &std::path::Path) {
-    ui::banner();
-    ui::blank();
-
-    let (provider, api_key_env, model) = detect_best_provider();
-
-    write_config_if_missing(carrier_dir, provider, model, api_key_env);
-
-    ui::blank();
-    ui::success("Carrier initialized (quick mode)");
-    ui::kv("Provider", provider);
-    ui::kv("Model", model);
-    ui::blank();
-    ui::next_steps(&[
-        "Start the daemon:  carrier start",
-        "Chat:              carrier chat",
-    ]);
-}
-
-/// Interactive 5-step onboarding wizard (ratatui TUI).
-fn cmd_init_interactive(carrier_dir: &std::path::Path) {
-    use tui::screens::init_wizard::{self, InitResult, LaunchChoice};
-
-    match init_wizard::run() {
-        InitResult::Completed {
-            provider,
-            model,
-            daemon_started,
-            launch,
-        } => {
-            // Print summary after TUI restores terminal
-            ui::blank();
-            ui::success("Carrier initialized!");
-            ui::kv("Provider", &provider);
-            ui::kv("Model", &model);
-
-            if daemon_started {
-                ui::kv_ok("Daemon", "running");
-            }
-            ui::blank();
-
-            // Execute the user's chosen launch action.
-            match launch {
-                LaunchChoice::Desktop => {
-                    launch_desktop_app(carrier_dir);
-                }
-                LaunchChoice::Dashboard => {
-                    if let Some(base) = find_daemon() {
-                        let url = format!("{base}/");
-                        ui::success(&format!("Opening dashboard at {url}"));
-                        if !open_in_browser(&url) {
-                            ui::hint(&format!("Could not open browser. Visit: {url}"));
-                        }
-                    } else {
-                        ui::error("Daemon is not running. Start it with: carrier start");
-                    }
-                }
-                LaunchChoice::Chat => {
-                    ui::hint("Starting chat session...");
-                    ui::blank();
-                    // Note: tracing was initialized for stderr (init is a CLI
-                    // subcommand).  The chat TUI takes over the terminal with
-                    // raw mode so stderr output is suppressed.  We can't
-                    // reinitialize tracing (global subscriber is set once).
-                    cmd_chat_interactive(None, "clone-creator");
-                }
-            }
-        }
-        InitResult::Cancelled => {
-            println!("  Setup cancelled.");
-        }
-    }
-}
-
-/// Launch the carrier-desktop Tauri app, connecting to the running daemon.
+/// Launch the opencarrier-desktop Tauri app, connecting to the running daemon.
 fn launch_desktop_app(_carrier_dir: &std::path::Path) {
     // Look for the desktop binary next to our own executable.
     let desktop_bin = {
@@ -975,16 +768,16 @@ fn launch_desktop_app(_carrier_dir: &std::path::Path) {
         let dir = exe.as_ref().and_then(|e| e.parent());
 
         #[cfg(windows)]
-        let name = "carrier-desktop.exe";
+        let name = "opencarrier-desktop.exe";
         #[cfg(not(windows))]
-        let name = "carrier-desktop";
+        let name = "opencarrier-desktop";
 
         dir.map(|d| d.join(name))
     };
 
     match desktop_bin {
         Some(ref path) if path.exists() => {
-            ui::success("Launching Carrier Desktop...");
+            ui::success("Launching OpenCarrier Desktop...");
             match std::process::Command::new(path)
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
@@ -996,13 +789,13 @@ fn launch_desktop_app(_carrier_dir: &std::path::Path) {
                 }
                 Err(e) => {
                     ui::error(&format!("Failed to launch desktop app: {e}"));
-                    ui::hint("Try: carrier dashboard");
+                    ui::hint("Try: opencarrier dashboard");
                 }
             }
         }
         _ => {
             ui::error("Desktop app not found.");
-            ui::hint("Install it with: cargo install carrier-desktop");
+            ui::hint("Install it with: cargo install opencarrier-desktop");
             ui::hint("Falling back to web dashboard...");
             ui::blank();
             if let Some(base) = find_daemon() {
@@ -1017,7 +810,7 @@ fn launch_desktop_app(_carrier_dir: &std::path::Path) {
                 // opener may still fail asynchronously.
                 ui::hint(&format!("Dashboard: {url}"));
             } else {
-                ui::hint("Daemon is not running. Start it with: carrier start");
+                ui::hint("Daemon is not running. Start it with: opencarrier start");
                 ui::hint("Then open: http://127.0.0.1:4200");
             }
         }
@@ -1081,31 +874,11 @@ fn check_ollama_available() -> bool {
     .is_ok()
 }
 
-/// Write config.toml if it doesn't already exist.
-fn write_config_if_missing(
-    carrier_dir: &std::path::Path,
-    _provider: &str,
-    _model: &str,
-    _api_key_env: &str,
-) {
-    let config_path = carrier_dir.join("config.toml");
-    if config_path.exists() {
-        ui::check_ok(&format!("Config already exists: {}", config_path.display()));
-    } else {
-        std::fs::write(&config_path, DEFAULT_CONFIG_TOML).unwrap_or_else(|e| {
-            ui::error_with_fix("Failed to write config", &e.to_string());
-            std::process::exit(1);
-        });
-        restrict_file_permissions(&config_path);
-        ui::success(&format!("Created: {}", config_path.display()));
-    }
-}
-
 fn cmd_start(config: Option<PathBuf>) {
     if let Some(base) = find_daemon() {
         ui::error_with_fix(
             &format!("Daemon already running at {base}"),
-            "Use `carrier status` to check it, or stop it first",
+            "Use `opencarrier status` to check it, or stop it first",
         );
         std::process::exit(1);
     }
@@ -1129,7 +902,7 @@ fn cmd_start(config: Option<PathBuf>) {
             }
             Err(e) => {
                 ui::error(&format!("Setup failed: {e}"));
-                ui::hint("You can run `carrier init` to configure manually");
+                ui::hint("You can run `opencarrier init` to configure manually");
                 std::process::exit(1);
             }
         }
@@ -1274,11 +1047,11 @@ fn cmd_start(config: Option<PathBuf>) {
         }
 
         ui::blank();
-        println!("  Carrier daemon stopped.");
+        println!("  OpenCarrier daemon stopped.");
     });
 }
 
-/// Read the api_key from ~/.carrier/config.toml (if any).
+/// Read the api_key from ~/.opencarrier/config.toml (if any).
 ///
 /// Returns `None` when the key is missing, empty, or whitespace-only —
 /// meaning the daemon is running in public (unauthenticated) mode.
@@ -1340,7 +1113,7 @@ fn cmd_stop() {
         None => {
             ui::warn_with_fix(
                 "No running daemon found",
-                "Is it running? Check with: carrier status",
+                "Is it running? Check with: opencarrier status",
             );
         }
     }
@@ -1367,22 +1140,22 @@ fn boot_kernel_error(e: &carrier_kernel::error::KernelError) {
     if msg.contains("parse") || msg.contains("toml") || msg.contains("config") {
         ui::error_with_fix(
             "Failed to parse configuration",
-            "Check your config.toml syntax: carrier config show",
+            "Check your config.toml syntax: opencarrier config show",
         );
     } else if msg.contains("database") || msg.contains("locked") || msg.contains("sqlite") {
         ui::error_with_fix(
             "Database error (file may be locked)",
-            "Check if another Carrier process is running: carrier status",
+            "Check if another OpenCarrier process is running: opencarrier status",
         );
     } else if msg.contains("key") || msg.contains("API") || msg.contains("auth") {
         ui::error_with_fix(
             "LLM provider authentication failed",
-            "Run `carrier doctor` to check your API key configuration",
+            "Run `opencarrier doctor` to check your API key configuration",
         );
     } else {
         ui::error_with_fix(
             &format!("Failed to boot kernel: {msg}"),
-            "Run `carrier doctor` to diagnose the issue",
+            "Run `opencarrier doctor` to diagnose the issue",
         );
     }
 }
@@ -1391,7 +1164,7 @@ fn cmd_agent_spawn(config: Option<PathBuf>, manifest_path: PathBuf) {
     if !manifest_path.exists() {
         ui::error_with_fix(
             &format!("Manifest file not found: {}", manifest_path.display()),
-            "Use `carrier agent new` to spawn from a template instead",
+            "Use `opencarrier agent new` to spawn from a template instead",
         );
         std::process::exit(1);
     }
@@ -1431,7 +1204,7 @@ fn cmd_agent_spawn(config: Option<PathBuf>, manifest_path: PathBuf) {
                 println!("Agent spawned (in-process mode).");
                 println!("  ID: {id}");
                 println!("\n  Note: Agent will be lost when this process exits.");
-                println!("  For persistent agents, use `carrier start` first.");
+                println!("  For persistent agents, use `opencarrier start` first.");
             }
             Err(e) => {
                 eprintln!("Failed to spawn agent: {e}");
@@ -1511,11 +1284,6 @@ fn cmd_agent_list(config: Option<PathBuf>, json: bool) {
             );
         }
     }
-}
-
-/// Interactive chat with an agent (TUI).
-fn cmd_chat_interactive(config: Option<PathBuf>, agent: &str) {
-    tui::chat_runner::run_chat_tui(config, Some(agent.to_string()));
 }
 
 /// Non-interactive chat: send one message (with optional file attachments), print response, exit.
@@ -1699,7 +1467,7 @@ fn cmd_agent_new(config: Option<PathBuf>, template_name: Option<String>) {
     if all_templates.is_empty() {
         ui::error_with_fix(
             "No agent templates found",
-            "Run `carrier init` to set up the agents directory",
+            "Run `opencarrier init` to set up the agents directory",
         );
         std::process::exit(1);
     }
@@ -1711,7 +1479,7 @@ fn cmd_agent_new(config: Option<PathBuf>, template_name: Option<String>) {
             None => {
                 ui::error_with_fix(
                     &format!("Template '{name}' not found"),
-                    "Run `carrier agent new` to see available templates",
+                    "Run `opencarrier agent new` to see available templates",
                 );
                 std::process::exit(1);
             }
@@ -1770,7 +1538,7 @@ fn spawn_template_agent(config: Option<PathBuf>, template: &templates::AgentTemp
                 ui::kv("Model", &format!("{provider}/{model}"));
             }
             ui::blank();
-            ui::hint(&format!("Chat: carrier chat {}", template.name));
+            ui::hint(&format!("Chat: opencarrier chat {}", template.name));
         } else {
             ui::error(&format!(
                 "Failed to spawn: {}",
@@ -1793,9 +1561,9 @@ fn spawn_template_agent(config: Option<PathBuf>, template: &templates::AgentTemp
                 ui::success(&format!("Agent '{}' spawned (in-process)", template.name));
                 ui::kv("ID", &id.to_string());
                 ui::blank();
-                ui::hint(&format!("Chat: carrier chat {}", template.name));
+                ui::hint(&format!("Chat: opencarrier chat {}", template.name));
                 ui::hint("Note: Agent will be lost when this process exits");
-                ui::hint("For persistent agents, use `carrier start` first");
+                ui::hint("For persistent agents, use `opencarrier start` first");
             }
             Err(e) => {
                 ui::error(&format!("Failed to spawn agent: {e}"));
@@ -1815,7 +1583,7 @@ fn cmd_status(config: Option<PathBuf>, json: bool) {
             return;
         }
 
-        ui::section("Carrier Daemon Status");
+        ui::section("OpenCarrier Daemon Status");
         ui::blank();
         ui::kv_ok("Status", body["status"].as_str().unwrap_or("?"));
         ui::kv(
@@ -1865,7 +1633,7 @@ fn cmd_status(config: Option<PathBuf>, json: bool) {
             return;
         }
 
-        ui::section("Carrier Status (in-process)");
+        ui::section("OpenCarrier Status (in-process)");
         ui::blank();
         ui::kv("Agents", &agent_count.to_string());
         ui::kv("Modality", &kernel.config.default_model.provider);
@@ -1873,7 +1641,7 @@ fn cmd_status(config: Option<PathBuf>, json: bool) {
         ui::kv("Data dir", &kernel.config.data_dir.display().to_string());
         ui::kv_warn("Daemon", "NOT RUNNING");
         ui::blank();
-        ui::hint("Run `carrier start` to launch the daemon");
+        ui::hint("Run `opencarrier start` to launch the daemon");
 
         if agent_count > 0 {
             ui::blank();
@@ -1891,7 +1659,7 @@ fn cmd_doctor(json: bool, repair: bool) {
     let mut repaired = false;
 
     if !json {
-        ui::step("Carrier Doctor");
+        ui::step("OpenCarrier Doctor");
         println!();
     }
 
@@ -1899,15 +1667,15 @@ fn cmd_doctor(json: bool, repair: bool) {
     if let Some(_h) = &home {
         let carrier_dir = cli_carrier_home();
 
-        // --- Check 1: Carrier directory ---
+        // --- Check 1: OpenCarrier directory ---
         if carrier_dir.exists() {
             if !json {
-                ui::check_ok(&format!("Carrier directory: {}", carrier_dir.display()));
+                ui::check_ok(&format!("OpenCarrier directory: {}", carrier_dir.display()));
             }
             checks.push(serde_json::json!({"check": "carrier_dir", "status": "ok", "path": carrier_dir.display().to_string()}));
         } else if repair {
             if !json {
-                ui::check_fail("Carrier directory not found.");
+                ui::check_fail("OpenCarrier directory not found.");
             }
             let answer = prompt_input("    Create it now? [Y/n] ");
             if answer.is_empty() || answer.starts_with('y') || answer.starts_with('Y') {
@@ -1917,7 +1685,7 @@ fn cmd_doctor(json: bool, repair: bool) {
                         let _ = std::fs::create_dir_all(carrier_dir.join(sub));
                     }
                     if !json {
-                        ui::check_ok("Created Carrier directory");
+                        ui::check_ok("Created OpenCarrier directory");
                     }
                     repaired = true;
                 } else {
@@ -1932,7 +1700,7 @@ fn cmd_doctor(json: bool, repair: bool) {
             checks.push(serde_json::json!({"check": "carrier_dir", "status": if repaired { "repaired" } else { "fail" }}));
         } else {
             if !json {
-                ui::check_fail("Carrier directory not found. Run `carrier init` first.");
+                ui::check_fail("OpenCarrier directory not found. Run `opencarrier init` first.");
             }
             checks.push(serde_json::json!({"check": "carrier_dir", "status": "fail"}));
             all_ok = false;
@@ -1983,7 +1751,7 @@ fn cmd_doctor(json: bool, repair: bool) {
         } else {
             if !json {
                 ui::check_warn(
-                    ".env file not found (create with: carrier config set-key <provider>)",
+                    ".env file not found (create with: opencarrier config set-key <provider>)",
                 );
             }
             checks.push(serde_json::json!({"check": "env_file", "status": "warn"}));
@@ -2003,7 +1771,7 @@ fn cmd_doctor(json: bool, repair: bool) {
                 Err(e) => {
                     if !json {
                         ui::check_fail(&format!("Config file has syntax errors: {e}"));
-                        ui::hint("Fix with: carrier config edit");
+                        ui::hint("Fix with: opencarrier config edit");
                     }
                     checks.push(serde_json::json!({"check": "config_syntax", "status": "fail", "error": e.to_string()}));
                     all_ok = false;
@@ -2066,7 +1834,7 @@ fn cmd_doctor(json: bool, repair: bool) {
             checks.push(serde_json::json!({"check": "daemon", "status": "ok", "url": base}));
         } else {
             if !json {
-                ui::check_warn("Daemon not running (start with `carrier start`)");
+                ui::check_warn("Daemon not running (start with `opencarrier start`)");
             }
             checks.push(serde_json::json!({"check": "daemon", "status": "warn"}));
 
@@ -2265,7 +2033,7 @@ fn cmd_doctor(json: bool, repair: bool) {
             ui::suggest_cmd("Gemini:", "https://aistudio.google.com    (free tier)");
             ui::suggest_cmd("DeepSeek:", "https://platform.deepseek.com  (low cost)");
             ui::blank();
-            ui::hint("Or run: carrier config set-key groq");
+            ui::hint("Or run: opencarrier config set-key groq");
         }
         all_ok = false;
     }
@@ -2611,14 +2379,14 @@ fn cmd_doctor(json: bool, repair: bool) {
     } else {
         println!();
         if all_ok {
-            ui::success("All checks passed! Carrier is ready.");
-            ui::hint("Start the daemon: carrier start");
+            ui::success("All checks passed! OpenCarrier is ready.");
+            ui::hint("Start the daemon: opencarrier start");
         } else if repaired {
-            ui::success("Repairs applied. Re-run `carrier doctor` to verify.");
+            ui::success("Repairs applied. Re-run `opencarrier doctor` to verify.");
         } else {
             ui::error("Some checks failed.");
             if !repair {
-                ui::hint("Run `carrier doctor --repair` to attempt auto-fix");
+                ui::hint("Run `opencarrier doctor --repair` to attempt auto-fix");
             }
         }
     }
@@ -2642,7 +2410,7 @@ fn cmd_dashboard() {
             Err(e) => {
                 ui::error_with_fix(
                     &format!("Could not start daemon: {e}"),
-                    "Start it manually: carrier start",
+                    "Start it manually: opencarrier start",
                 );
                 std::process::exit(1);
             }
@@ -2785,17 +2553,17 @@ pub(crate) fn open_in_browser(url: &str) -> bool {
 fn cmd_completion(shell: clap_complete::Shell) {
     use clap::CommandFactory;
     let mut cmd = Cli::command();
-    clap_complete::generate(shell, &mut cmd, "carrier", &mut std::io::stdout());
+    clap_complete::generate(shell, &mut cmd, "opencarrier", &mut std::io::stdout());
 }
 
 /// Require a running daemon — exit with helpful message if not found.
 fn require_daemon(command: &str) -> String {
     find_daemon().unwrap_or_else(|| {
         ui::error_with_fix(
-            &format!("`carrier {command}` requires a running daemon"),
-            "Start the daemon: carrier start",
+            &format!("`opencarrier {command}` requires a running daemon"),
+            "Start the daemon: opencarrier start",
         );
-        ui::hint("Or try `carrier chat` which works without a daemon");
+        ui::hint("Or try `opencarrier chat` which works without a daemon");
         std::process::exit(1);
     })
 }
@@ -2902,7 +2670,7 @@ fn cmd_providers() {
     let brain_path = home.join("brain.json");
 
     if !brain_path.exists() {
-        ui::error("No brain.json found. Run `carrier start` first to generate one.");
+        ui::error("No brain.json found. Run `opencarrier start` first to generate one.");
         return;
     }
 
@@ -3078,7 +2846,7 @@ fn cmd_providers() {
 // Background daemon start
 // ---------------------------------------------------------------------------
 
-/// Spawn `carrier start` as a detached background process.
+/// Spawn `opencarrier start` as a detached background process.
 ///
 /// Polls for daemon health for up to 10 seconds. Returns the daemon URL on success.
 pub(crate) fn start_daemon_background() -> Result<String, String> {
@@ -3131,7 +2899,7 @@ fn cmd_config_show() {
 
     if !config_path.exists() {
         println!("No configuration found at: {}", config_path.display());
-        println!("Run `carrier init` to create one.");
+        println!("Run `opencarrier init` to create one.");
         return;
     }
 
@@ -3179,7 +2947,7 @@ fn cmd_config_get(key: &str) {
     let config_path = home.join("config.toml");
 
     if !config_path.exists() {
-        ui::error_with_fix("No config file found", "Run `carrier init` first");
+        ui::error_with_fix("No config file found", "Run `opencarrier init` first");
         std::process::exit(1);
     }
 
@@ -3191,7 +2959,7 @@ fn cmd_config_get(key: &str) {
     let table: toml::Value = toml::from_str(&content).unwrap_or_else(|e| {
         ui::error_with_fix(
             &format!("Config parse error: {e}"),
-            "Fix your config.toml syntax, or run `carrier config edit`",
+            "Fix your config.toml syntax, or run `opencarrier config edit`",
         );
         std::process::exit(1);
     });
@@ -3223,7 +2991,7 @@ fn cmd_config_set(key: &str, value: &str) {
     let config_path = home.join("config.toml");
 
     if !config_path.exists() {
-        ui::error_with_fix("No config file found", "Run `carrier init` first");
+        ui::error_with_fix("No config file found", "Run `opencarrier init` first");
         std::process::exit(1);
     }
 
@@ -3345,7 +3113,7 @@ fn cmd_config_unset(key: &str) {
     let config_path = home.join("config.toml");
 
     if !config_path.exists() {
-        ui::error_with_fix("No config file found", "Run `carrier init` first");
+        ui::error_with_fix("No config file found", "Run `opencarrier init` first");
         std::process::exit(1);
     }
 
@@ -3413,15 +3181,7 @@ fn cmd_config_unset(key: &str) {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn carrier_home() -> PathBuf {
-    if let Ok(home) = std::env::var("CARRIER_HOME") {
-        return PathBuf::from(home);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| {
-            eprintln!("Error: Could not determine home directory");
-            std::process::exit(1);
-        })
-        .join(".carrier")
+    carrier_types::config::home_dir()
 }
 
 fn prompt_input(prompt: &str) -> String {
@@ -3786,7 +3546,7 @@ fn cmd_sessions(agent: Option<&str>, json: bool) {
 }
 
 fn cmd_logs(lines: usize, follow: bool) {
-    let log_path = cli_carrier_home().join("tui.log");
+    let log_path = cli_carrier_home().join("opencarrier.log");
 
     if !log_path.exists() {
         ui::error_with_fix(
@@ -4099,7 +3859,7 @@ async fn cmd_hub(cmd: HubCommands) {
                     );
                     // Check MCP server dependencies
                     check_mcp_deps(&workspace_dir);
-                    println!("运行 'carrier agent spawn {}' 启动分身", clone_name);
+                    println!("运行 'opencarrier agent spawn {}' 启动分身", clone_name);
                 }
                 Err(e) => eprintln!("安装失败: {e}"),
             }
@@ -4154,7 +3914,7 @@ async fn cmd_plugin(cmd: PluginCommands) {
                         let msg = err_body["error"].as_str().unwrap_or("未知错误");
                         eprintln!("Daemon 返回错误 ({}): {}", status, msg);
                         if status.as_u16() == 401 {
-                            eprintln!("请运行 `carrier config set-key <key>` 配置 API key");
+                            eprintln!("请运行 `opencarrier config set-key <key>` 配置 API key");
                         }
                         return;
                     }
@@ -4268,7 +4028,7 @@ async fn cmd_plugin(cmd: PluginCommands) {
                     println!("插件 '{}' 安装成功!", installed_name.green());
                     println!(
                         "重启 daemon 以加载插件: {}",
-                        "carrier stop && carrier start".cyan()
+                        "opencarrier stop && opencarrier start".cyan()
                     );
                 }
                 Err(e) => eprintln!("安装失败: {e}"),
@@ -4290,7 +4050,7 @@ async fn cmd_plugin(cmd: PluginCommands) {
                     println!("插件 '{}' 已删除", name.green());
                     println!(
                         "重启 daemon 以卸载插件: {}",
-                        "carrier stop && carrier start".cyan()
+                        "opencarrier stop && opencarrier start".cyan()
                     );
                 }
                 Err(e) => eprintln!("删除失败: {e}"),
@@ -4348,7 +4108,7 @@ fn cmd_uninstall(confirm: bool, keep_config: bool) {
     println!();
     println!(
         "  {}",
-        "This will completely uninstall Carrier from your system."
+        "This will completely uninstall OpenCarrier from your system."
             .bold()
             .red()
     );
@@ -4372,9 +4132,9 @@ fn cmd_uninstall(confirm: bool, keep_config: bool) {
         .join(".cargo")
         .join("bin")
         .join(if cfg!(windows) {
-            "carrier.exe"
+            "opencarrier.exe"
         } else {
-            "carrier"
+            "opencarrier"
         });
     if cargo_bin.exists() && exe_path.as_ref().is_none_or(|e| *e != cargo_bin) {
         println!("  • Remove cargo binary: {}", cargo_bin.display());
@@ -4419,7 +4179,7 @@ fn cmd_uninstall(confirm: bool, keep_config: bool) {
         }
     }
 
-    // Step 6: Remove ~/.carrier/ data
+    // Step 6: Remove ~/.opencarrier/ data
     if carrier_dir.exists() {
         if keep_config {
             remove_dir_except_config(&carrier_dir);
@@ -4446,7 +4206,7 @@ fn cmd_uninstall(confirm: bool, keep_config: bool) {
     }
 
     println!();
-    ui::success("Carrier has been uninstalled. Goodbye!");
+    ui::success("OpenCarrier has been uninstalled. Goodbye!");
 }
 
 /// Remove auto-start / launch-agent / systemd entries.
@@ -4460,7 +4220,7 @@ fn remove_autostart_entries(home: &std::path::Path) {
                 "delete",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
                 "/v",
-                "Carrier",
+                "OpenCarrier",
                 "/f",
             ])
             .output();
@@ -4474,7 +4234,7 @@ fn remove_autostart_entries(home: &std::path::Path) {
 
     #[cfg(target_os = "macos")]
     {
-        let plist = home.join("Library/LaunchAgents/ai.carrier.desktop.plist");
+        let plist = home.join("Library/LaunchAgents/ai.opencarrier.desktop.plist");
         if plist.exists() {
             // Unload first
             let _ = std::process::Command::new("launchctl")
@@ -4489,7 +4249,7 @@ fn remove_autostart_entries(home: &std::path::Path) {
 
     #[cfg(target_os = "linux")]
     {
-        let desktop_file = home.join(".config/autostart/Carrier.desktop");
+        let desktop_file = home.join(".config/autostart/OpenCarrier.desktop");
         if desktop_file.exists() {
             match std::fs::remove_file(&desktop_file) {
                 Ok(()) => ui::success("Removed Linux autostart entry"),
@@ -4614,7 +4374,7 @@ fn is_carrier_path_line(line: &str, carrier_dir: &str) -> bool {
         || lower.contains("fish_add_path")
 }
 
-/// Remove everything in ~/.carrier/ except config files.
+/// Remove everything in ~/.opencarrier/ except config files.
 fn remove_dir_except_config(carrier_dir: &std::path::Path) {
     let keep = ["config.toml", ".env", "secrets.env"];
     let Ok(entries) = std::fs::read_dir(carrier_dir) else {
@@ -4787,11 +4547,11 @@ args = ["-y", "@modelcontextprotocol/server-github"]
     #[test]
     fn test_uninstall_path_line_filter() {
         use super::is_carrier_path_line;
-        let dir = "/home/user/.carrier/bin";
+        let dir = "/home/user/.opencarrier/bin";
 
         // Should match: carrier PATH exports
         assert!(is_carrier_path_line(
-            r#"export PATH="$HOME/.carrier/bin:$PATH""#,
+            r#"export PATH="$HOME/.opencarrier/bin:$PATH""#,
             dir
         ));
         assert!(is_carrier_path_line(
@@ -4799,11 +4559,11 @@ args = ["-y", "@modelcontextprotocol/server-github"]
             dir
         ));
         assert!(is_carrier_path_line(
-            "set -gx PATH $HOME/.carrier/bin $PATH",
+            "set -gx PATH $HOME/.opencarrier/bin $PATH",
             dir
         ));
         assert!(is_carrier_path_line(
-            "fish_add_path $HOME/.carrier/bin",
+            "fish_add_path $HOME/.opencarrier/bin",
             dir
         ));
 
@@ -4887,7 +4647,7 @@ fn cmd_mcp_install(source: &str) {
             }
         };
         // Write to temp file for the registry to copy
-        let tmp_dir = std::env::temp_dir().join("carrier-mcp-download");
+        let tmp_dir = std::env::temp_dir().join("opencarrier-mcp-download");
         std::fs::create_dir_all(&tmp_dir).ok();
         let tmp_path = tmp_dir.join(format!("{}.mcp.json", manifest.name));
         std::fs::write(&tmp_path, &body).unwrap();
@@ -4910,12 +4670,12 @@ fn cmd_mcp_install(source: &str) {
     if let Err(e) = mcp_registry::ensure_config_include() {
         eprintln!("Warning: could not update config.toml: {e}");
         eprintln!(
-            "Add this line to ~/.carrier/config.toml:\n  \
+            "Add this line to ~/.opencarrier/config.toml:\n  \
              include = [\"mcp-servers.d/mcp-servers.toml\"]"
         );
     }
 
-    println!("Installed! Restart carrier or send SIGHUP to reload.");
+    println!("Installed! Restart opencarrier or send SIGHUP to reload.");
 }
 
 fn cmd_mcp_uninstall(name: &str) {
@@ -4930,7 +4690,7 @@ fn cmd_mcp_uninstall(name: &str) {
         eprintln!("Uninstall failed: {e}");
         std::process::exit(1);
     }
-    println!("MCP server '{name}' uninstalled. Restart carrier to apply.");
+    println!("MCP server '{name}' uninstalled. Restart opencarrier to apply.");
 }
 
 fn cmd_mcp_list(json: bool) {
@@ -4948,7 +4708,7 @@ fn cmd_mcp_list(json: bool) {
 
     if records.is_empty() {
         println!("No MCP servers installed.");
-        println!("Install one with: carrier mcp install <name-or-path>");
+        println!("Install one with: opencarrier mcp install <name-or-path>");
         return;
     }
 
@@ -5105,7 +4865,7 @@ fn check_mcp_deps(workspace_dir: &std::path::Path) {
         );
         eprintln!("Install them with:");
         for name in &missing_required {
-            eprintln!("  carrier mcp install {name}");
+            eprintln!("  opencarrier mcp install {name}");
         }
     }
     if !missing_optional.is_empty() {

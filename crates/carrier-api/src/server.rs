@@ -1,4 +1,4 @@
-//! Carrier daemon server — boots the kernel and serves the HTTP API.
+//! OpenCarrier daemon server — boots the kernel and serves the HTTP API.
 
 use crate::middleware;
 use crate::rate_limiter;
@@ -18,7 +18,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
-/// Daemon info written to `~/.carrier/daemon.json` so the CLI can find us.
+/// Daemon info written to `~/.opencarrier/daemon.json` so the CLI can find us.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct DaemonInfo {
     pub pid: u32,
@@ -378,7 +378,7 @@ pub async fn run_daemon(
         }
     }
 
-    info!("Carrier API server listening on http://{addr}");
+    info!("OpenCarrier API server listening on http://{addr}");
     info!("WebChat UI available at http://{addr}/",);
     info!("WebSocket endpoint: ws://{addr}/api/agents/{{id}}/ws",);
 
@@ -417,7 +417,7 @@ pub async fn run_daemon(
     // Shutdown kernel
     kernel.shutdown();
 
-    info!("Carrier daemon stopped");
+    info!("OpenCarrier daemon stopped");
     Ok(())
 }
 

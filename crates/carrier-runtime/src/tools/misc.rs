@@ -48,7 +48,7 @@ async fn location_get() -> Result<String, String> {
         .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
     let resp = client
         .get("https://ip-api.com/json/?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,query")
-        .header("User-Agent", format!("Carrier/{}", env!("CARGO_PKG_VERSION")))
+        .header("User-Agent", format!("OpenCarrier/{}", env!("CARGO_PKG_VERSION")))
         .send()
         .await
         .map_err(|e| format!("Location request failed: {e}"))?;

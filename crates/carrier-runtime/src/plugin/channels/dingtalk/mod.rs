@@ -53,14 +53,7 @@ pub(crate) static DINGTALK_TENANTS: std::sync::LazyLock<DashMap<String, DingTalk
 // ---------------------------------------------------------------------------
 
 fn find_plugin_dir() -> Option<std::path::PathBuf> {
-    let home = std::env::var("CARRIER_HOME")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| std::path::PathBuf::from(h).join(".carrier"))
-        })?;
+    let home = carrier_types::config::home_dir();
 
     for dir_name in ["dingtalk", "carrier-plugin-dingtalk"] {
         let dir = home.join("plugins").join(dir_name);

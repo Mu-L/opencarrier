@@ -338,7 +338,7 @@ fn build_identity_section(ctx: &PromptContext) -> String {
         format!("You are {}.\n{}", ctx.agent_name, ctx.agent_description)
     } else if ctx.base_system_prompt.is_empty() {
         format!(
-            "You are {}, an AI agent running inside the Carrier Agent OS.\n{}",
+            "You are {}, an AI agent running inside the OpenCarrier Agent OS.\n{}",
             ctx.agent_name, ctx.agent_description
         )
     } else {

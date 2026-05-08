@@ -35,14 +35,8 @@ pub fn discover_template_dirs() -> Vec<PathBuf> {
         }
     }
 
-    // Installed templates (respects CARRIER_HOME)
-    let of_home = if let Ok(h) = std::env::var("CARRIER_HOME") {
-        PathBuf::from(h)
-    } else if let Some(home) = dirs::home_dir() {
-        home.join(".carrier")
-    } else {
-        std::env::temp_dir().join(".carrier")
-    };
+    // Installed templates
+    let of_home = carrier_types::config::home_dir();
     {
         let agents = of_home.join("agents");
         if agents.is_dir() && !dirs.contains(&agents) {

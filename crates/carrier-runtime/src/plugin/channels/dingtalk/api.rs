@@ -60,7 +60,7 @@ pub async fn open_gateway(
     let body = GatewayOpenRequest {
         client_id: client_id.to_string(),
         client_secret: client_secret.to_string(),
-        ua: "carrier".to_string(),
+        ua: "opencarrier".to_string(),
         subscriptions: vec![Subscription {
             r#type: "CALLBACK".to_string(),
             topic: TOPIC_ROBOT.to_string(),

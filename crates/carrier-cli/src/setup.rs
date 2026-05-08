@@ -58,7 +58,7 @@ pub fn run_first_time_setup(carrier_dir: &Path, hub_url: &str) -> Result<(String
     let device_short = &device_id[..8.min(device_id.len())];
     let username = format!("dev_{}", device_short);
     let password = random_password(16);
-    let email = format!("{}@device.carrier", username);
+    let email = format!("{}@device.opencarrier", username);
 
     println!("  {} Registering with {}...", "-".bright_yellow(), hub_url);
 

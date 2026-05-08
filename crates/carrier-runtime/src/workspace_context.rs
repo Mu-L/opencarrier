@@ -65,7 +65,7 @@ pub struct WorkspaceContext {
     pub project_type: ProjectType,
     /// Whether this is a git repository.
     pub is_git_repo: bool,
-    /// Whether .carrier/ directory exists.
+    /// Whether .opencarrier/ directory exists.
     pub has_carrier_dir: bool,
     /// Cached context files.
     cache: HashMap<String, CachedFile>,
@@ -76,7 +76,7 @@ impl WorkspaceContext {
     pub fn detect(root: &Path) -> Self {
         let project_type = detect_project_type(root);
         let is_git_repo = root.join(".git").exists();
-        let has_carrier_dir = root.join(".carrier").exists();
+        let has_carrier_dir = root.join(".opencarrier").exists();
 
         let mut cache = HashMap::new();
         for &name in CONTEXT_FILES {
@@ -215,7 +215,7 @@ fn has_extension_in_dir(dir: &Path, ext: &str) -> bool {
     false
 }
 
-/// Persistent workspace state, saved to `.carrier/workspace-state.json`.
+/// Persistent workspace state, saved to `.opencarrier/workspace-state.json`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkspaceState {
     /// State format version.
@@ -232,19 +232,19 @@ fn default_version() -> u32 {
 }
 
 impl WorkspaceState {
-    /// Load state from the workspace's `.carrier/workspace-state.json`.
+    /// Load state from the workspace's `.opencarrier/workspace-state.json`.
     pub fn load(workspace_root: &Path) -> Self {
-        let path = workspace_root.join(".carrier").join("workspace-state.json");
+        let path = workspace_root.join(".opencarrier").join("workspace-state.json");
         match std::fs::read_to_string(&path) {
             Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
             Err(_) => Self::default(),
         }
     }
 
-    /// Save state to the workspace's `.carrier/workspace-state.json`.
+    /// Save state to the workspace's `.opencarrier/workspace-state.json`.
     pub fn save(&self, workspace_root: &Path) -> Result<(), String> {
-        let dir = workspace_root.join(".carrier");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create .carrier dir: {e}"))?;
+        let dir = workspace_root.join(".opencarrier");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create .opencarrier dir: {e}"))?;
         let path = dir.join("workspace-state.json");
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| format!("Failed to serialize state: {e}"))?;

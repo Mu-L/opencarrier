@@ -145,7 +145,7 @@ fn fetch_config(
             .header("Accept", "application/json")
             .header(
                 "User-Agent",
-                format!("Carrier/{}", env!("CARGO_PKG_VERSION")),
+                format!("OpenCarrier/{}", env!("CARGO_PKG_VERSION")),
             )
             .json(&body)
             .timeout(std::time::Duration::from_secs(10))

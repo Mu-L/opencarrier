@@ -5,7 +5,7 @@
 
 /// Default User-Agent header sent with all outgoing HTTP requests.
 /// Some LLM providers (e.g. Moonshot, Qwen) reject requests without one.
-pub const USER_AGENT: &str = concat!("carrier/", env!("CARGO_PKG_VERSION"));
+pub const USER_AGENT: &str = concat!("opencarrier/", env!("CARGO_PKG_VERSION"));
 
 pub mod a2a;
 pub mod agent_loop;

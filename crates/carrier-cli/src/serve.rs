@@ -223,7 +223,7 @@ pub(crate) fn jsonrpc_error(id: Option<Value>, code: i32, message: &str) -> Resp
 /// Creates the sessions directory and returns a file-backed session manager.
 fn init_acp_session_store(_kernel: &CarrierKernel) -> AcpSessionStore {
     let sessions_dir = dirs::home_dir()
-        .map(|h| h.join(".carrier").join("sessions"))
+        .map(|_| carrier_types::config::home_dir().join("sessions"))
         .unwrap_or_else(|| std::path::PathBuf::from("./sessions"));
 
     if let Err(e) = std::fs::create_dir_all(&sessions_dir) {

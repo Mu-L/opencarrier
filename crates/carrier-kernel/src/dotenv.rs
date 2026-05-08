@@ -1,4 +1,4 @@
-//! Minimal `.env` file loader/saver for `~/.carrier/.env`.
+//! Minimal `.env` file loader/saver for `~/.opencarrier/.env`.
 //!
 //! No external crate needed — hand-rolled for simplicity.
 //! Format: `KEY=VALUE` lines, `#` comments, optional quotes.
@@ -6,20 +6,12 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-/// Get the Carrier home directory, respecting CARRIER_HOME env var.
-fn dotenv_carrier_home() -> Option<PathBuf> {
-    if let Ok(home) = std::env::var("CARRIER_HOME") {
-        return Some(PathBuf::from(home));
-    }
-    dirs::home_dir().map(|h| h.join(".carrier"))
-}
-
-/// Return the path to `~/.carrier/.env`.
+/// Return the path to `~/.opencarrier/.env`.
 pub fn env_file_path() -> Option<PathBuf> {
-    dotenv_carrier_home().map(|h| h.join(".env"))
+    Some(carrier_types::config::home_dir().join(".env"))
 }
 
-/// Load `~/.carrier/.env` and `~/.carrier/secrets.env` into `std::env`.
+/// Load `~/.opencarrier/.env` and `~/.opencarrier/secrets.env` into `std::env`.
 ///
 /// System env vars take priority — existing vars are NOT overridden.
 /// `secrets.env` is loaded second so `.env` values take priority over secrets
@@ -35,9 +27,9 @@ pub fn load_dotenv() {
     load_env_file(secrets_env_path());
 }
 
-/// Return the path to `~/.carrier/secrets.env`.
+/// Return the path to `~/.opencarrier/secrets.env`.
 pub fn secrets_env_path() -> Option<PathBuf> {
-    dotenv_carrier_home().map(|h| h.join("secrets.env"))
+    Some(carrier_types::config::home_dir().join("secrets.env"))
 }
 
 fn load_env_file(path: Option<PathBuf>) {
@@ -65,7 +57,7 @@ fn load_env_file(path: Option<PathBuf>) {
     }
 }
 
-/// Upsert a key in `~/.carrier/.env`.
+/// Upsert a key in `~/.opencarrier/.env`.
 ///
 /// Creates the file if missing. Sets 0600 permissions on Unix.
 /// Also sets the key in the current process environment.
@@ -89,7 +81,7 @@ pub fn save_env_key(key: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Delete a key from `~/.carrier/.env`.
+/// Delete a key from `~/.opencarrier/.env`.
 ///
 /// Also removes the key from the current process environment.
 pub fn delete_env_key(key: &str) -> Result<(), String> {
@@ -109,7 +101,7 @@ pub fn delete_env_key(key: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Check if a key exists in `~/.carrier/.env` or the process environment.
+/// Check if a key exists in `~/.opencarrier/.env` or the process environment.
 pub fn has_env_key(key: &str) -> bool {
     std::env::var(key).is_ok()
 }

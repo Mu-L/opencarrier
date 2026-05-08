@@ -176,7 +176,7 @@ pub async fn auth(
             .and_then(|cookie_str| {
                 cookie_str
                     .split(';')
-                    .find_map(|part| part.trim().strip_prefix("carrier_session="))
+                    .find_map(|part| part.trim().strip_prefix("opencarrier_session="))
             });
         if let Some(token) = session_token {
             if crate::session_auth::verify_session_token(token, api_key).is_some() {

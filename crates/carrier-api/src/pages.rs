@@ -46,7 +46,7 @@ fn get_session_user(request: &Request<axum::body::Body>, state: &AppState) -> Op
         .and_then(|cookie_str| {
             cookie_str
                 .split(';')
-                .find_map(|part| part.trim().strip_prefix("carrier_session="))
+                .find_map(|part| part.trim().strip_prefix("opencarrier_session="))
         });
     session_token.and_then(|token| {
         session_auth::verify_session_token(token, secret).map(|info| info.username)
@@ -87,7 +87,7 @@ pub async fn logout_page() -> impl IntoResponse {
     let mut response = Redirect::to("/login").into_response();
     response.headers_mut().insert(
         axum::http::header::SET_COOKIE,
-        "carrier_session=; Path=/; Max-Age=0; SameSite=Strict"
+        "opencarrier_session=; Path=/; Max-Age=0; SameSite=Strict"
             .parse()
             .unwrap(),
     );

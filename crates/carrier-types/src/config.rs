@@ -370,7 +370,7 @@ impl Default for DockerSandboxConfig {
 pub struct VaultConfig {
     /// Whether the vault is enabled (auto-detected if vault.enc exists).
     pub enabled: bool,
-    /// Custom vault file path (default: ~/.carrier/vault.enc).
+    /// Custom vault file path (default: ~/.opencarrier/vault.enc).
     pub path: Option<PathBuf>,
 }
 
@@ -679,9 +679,9 @@ pub struct BudgetConfig {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct KernelConfig {
-    /// Carrier home directory (default: ~/.carrier).
+    /// Carrier home directory (default: ~/.opencarrier).
     pub home_dir: PathBuf,
-    /// Data directory for databases (default: ~/.carrier/data).
+    /// Data directory for databases (default: ~/.opencarrier/data).
     pub data_dir: PathBuf,
     /// Log level (trace, debug, info, warn, error).
     pub log_level: String,
@@ -728,7 +728,7 @@ pub struct KernelConfig {
     /// Credential vault configuration.
     #[serde(default)]
     pub vault: VaultConfig,
-    /// Root directory for agent workspaces. Default: `~/.carrier/workspaces`
+    /// Root directory for agent workspaces. Default: `~/.opencarrier/workspaces`
     #[serde(default)]
     pub workspaces_dir: Option<PathBuf>,
     /// Hub (openclone-hub) connection settings.
@@ -954,10 +954,10 @@ fn default_language() -> String {
 
 impl Default for KernelConfig {
     fn default() -> Self {
-        let home_dir = carrier_home_dir();
+        let home = home_dir();
         Self {
-            data_dir: home_dir.join("data"),
-            home_dir,
+            data_dir: home.join("data"),
+            home_dir: home,
             log_level: "info".to_string(),
             api_listen: "127.0.0.1:50051".to_string(),
             default_model: DefaultModelConfig::default(),
@@ -1107,16 +1107,16 @@ impl std::fmt::Debug for KernelConfig {
     }
 }
 
-/// Resolve the Carrier home directory.
+/// Resolve the OpenCarrier home directory.
 ///
-/// Priority: `CARRIER_HOME` env var > `~/.carrier`.
-fn carrier_home_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("CARRIER_HOME") {
+/// Priority: `OPENCARRIER_HOME` env var > `~/.opencarrier`.
+pub fn home_dir() -> PathBuf {
+    if let Ok(home) = std::env::var("OPENCARRIER_HOME") {
         return PathBuf::from(home);
     }
     dirs::home_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join(".carrier")
+        .join(".opencarrier")
 }
 
 /// Default LLM model configuration.

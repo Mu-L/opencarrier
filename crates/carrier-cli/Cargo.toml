@@ -3,10 +3,10 @@ name = "carrier-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "CLI tool for the Carrier Agent OS"
+description = "CLI tool for the OpenCarrier Agent OS"
 
 [[bin]]
-name = "carrier"
+name = "opencarrier"
 path = "src/main.rs"
 
 [dependencies]
@@ -28,7 +28,6 @@ dirs = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
 carrier-runtime = { path = "../carrier-runtime" }
 uuid = { workspace = true }
-ratatui = { workspace = true }
 colored = { workspace = true }
 rusqlite = { workspace = true }
 chrono = { workspace = true }
