@@ -197,19 +197,19 @@ impl ToolModule for MediaTools {
 
             // Media understanding
             "media_describe" => Some(tool_media_describe(input, ctx.brain).await),
-            "media_transcribe" => Some(tool_media_transcribe(input, ctx.media_engine).await),
+            "media_transcribe" => Some(tool_media_transcribe(input, ctx.brain).await),
 
             // Image generation
             "image_generate" => {
-                Some(tool_image_generate(input, ctx.workspace_root, ctx.sender_id).await)
+                Some(tool_image_generate(input, ctx.brain, ctx.workspace_root, ctx.sender_id).await)
             }
 
             // TTS/STT
             "text_to_speech" => Some(
-                tool_text_to_speech(input, ctx.tts_engine, ctx.workspace_root, ctx.sender_id).await,
+                tool_text_to_speech(input, ctx.brain, ctx.workspace_root, ctx.sender_id).await,
             ),
             "speech_to_text" => {
-                Some(tool_speech_to_text(input, ctx.media_engine, ctx.workspace_root).await)
+                Some(tool_speech_to_text(input, ctx.brain, ctx.workspace_root).await)
             }
 
             // Docker sandbox
@@ -503,13 +503,13 @@ async fn tool_media_describe(
     serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
 }
 
-/// Transcribe audio to text using speech-to-text.
+/// Transcribe audio to text via the Brain's audio modality.
 async fn tool_media_transcribe(
     input: &serde_json::Value,
-    media_engine: Option<&crate::media_understanding::MediaEngine>,
+    brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
 ) -> Result<String, String> {
     use base64::Engine;
-    let engine = media_engine.ok_or("Media engine not available. Check media configuration.")?;
+    let brain = brain.ok_or("Brain not available. Ensure audio modality is configured.")?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
     let _ = crate::tools::validate_path(path)?;
 
@@ -534,83 +534,149 @@ async fn tool_media_transcribe(
         _ => return Err(format!("Unsupported audio format: .{ext}")),
     };
 
-    let attachment = opencarrier_types::media::MediaAttachment {
-        media_type: opencarrier_types::media::MediaType::Audio,
-        mime_type: mime.to_string(),
-        source: opencarrier_types::media::MediaSource::Base64 {
-            data: base64::engine::general_purpose::STANDARD.encode(&data),
-            mime_type: mime.to_string(),
-        },
-        size_bytes: data.len() as u64,
+    let audio_block = opencarrier_types::message::ContentBlock::Audio {
+        media_type: mime.to_string(),
+        data: base64::engine::general_purpose::STANDARD.encode(&data),
     };
 
-    let understanding = engine.transcribe_audio(&attachment).await?;
-    serde_json::to_string_pretty(&understanding).map_err(|e| format!("Serialize error: {e}"))
+    let request = crate::llm_driver::CompletionRequest {
+        model: String::new(),
+        messages: vec![opencarrier_types::message::Message {
+            role: opencarrier_types::message::Role::User,
+            content: opencarrier_types::message::MessageContent::Blocks(vec![audio_block]),
+        }],
+        tools: vec![],
+        max_tokens: 4096,
+        temperature: 0.0,
+        system: None,
+        thinking: None,
+        extra: serde_json::Value::Object(serde_json::Map::new()),
+    };
+
+    let response = brain
+        .complete("audio", request)
+        .await
+        .map_err(|e| format!("Audio transcription brain call failed: {e}"))?;
+
+    let transcript = response.text();
+    let result = serde_json::json!({
+        "transcript": transcript,
+        "provider": "brain",
+    });
+    serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
 }
 
 // ---------------------------------------------------------------------------
 // Image generation tool
 // ---------------------------------------------------------------------------
 
-/// Generate images from a text prompt.
+/// Generate images from a text prompt via the Brain's image modality.
 async fn tool_image_generate(
     input: &serde_json::Value,
+    brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
     workspace_root: Option<&Path>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
+    let brain = brain.ok_or("Brain not available. Ensure image modality is configured.")?;
     let prompt = input["prompt"]
         .as_str()
         .ok_or("Missing 'prompt' parameter")?;
 
-    let model_str = input["model"].as_str().unwrap_or("dall-e-3");
-    let model = match model_str {
-        "dall-e-3" | "dalle3" | "dalle-3" => opencarrier_types::media::ImageGenModel::DallE3,
-        "dall-e-2" | "dalle2" | "dalle-2" => opencarrier_types::media::ImageGenModel::DallE2,
-        "gpt-image-1" | "gpt_image_1" => opencarrier_types::media::ImageGenModel::GptImage1,
-        _ => {
-            return Err(format!(
-                "Unknown image model: {model_str}. Use 'dall-e-3', 'dall-e-2', or 'gpt-image-1'."
-            ))
-        }
-    };
-
-    let size = input["size"].as_str().unwrap_or("1024x1024").to_string();
-    let quality = input["quality"].as_str().unwrap_or("hd").to_string();
+    let model = input["model"].as_str().unwrap_or("dall-e-3");
+    let size = input["size"].as_str().unwrap_or("1024x1024");
+    let quality = input["quality"].as_str().unwrap_or("hd");
     let count = input["count"].as_u64().unwrap_or(1).min(4) as u8;
 
-    let request = opencarrier_types::media::ImageGenRequest {
-        prompt: prompt.to_string(),
-        model,
-        size,
-        quality,
-        count,
+    let mut extra = serde_json::Map::new();
+    extra.insert("model".to_string(), serde_json::json!(model));
+    extra.insert("size".to_string(), serde_json::json!(size));
+    extra.insert("quality".to_string(), serde_json::json!(quality));
+    extra.insert("n".to_string(), serde_json::json!(count));
+
+    let request = crate::llm_driver::CompletionRequest {
+        model: String::new(),
+        messages: vec![opencarrier_types::message::Message {
+            role: opencarrier_types::message::Role::User,
+            content: opencarrier_types::message::MessageContent::Text(prompt.to_string()),
+        }],
+        tools: vec![],
+        max_tokens: 0,
+        temperature: 0.0,
+        system: None,
+        thinking: None,
+        extra: serde_json::Value::Object(extra),
     };
 
-    let result = crate::image_gen::generate_image(&request).await?;
+    let response = brain
+        .complete("image", request)
+        .await
+        .map_err(|e| format!("Image generation brain call failed: {e}"))?;
+
+    let images = match response.media {
+        Some(opencarrier_types::media::MediaOutput::Images { items }) => items,
+        Some(opencarrier_types::media::MediaOutput::Image { data, format: _fmt }) => {
+            vec![opencarrier_types::media::GeneratedImage {
+                data_base64: {
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.encode(&data)
+                },
+                url: None,
+            }]
+        }
+        _ => return Err("Image generation returned no images".into()),
+    };
+
+    if images.is_empty() {
+        return Err("Image generation returned empty image list".into());
+    }
 
     // Save images to workspace if available
     let saved_paths = if let Some(workspace) = workspace_root {
-        match crate::image_gen::save_images_to_workspace(&result, workspace, sender_id) {
-            Ok(paths) => paths,
-            Err(e) => {
-                warn!("Failed to save images to workspace: {e}");
-                Vec::new()
-            }
+        let sid = sender_id.ok_or("Cannot save images: no sender context")?;
+        let output_dir = workspace.join("users").join(sid).join("output");
+        tokio::fs::create_dir_all(&output_dir)
+            .await
+            .map_err(|e| format!("Failed to create output dir: {e}"))?;
+
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+        let mut paths = Vec::new();
+
+        for (i, image) in images.iter().enumerate() {
+            let filename = if images.len() == 1 {
+                format!("image_{timestamp}.png")
+            } else {
+                format!("image_{timestamp}_{i}.png")
+            };
+            let path = output_dir.join(&filename);
+
+            let decoded = {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD
+                    .decode(&image.data_base64)
+                    .map_err(|e| format!("Failed to decode base64 image: {e}"))?
+            };
+
+            tokio::fs::write(&path, &decoded)
+                .await
+                .map_err(|e| format!("Failed to write image: {e}"))?;
+
+            paths.push(path.display().to_string());
         }
+        paths
     } else {
         Vec::new()
     };
 
     // Also save to the uploads temp dir so the web UI can serve them via
-    // GET /api/uploads/{file_id}.  Each image gets a UUID filename.
+    // GET /api/uploads/{file_id}. Each image gets a UUID filename.
     let mut image_urls: Vec<String> = Vec::new();
     {
         use base64::Engine;
         let upload_dir = std::env::temp_dir().join("opencarrier_uploads");
         let _ = std::fs::create_dir_all(&upload_dir);
-        for img in &result.images {
+        for image in &images {
             let file_id = uuid::Uuid::new_v4().to_string();
-            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&img.data_base64)
+            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&image.data_base64)
             {
                 let path = upload_dir.join(&file_id);
                 if std::fs::write(&path, &decoded).is_ok() {
@@ -620,13 +686,11 @@ async fn tool_image_generate(
         }
     }
 
-    // Build response — include image_urls so the dashboard can render <img> tags
     let response = serde_json::json!({
-        "model": result.model,
-        "images_generated": result.images.len(),
+        "images_generated": images.len(),
         "saved_to": saved_paths,
-        "revised_prompt": result.revised_prompt,
         "image_urls": image_urls,
+        "provider": "brain",
     });
 
     serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
@@ -638,16 +702,49 @@ async fn tool_image_generate(
 
 async fn tool_text_to_speech(
     input: &serde_json::Value,
-    tts_engine: Option<&crate::tts::TtsEngine>,
+    brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
     workspace_root: Option<&Path>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
-    let engine = tts_engine.ok_or("TTS engine not available. Ensure tts.enabled=true in config.")?;
+    let brain = brain.ok_or("Brain not available. Ensure tts modality is configured.")?;
     let text = input["text"].as_str().ok_or("Missing 'text' parameter")?;
     let voice = input["voice"].as_str();
     let format = input["format"].as_str();
 
-    let result = engine.synthesize(text, voice, format).await?;
+    let mut extra = serde_json::Map::new();
+    if let Some(v) = voice {
+        extra.insert("voice".to_string(), serde_json::json!(v));
+    }
+    if let Some(f) = format {
+        extra.insert("format".to_string(), serde_json::json!(f));
+    }
+
+    let request = crate::llm_driver::CompletionRequest {
+        model: String::new(),
+        messages: vec![opencarrier_types::message::Message {
+            role: opencarrier_types::message::Role::User,
+            content: opencarrier_types::message::MessageContent::Text(text.to_string()),
+        }],
+        tools: vec![],
+        max_tokens: 0,
+        temperature: 0.0,
+        system: None,
+        thinking: None,
+        extra: serde_json::Value::Object(extra),
+    };
+
+    let response = brain
+        .complete("tts", request)
+        .await
+        .map_err(|e| format!("TTS brain call failed: {e}"))?;
+
+    let media = response.media.ok_or("TTS returned no media")?;
+    let (audio_data, format, duration_ms) = match media {
+        opencarrier_types::media::MediaOutput::Audio { data, format, duration_ms } => {
+            (data, format, duration_ms)
+        }
+        _ => return Err("TTS returned non-audio media".into()),
+    };
 
     // Save audio to per-user output directory
     let saved_path = if let Some(workspace) = workspace_root {
@@ -658,10 +755,10 @@ async fn tool_text_to_speech(
             .map_err(|e| format!("Failed to create output dir: {e}"))?;
 
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
-        let filename = format!("tts_{timestamp}.{}", result.format);
+        let filename = format!("tts_{timestamp}.{format}");
         let path = output_dir.join(&filename);
 
-        tokio::fs::write(&path, &result.audio_data)
+        tokio::fs::write(&path, &audio_data)
             .await
             .map_err(|e| format!("Failed to write audio file: {e}"))?;
 
@@ -672,10 +769,10 @@ async fn tool_text_to_speech(
 
     let response = serde_json::json!({
         "saved_to": saved_path,
-        "format": result.format,
-        "provider": result.provider,
-        "duration_estimate_ms": result.duration_estimate_ms,
-        "size_bytes": result.audio_data.len(),
+        "format": format,
+        "provider": "brain",
+        "duration_estimate_ms": duration_ms,
+        "size_bytes": audio_data.len(),
     });
 
     serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
@@ -683,12 +780,13 @@ async fn tool_text_to_speech(
 
 async fn tool_speech_to_text(
     input: &serde_json::Value,
-    media_engine: Option<&crate::media_understanding::MediaEngine>,
+    brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
     workspace_root: Option<&Path>,
 ) -> Result<String, String> {
-    let engine = media_engine.ok_or("Media engine not available for speech-to-text")?;
+    use base64::Engine;
+    let brain = brain.ok_or("Brain not available. Ensure audio modality is configured.")?;
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let _language = input["language"].as_str();
+    let language = input["language"].as_str();
 
     let resolved = crate::tools::resolve_file_path(raw_path, workspace_root)?;
 
@@ -712,29 +810,42 @@ async fn tool_speech_to_text(
         _ => "audio/mpeg",
     };
 
-    use opencarrier_types::media::{MediaAttachment, MediaSource, MediaType};
-    let attachment = MediaAttachment {
-        media_type: MediaType::Audio,
-        mime_type: mime_type.to_string(),
-        source: MediaSource::Base64 {
-            data: {
-                use base64::Engine;
-                base64::engine::general_purpose::STANDARD.encode(&data)
-            },
-            mime_type: mime_type.to_string(),
-        },
-        size_bytes: data.len() as u64,
+    let audio_block = opencarrier_types::message::ContentBlock::Audio {
+        media_type: mime_type.to_string(),
+        data: base64::engine::general_purpose::STANDARD.encode(&data),
     };
 
-    let understanding = engine.transcribe_audio(&attachment).await?;
+    let mut extra = serde_json::Map::new();
+    if let Some(lang) = language {
+        extra.insert("language".to_string(), serde_json::json!(lang));
+    }
 
-    let response = serde_json::json!({
-        "transcript": understanding.description,
-        "provider": understanding.provider,
-        "model": understanding.model,
+    let request = crate::llm_driver::CompletionRequest {
+        model: String::new(),
+        messages: vec![opencarrier_types::message::Message {
+            role: opencarrier_types::message::Role::User,
+            content: opencarrier_types::message::MessageContent::Blocks(vec![audio_block]),
+        }],
+        tools: vec![],
+        max_tokens: 4096,
+        temperature: 0.0,
+        system: None,
+        thinking: None,
+        extra: serde_json::Value::Object(extra),
+    };
+
+    let response = brain
+        .complete("audio", request)
+        .await
+        .map_err(|e| format!("Speech-to-text brain call failed: {e}"))?;
+
+    let transcript = response.text();
+    let result = serde_json::json!({
+        "transcript": transcript,
+        "provider": "brain",
     });
 
-    serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
+    serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
 }
 
 // ---------------------------------------------------------------------------

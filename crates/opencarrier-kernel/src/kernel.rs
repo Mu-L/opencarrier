@@ -58,8 +58,6 @@ pub struct KernelServices {
     pub browser_ctx: opencarrier_runtime::browser::BrowserManager,
     /// Media understanding engine (image description, audio transcription).
     pub media_engine: opencarrier_runtime::media_understanding::MediaEngine,
-    /// Text-to-speech engine.
-    pub tts_engine: opencarrier_runtime::tts::TtsEngine,
 }
 
 /// Plugin and MCP tooling subsystem.
@@ -1193,7 +1191,6 @@ impl OpenCarrierKernel {
         // Initialize media understanding engine
         let media_engine =
             opencarrier_runtime::media_understanding::MediaEngine::new(config.media.clone());
-        let tts_engine = opencarrier_runtime::tts::TtsEngine::new(config.tts.clone());
 
         // Initialize cron scheduler
         let cron_scheduler =
@@ -1233,7 +1230,6 @@ impl OpenCarrierKernel {
                 web_ctx,
                 browser_ctx,
                 media_engine,
-                tts_engine,
             },
             plugins: KernelPlugins {
                 mcp_connections: dashmap::DashMap::new(),
@@ -1851,12 +1847,6 @@ impl OpenCarrierKernel {
                 Some(&kernel_clone.services.browser_ctx),
                 manifest.workspace.as_deref(),
                 Some(&phase_cb),
-                Some(&kernel_clone.services.media_engine),
-                if kernel_clone.config.tts.enabled {
-                    Some(&kernel_clone.services.tts_engine)
-                } else {
-                    None
-                },
                 if kernel_clone.config.docker.enabled {
                     Some(&kernel_clone.config.docker)
                 } else {
@@ -2260,12 +2250,6 @@ impl OpenCarrierKernel {
             Some(&self.services.browser_ctx),
             manifest.workspace.as_deref(),
             None, // on_phase callback
-            Some(&self.services.media_engine),
-            if self.config.tts.enabled {
-                Some(&self.services.tts_engine)
-            } else {
-                None
-            },
             if self.config.docker.enabled {
                 Some(&self.config.docker)
             } else {

@@ -124,8 +124,6 @@ pub async fn run_agent_loop(
     browser_ctx: Option<&crate::browser::BrowserManager>,
     workspace_root: Option<&Path>,
     on_phase: Option<&PhaseCallback>,
-    media_engine: Option<&crate::media_understanding::MediaEngine>,
-    tts_engine: Option<&crate::tts::TtsEngine>,
     docker_config: Option<&opencarrier_types::config::DockerSandboxConfig>,
     hooks: Option<&crate::hooks::HookRegistry>,
     context_window_tokens: Option<usize>,
@@ -598,10 +596,9 @@ pub async fn run_agent_loop(
                             Some(&hand_allowed_env)
                         },
                         workspace_root,
-                        media_engine,
                         brain: brain.as_ref(),
                         exec_policy: effective_exec_policy,
-                        tts_engine,
+
                         docker_config,
                         process_manager,
                         sender_id,
@@ -1004,8 +1001,6 @@ pub async fn run_agent_loop_streaming(
     browser_ctx: Option<&crate::browser::BrowserManager>,
     workspace_root: Option<&Path>,
     on_phase: Option<&PhaseCallback>,
-    media_engine: Option<&crate::media_understanding::MediaEngine>,
-    tts_engine: Option<&crate::tts::TtsEngine>,
     docker_config: Option<&opencarrier_types::config::DockerSandboxConfig>,
     hooks: Option<&crate::hooks::HookRegistry>,
     context_window_tokens: Option<usize>,
@@ -1491,10 +1486,9 @@ pub async fn run_agent_loop_streaming(
                             Some(&hand_allowed_env)
                         },
                         workspace_root,
-                        media_engine,
                         brain: brain.as_ref(),
                         exec_policy: effective_exec_policy,
-                        tts_engine,
+
                         docker_config,
                         process_manager,
                         sender_id,
@@ -2723,8 +2717,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // media_engine
-            None, // tts_engine
             None, // docker_config
             None, // hooks
             None, // context_window_tokens
@@ -2776,8 +2768,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // media_engine
-            None, // tts_engine
             None, // docker_config
             None, // hooks
             None, // context_window_tokens
@@ -2831,8 +2821,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // media_engine
-            None, // tts_engine
             None, // docker_config
             None, // hooks
             None, // context_window_tokens
@@ -2884,8 +2872,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // media_engine
-            None, // tts_engine
             None, // docker_config
             None, // hooks
             None, // context_window_tokens
@@ -2930,8 +2916,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // media_engine
-            None, // tts_engine
             None, // docker_config
             None, // hooks
             None, // context_window_tokens
@@ -3059,8 +3043,6 @@ mod tests {
             None,
             None,
             None,
-            None,
-            None,
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
@@ -3098,8 +3080,6 @@ mod tests {
             &memory,
             driver,
             &[],
-            None,
-            None,
             None,
             None,
             None,
@@ -3159,8 +3139,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // media_engine
-            None, // tts_engine
             None, // docker_config
             None, // hooks
             None, // context_window_tokens
@@ -4049,8 +4027,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // media_engine
-            None, // tts_engine
             None, // docker_config
             None, // hooks
             None, // context_window_tokens
@@ -4120,8 +4096,6 @@ mod tests {
             None,
             None,
             None,
-            None,
-            None,
             None, // user_content_blocks
             None, // brain
             None, // sender_id
@@ -4179,8 +4153,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // media_engine
-            None, // tts_engine
             None, // docker_config
             None, // hooks
             None, // context_window_tokens

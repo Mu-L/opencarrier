@@ -88,6 +88,19 @@ impl OpenAIDriver {
     }
 }
 
+/// Map audio MIME type to OpenAI `input_audio.format` value.
+fn mime_to_audio_format(mime: &str) -> &str {
+    match mime {
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/ogg" => "ogg",
+        "audio/flac" => "flac",
+        "audio/mp4" | "audio/m4a" => "mp4",
+        "audio/webm" => "webm",
+        _ => "mp3",
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct OaiRequest {
     model: String,
@@ -178,6 +191,14 @@ enum OaiContentPart {
     Text { text: String },
     #[serde(rename = "image_url")]
     ImageUrl { image_url: OaiImageUrl },
+    #[serde(rename = "input_audio")]
+    InputAudio { input_audio: OaiInputAudio },
+}
+
+#[derive(Debug, Serialize)]
+struct OaiInputAudio {
+    data: String,
+    format: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -319,6 +340,15 @@ impl LlmDriver for OpenAIDriver {
                                 parts.push(OaiContentPart::ImageUrl {
                                     image_url: OaiImageUrl {
                                         url: format!("data:{media_type};base64,{data}"),
+                                    },
+                                });
+                            }
+                            ContentBlock::Audio { media_type, data } => {
+                                let fmt = mime_to_audio_format(media_type);
+                                parts.push(OaiContentPart::InputAudio {
+                                    input_audio: OaiInputAudio {
+                                        data: data.clone(),
+                                        format: fmt.to_string(),
                                     },
                                 });
                             }

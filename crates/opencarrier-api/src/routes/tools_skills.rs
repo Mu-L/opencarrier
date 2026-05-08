@@ -192,14 +192,8 @@ pub async fn mcp_http(
             browser_ctx: Some(&state.kernel.services.browser_ctx),
             allowed_env_vars: None,
             workspace_root: None,
-            media_engine: Some(&state.kernel.services.media_engine),
             brain: None,
             exec_policy: Some(&state.kernel.config.exec_policy),
-            tts_engine: if state.kernel.config.tts.enabled {
-                Some(&state.kernel.services.tts_engine)
-            } else {
-                None
-            },
             docker_config: if state.kernel.config.docker.enabled {
                 Some(&state.kernel.config.docker)
             } else {

@@ -455,6 +455,9 @@ impl SessionStore {
                             ContentBlock::Image { media_type, .. } => {
                                 text_parts.push(format!("[image: {media_type}]"));
                             }
+                            ContentBlock::Audio { media_type, .. } => {
+                                text_parts.push(format!("[audio: {media_type}]"));
+                            }
                             ContentBlock::Thinking { thinking } => {
                                 text_parts.push(format!(
                                     "[thinking: {}]",

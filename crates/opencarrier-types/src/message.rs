@@ -56,6 +56,14 @@ pub enum ContentBlock {
         /// Base64-encoded image data.
         data: String,
     },
+    /// An inline base64-encoded audio clip.
+    #[serde(rename = "audio")]
+    Audio {
+        /// MIME type (e.g. "audio/mpeg", "audio/wav").
+        media_type: String,
+        /// Base64-encoded audio data.
+        data: String,
+    },
     /// A tool use request from the assistant.
     #[serde(rename = "tool_use")]
     ToolUse {
@@ -144,6 +152,7 @@ impl MessageContent {
                     ContentBlock::Thinking { thinking } => thinking.len(),
                     ContentBlock::ToolUse { .. }
                     | ContentBlock::Image { .. }
+                    | ContentBlock::Audio { .. }
                     | ContentBlock::Unknown => 0,
                 })
                 .sum(),

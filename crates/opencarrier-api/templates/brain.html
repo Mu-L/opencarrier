@@ -166,7 +166,10 @@
     <div id="modal-endpoint" class="modal-content" style="display:none">
       <h3 style="font-size:16px;margin-bottom:16px">端点</h3>
       <input type="text" id="e-name" placeholder="名称 (如 glm-chat)" style="margin-bottom:8px">
-      <input type="text" id="e-provider" placeholder="提供商名称" style="margin-bottom:8px">
+      <select id="e-provider" style="margin-bottom:8px">
+        <option value="">选择提供商</option>
+        {% for p in providers %}<option value="{{ p.name }}">{{ p.name }}</option>{% endfor %}
+      </select>
       <input type="text" id="e-model" placeholder="模型 (如 glm-5.1)" style="margin-bottom:8px">
       <input type="text" id="e-url" placeholder="Base URL (https://...)" style="margin-bottom:8px">
       <select id="e-format" style="margin-bottom:8px">
@@ -189,8 +192,14 @@
     <div id="modal-modality" class="modal-content" style="display:none">
       <h3 style="font-size:16px;margin-bottom:16px">模态</h3>
       <input type="text" id="m-name" placeholder="名称 (如 chat / vision / tts)" style="margin-bottom:8px">
-      <input type="text" id="m-primary" placeholder="主端点名称" style="margin-bottom:8px">
-      <input type="text" id="m-fallbacks" placeholder="备用端点 (逗号分隔)" style="margin-bottom:8px">
+      <select id="m-primary" style="margin-bottom:8px">
+        <option value="">选择主端点</option>
+        {% for ep in endpoints %}<option value="{{ ep.name }}">{{ ep.name }}</option>{% endfor %}
+      </select>
+      <select id="m-fallbacks" multiple style="margin-bottom:8px;min-height:80px">
+        {% for ep in endpoints %}<option value="{{ ep.name }}">{{ ep.name }}</option>{% endfor %}
+      </select>
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">按住 Ctrl/Cmd 多选备用端点</div>
       <input type="text" id="m-desc" placeholder="描述" style="margin-bottom:8px">
       <div style="display:flex;gap:8px;margin-top:12px">
         <button class="btn btn-primary" onclick="saveModality()">保存</button>
@@ -246,7 +255,7 @@ function openModal(type) {
   // clear inputs
   if(type==='provider'){ document.getElementById('p-name').value=''; document.getElementById('p-key').value=''; document.getElementById('p-key-value').value=''; document.getElementById('p-auth').value='apikey'; document.getElementById('p-msg').textContent=''; }
   if(type==='endpoint'){ document.getElementById('e-name').value=''; document.getElementById('e-provider').value=''; document.getElementById('e-model').value=''; document.getElementById('e-url').value=''; document.getElementById('e-format').value='openai'; document.getElementById('e-msg').textContent=''; }
-  if(type==='modality'){ document.getElementById('m-name').value=''; document.getElementById('m-primary').value=''; document.getElementById('m-fallbacks').value=''; document.getElementById('m-desc').value=''; document.getElementById('m-msg').textContent=''; }
+  if(type==='modality'){ document.getElementById('m-name').value=''; document.getElementById('m-primary').selectedIndex=0; var fb=document.getElementById('m-fallbacks'); for(var i=0;i<fb.options.length;i++){fb.options[i].selected=false;} document.getElementById('m-desc').value=''; document.getElementById('m-msg').textContent=''; }
 }
 function closeModal() {
   document.getElementById('modal-overlay').style.display='none';
@@ -318,7 +327,8 @@ function editEndpoint(name, provider, model, url, format) {
 function saveModality() {
   var name = document.getElementById('m-name').value.trim();
   var primary = document.getElementById('m-primary').value.trim();
-  var fallbacks = document.getElementById('m-fallbacks').value.trim().split(',').map(function(s){return s.trim()}).filter(Boolean);
+  var fbSel = document.getElementById('m-fallbacks');
+  var fallbacks = Array.from(fbSel.selectedOptions).map(function(o){return o.value;});
   var description = document.getElementById('m-desc').value.trim();
   if (!name || !primary) { setMsg('m-msg', '名称和主端点必填', false); return; }
   api('PUT', '/api/brain/modalities/' + name, {primary: primary, fallbacks: fallbacks, description: description})
@@ -327,7 +337,11 @@ function saveModality() {
 function editModality(name, primary, fallbacks, description) {
   document.getElementById('m-name').value = name;
   document.getElementById('m-primary').value = primary;
-  document.getElementById('m-fallbacks').value = fallbacks;
+  var fb = document.getElementById('m-fallbacks');
+  var fbSet = new Set((fallbacks || '').split(',').filter(Boolean));
+  for (var i = 0; i < fb.options.length; i++) {
+    fb.options[i].selected = fbSet.has(fb.options[i].value);
+  }
   document.getElementById('m-desc').value = description || '';
   document.getElementById('m-msg').textContent = '';
   document.querySelectorAll('.modal-content').forEach(function(c){ c.style.display='none'; });

@@ -3,10 +3,8 @@
 use crate::browser::BrowserManager;
 use crate::kernel_handle::KernelHandle;
 use crate::llm_driver::Brain;
-use crate::media_understanding::MediaEngine;
 use crate::mcp::McpConnection;
 use crate::process_manager::ProcessManager;
-use crate::tts::TtsEngine;
 use crate::web_search::WebToolsContext;
 use dashmap::DashMap;
 use opencarrier_types::config::{DockerSandboxConfig, ExecPolicy};
@@ -30,10 +28,8 @@ pub struct ToolContext<'a> {
     pub browser_ctx: Option<&'a BrowserManager>,
     pub allowed_env_vars: Option<&'a [String]>,
     pub workspace_root: Option<&'a Path>,
-    pub media_engine: Option<&'a MediaEngine>,
     pub brain: Option<&'a Arc<dyn Brain>>,
     pub exec_policy: Option<&'a ExecPolicy>,
-    pub tts_engine: Option<&'a TtsEngine>,
     pub docker_config: Option<&'a DockerSandboxConfig>,
     pub process_manager: Option<&'a ProcessManager>,
     pub sender_id: Option<&'a str>,

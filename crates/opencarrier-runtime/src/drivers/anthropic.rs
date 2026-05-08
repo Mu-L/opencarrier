@@ -613,6 +613,7 @@ fn convert_message(msg: &Message) -> ApiMessage {
                         content: content.clone(),
                         is_error: *is_error,
                     }),
+                    ContentBlock::Audio { .. } => None,
                     ContentBlock::Thinking { .. } => None,
                     ContentBlock::Unknown => None,
                 })
