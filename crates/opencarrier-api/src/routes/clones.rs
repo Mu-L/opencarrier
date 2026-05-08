@@ -135,10 +135,7 @@ pub async fn install_clone(
     let name = manifest.name.clone();
     let warnings = clone_data.security_warnings.clone();
 
-    match state
-        .kernel
-        .spawn_agent(manifest)
-    {
+    match state.kernel.spawn_agent(manifest) {
         Ok(id) => {
             tracing::info!("Clone '{}' installed and spawned: {}", name, id);
             (
@@ -161,9 +158,7 @@ pub async fn install_clone(
     }
 }
 /// GET /api/clones — List installed clones (agents with clone_source).
-pub async fn list_clones(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn list_clones(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let agents = state.kernel.registry.list();
     let clones: Vec<serde_json::Value> = agents
         .into_iter()
@@ -269,11 +264,10 @@ pub async fn clone_compile(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let (entry, workspace) =
-        match get_clone_workspace(&name, &state.kernel.registry) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     // Resolve an LLM driver for compile operations
     let driver = match state.kernel.resolve_driver(&entry.manifest) {
@@ -303,7 +297,7 @@ pub async fn clone_compile(
                 temperature: 0.3,
                 system: Some(sys.to_string()),
                 thinking: None,
-                    extra: Default::default(),
+                extra: Default::default(),
             };
             rt.block_on(async { driver.complete(request).await })
                 .map(|r: opencarrier_runtime::llm_driver::CompletionResponse| r.text())
@@ -358,11 +352,10 @@ pub async fn clone_health(
     Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let (_entry, workspace) =
-        match get_clone_workspace(&name, &state.kernel.registry) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     let do_fix = params.get("fix").map(|v| v == "true").unwrap_or(false);
 
@@ -391,11 +384,10 @@ pub async fn clone_feedback_push(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    let (_entry, workspace) =
-        match get_clone_workspace(&name, &state.kernel.registry) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     let entries = match opencarrier_lifecycle::feedback::collect_feedback(&workspace) {
         Ok(e) => e,
@@ -455,11 +447,10 @@ pub async fn clone_evaluate(
     Path(name): Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let (entry, workspace) =
-        match get_clone_workspace(&name, &state.kernel.registry) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     let metrics = opencarrier_lifecycle::evaluate::compute_deterministic_metrics(&workspace);
 
@@ -495,7 +486,7 @@ pub async fn clone_evaluate(
                         temperature: 0.7,
                         system: Some(sys_prompt),
                         thinking: None,
-                    extra: Default::default(),
+                        extra: Default::default(),
                     })
                     .await
                 {
@@ -525,7 +516,7 @@ pub async fn clone_evaluate(
                                     "Answer the following question concisely.".to_string(),
                                 ),
                                 thinking: None,
-                    extra: Default::default(),
+                                extra: Default::default(),
                             })
                             .await
                         {
@@ -550,7 +541,7 @@ pub async fn clone_evaluate(
                                 temperature: 0.0,
                                 system: Some(j_sys),
                                 thinking: None,
-                    extra: Default::default(),
+                                extra: Default::default(),
                             })
                             .await
                         {
@@ -609,11 +600,10 @@ pub async fn clone_rollback(
         }
     };
 
-    let (_entry, workspace) =
-        match get_clone_workspace(&name, &state.kernel.registry) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     match opencarrier_lifecycle::version::rollback_file(&workspace, &filename) {
         Ok(()) => {
@@ -648,11 +638,10 @@ pub async fn clone_verify(
         }
     };
 
-    let (_entry, workspace) =
-        match get_clone_workspace(&name, &state.kernel.registry) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     match opencarrier_lifecycle::version::verify_version(&workspace, &filename) {
         Ok(()) => (
@@ -698,7 +687,9 @@ pub async fn upgrade_clone(
     {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Clone has no hub_template_id, cannot upgrade from hub"})),
+            Json(
+                serde_json::json!({"error": "Clone has no hub_template_id, cannot upgrade from hub"}),
+            ),
         );
     }
 

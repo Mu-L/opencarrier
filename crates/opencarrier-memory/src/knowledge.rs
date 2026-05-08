@@ -51,10 +51,7 @@ impl KnowledgeStore {
     }
 
     /// Add a relation between two entities.
-    pub fn add_relation(
-        &self,
-        relation: Relation,
-    ) -> OpenCarrierResult<String> {
+    pub fn add_relation(&self, relation: Relation) -> OpenCarrierResult<String> {
         let conn = self
             .conn
             .lock()
@@ -83,10 +80,7 @@ impl KnowledgeStore {
     }
 
     /// Query the knowledge graph with a pattern.
-    pub fn query_graph(
-        &self,
-        pattern: GraphPattern,
-    ) -> OpenCarrierResult<Vec<GraphMatch>> {
+    pub fn query_graph(&self, pattern: GraphPattern) -> OpenCarrierResult<Vec<GraphMatch>> {
         let conn = self
             .conn
             .lock()
@@ -281,16 +275,14 @@ mod tests {
     fn test_add_and_query_entity() {
         let store = setup();
         let id = store
-            .add_entity(
-                Entity {
-                    id: String::new(),
-                    entity_type: EntityType::Person,
-                    name: "Alice".to_string(),
-                    properties: HashMap::new(),
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                },
-            )
+            .add_entity(Entity {
+                id: String::new(),
+                entity_type: EntityType::Person,
+                name: "Alice".to_string(),
+                properties: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
             .unwrap();
         assert!(!id.is_empty());
     }
@@ -299,51 +291,43 @@ mod tests {
     fn test_add_relation_and_query() {
         let store = setup();
         let alice_id = store
-            .add_entity(
-                Entity {
-                    id: "alice".to_string(),
-                    entity_type: EntityType::Person,
-                    name: "Alice".to_string(),
-                    properties: HashMap::new(),
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                },
-            )
+            .add_entity(Entity {
+                id: "alice".to_string(),
+                entity_type: EntityType::Person,
+                name: "Alice".to_string(),
+                properties: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
             .unwrap();
         let company_id = store
-            .add_entity(
-                Entity {
-                    id: "acme".to_string(),
-                    entity_type: EntityType::Organization,
-                    name: "Acme Corp".to_string(),
-                    properties: HashMap::new(),
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                },
-            )
+            .add_entity(Entity {
+                id: "acme".to_string(),
+                entity_type: EntityType::Organization,
+                name: "Acme Corp".to_string(),
+                properties: HashMap::new(),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            })
             .unwrap();
         store
-            .add_relation(
-                Relation {
-                    source: alice_id.clone(),
-                    relation: RelationType::WorksAt,
-                    target: company_id,
-                    properties: HashMap::new(),
-                    confidence: 0.95,
-                    created_at: Utc::now(),
-                },
-            )
+            .add_relation(Relation {
+                source: alice_id.clone(),
+                relation: RelationType::WorksAt,
+                target: company_id,
+                properties: HashMap::new(),
+                confidence: 0.95,
+                created_at: Utc::now(),
+            })
             .unwrap();
 
         let matches = store
-            .query_graph(
-                GraphPattern {
-                    source: Some(alice_id),
-                    relation: Some(RelationType::WorksAt),
-                    target: None,
-                    max_depth: 1,
-                },
-            )
+            .query_graph(GraphPattern {
+                source: Some(alice_id),
+                relation: Some(RelationType::WorksAt),
+                target: None,
+                max_depth: 1,
+            })
             .unwrap();
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].target.name, "Acme Corp");

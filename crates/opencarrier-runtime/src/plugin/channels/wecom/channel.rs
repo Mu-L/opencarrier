@@ -88,7 +88,16 @@ impl crate::plugin::BuiltinChannel for WeComChannel {
                 .build()
                 .expect("Failed to create tokio runtime for WeCom webhook");
             rt.block_on(async move {
-                run_webhook_server(tenant_name, corp_id, encoding_aes_key, callback_token, port, is_kf, sender).await;
+                run_webhook_server(
+                    tenant_name,
+                    corp_id,
+                    encoding_aes_key,
+                    callback_token,
+                    port,
+                    is_kf,
+                    sender,
+                )
+                .await;
             });
         });
 
@@ -116,7 +125,8 @@ impl crate::plugin::BuiltinChannel for WeComChannel {
             }
             token::WecomMode::SmartBot { .. } => {
                 return Err(
-                    "SmartBot mode does not support send via channel (use response_url)".to_string(),
+                    "SmartBot mode does not support send via channel (use response_url)"
+                        .to_string(),
                 );
             }
         }
@@ -192,7 +202,9 @@ async fn webhook_get(
 ) -> axum::response::Response {
     let msg_signature = match params.msg_signature.as_deref() {
         Some(s) => s,
-        None => return (axum::http::StatusCode::BAD_REQUEST, "missing msg_signature").into_response(),
+        None => {
+            return (axum::http::StatusCode::BAD_REQUEST, "missing msg_signature").into_response()
+        }
     };
     let timestamp = match params.timestamp.as_deref() {
         Some(s) => s,
@@ -220,7 +232,11 @@ async fn webhook_get(
             Ok(decrypted) => decrypted,
             Err(e) => {
                 warn!("Failed to decrypt echostr: {e}");
-                return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "decrypt error").into_response();
+                return (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "decrypt error",
+                )
+                    .into_response();
             }
         }
     } else {
@@ -229,7 +245,10 @@ async fn webhook_get(
 
     (
         axum::http::StatusCode::OK,
-        [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
         response,
     )
         .into_response()

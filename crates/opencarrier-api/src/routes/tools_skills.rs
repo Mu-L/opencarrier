@@ -47,10 +47,14 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
         .collect();
 
     // Get connected servers and their tools from the live MCP connections
-    let connected: Vec<serde_json::Value> = state.kernel.plugins.mcp_connections
+    let connected: Vec<serde_json::Value> = state
+        .kernel
+        .plugins
+        .mcp_connections
         .iter()
         .map(|entry| {
-            let tools: Vec<serde_json::Value> = entry.value()
+            let tools: Vec<serde_json::Value> = entry
+                .value()
                 .tools()
                 .iter()
                 .map(|t| {
@@ -203,10 +207,7 @@ pub async fn mcp_http(
             sender_id: None,
         };
         let result = opencarrier_runtime::tool_runner::execute_tool(
-            "mcp-http",
-            tool_name,
-            &arguments,
-            &tool_ctx,
+            "mcp-http", tool_name, &arguments, &tool_ctx,
         )
         .await;
 
@@ -229,11 +230,10 @@ pub async fn get_agent_tools(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) =
-        match parse_and_get_agent(&id, &state.kernel.registry) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -294,11 +294,10 @@ pub async fn get_agent_mcp_servers(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) =
-        match parse_and_get_agent(&id, &state.kernel.registry) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
     // Collect known MCP server names from connected tools
     let mut available: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();

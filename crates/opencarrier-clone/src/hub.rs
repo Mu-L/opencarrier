@@ -465,7 +465,10 @@ pub async fn install_plugin(
         let mut entry = entry.with_context(|| "读取归档条目失败")?;
         let path = entry.path().with_context(|| "获取归档条目路径失败")?;
         // Block entries that would escape the plugin directory
-        if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             bail!("插件归档包含不安全路径: {} (不允许使用 ..)", path.display());
         }
         let path_owned = path.to_path_buf();

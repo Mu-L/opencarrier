@@ -97,10 +97,7 @@ impl UsageStore {
     }
 
     /// Query usage summary, optionally filtered by agent.
-    pub fn query_summary(
-        &self,
-        agent_id: Option<AgentId>,
-    ) -> OpenCarrierResult<UsageSummary> {
+    pub fn query_summary(&self, agent_id: Option<AgentId>) -> OpenCarrierResult<UsageSummary> {
         let conn = self
             .conn
             .lock()
@@ -169,10 +166,7 @@ impl UsageStore {
     }
 
     /// Query daily usage breakdown for the last N days.
-    pub fn query_daily_breakdown(
-        &self,
-        days: u32,
-    ) -> OpenCarrierResult<Vec<DailyBreakdown>> {
+    pub fn query_daily_breakdown(&self, days: u32) -> OpenCarrierResult<Vec<DailyBreakdown>> {
         let conn = self
             .conn
             .lock()

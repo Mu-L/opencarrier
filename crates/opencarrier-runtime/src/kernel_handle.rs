@@ -67,11 +67,19 @@ pub trait KernelHandle: Send + Sync {
     ) -> Result<(), String>;
 
     /// Recall a value from the agent's per-user memory namespace.
-    fn memory_recall(&self, agent_id: &str, sender_id: &str, key: &str)
-        -> Result<Option<serde_json::Value>, String>;
+    fn memory_recall(
+        &self,
+        agent_id: &str,
+        sender_id: &str,
+        key: &str,
+    ) -> Result<Option<serde_json::Value>, String>;
 
     /// List all keys in the agent's per-user memory namespace.
-    fn memory_list(&self, agent_id: &str, sender_id: &str) -> Result<Vec<(String, serde_json::Value)>, String>;
+    fn memory_list(
+        &self,
+        agent_id: &str,
+        sender_id: &str,
+    ) -> Result<Vec<(String, serde_json::Value)>, String>;
 
     /// Find agents by query (matches on name substring, tag, or tool name; case-insensitive).
     fn find_agents(&self, query: &str) -> Vec<AgentInfo>;
@@ -86,23 +94,13 @@ pub trait KernelHandle: Send + Sync {
     ) -> Result<String, String>;
 
     /// Claim the next available task.
-    async fn task_claim(
-        &self,
-        agent_id: &str,
-    ) -> Result<Option<serde_json::Value>, String>;
+    async fn task_claim(&self, agent_id: &str) -> Result<Option<serde_json::Value>, String>;
 
     /// Mark a task as completed with a result string.
-    async fn task_complete(
-        &self,
-        task_id: &str,
-        result: &str,
-    ) -> Result<(), String>;
+    async fn task_complete(&self, task_id: &str, result: &str) -> Result<(), String>;
 
     /// List tasks, optionally filtered by status.
-    async fn task_list(
-        &self,
-        status: Option<&str>,
-    ) -> Result<Vec<serde_json::Value>, String>;
+    async fn task_list(&self, status: Option<&str>) -> Result<Vec<serde_json::Value>, String>;
 
     /// Publish a custom event that can trigger proactive agents.
     async fn publish_event(
@@ -184,11 +182,7 @@ pub trait KernelHandle: Send + Sync {
     }
 
     /// Install a clone from raw .agx bytes. Returns (agent_id, agent_name).
-    async fn clone_install(
-        &self,
-        name: &str,
-        agx_data: &[u8],
-    ) -> Result<(String, String), String> {
+    async fn clone_install(&self, name: &str, agx_data: &[u8]) -> Result<(String, String), String> {
         let _ = (name, agx_data);
         Err("Clone install not available".to_string())
     }

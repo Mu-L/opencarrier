@@ -44,11 +44,17 @@ pub fn tools() -> Vec<ToolSpec> {
             param_mapper: |args| {
                 let whiteboard_id = args["whiteboard_id"].as_str().unwrap_or("").to_string();
                 let mut body = serde_json::Map::new();
-                if let Some(v) = args.get("title") { body.insert("title".into(), v.clone()); }
+                if let Some(v) = args.get("title") {
+                    body.insert("title".into(), v.clone());
+                }
                 MappedParams {
                     path_params: HashMap::from([("whiteboard_id", whiteboard_id)]),
                     query: None,
-                    body: if body.is_empty() { None } else { Some(json!(body)) },
+                    body: if body.is_empty() {
+                        None
+                    } else {
+                        Some(json!(body))
+                    },
                 }
             },
         },

@@ -47,9 +47,7 @@ use std::sync::Arc;
 // ---------------------------------------------------------------------------
 
 /// GET /api/status — Kernel status.
-pub async fn status(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let all_agents = state.kernel.registry.list();
     let agents: Vec<serde_json::Value> = all_agents
         .into_iter()
@@ -87,9 +85,7 @@ pub async fn status(
 }
 
 /// POST /api/shutdown — Graceful shutdown.
-pub async fn shutdown(
-    State(state): State<Arc<AppState>>,
-) -> axum::response::Response {
+pub async fn shutdown(State(state): State<Arc<AppState>>) -> axum::response::Response {
     tracing::info!("Shutdown requested via API");
     state.kernel.audit_log.record(
         "system",

@@ -58,12 +58,7 @@ fn resolve_target_workspace(
 
     let target_workspace = kh
         .resolve_agent_workspace(target)
-        .ok_or_else(|| {
-            format!(
-                "Agent '{}' not found or has no workspace",
-                target
-            )
-        })?;
+        .ok_or_else(|| format!("Agent '{}' not found or has no workspace", target))?;
 
     let path = PathBuf::from(&target_workspace);
     if !path.exists() {
@@ -292,7 +287,8 @@ async fn tool_train_knowledge_add(
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
-    let filename = crate::tools::knowledge::knowledge_add_core(&target_root, title, content, "train").await?;
+    let filename =
+        crate::tools::knowledge::knowledge_add_core(&target_root, title, content, "train").await?;
     Ok(format!("Knowledge added to target: {filename}.md"))
 }
 
@@ -304,7 +300,8 @@ async fn tool_train_knowledge_import(
     let target_root = resolve_target_workspace(input, kernel)?;
     let data = input["data"].as_str().ok_or("Missing 'data' parameter")?;
     let data_type = input["data_type"].as_str().unwrap_or("auto");
-    let (saved, quality) = crate::tools::knowledge::knowledge_import_core(&target_root, data, data_type).await?;
+    let (saved, quality) =
+        crate::tools::knowledge::knowledge_import_core(&target_root, data, data_type).await?;
     Ok(format!(
         "Imported {} entries to target. Quality: {:?}",
         saved.len(),
@@ -692,7 +689,9 @@ async fn tool_agent_send(
         .ok_or("Missing 'message' parameter")?;
 
     // Check + increment inter-agent call depth
-    let current_depth = crate::tool_runner::AGENT_CALL_DEPTH.try_with(|d| d.get()).unwrap_or(0);
+    let current_depth = crate::tool_runner::AGENT_CALL_DEPTH
+        .try_with(|d| d.get())
+        .unwrap_or(0);
     if current_depth >= MAX_AGENT_CALL_DEPTH {
         return Err(format!(
             "Inter-agent call depth exceeded (max {}). \
@@ -1782,14 +1781,24 @@ impl ToolModule for AgentTools {
             "train_read" => Some(tool_train_read(input, kernel, caller_agent_id).await),
             "train_write" => Some(tool_train_write(input, kernel, caller_agent_id).await),
             "train_list" => Some(tool_train_list(input, kernel, caller_agent_id).await),
-            "train_knowledge_add" => Some(tool_train_knowledge_add(input, kernel, caller_agent_id).await),
+            "train_knowledge_add" => {
+                Some(tool_train_knowledge_add(input, kernel, caller_agent_id).await)
+            }
             "train_knowledge_import" => {
                 Some(tool_train_knowledge_import(input, kernel, caller_agent_id).await)
             }
-            "train_knowledge_list" => Some(tool_train_knowledge_list(input, kernel, caller_agent_id).await),
-            "train_knowledge_read" => Some(tool_train_knowledge_read(input, kernel, caller_agent_id).await),
-            "train_knowledge_lint" => Some(tool_train_knowledge_lint(input, kernel, caller_agent_id).await),
-            "train_knowledge_heal" => Some(tool_train_knowledge_heal(input, kernel, caller_agent_id).await),
+            "train_knowledge_list" => {
+                Some(tool_train_knowledge_list(input, kernel, caller_agent_id).await)
+            }
+            "train_knowledge_read" => {
+                Some(tool_train_knowledge_read(input, kernel, caller_agent_id).await)
+            }
+            "train_knowledge_lint" => {
+                Some(tool_train_knowledge_lint(input, kernel, caller_agent_id).await)
+            }
+            "train_knowledge_heal" => {
+                Some(tool_train_knowledge_heal(input, kernel, caller_agent_id).await)
+            }
             "train_evaluate" => Some(tool_train_evaluate(input, kernel, caller_agent_id).await),
 
             // User profile
@@ -1809,7 +1818,12 @@ impl ToolModule for AgentTools {
 
             // Memory tools (scoped to caller's agent + sender namespace)
             "memory_store" => Some(tool_memory_store(input, kernel, caller_agent_id, sender_id)),
-            "memory_recall" => Some(tool_memory_recall(input, kernel, caller_agent_id, sender_id)),
+            "memory_recall" => Some(tool_memory_recall(
+                input,
+                kernel,
+                caller_agent_id,
+                sender_id,
+            )),
             "memory_list" => Some(tool_memory_list(input, kernel, caller_agent_id, sender_id)),
 
             // Collaboration tools
@@ -1826,7 +1840,9 @@ impl ToolModule for AgentTools {
             "schedule_delete" => Some(tool_schedule_delete(input, kernel, caller_agent_id).await),
 
             // Knowledge graph tools
-            "knowledge_add_entity" => Some(tool_knowledge_add_entity(input, kernel, caller_agent_id).await),
+            "knowledge_add_entity" => {
+                Some(tool_knowledge_add_entity(input, kernel, caller_agent_id).await)
+            }
             "knowledge_add_relation" => {
                 Some(tool_knowledge_add_relation(input, kernel, caller_agent_id).await)
             }

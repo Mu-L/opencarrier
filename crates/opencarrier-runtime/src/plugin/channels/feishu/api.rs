@@ -169,6 +169,5 @@ pub async fn get_ws_endpoint(
         return Err(format!("Feishu ws/endpoint HTTP {status}: {body_text}"));
     }
 
-    serde_json::from_str(&body_text)
-        .map_err(|e| format!("Feishu ws/endpoint parse error: {e}"))
+    serde_json::from_str(&body_text).map_err(|e| format!("Feishu ws/endpoint parse error: {e}"))
 }

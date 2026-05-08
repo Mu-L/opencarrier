@@ -232,19 +232,20 @@ pub async fn set_brain_endpoint(
         );
     }
 
-    let format: opencarrier_types::brain::ApiFormat =
-        match serde_json::from_value(serde_json::Value::String(format_str.clone())) {
-            Ok(f) => f,
-            Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": format!(
-                        "Invalid format '{}'. Supported: openai, anthropic, gemini, dashscope_tts, dashscope_image, dashscope_video, kling",
-                        format_str
-                    )})),
-                )
-            }
-        };
+    let format: opencarrier_types::brain::ApiFormat = match serde_json::from_value(
+        serde_json::Value::String(format_str.clone()),
+    ) {
+        Ok(f) => f,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!(
+                    "Invalid format '{}'. Supported: openai, anthropic, gemini, dashscope_tts, dashscope_image, dashscope_video, kling",
+                    format_str
+                )})),
+            )
+        }
+    };
 
     // Validate provider exists
     {
@@ -355,7 +356,11 @@ pub async fn set_brain_modality(
                 .collect()
         })
         .unwrap_or_default();
-    let description = body["description"].as_str().unwrap_or("").trim().to_string();
+    let description = body["description"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
     if primary.is_empty() {
         return (
@@ -498,9 +503,7 @@ pub async fn set_brain_default_modality(
     }
 }
 /// POST /api/brain/reload — reload Brain from disk.
-pub async fn reload_brain(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn reload_brain(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.kernel.reload_brain() {
         Ok(()) => {
             state.kernel.audit_log.record(
@@ -521,9 +524,7 @@ pub async fn reload_brain(
     }
 }
 /// GET /api/brain/config — Return raw brain.json content.
-pub async fn get_brain_config_raw(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn get_brain_config_raw(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let path = state.kernel.brain_path();
     match std::fs::read_to_string(path) {
         Ok(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {

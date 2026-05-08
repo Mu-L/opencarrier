@@ -43,8 +43,7 @@ static MCP_CONFIG_CACHE: LazyLock<DashMap<String, CachedConfig>> = LazyLock::new
 
 const CONFIG_TTL_SECS: u64 = 86_400; // 24 hours
 
-const MCP_CONFIG_ENDPOINT: &str =
-    "https://qyapi.weixin.qq.com/cgi-bin/aibot/cli/get_mcp_config";
+const MCP_CONFIG_ENDPOINT: &str = "https://qyapi.weixin.qq.com/cgi-bin/aibot/cli/get_mcp_config";
 
 // ---------------------------------------------------------------------------
 // Public API

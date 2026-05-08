@@ -140,7 +140,9 @@ impl crate::plugin::BuiltinChannel for SmartBotChannel {
         let secret = self.secret.clone();
         let tenant_name = self.tenant_name.clone();
         let corp_id = self.corp_id.clone();
-        let response_urls = RESPONSE_URLS.get_or_init(|| Arc::new(Mutex::new(HashMap::new()))).clone();
+        let response_urls = RESPONSE_URLS
+            .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+            .clone();
 
         // Spawn the WebSocket connection loop in its own thread with a dedicated
         // tokio runtime.
@@ -151,7 +153,14 @@ impl crate::plugin::BuiltinChannel for SmartBotChannel {
                 .build()
                 .expect("Failed to create tokio runtime for SmartBot");
             eprintln!("[SmartBot] Runtime created, starting WS loop...");
-            rt.block_on(run_ws_loop(bot_id, secret, tenant_name, corp_id, sender, response_urls));
+            rt.block_on(run_ws_loop(
+                bot_id,
+                secret,
+                tenant_name,
+                corp_id,
+                sender,
+                response_urls,
+            ));
         });
 
         info!(
@@ -186,7 +195,11 @@ impl crate::plugin::BuiltinChannel for SmartBotChannel {
             .enable_all()
             .build()
             .map_err(|e| format!("Runtime creation failed: {e}"))?;
-        rt.block_on(token::send_smartbot_response_async(&tenant.http, &response_url, text))
+        rt.block_on(token::send_smartbot_response_async(
+            &tenant.http,
+            &response_url,
+            text,
+        ))
     }
 
     fn stop(&mut self) {
@@ -207,12 +220,24 @@ async fn run_ws_loop(
     response_urls: ResponseUrlStore,
 ) {
     loop {
-        match connect_and_handle(&bot_id, &secret, &tenant_name, &corp_id, &sender, &response_urls).await {
+        match connect_and_handle(
+            &bot_id,
+            &secret,
+            &tenant_name,
+            &corp_id,
+            &sender,
+            &response_urls,
+        )
+        .await
+        {
             Ok(()) => {
                 info!("SmartBot WebSocket disconnected normally, reconnecting...");
             }
             Err(e) => {
-                error!("SmartBot WebSocket error: {}, reconnecting in {}s...", e, RECONNECT_DELAY_SECS);
+                error!(
+                    "SmartBot WebSocket error: {}, reconnecting in {}s...",
+                    e, RECONNECT_DELAY_SECS
+                );
             }
         }
         tokio::time::sleep(Duration::from_secs(RECONNECT_DELAY_SECS)).await;
@@ -322,8 +347,8 @@ async fn handle_ws_message(
     sender: &tokio::sync::mpsc::Sender<PluginMessage>,
     response_urls: &ResponseUrlStore,
 ) -> Result<(), String> {
-    let json: serde_json::Value = serde_json::from_str(raw)
-        .map_err(|e| format!("Parse WS message failed: {e}"))?;
+    let json: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| format!("Parse WS message failed: {e}"))?;
     let cmd = json["cmd"].as_str().unwrap_or("");
 
     match cmd {
@@ -345,9 +370,14 @@ async fn handle_ws_message(
                 return Ok(());
             }
 
-            let content = body.content
+            let content = body
+                .content
                 .as_ref()
-                .and_then(|c| c.get("text").and_then(|t| t.get("content")).and_then(|v| v.as_str()))
+                .and_then(|c| {
+                    c.get("text")
+                        .and_then(|t| t.get("content"))
+                        .and_then(|v| v.as_str())
+                })
                 .unwrap_or("")
                 .to_string();
 
@@ -378,9 +408,15 @@ async fn handle_ws_message(
             }
 
             let mut metadata = HashMap::new();
-            metadata.insert("bot_id".to_string(), serde_json::Value::String(bot_id.to_string()));
+            metadata.insert(
+                "bot_id".to_string(),
+                serde_json::Value::String(bot_id.to_string()),
+            );
             if let Some(ref chat_id) = body.chat_id {
-                metadata.insert("chat_id".to_string(), serde_json::Value::String(chat_id.clone()));
+                metadata.insert(
+                    "chat_id".to_string(),
+                    serde_json::Value::String(chat_id.clone()),
+                );
             }
 
             let message = PluginMessage {

@@ -63,9 +63,7 @@ pub async fn qr_login(
                         let bot_token = status.bot_token.ok_or("confirmed but no bot_token")?;
                         let ilink_bot_id =
                             status.ilink_bot_id.ok_or("confirmed but no ilink_bot_id")?;
-                        let baseurl = status
-                            .baseurl
-                            .unwrap_or_else(|| ILINK_API_BASE.to_string());
+                        let baseurl = status.baseurl.unwrap_or_else(|| ILINK_API_BASE.to_string());
                         let user_id = status.ilink_user_id;
 
                         // Register the tenant

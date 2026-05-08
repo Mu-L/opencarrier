@@ -3,7 +3,7 @@
 //! All CDN media uses AES-128-ECB with PKCS7-style padding.
 //! Ciphertext size = ceil((plaintext_size + 1) / 16) * 16.
 
-use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit, generic_array::GenericArray};
+use aes::cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit};
 use base64::Engine;
 use reqwest::Client;
 use tracing::warn;
@@ -43,7 +43,11 @@ pub fn aes_128_ecb_decrypt(ciphertext: &[u8], key: &[u8; 16]) -> Vec<u8> {
     }
 
     // Trim trailing zeros
-    let end = buf.iter().rposition(|&b| b != 0).map(|i| i + 1).unwrap_or(0);
+    let end = buf
+        .iter()
+        .rposition(|&b| b != 0)
+        .map(|i| i + 1)
+        .unwrap_or(0);
     buf.truncate(end);
     buf
 }
@@ -90,11 +94,7 @@ pub fn generate_aes_key() -> ([u8; 16], String) {
 }
 
 /// Download and decrypt a file from CDN.
-pub async fn cdn_download(
-    http: &Client,
-    url: &str,
-    key: &[u8; 16],
-) -> Result<Vec<u8>, String> {
+pub async fn cdn_download(http: &Client, url: &str, key: &[u8; 16]) -> Result<Vec<u8>, String> {
     let resp = http
         .get(url)
         .send()

@@ -24,11 +24,19 @@ pub fn tools() -> Vec<ToolSpec> {
             param_mapper: |args| {
                 let app_token = args["app_token"].as_str().unwrap_or("").to_string();
                 let mut query = serde_json::Map::new();
-                if let Some(v) = args.get("page_size") { query.insert("page_size".into(), v.clone()); }
-                if let Some(v) = args.get("page_token") { query.insert("page_token".into(), v.clone()); }
+                if let Some(v) = args.get("page_size") {
+                    query.insert("page_size".into(), v.clone());
+                }
+                if let Some(v) = args.get("page_token") {
+                    query.insert("page_token".into(), v.clone());
+                }
                 MappedParams {
                     path_params: HashMap::from([("app_token", app_token)]),
-                    query: if query.is_empty() { None } else { Some(json!(query)) },
+                    query: if query.is_empty() {
+                        None
+                    } else {
+                        Some(json!(query))
+                    },
                     body: None,
                 }
             },
@@ -74,10 +82,16 @@ pub fn tools() -> Vec<ToolSpec> {
                 let app_token = args["app_token"].as_str().unwrap_or("").to_string();
                 let table_id = args["table_id"].as_str().unwrap_or("").to_string();
                 let mut query = serde_json::Map::new();
-                if let Some(v) = args.get("page_size") { query.insert("page_size".into(), v.clone()); }
+                if let Some(v) = args.get("page_size") {
+                    query.insert("page_size".into(), v.clone());
+                }
                 MappedParams {
                     path_params: HashMap::from([("app_token", app_token), ("table_id", table_id)]),
-                    query: if query.is_empty() { None } else { Some(json!(query)) },
+                    query: if query.is_empty() {
+                        None
+                    } else {
+                        Some(json!(query))
+                    },
                     body: None,
                 }
             },
@@ -132,13 +146,25 @@ pub fn tools() -> Vec<ToolSpec> {
                 let app_token = args["app_token"].as_str().unwrap_or("").to_string();
                 let table_id = args["table_id"].as_str().unwrap_or("").to_string();
                 let mut query = serde_json::Map::new();
-                if let Some(v) = args.get("page_size") { query.insert("page_size".into(), v.clone()); }
-                if let Some(v) = args.get("page_token") { query.insert("page_token".into(), v.clone()); }
-                if let Some(v) = args.get("filter") { query.insert("filter".into(), v.clone()); }
-                if let Some(v) = args.get("sort") { query.insert("sort".into(), v.clone()); }
+                if let Some(v) = args.get("page_size") {
+                    query.insert("page_size".into(), v.clone());
+                }
+                if let Some(v) = args.get("page_token") {
+                    query.insert("page_token".into(), v.clone());
+                }
+                if let Some(v) = args.get("filter") {
+                    query.insert("filter".into(), v.clone());
+                }
+                if let Some(v) = args.get("sort") {
+                    query.insert("sort".into(), v.clone());
+                }
                 MappedParams {
                     path_params: HashMap::from([("app_token", app_token), ("table_id", table_id)]),
-                    query: if query.is_empty() { None } else { Some(json!(query)) },
+                    query: if query.is_empty() {
+                        None
+                    } else {
+                        Some(json!(query))
+                    },
                     body: None,
                 }
             },

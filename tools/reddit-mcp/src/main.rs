@@ -254,8 +254,18 @@ impl RedditServer {
         };
         let limit = params.limit.unwrap_or(20);
         let query = format!("limit={limit}");
-        match api::reddit_api(&make_cookie(&params), Method::GET, &path, Some(&query), None).await {
-            Ok(resp) => json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp))),
+        match api::reddit_api(
+            &make_cookie(&params),
+            Method::GET,
+            &path,
+            Some(&query),
+            None,
+        )
+        .await
+        {
+            Ok(resp) => {
+                json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
+            }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
@@ -264,8 +274,18 @@ impl RedditServer {
     async fn reddit_frontpage(&self, Parameters(params): Parameters<FrontpageParams>) -> String {
         let limit = params.limit.unwrap_or(15);
         let query = format!("limit={limit}");
-        match api::reddit_api(&make_cookie(&params), Method::GET, "/r/all.json", Some(&query), None).await {
-            Ok(resp) => json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp))),
+        match api::reddit_api(
+            &make_cookie(&params),
+            Method::GET,
+            "/r/all.json",
+            Some(&query),
+            None,
+        )
+        .await
+        {
+            Ok(resp) => {
+                json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
+            }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
@@ -274,8 +294,18 @@ impl RedditServer {
     async fn reddit_popular(&self, Parameters(params): Parameters<PopularParams>) -> String {
         let limit = params.limit.unwrap_or(20);
         let query = format!("limit={limit}");
-        match api::reddit_api(&make_cookie(&params), Method::GET, "/r/popular.json", Some(&query), None).await {
-            Ok(resp) => json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp))),
+        match api::reddit_api(
+            &make_cookie(&params),
+            Method::GET,
+            "/r/popular.json",
+            Some(&query),
+            None,
+        )
+        .await
+        {
+            Ok(resp) => {
+                json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
+            }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
@@ -287,8 +317,18 @@ impl RedditServer {
         let limit = params.limit.unwrap_or(15);
         let time = params.time.as_deref().unwrap_or("all");
         let query = format!("limit={limit}&t={time}");
-        match api::reddit_api(&make_cookie(&params), Method::GET, &path, Some(&query), None).await {
-            Ok(resp) => json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp))),
+        match api::reddit_api(
+            &make_cookie(&params),
+            Method::GET,
+            &path,
+            Some(&query),
+            None,
+        )
+        .await
+        {
+            Ok(resp) => {
+                json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
+            }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
@@ -310,20 +350,33 @@ impl RedditServer {
             q.push_str("&restrict_sr=on");
         }
         match api::reddit_api(&make_cookie(&params), Method::GET, &path, Some(&q), None).await {
-            Ok(resp) => json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp))),
+            Ok(resp) => {
+                json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
+            }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
 
     #[tool(description = "获取 Reddit 帖子详情及评论")]
     async fn reddit_read(&self, Parameters(params): Parameters<ReadParams>) -> String {
-        let post_id = params.post_id.strip_prefix("t3_").unwrap_or(&params.post_id);
+        let post_id = params
+            .post_id
+            .strip_prefix("t3_")
+            .unwrap_or(&params.post_id);
         let path = format!("/comments/{post_id}.json");
         let sort = params.sort.as_deref().unwrap_or("best");
         let limit = params.limit.unwrap_or(25);
         let depth = params.depth.unwrap_or(2);
         let query = format!("sort={sort}&limit={limit}&depth={depth}");
-        match api::reddit_api(&make_cookie(&params), Method::GET, &path, Some(&query), None).await {
+        match api::reddit_api(
+            &make_cookie(&params),
+            Method::GET,
+            &path,
+            Some(&query),
+            None,
+        )
+        .await
+        {
             Ok(resp) => {
                 let arr = resp.as_array();
                 let result = match arr {
@@ -372,49 +425,94 @@ impl RedditServer {
         let path = format!("/user/{}/submitted.json", params.username);
         let limit = params.limit.unwrap_or(15);
         let query = format!("limit={limit}");
-        match api::reddit_api(&make_cookie(&params), Method::GET, &path, Some(&query), None).await {
-            Ok(resp) => json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp))),
+        match api::reddit_api(
+            &make_cookie(&params),
+            Method::GET,
+            &path,
+            Some(&query),
+            None,
+        )
+        .await
+        {
+            Ok(resp) => {
+                json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
+            }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
 
     #[tool(description = "获取 Reddit 用户评论")]
-    async fn reddit_user_comments(&self, Parameters(params): Parameters<UserCommentsParams>) -> String {
+    async fn reddit_user_comments(
+        &self,
+        Parameters(params): Parameters<UserCommentsParams>,
+    ) -> String {
         let path = format!("/user/{}/comments.json", params.username);
         let limit = params.limit.unwrap_or(15);
         let query = format!("limit={limit}");
-        match api::reddit_api(&make_cookie(&params), Method::GET, &path, Some(&query), None).await {
-            Ok(resp) => json_to_string(&serde_json::Value::Array(extract_comments_from_listing(&resp))),
+        match api::reddit_api(
+            &make_cookie(&params),
+            Method::GET,
+            &path,
+            Some(&query),
+            None,
+        )
+        .await
+        {
+            Ok(resp) => json_to_string(&serde_json::Value::Array(extract_comments_from_listing(
+                &resp,
+            ))),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
 
     #[tool(description = "获取 Reddit 收藏列表")]
     async fn reddit_saved(&self, Parameters(params): Parameters<SavedParams>) -> String {
-        let username = match resolve_username(&make_cookie(&params), params.username.as_deref()).await {
-            Ok(u) => u,
-            Err(e) => return format!("{{\"error\": \"{}\"}}", e),
-        };
+        let username =
+            match resolve_username(&make_cookie(&params), params.username.as_deref()).await {
+                Ok(u) => u,
+                Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+            };
         let path = format!("/user/{username}/saved.json");
         let limit = params.limit.unwrap_or(15);
         let query = format!("limit={limit}");
-        match api::reddit_api(&make_cookie(&params), Method::GET, &path, Some(&query), None).await {
-            Ok(resp) => json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp))),
+        match api::reddit_api(
+            &make_cookie(&params),
+            Method::GET,
+            &path,
+            Some(&query),
+            None,
+        )
+        .await
+        {
+            Ok(resp) => {
+                json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
+            }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
 
     #[tool(description = "获取 Reddit 点赞列表")]
     async fn reddit_upvoted(&self, Parameters(params): Parameters<UpvotedParams>) -> String {
-        let username = match resolve_username(&make_cookie(&params), params.username.as_deref()).await {
-            Ok(u) => u,
-            Err(e) => return format!("{{\"error\": \"{}\"}}", e),
-        };
+        let username =
+            match resolve_username(&make_cookie(&params), params.username.as_deref()).await {
+                Ok(u) => u,
+                Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+            };
         let path = format!("/user/{username}/upvoted.json");
         let limit = params.limit.unwrap_or(15);
         let query = format!("limit={limit}");
-        match api::reddit_api(&make_cookie(&params), Method::GET, &path, Some(&query), None).await {
-            Ok(resp) => json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp))),
+        match api::reddit_api(
+            &make_cookie(&params),
+            Method::GET,
+            &path,
+            Some(&query),
+            None,
+        )
+        .await
+        {
+            Ok(resp) => {
+                json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
+            }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
@@ -436,7 +534,9 @@ impl RedditServer {
         };
         let body = format!("id={post_id}&dir={dir}&uh={modhash}");
         match api::reddit_api(&cookie, Method::POST, "/api/vote", None, Some(&body)).await {
-            Ok(resp) => json_to_string(&serde_json::json!({"ok": resp.get("success").and_then(|v| v.as_bool()).unwrap_or(true)})),
+            Ok(resp) => json_to_string(
+                &serde_json::json!({"ok": resp.get("success").and_then(|v| v.as_bool()).unwrap_or(true)}),
+            ),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
@@ -453,7 +553,10 @@ impl RedditServer {
         let body = format!("parent={post_id}&text={encoded_text}&uh={modhash}");
         match api::reddit_api(&cookie, Method::POST, "/api/comment", None, Some(&body)).await {
             Ok(resp) => {
-                let success = resp.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                let success = resp
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 json_to_string(&serde_json::json!({"ok": success}))
             }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),

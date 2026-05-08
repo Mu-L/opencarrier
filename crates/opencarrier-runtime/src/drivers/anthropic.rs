@@ -561,7 +561,7 @@ impl LlmDriver for AnthropicDriver {
                 stop_reason,
                 tool_calls,
                 usage,
-            media: None,
+                media: None,
             });
         }
 
@@ -672,7 +672,7 @@ fn convert_response(api: ApiResponse) -> CompletionResponse {
             input_tokens: api.usage.input_tokens,
             output_tokens: api.usage.output_tokens,
         },
-    media: None,
+        media: None,
     }
 }
 

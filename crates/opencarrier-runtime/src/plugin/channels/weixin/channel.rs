@@ -86,13 +86,9 @@ impl BuiltinChannel for ILinkChannel {
         }
 
         // Get cached context_token for this user (REQUIRED by iLink protocol)
-        let context_token = state
-            .get_context_token(user_id)
-            .ok_or_else(|| {
-                format!(
-                    "No context_token for user {user_id} — can only reply to received messages"
-                )
-            })?;
+        let context_token = state.get_context_token(user_id).ok_or_else(|| {
+            format!("No context_token for user {user_id} — can only reply to received messages")
+        })?;
 
         // Generate client_id
         let client_id = format!("openclaw-weixin-{}", Uuid::new_v4().as_simple());
@@ -132,7 +128,8 @@ impl BuiltinChannel for ILinkChannel {
             let _ = tx.send(result);
         });
 
-        rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))?
+        rx.recv()
+            .map_err(|e| format!("Send thread disconnected: {e}"))?
     }
 
     fn stop(&mut self) {
@@ -154,11 +151,7 @@ impl BuiltinChannel for ILinkChannel {
 }
 
 /// Main polling loop (runs in a dedicated thread with its own runtime).
-fn run_poll_loop(
-    tenant_name: &str,
-    sender: mpsc::Sender<PluginMessage>,
-    shutdown: &AtomicBool,
-) {
+fn run_poll_loop(tenant_name: &str, sender: mpsc::Sender<PluginMessage>, shutdown: &AtomicBool) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -184,7 +177,10 @@ async fn poll_loop_inner(
 
     loop {
         if shutdown.load(Ordering::Relaxed) {
-            info!(tenant = tenant_name, "Shutdown signal received, exiting poll loop");
+            info!(
+                tenant = tenant_name,
+                "Shutdown signal received, exiting poll loop"
+            );
             return;
         }
 
@@ -206,7 +202,10 @@ async fn poll_loop_inner(
             if !state.active.load(Ordering::Relaxed) || state.is_expired() {
                 for _ in 0..10 {
                     if shutdown.load(Ordering::Relaxed) {
-                        info!(tenant = tenant_name, "Shutdown during inactive wait, exiting");
+                        info!(
+                            tenant = tenant_name,
+                            "Shutdown during inactive wait, exiting"
+                        );
                         return;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -241,7 +240,10 @@ async fn poll_loop_inner(
 
                 if let Some(ret) = resp.ret {
                     if ret != 0 {
-                        warn!(tenant = tenant_name, ret, "getUpdates returned non-zero ret");
+                        warn!(
+                            tenant = tenant_name,
+                            ret, "getUpdates returned non-zero ret"
+                        );
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                         continue;
                     }
@@ -399,9 +401,7 @@ impl BuiltinChannel for TenantWatcher {
         }
 
         let context_token = state.get_context_token(user_id).ok_or_else(|| {
-            format!(
-                "No context_token for user {user_id} — can only reply to received messages"
-            )
+            format!("No context_token for user {user_id} — can only reply to received messages")
         })?;
 
         let client_id = format!("openclaw-weixin-{}", Uuid::new_v4().as_simple());
@@ -439,7 +439,8 @@ impl BuiltinChannel for TenantWatcher {
             let _ = tx.send(result);
         });
 
-        rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))?
+        rx.recv()
+            .map_err(|e| format!("Send thread disconnected: {e}"))?
     }
 
     fn stop(&mut self) {

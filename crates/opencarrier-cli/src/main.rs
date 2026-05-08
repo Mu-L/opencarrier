@@ -4142,8 +4142,8 @@ async fn cmd_plugin(cmd: PluginCommands) {
             // Try daemon first via async HTTP, fall back to directory scan
             let mut shown = false;
             if let Some(base_url) = find_daemon_async().await {
-                let mut client_builder = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(5));
+                let mut client_builder =
+                    reqwest::Client::builder().timeout(std::time::Duration::from_secs(5));
                 if let Some(key) = read_api_key() {
                     let mut headers = reqwest::header::HeaderMap::new();
                     if let Ok(val) =
@@ -4162,8 +4162,7 @@ async fn cmd_plugin(cmd: PluginCommands) {
                     }
                     Ok(r) => {
                         let status = r.status();
-                        let err_body: serde_json::Value =
-                            r.json().await.unwrap_or_default();
+                        let err_body: serde_json::Value = r.json().await.unwrap_or_default();
                         let msg = err_body["error"].as_str().unwrap_or("未知错误");
                         eprintln!("Daemon 返回错误 ({}): {}", status, msg);
                         if status.as_u16() == 401 {
@@ -4852,10 +4851,12 @@ fn cmd_mcp_install(source: &str) {
 
     // Check if source is a local .mcp.json file
     let (manifest, manifest_path) = if source_path.exists()
-        && source_path
-            .extension()
-            .is_some_and(|e| e == "json" || source_path.file_name().is_some_and(|f| f.to_string_lossy().ends_with(".mcp.json")))
-    {
+        && source_path.extension().is_some_and(|e| {
+            e == "json"
+                || source_path
+                    .file_name()
+                    .is_some_and(|f| f.to_string_lossy().ends_with(".mcp.json"))
+        }) {
         let content = match std::fs::read_to_string(source_path) {
             Ok(c) => c,
             Err(e) => {
@@ -4874,8 +4875,8 @@ fn cmd_mcp_install(source: &str) {
     } else {
         // Treat as Hub server name — download from hub
         eprintln!("Downloading MCP server '{source}' from Hub...");
-        let hub_url =
-            std::env::var("OPENCLONE_HUB_URL").unwrap_or_else(|_| "https://hub.aginx.net".to_string());
+        let hub_url = std::env::var("OPENCLONE_HUB_URL")
+            .unwrap_or_else(|_| "https://hub.aginx.net".to_string());
         let url = format!("{hub_url}/api/mcp-servers/{source}/download");
         let client = reqwest::blocking::Client::new();
         let resp = match client.get(&url).send() {
@@ -4886,7 +4887,11 @@ fn cmd_mcp_install(source: &str) {
             }
         };
         if !resp.status().is_success() {
-            eprintln!("Hub returned {}: {}", resp.status(), resp.text().unwrap_or_default());
+            eprintln!(
+                "Hub returned {}: {}",
+                resp.status(),
+                resp.text().unwrap_or_default()
+            );
             std::process::exit(1);
         }
         let body = resp.text().unwrap_or_default();
@@ -4950,7 +4955,10 @@ fn cmd_mcp_list(json: bool) {
     let records = mcp_registry::list_installed();
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&records).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&records).unwrap_or_default()
+        );
         return;
     }
 
@@ -4998,7 +5006,10 @@ fn cmd_mcp_docker_start(name: &str) {
         std::process::exit(1);
     }
     let state = run_docker_cmd(name, mcp_docker::start(&dir));
-    println!("Container '{}' started — running: {}", state.name, state.running);
+    println!(
+        "Container '{}' started — running: {}",
+        state.name, state.running
+    );
 }
 
 fn cmd_mcp_docker_stop(name: &str) {
@@ -5020,7 +5031,10 @@ fn cmd_mcp_docker_restart(name: &str) {
         std::process::exit(1);
     }
     let state = run_docker_cmd(name, mcp_docker::restart(&dir));
-    println!("Container '{}' restarted — running: {}", state.name, state.running);
+    println!(
+        "Container '{}' restarted — running: {}",
+        state.name, state.running
+    );
 }
 
 fn cmd_mcp_docker_status(name: &str) {
@@ -5079,7 +5093,10 @@ fn check_mcp_deps(workspace_dir: &std::path::Path) {
 
     for dep in deps {
         let name = dep.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let required = dep.get("required").and_then(|v| v.as_bool()).unwrap_or(true);
+        let required = dep
+            .get("required")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         if name.is_empty() {
             continue;
         }

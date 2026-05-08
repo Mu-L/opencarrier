@@ -1,6 +1,6 @@
 //! DashScope TTS driver — text-to-speech via Alibaba DashScope API.
 
-use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmError, LlmDriver};
+use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError};
 use async_trait::async_trait;
 use opencarrier_types::media::MediaOutput;
 use opencarrier_types::message::MessageContent;
@@ -30,7 +30,9 @@ fn extract_text(request: &CompletionRequest) -> String {
             MessageContent::Blocks(blocks) => blocks
                 .iter()
                 .filter_map(|b| match b {
-                    opencarrier_types::message::ContentBlock::Text { text, .. } => Some(text.as_str()),
+                    opencarrier_types::message::ContentBlock::Text { text, .. } => {
+                        Some(text.as_str())
+                    }
                     _ => None,
                 })
                 .collect::<Vec<_>>()

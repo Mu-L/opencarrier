@@ -2,7 +2,7 @@
 //!
 //! Uses async task pattern: submit → poll until complete → return video URL.
 
-use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmError, LlmDriver};
+use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError};
 use async_trait::async_trait;
 use opencarrier_types::media::MediaOutput;
 use opencarrier_types::message::MessageContent;
@@ -60,10 +60,7 @@ impl LlmDriver for DashScopeVideoDriver {
             .get("resolution")
             .and_then(|v| v.as_str())
             .unwrap_or("720P");
-        let duration = extra
-            .get("duration")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(5);
+        let duration = extra.get("duration").and_then(|v| v.as_u64()).unwrap_or(5);
         let img_url = extra.get("img_url").and_then(|v| v.as_str());
 
         let mut input = serde_json::json!({ "prompt": prompt });
@@ -104,7 +101,9 @@ impl LlmDriver for DashScopeVideoDriver {
         }
 
         let result: serde_json::Value = response.json().await.map_err(|e| {
-            LlmError::Parse(format!("Failed to parse DashScope video submit response: {e}"))
+            LlmError::Parse(format!(
+                "Failed to parse DashScope video submit response: {e}"
+            ))
         })?;
 
         let task_id = result
@@ -114,10 +113,7 @@ impl LlmDriver for DashScopeVideoDriver {
             .to_string();
 
         // Poll for completion
-        let task_url = format!(
-            "https://dashscope.aliyuncs.com/api/v1/tasks/{}",
-            task_id
-        );
+        let task_url = format!("https://dashscope.aliyuncs.com/api/v1/tasks/{}", task_id);
 
         let start = std::time::Instant::now();
         loop {
@@ -141,9 +137,10 @@ impl LlmDriver for DashScopeVideoDriver {
                 continue;
             }
 
-            let poll_result: serde_json::Value = poll_resp.json().await.map_err(|e| {
-                LlmError::Parse(format!("Failed to parse video task status: {e}"))
-            })?;
+            let poll_result: serde_json::Value = poll_resp
+                .json()
+                .await
+                .map_err(|e| LlmError::Parse(format!("Failed to parse video task status: {e}")))?;
 
             let task_status = poll_result
                 .pointer("/output/task_status")

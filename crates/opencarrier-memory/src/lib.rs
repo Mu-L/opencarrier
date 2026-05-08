@@ -18,7 +18,7 @@ pub mod structured;
 pub mod usage;
 
 mod substrate;
-pub use substrate::MemorySubstrate;
 pub use invites::InviteStore;
 pub use semantic::SemanticStore;
 pub use session::SessionStore;
+pub use substrate::MemorySubstrate;

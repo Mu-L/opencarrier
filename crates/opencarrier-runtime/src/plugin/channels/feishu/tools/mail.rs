@@ -57,12 +57,22 @@ pub fn tools() -> Vec<ToolSpec> {
             param_mapper: |args| {
                 let mailbox_id = args["mailbox_id"].as_str().unwrap_or("").to_string();
                 let mut query = serde_json::Map::new();
-                if let Some(v) = args.get("folder_id") { query.insert("folder_id".into(), v.clone()); }
-                if let Some(v) = args.get("page_size") { query.insert("page_size".into(), v.clone()); }
-                if let Some(v) = args.get("page_token") { query.insert("page_token".into(), v.clone()); }
+                if let Some(v) = args.get("folder_id") {
+                    query.insert("folder_id".into(), v.clone());
+                }
+                if let Some(v) = args.get("page_size") {
+                    query.insert("page_size".into(), v.clone());
+                }
+                if let Some(v) = args.get("page_token") {
+                    query.insert("page_token".into(), v.clone());
+                }
                 MappedParams {
                     path_params: HashMap::from([("mailbox_id", mailbox_id)]),
-                    query: if query.is_empty() { None } else { Some(json!(query)) },
+                    query: if query.is_empty() {
+                        None
+                    } else {
+                        Some(json!(query))
+                    },
                     body: None,
                 }
             },
@@ -84,7 +94,10 @@ pub fn tools() -> Vec<ToolSpec> {
                 let mailbox_id = args["mailbox_id"].as_str().unwrap_or("").to_string();
                 let message_id = args["message_id"].as_str().unwrap_or("").to_string();
                 MappedParams {
-                    path_params: HashMap::from([("mailbox_id", mailbox_id), ("message_id", message_id)]),
+                    path_params: HashMap::from([
+                        ("mailbox_id", mailbox_id),
+                        ("message_id", message_id),
+                    ]),
                     query: None,
                     body: None,
                 }

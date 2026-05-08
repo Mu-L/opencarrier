@@ -72,7 +72,12 @@ impl PluginBridgeManager {
     }
 
     /// Map a channel's tenant_id to its bot UUID (for finding bot.toml on disk).
-    pub fn map_channel_tenant(&mut self, channel_type: String, tenant_id: String, bot_uuid: String) {
+    pub fn map_channel_tenant(
+        &mut self,
+        channel_type: String,
+        tenant_id: String,
+        bot_uuid: String,
+    ) {
         self.channel_tenant_to_bot_uuid
             .insert((channel_type, tenant_id), bot_uuid);
     }
@@ -321,20 +326,15 @@ impl PluginBridgeManager {
 
 /// Write `owner_id` into a bot.toml file (read → parse → insert → write).
 fn write_owner_id(path: &Path, owner_id: &str) -> Result<(), String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("读取失败: {e}"))?;
+    let content = std::fs::read_to_string(path).map_err(|e| format!("读取失败: {e}"))?;
     let mut doc = content
         .parse::<toml::Value>()
         .map_err(|e| format!("解析失败: {e}"))?;
     let table = doc
         .as_table_mut()
         .ok_or("Invalid bot.toml structure".to_string())?;
-    table.insert(
-        "owner_id".into(),
-        toml::Value::String(owner_id.to_string()),
-    );
-    let new_content =
-        toml::to_string_pretty(&doc).map_err(|e| format!("序列化失败: {e}"))?;
+    table.insert("owner_id".into(), toml::Value::String(owner_id.to_string()));
+    let new_content = toml::to_string_pretty(&doc).map_err(|e| format!("序列化失败: {e}"))?;
     // Atomic write: write to tmp file then rename
     let tmp_path = path.with_extension("toml.tmp");
     std::fs::write(&tmp_path, &new_content).map_err(|e| format!("写入临时文件失败: {e}"))?;

@@ -12,8 +12,7 @@ pub async fn get_agent_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry)
-    {
+    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err((status, _)) => {
             return (
@@ -190,9 +189,7 @@ pub async fn get_agent_session(
 // ---------------------------------------------------------------------------
 
 /// GET /api/sessions -- List all sessions with metadata.
-pub async fn list_sessions(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn list_sessions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.kernel.memory.list_sessions() {
         Ok(sessions) => Json(serde_json::json!({"sessions": sessions})),
         Err(_) => Json(serde_json::json!({"sessions": []})),
@@ -306,11 +303,10 @@ pub async fn find_session_by_label(
     State(state): State<Arc<AppState>>,
     Path((agent_id_str, label)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let (agent_id, _entry) =
-        match resolve_agent_id(&agent_id_str, &state.kernel.registry) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (agent_id, _entry) = match resolve_agent_id(&agent_id_str, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     match state.kernel.memory.find_session_by_label(agent_id, &label) {
         Ok(Some(session)) => (
@@ -429,16 +425,15 @@ pub async fn clear_agent_history(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (agent_id, _entry) =
-        match parse_and_get_agent(&id, &state.kernel.registry) {
-            Ok(r) => r,
-            Err((status, _)) => {
-                return (
-                    status,
-                    Json(serde_json::json!({"error": "Agent not found"})),
-                );
-            }
-        };
+    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
+        Err((status, _)) => {
+            return (
+                status,
+                Json(serde_json::json!({"error": "Agent not found"})),
+            );
+        }
+    };
     match state.kernel.clear_agent_history(agent_id) {
         Ok(()) => (
             StatusCode::OK,

@@ -332,7 +332,11 @@ fn append_daily_memory_log(workspace: &Path, response: &str, sender_id: Option<&
     }
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let log_path = if let Some(sid) = sender_id {
-        workspace.join("users").join(sid).join("memory").join(format!("{today}.md"))
+        workspace
+            .join("users")
+            .join(sid)
+            .join("memory")
+            .join(format!("{today}.md"))
     } else {
         workspace.join("memory").join(format!("{today}.md"))
     };
@@ -527,7 +531,7 @@ impl OpenCarrierKernel {
                                             temperature: 0.1,
                                             system: Some(sys),
                                             thinking: None,
-                extra: Default::default(),
+                                            extra: Default::default(),
                                         };
                                     match driver.complete(anon_req).await {
                                         Ok(anon_resp) => {
@@ -1176,9 +1180,7 @@ impl OpenCarrierKernel {
         let web_cache = Arc::new(opencarrier_runtime::web_cache::WebCache::new(cache_ttl));
         let brain_arc: Arc<Brain> = Arc::new(brain);
         let web_ctx = opencarrier_runtime::web_search::WebToolsContext {
-            search: opencarrier_runtime::web_search::WebSearchEngine::new(
-                web_cache.clone(),
-            ),
+            search: opencarrier_runtime::web_search::WebSearchEngine::new(web_cache.clone()),
             fetch: opencarrier_runtime::web_fetch::WebFetchEngine::new(
                 config.web.fetch.clone(),
                 web_cache,
@@ -1273,10 +1275,7 @@ impl OpenCarrierKernel {
 
                     let mut entry = entry;
 
-                    let ws = kernel
-                        .config
-                        .effective_workspaces_dir()
-                        .join(&name);
+                    let ws = kernel.config.effective_workspaces_dir().join(&name);
                     entry.manifest.workspace = Some(ws);
 
                     // Re-grant capabilities
@@ -1717,7 +1716,7 @@ impl OpenCarrierKernel {
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     label: None,
-                        })
+                })
         };
 
         // Check if auto-compaction is needed: message-count OR token-count OR quota-headroom trigger
@@ -1906,15 +1905,15 @@ impl OpenCarrierKernel {
 
                     // Persist usage and check budget thresholds
                     let model = manifest.model.modality.clone();
-                    match kernel_clone
-                        .metering
-                        .record_and_check(&opencarrier_memory::usage::UsageRecord {
+                    match kernel_clone.metering.record_and_check(
+                        &opencarrier_memory::usage::UsageRecord {
                             agent_id,
                             model: model.clone(),
                             input_tokens: result.total_usage.input_tokens,
                             output_tokens: result.total_usage.output_tokens,
                             tool_calls: result.iterations.saturating_sub(1),
-                                        }) {
+                        },
+                    ) {
                         Ok(Some(alert)) => kernel_clone.handle_budget_alert(&alert),
                         Err(e) => warn!("Failed to record metering: {e}"),
                         _ => {}
@@ -2148,7 +2147,7 @@ impl OpenCarrierKernel {
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     label: None,
-                        })
+                })
         };
 
         // Pre-emptive compaction: compact before LLM call if session is large or quota headroom is low
@@ -2329,7 +2328,7 @@ impl OpenCarrierKernel {
                 input_tokens: result.total_usage.input_tokens,
                 output_tokens: result.total_usage.output_tokens,
                 tool_calls: result.iterations.saturating_sub(1),
-                }) {
+            }) {
             Ok(Some(alert)) => self.handle_budget_alert(&alert),
             Err(e) => warn!("Failed to record metering: {e}"),
             _ => {}
@@ -2579,9 +2578,12 @@ impl OpenCarrierKernel {
 
         // Save to structured memory store (key = "session_{date}_{slug}")
         let key = format!("session_{date}_{slug}");
-        let _ =
-            self.memory
-                .structured_set(agent_id, "", &key, serde_json::Value::String(summary.clone()));
+        let _ = self.memory.structured_set(
+            agent_id,
+            "",
+            &key,
+            serde_json::Value::String(summary.clone()),
+        );
 
         // Also write to workspace memory/ dir if workspace exists
         if let Some(ref workspace) = entry.manifest.workspace {
@@ -2726,7 +2728,7 @@ impl OpenCarrierKernel {
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
-                });
+            });
 
         let config = CompactionConfig::default();
 
@@ -2810,7 +2812,7 @@ impl OpenCarrierKernel {
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
-                });
+            });
 
         let system_prompt = &entry.manifest.model.system_prompt;
         // Use the agent's actual filtered tools instead of all builtins
@@ -3055,14 +3057,20 @@ impl OpenCarrierKernel {
         let kernel = Arc::clone(self);
 
         for entry in &agents {
-            let Some(ref _cs) = entry.manifest.clone_source else { continue };
-            let Some(ref workspace) = entry.manifest.workspace else { continue };
+            let Some(ref _cs) = entry.manifest.clone_source else {
+                continue;
+            };
+            let Some(ref workspace) = entry.manifest.workspace else {
+                continue;
+            };
 
-            let config = opencarrier_lifecycle::evolution_config::read_evolution_config(
-                workspace.as_path(),
-            );
+            let config =
+                opencarrier_lifecycle::evolution_config::read_evolution_config(workspace.as_path());
 
-            if matches!(config.evolution_mode, opencarrier_lifecycle::evolution_config::EvolutionMode::Disabled) {
+            if matches!(
+                config.evolution_mode,
+                opencarrier_lifecycle::evolution_config::EvolutionMode::Disabled
+            ) {
                 continue;
             }
 
@@ -3081,16 +3089,19 @@ impl OpenCarrierKernel {
                         model: String::new(),
                         messages: vec![opencarrier_types::message::Message {
                             role: opencarrier_types::message::Role::User,
-                            content: opencarrier_types::message::MessageContent::Text(user.to_string()),
+                            content: opencarrier_types::message::MessageContent::Text(
+                                user.to_string(),
+                            ),
                         }],
                         tools: vec![],
                         max_tokens,
                         temperature: 0.3,
                         system: Some(sys.to_string()),
                         thinking: None,
-                extra: Default::default(),
+                        extra: Default::default(),
                     };
-                    rt_handle.block_on(async { driver.complete(request).await })
+                    rt_handle
+                        .block_on(async { driver.complete(request).await })
                         .map(|r: opencarrier_runtime::llm_driver::CompletionResponse| r.text())
                         .map_err(|e| anyhow::anyhow!("{e}"))
                 },
@@ -3128,8 +3139,12 @@ impl OpenCarrierKernel {
         let kernel = Arc::clone(self);
         tokio::spawn(async move {
             for entry in &agents {
-                let Some(ref cs) = entry.manifest.clone_source else { continue };
-                let Some(ref tid) = cs.hub_template_id else { continue };
+                let Some(ref cs) = entry.manifest.clone_source else {
+                    continue;
+                };
+                let Some(ref tid) = cs.hub_template_id else {
+                    continue;
+                };
 
                 let local_ver: i64 = match cs.agx_version.parse() {
                     Ok(v) => v,
@@ -3145,7 +3160,11 @@ impl OpenCarrierKernel {
                     Ok(j) => j,
                     Err(_) => continue,
                 };
-                let remote_ver: i64 = match json.get("latest_version").and_then(|v| v.as_str()).and_then(|s| s.parse().ok()) {
+                let remote_ver: i64 = match json
+                    .get("latest_version")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())
+                {
                     Some(v) => v,
                     None => continue,
                 };
@@ -3885,8 +3904,12 @@ impl OpenCarrierKernel {
                 let mut dead_servers = Vec::new();
                 {
                     // Collect keys first to avoid holding DashMap references across awaits
-                    let keys: Vec<String> = kernel.plugins.mcp_connections
-                        .iter().map(|e| e.key().clone()).collect();
+                    let keys: Vec<String> = kernel
+                        .plugins
+                        .mcp_connections
+                        .iter()
+                        .map(|e| e.key().clone())
+                        .collect();
                     for key in &keys {
                         if let Some(mut conn) = kernel.plugins.mcp_connections.get_mut(key) {
                             if conn.ping().await.is_err() {
@@ -3898,7 +3921,8 @@ impl OpenCarrierKernel {
                         }
                     }
                     // Remove dead connections (keys collected above)
-                    let dead_keys: Vec<String> = dead_servers.iter()
+                    let dead_keys: Vec<String> = dead_servers
+                        .iter()
                         .map(|(name, _)| opencarrier_runtime::mcp::normalize_name(name))
                         .collect();
                     for key in &dead_keys {
@@ -3912,16 +3936,22 @@ impl OpenCarrierKernel {
                 {
                     use opencarrier_runtime::mcp::normalize_name;
 
-                    let effective: Vec<opencarrier_types::config::McpServerConfigEntry> =
-                        kernel.plugins.effective_mcp_servers.read()
-                            .map(|s| s.clone())
-                            .unwrap_or_default();
-                    let effective_keys: Vec<String> = effective
-                        .iter().map(|c| normalize_name(&c.name)).collect();
+                    let effective: Vec<opencarrier_types::config::McpServerConfigEntry> = kernel
+                        .plugins
+                        .effective_mcp_servers
+                        .read()
+                        .map(|s| s.clone())
+                        .unwrap_or_default();
+                    let effective_keys: Vec<String> =
+                        effective.iter().map(|c| normalize_name(&c.name)).collect();
 
                     // Remove connections not in effective config
                     {
-                        let mut tools = kernel.plugins.mcp_tools.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut tools = kernel
+                            .plugins
+                            .mcp_tools
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
                         let mut removed = Vec::new();
                         kernel.plugins.mcp_connections.retain(|key, conn| {
                             if effective_keys.contains(key) {
@@ -3939,15 +3969,21 @@ impl OpenCarrierKernel {
                     }
 
                     // Connect servers in config but not yet connected
-                    let connected_keys: Vec<String> = kernel.plugins.mcp_connections
-                        .iter().map(|e| e.key().clone()).collect();
+                    let connected_keys: Vec<String> = kernel
+                        .plugins
+                        .mcp_connections
+                        .iter()
+                        .map(|e| e.key().clone())
+                        .collect();
                     let missing: Vec<&opencarrier_types::config::McpServerConfigEntry> = effective
                         .iter()
                         .filter(|c| !connected_keys.contains(&normalize_name(&c.name)))
                         .collect();
 
                     for server_config in &missing {
-                        use opencarrier_runtime::mcp::{McpConnection, McpServerConfig, McpTransport};
+                        use opencarrier_runtime::mcp::{
+                            McpConnection, McpServerConfig, McpTransport,
+                        };
                         use opencarrier_types::config::McpTransportEntry;
 
                         let transport = match &server_config.transport {
@@ -3955,7 +3991,9 @@ impl OpenCarrierKernel {
                                 command: command.clone(),
                                 args: args.clone(),
                             },
-                            McpTransportEntry::Sse { url } => McpTransport::Sse { url: url.clone() },
+                            McpTransportEntry::Sse { url } => {
+                                McpTransport::Sse { url: url.clone() }
+                            }
                         };
                         let mcp_config = McpServerConfig {
                             name: server_config.name.clone(),
@@ -3984,20 +4022,28 @@ impl OpenCarrierKernel {
                 for (name, config) in dead_servers {
                     use opencarrier_runtime::mcp::McpConnection;
                     // Only reconnect if still in effective config
-                    let still_configured = kernel.plugins.effective_mcp_servers.read()
+                    let still_configured = kernel
+                        .plugins
+                        .effective_mcp_servers
+                        .read()
                         .map(|s| s.iter().any(|c| c.name == name))
                         .unwrap_or(false);
                     if !still_configured {
-                        kernel.plugins.mcp_reconnect_failures.remove(
-                            &opencarrier_runtime::mcp::normalize_name(&name)
-                        );
+                        kernel
+                            .plugins
+                            .mcp_reconnect_failures
+                            .remove(&opencarrier_runtime::mcp::normalize_name(&name));
                         continue;
                     }
                     // Exponential backoff: skip reconnection if backoff hasn't elapsed.
                     // Formula: min(60 * 2^count, 3600) seconds between attempts.
                     let key = opencarrier_runtime::mcp::normalize_name(&name);
-                    let fail_count = kernel.plugins.mcp_reconnect_failures
-                        .get(&key).map(|g| *g).unwrap_or(0);
+                    let fail_count = kernel
+                        .plugins
+                        .mcp_reconnect_failures
+                        .get(&key)
+                        .map(|g| *g)
+                        .unwrap_or(0);
                     if fail_count > 0 {
                         let backoff_secs = std::cmp::min(60 * 2u64.pow(fail_count), 3600);
                         // Health check runs every 60s, so skip if backoff > 60s remaining
@@ -4011,7 +4057,9 @@ impl OpenCarrierKernel {
                                 );
                             }
                             // Increment failure counter and skip this cycle
-                            kernel.plugins.mcp_reconnect_failures
+                            kernel
+                                .plugins
+                                .mcp_reconnect_failures
                                 .insert(key.clone(), fail_count + 1);
                             continue;
                         }
@@ -4216,9 +4264,7 @@ impl OpenCarrierKernel {
             let all_defs: Vec<ToolDefinition> = builtin_tool_definitions();
             let mut added = Vec::new();
             for def in all_defs {
-                if whitelist.iter().any(|w| w == &def.name)
-                    && !existing_names.contains(&def.name)
-                {
+                if whitelist.iter().any(|w| w == &def.name) && !existing_names.contains(&def.name) {
                     added.push(def.name.clone());
                     all_tools.push(def);
                 }
@@ -4282,8 +4328,12 @@ impl OpenCarrierKernel {
 
         // Collect known server names from live connections for correct grouping.
         // DashMap iteration doesn't block tool calls.
-        let known_names: Vec<String> = self.plugins.mcp_connections
-            .iter().map(|e| e.value().name().to_string()).collect();
+        let known_names: Vec<String> = self
+            .plugins
+            .mcp_connections
+            .iter()
+            .map(|e| e.value().name().to_string())
+            .collect();
         let known_refs: Vec<&str> = known_names.iter().map(|s| s.as_str()).collect();
 
         // Group tools by MCP server using known-names resolver
@@ -4711,7 +4761,10 @@ impl OpenCarrierKernel {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Hub download failed {}: {} — {}", hub_template_id, status, body));
+            return Err(format!(
+                "Hub download failed {}: {} — {}",
+                hub_template_id, status, body
+            ));
         }
 
         let bytes = resp
@@ -4720,15 +4773,11 @@ impl OpenCarrierKernel {
             .map_err(|e| format!("Failed to read response: {e}"))?;
 
         // 3. Parse the .agx
-        let tmp_dir = std::env::temp_dir().join(format!(
-            "opencarrier-upgrade-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&tmp_dir)
-            .map_err(|e| format!("Failed to create temp dir: {e}"))?;
+        let tmp_dir =
+            std::env::temp_dir().join(format!("opencarrier-upgrade-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
         let tmp_path = tmp_dir.join("upgrade.agx");
-        std::fs::write(&tmp_path, &bytes)
-            .map_err(|e| format!("Failed to write temp file: {e}"))?;
+        std::fs::write(&tmp_path, &bytes).map_err(|e| format!("Failed to write temp file: {e}"))?;
 
         let clone_data = load_agx(&tmp_path).map_err(|e| {
             let _ = std::fs::remove_dir_all(&tmp_dir);
@@ -4753,8 +4802,11 @@ impl OpenCarrierKernel {
 
         // Write system_prompt.md
         if !clone_data.system_prompt.is_empty() {
-            std::fs::write(workspace.join("system_prompt.md"), &clone_data.system_prompt)
-                .map_err(|e| format!("Failed to write system_prompt.md: {e}"))?;
+            std::fs::write(
+                workspace.join("system_prompt.md"),
+                &clone_data.system_prompt,
+            )
+            .map_err(|e| format!("Failed to write system_prompt.md: {e}"))?;
         }
 
         // Write profile.md
@@ -5006,7 +5058,8 @@ impl KernelHandle for OpenCarrierKernel {
             .parse()
             .map_err(|_| "Invalid agent ID".to_string())?;
         // Cancel any running task
-        self.stop_agent_run(id).map_err(|e| format!("Stop failed: {e}"))?;
+        self.stop_agent_run(id)
+            .map_err(|e| format!("Stop failed: {e}"))?;
         // Reset state to Running
         self.registry
             .set_state(id, opencarrier_types::agent::AgentState::Running)
@@ -5043,7 +5096,11 @@ impl KernelHandle for OpenCarrierKernel {
             .map_err(|e| format!("Memory recall failed: {e}"))
     }
 
-    fn memory_list(&self, agent_id: &str, sender_id: &str) -> Result<Vec<(String, serde_json::Value)>, String> {
+    fn memory_list(
+        &self,
+        agent_id: &str,
+        sender_id: &str,
+    ) -> Result<Vec<(String, serde_json::Value)>, String> {
         let aid: AgentId = agent_id
             .parse()
             .map_err(|_| "Invalid agent ID".to_string())?;
@@ -5093,41 +5150,26 @@ impl KernelHandle for OpenCarrierKernel {
         created_by: Option<&str>,
     ) -> Result<String, String> {
         self.memory
-            .task_post(
-                title,
-                description,
-                assigned_to,
-                created_by,
-            )
+            .task_post(title, description, assigned_to, created_by)
             .await
             .map_err(|e| format!("Task post failed: {e}"))
     }
 
-    async fn task_claim(
-        &self,
-        agent_id: &str,
-    ) -> Result<Option<serde_json::Value>, String> {
+    async fn task_claim(&self, agent_id: &str) -> Result<Option<serde_json::Value>, String> {
         self.memory
             .task_claim(agent_id)
             .await
             .map_err(|e| format!("Task claim failed: {e}"))
     }
 
-    async fn task_complete(
-        &self,
-        task_id: &str,
-        result: &str,
-    ) -> Result<(), String> {
+    async fn task_complete(&self, task_id: &str, result: &str) -> Result<(), String> {
         self.memory
             .task_complete(task_id, result)
             .await
             .map_err(|e| format!("Task complete failed: {e}"))
     }
 
-    async fn task_list(
-        &self,
-        status: Option<&str>,
-    ) -> Result<Vec<serde_json::Value>, String> {
+    async fn task_list(&self, status: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
         self.memory
             .task_list(status)
             .await
@@ -5342,11 +5384,7 @@ impl KernelHandle for OpenCarrierKernel {
         }
     }
 
-    async fn clone_install(
-        &self,
-        name: &str,
-        agx_data: &[u8],
-    ) -> Result<(String, String), String> {
+    async fn clone_install(&self, name: &str, agx_data: &[u8]) -> Result<(String, String), String> {
         use opencarrier_clone::{convert_to_manifest, install_clone_to_workspace, load_agx};
 
         // Validate name: only lowercase alphanumeric and hyphens
@@ -5388,15 +5426,8 @@ impl KernelHandle for OpenCarrierKernel {
         let clone_name = name.to_string();
 
         // Check for name collision
-        if self
-            .registry
-            .find_by_name(&clone_name)
-            .is_some()
-        {
-            return Err(format!(
-                "Agent '{}' already exists",
-                clone_name
-            ));
+        if self.registry.find_by_name(&clone_name).is_some() {
+            return Err(format!("Agent '{}' already exists", clone_name));
         }
 
         // Create workspace directory (including parents)

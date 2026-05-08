@@ -277,7 +277,10 @@ impl BrowserSession {
             // Obscura and other non-Chromium CDP servers require this flow because
             // they do not expose per-page WebSocket URLs.
             let create_resp = cdp
-                .send("Target.createTarget", serde_json::json!({"url": "about:blank"}))
+                .send(
+                    "Target.createTarget",
+                    serde_json::json!({"url": "about:blank"}),
+                )
                 .await?;
             let target_id = create_resp["targetId"]
                 .as_str()
@@ -294,7 +297,10 @@ impl BrowserSession {
                 .ok_or("No sessionId in attachToTarget response")?;
             *cdp.default_session_id.lock().unwrap() = Some(session_id.to_string());
 
-            info!(target_id, session_id, "External CDP flatten session established");
+            info!(
+                target_id,
+                session_id, "External CDP flatten session established"
+            );
 
             // Enable required domains (commands automatically carry sessionId)
             let _ = cdp.send("Page.enable", serde_json::json!({})).await;
@@ -708,7 +714,10 @@ impl BrowserSession {
     }
 
     async fn cmd_back(&self) -> BrowserResponse {
-        let back_result = self.cdp.run_js("(function(){ history.back(); return 'ok'; })()").await;
+        let back_result = self
+            .cdp
+            .run_js("(function(){ history.back(); return 'ok'; })()")
+            .await;
         match back_result {
             Ok(_) => {
                 tokio::time::sleep(Duration::from_millis(500)).await;

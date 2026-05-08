@@ -38,7 +38,10 @@ impl DingTalkTenantEntry {
             config.app_key.clone(),
             config.app_secret.clone(),
         ));
-        Self { config, token_cache }
+        Self {
+            config,
+            token_cache,
+        }
     }
 }
 
@@ -96,10 +99,7 @@ fn scan_bot_configs(plugin_dir: &Path) -> Vec<(String, serde_json::Value)> {
             Ok(content) => {
                 if let Ok(mut val) = content.parse::<toml::Value>() {
                     if let Some(table) = val.as_table_mut() {
-                        table.insert(
-                            "_bot_id".to_string(),
-                            toml::Value::String(bot_uuid.clone()),
-                        );
+                        table.insert("_bot_id".to_string(), toml::Value::String(bot_uuid.clone()));
                     }
                     if let Ok(json) = serde_json::to_value(val) {
                         configs.push((bot_uuid, json));
@@ -122,7 +122,9 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<DingTalkTenantEntry
         return None;
     }
 
-    let secret_env = bot_config["secret_env"].as_str().unwrap_or("DINGTALK_APP_SECRET");
+    let secret_env = bot_config["secret_env"]
+        .as_str()
+        .unwrap_or("DINGTALK_APP_SECRET");
     let app_secret = match std::env::var(secret_env) {
         Ok(s) if !s.is_empty() => s,
         _ => {
@@ -289,8 +291,8 @@ impl BuiltinChannel for DingTalkWatcher {
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let plugin_dir = find_plugin_dir()
-            .ok_or_else(|| "Cannot find DingTalk plugin directory".to_string())?;
+        let plugin_dir =
+            find_plugin_dir().ok_or_else(|| "Cannot find DingTalk plugin directory".to_string())?;
 
         let shutdown = self.shutdown.clone();
         let handle = std::thread::Builder::new()
@@ -338,7 +340,8 @@ impl BuiltinChannel for DingTalkWatcher {
             let _ = tx.send(result);
         });
 
-        rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))?
+        rx.recv()
+            .map_err(|e| format!("Send thread disconnected: {e}"))?
     }
 
     fn stop(&mut self) {

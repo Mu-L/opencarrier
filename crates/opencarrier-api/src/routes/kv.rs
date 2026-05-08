@@ -79,7 +79,11 @@ pub async fn set_agent_kv_key(
 
     let value = body.get("value").cloned().unwrap_or(body);
 
-    match state.kernel.memory.structured_set(agent_id, "", &key, value) {
+    match state
+        .kernel
+        .memory
+        .structured_set(agent_id, "", &key, value)
+    {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "stored", "key": key})),

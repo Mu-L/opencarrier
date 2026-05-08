@@ -10,12 +10,7 @@ use std::path::{Path, PathBuf};
 fn is_internal_path(rel: &str) -> bool {
     matches!(
         rel,
-        "agent.toml"
-            | "SOUL.md"
-            | "system_prompt.md"
-            | "profile.md"
-            | "style.md"
-            | "evolution.md"
+        "agent.toml" | "SOUL.md" | "system_prompt.md" | "profile.md" | "style.md" | "evolution.md"
     ) || rel.starts_with("knowledge/")
         || rel.starts_with("skills/")
         || rel.starts_with("sessions/")

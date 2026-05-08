@@ -163,9 +163,7 @@ pub enum McpRuntimeTransport {
 
 impl Default for McpRuntimeTransport {
     fn default() -> Self {
-        Self::Sse {
-            url: String::new(),
-        }
+        Self::Sse { url: String::new() }
     }
 }
 

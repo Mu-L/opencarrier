@@ -281,7 +281,12 @@ pub trait Memory: Send + Sync {
     ) -> crate::error::OpenCarrierResult<()>;
 
     /// Delete a key-value pair for a specific agent and user.
-    async fn delete(&self, agent_id: AgentId, sender_id: &str, key: &str) -> crate::error::OpenCarrierResult<()>;
+    async fn delete(
+        &self,
+        agent_id: AgentId,
+        sender_id: &str,
+        key: &str,
+    ) -> crate::error::OpenCarrierResult<()>;
 
     // -- Semantic operations --
 
@@ -309,16 +314,10 @@ pub trait Memory: Send + Sync {
     // -- Knowledge graph operations --
 
     /// Add an entity to the knowledge graph.
-    async fn add_entity(
-        &self,
-        entity: Entity,
-    ) -> crate::error::OpenCarrierResult<String>;
+    async fn add_entity(&self, entity: Entity) -> crate::error::OpenCarrierResult<String>;
 
     /// Add a relation between entities.
-    async fn add_relation(
-        &self,
-        relation: Relation,
-    ) -> crate::error::OpenCarrierResult<String>;
+    async fn add_relation(&self, relation: Relation) -> crate::error::OpenCarrierResult<String>;
 
     /// Query the knowledge graph.
     async fn query_graph(

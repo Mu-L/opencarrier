@@ -77,13 +77,11 @@ impl ToolProvider for WeixinSendMessageTool {
             return Err(PluginError::tool("Token expired, please re-scan QR code"));
         }
 
-        let context_token = state
-            .get_context_token(user_id)
-            .ok_or_else(|| {
-                PluginError::tool(format!(
-                    "No context_token for user {user_id} — can only reply to received messages"
-                ))
-            })?;
+        let context_token = state.get_context_token(user_id).ok_or_else(|| {
+            PluginError::tool(format!(
+                "No context_token for user {user_id} — can only reply to received messages"
+            ))
+        })?;
 
         let bot_token = state.bot_token.clone();
         let baseurl = state.baseurl.clone();

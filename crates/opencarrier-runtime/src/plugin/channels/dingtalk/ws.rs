@@ -81,10 +81,7 @@ impl DingTalkWsClient {
     }
 
     /// Connect to WebSocket and listen for events until disconnection.
-    async fn connect_and_listen(
-        &self,
-        sender: &mpsc::Sender<PluginMessage>,
-    ) -> Result<(), String> {
+    async fn connect_and_listen(&self, sender: &mpsc::Sender<PluginMessage>) -> Result<(), String> {
         // 1. Get access token (required for both gateway open header and send operations)
         let token = self
             .token_cache
@@ -101,12 +98,8 @@ impl DingTalkWsClient {
         )
         .await?;
 
-        let endpoint = gw
-            .endpoint
-            .ok_or("Missing endpoint in gateway response")?;
-        let ticket = gw
-            .ticket
-            .ok_or("Missing ticket in gateway response")?;
+        let endpoint = gw.endpoint.ok_or("Missing endpoint in gateway response")?;
+        let ticket = gw.ticket.ok_or("Missing ticket in gateway response")?;
 
         let ws_url = format!("{endpoint}?ticket={ticket}");
 

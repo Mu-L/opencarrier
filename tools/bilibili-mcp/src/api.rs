@@ -13,10 +13,9 @@ const MAX_RESULT_BYTES: usize = 60_000;
 
 /// WBI mixin key permutation table.
 const MIXIN_KEY_ENC_TAB: [usize; 64] = [
-    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
-    33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61,
-    26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36,
-    20, 34, 44, 52,
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29,
+    28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25,
+    54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
 ];
 
 /// Cache for WBI keys: (img_key, sub_key, expires_at).
@@ -137,7 +136,11 @@ async fn get_wbi_keys() -> Result<(String, String), String> {
     Ok((img, sub))
 }
 
-pub fn build_cookie(sessdata: Option<&str>, bili_jct: Option<&str>, dede_user_id: Option<&str>) -> String {
+pub fn build_cookie(
+    sessdata: Option<&str>,
+    bili_jct: Option<&str>,
+    dede_user_id: Option<&str>,
+) -> String {
     let mut parts = Vec::new();
     if let Some(v) = sessdata {
         parts.push(format!("SESSDATA={v}"));
@@ -210,15 +213,22 @@ pub async fn bilibili_api(
         ));
     }
 
-    let json: Value = serde_json::from_str(&text)
-        .map_err(|e| format!("Bilibili API JSON parse error: {e}"))?;
+    let json: Value =
+        serde_json::from_str(&text).map_err(|e| format!("Bilibili API JSON parse error: {e}"))?;
 
     Ok(json)
 }
 
 pub async fn get_self_uid(cookie_str: &str) -> Result<u64, String> {
     let params = HashMap::new();
-    let result = bilibili_api(cookie_str, Method::GET, "/x/web-interface/nav", &params, false).await?;
+    let result = bilibili_api(
+        cookie_str,
+        Method::GET,
+        "/x/web-interface/nav",
+        &params,
+        false,
+    )
+    .await?;
     let uid = result
         .pointer("/data/mid")
         .and_then(|v| v.as_u64())

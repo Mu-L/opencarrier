@@ -49,20 +49,23 @@ fn get_session_user(request: &Request<axum::body::Body>, state: &AppState) -> Op
                 .find_map(|part| part.trim().strip_prefix("opencarrier_session="))
         });
     session_token.and_then(|token| {
-        session_auth::verify_session_token(token, secret)
-            .map(|info| info.username)
+        session_auth::verify_session_token(token, secret).map(|info| info.username)
     })
 }
 
-fn require_auth(request: &Request<axum::body::Body>, state: &AppState) -> Result<String, Html<String>> {
+fn require_auth(
+    request: &Request<axum::body::Body>,
+    state: &AppState,
+) -> Result<String, Html<String>> {
     match get_session_user(request, state) {
         Some(user) => Ok(user),
-        None => {
-            Err(render("login.html", minijinja::context! {
+        None => Err(render(
+            "login.html",
+            minijinja::context! {
                 hide_sidebar => true,
                 version => env!("CARGO_PKG_VERSION"),
-            }))
-        }
+            },
+        )),
     }
 }
 
@@ -70,10 +73,13 @@ fn require_auth(request: &Request<axum::body::Body>, state: &AppState) -> Result
 
 /// GET /login — Login page (always public).
 pub async fn login_page() -> impl IntoResponse {
-    render("login.html", minijinja::context! {
-        hide_sidebar => true,
-        version => env!("CARGO_PKG_VERSION"),
-    })
+    render(
+        "login.html",
+        minijinja::context! {
+            hide_sidebar => true,
+            version => env!("CARGO_PKG_VERSION"),
+        },
+    )
 }
 
 /// GET /logout — Clear session cookie and redirect to login.
@@ -116,15 +122,18 @@ pub async fn overview_page(
         })
         .collect();
 
-    Ok(render("overview.html", minijinja::context! {
-        page => "overview",
-        session_user => user,
-        version => env!("CARGO_PKG_VERSION"),
-        agent_count => agent_count,
-        uptime => format!("{}h {}m", uptime / 3600, (uptime % 3600) / 60),
-        default_model => default_model,
-        agents => agents,
-    }))
+    Ok(render(
+        "overview.html",
+        minijinja::context! {
+            page => "overview",
+            session_user => user,
+            version => env!("CARGO_PKG_VERSION"),
+            agent_count => agent_count,
+            uptime => format!("{}h {}m", uptime / 3600, (uptime % 3600) / 60),
+            default_model => default_model,
+            agents => agents,
+        },
+    ))
 }
 
 /// GET /agents — Agent list.
@@ -155,12 +164,15 @@ pub async fn agents_page(
         })
         .collect();
 
-    Ok(render("agents.html", minijinja::context! {
-        page => "agents",
-        session_user => user,
-        version => env!("CARGO_PKG_VERSION"),
-        agents => agents,
-    }))
+    Ok(render(
+        "agents.html",
+        minijinja::context! {
+            page => "agents",
+            session_user => user,
+            version => env!("CARGO_PKG_VERSION"),
+            agents => agents,
+        },
+    ))
 }
 
 /// GET /agents/:id/chat — Chat with a specific agent.
@@ -174,45 +186,60 @@ pub async fn chat_page(
     let agent_id = match uuid::Uuid::parse_str(&id) {
         Ok(uid) => uid,
         Err(_) => {
-            return Ok(render("agents.html", minijinja::context! {
-                page => "agents",
-                session_user => user,
-                version => env!("CARGO_PKG_VERSION"),
-                agents => Vec::<minijinja::Value>::new(),
-            }));
+            return Ok(render(
+                "agents.html",
+                minijinja::context! {
+                    page => "agents",
+                    session_user => user,
+                    version => env!("CARGO_PKG_VERSION"),
+                    agents => Vec::<minijinja::Value>::new(),
+                },
+            ));
         }
     };
 
-    let entry = match state.kernel.registry.get(opencarrier_types::agent::AgentId(agent_id)) {
+    let entry = match state
+        .kernel
+        .registry
+        .get(opencarrier_types::agent::AgentId(agent_id))
+    {
         Some(e) => e,
         None => {
-            return Ok(render("agents.html", minijinja::context! {
-                page => "agents",
-                session_user => user,
-                version => env!("CARGO_PKG_VERSION"),
-                agents => Vec::<minijinja::Value>::new(),
-            }));
+            return Ok(render(
+                "agents.html",
+                minijinja::context! {
+                    page => "agents",
+                    session_user => user,
+                    version => env!("CARGO_PKG_VERSION"),
+                    agents => Vec::<minijinja::Value>::new(),
+                },
+            ));
         }
     };
 
-    let (_, model) = state.kernel.resolve_model_label(&entry.manifest.model.modality);
+    let (_, model) = state
+        .kernel
+        .resolve_model_label(&entry.manifest.model.modality);
     let api_key = state.kernel.config.api_key.clone();
 
-    Ok(render("chat.html", minijinja::context! {
-        page => "chat",
-        session_user => user,
-        version => env!("CARGO_PKG_VERSION"),
-        agent => minijinja::context! {
-            id => entry.id.to_string(),
-            name => entry.name.clone(),
-            state => format!("{:?}", entry.state),
-            model_name => model,
-            identity => minijinja::context! {
-                emoji => entry.identity.emoji.clone(),
+    Ok(render(
+        "chat.html",
+        minijinja::context! {
+            page => "chat",
+            session_user => user,
+            version => env!("CARGO_PKG_VERSION"),
+            agent => minijinja::context! {
+                id => entry.id.to_string(),
+                name => entry.name.clone(),
+                state => format!("{:?}", entry.state),
+                model_name => model,
+                identity => minijinja::context! {
+                    emoji => entry.identity.emoji.clone(),
+                },
             },
+            api_key => api_key,
         },
-        api_key => api_key,
-    }))
+    ))
 }
 
 /// GET /tasks — Task scheduler page.
@@ -221,11 +248,14 @@ pub async fn tasks_page(
     request: Request<axum::body::Body>,
 ) -> Result<Html<String>, Html<String>> {
     let user = require_auth(&request, &state)?;
-    Ok(render("tasks.html", minijinja::context! {
-        page => "tasks",
-        session_user => user,
-        version => env!("CARGO_PKG_VERSION"),
-    }))
+    Ok(render(
+        "tasks.html",
+        minijinja::context! {
+            page => "tasks",
+            session_user => user,
+            version => env!("CARGO_PKG_VERSION"),
+        },
+    ))
 }
 
 /// GET /brain — Brain config page.
@@ -242,8 +272,7 @@ pub async fn brain_page(
         .providers
         .iter()
         .map(|(name, p)| {
-            let has_key = !p.api_key_env.is_empty()
-                && std::env::var(&p.api_key_env).is_ok();
+            let has_key = !p.api_key_env.is_empty() && std::env::var(&p.api_key_env).is_ok();
             minijinja::context! {
                 name => name,
                 api_key_env => p.api_key_env.clone(),
@@ -282,13 +311,16 @@ pub async fn brain_page(
         })
         .collect();
 
-    Ok(render("brain.html", minijinja::context! {
-        page => "brain",
-        session_user => user,
-        version => env!("CARGO_PKG_VERSION"),
-        default_modality => config.default_modality.clone(),
-        providers => providers,
-        endpoints => endpoints,
-        modalities => modalities,
-    }))
+    Ok(render(
+        "brain.html",
+        minijinja::context! {
+            page => "brain",
+            session_user => user,
+            version => env!("CARGO_PKG_VERSION"),
+            default_modality => config.default_modality.clone(),
+            providers => providers,
+            endpoints => endpoints,
+            modalities => modalities,
+        },
+    ))
 }

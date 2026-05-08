@@ -296,9 +296,9 @@ pub trait Brain: Send + Sync {
             }
         }
 
-        Err(OpenCarrierError::LlmDriver(last_error.unwrap_or_else(|| {
-            format!("All endpoints exhausted for modality '{modality}'")
-        })))
+        Err(OpenCarrierError::LlmDriver(last_error.unwrap_or_else(
+            || format!("All endpoints exhausted for modality '{modality}'"),
+        )))
     }
 
     // --- Legacy methods ---
@@ -401,7 +401,7 @@ mod tests {
             stop_reason: StopReason::EndTurn,
             tool_calls: vec![],
             usage: TokenUsage::default(),
-        media: None,
+            media: None,
         };
         assert_eq!(response.text(), "Hello world!");
     }
@@ -467,7 +467,7 @@ mod tests {
                         input_tokens: 5,
                         output_tokens: 3,
                     },
-                media: None,
+                    media: None,
                 })
             }
         }

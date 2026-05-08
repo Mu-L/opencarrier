@@ -23,7 +23,9 @@ pub trait ChannelAdapter: Send + Sync {
     fn name(&self) -> &str;
 
     /// Tenant identifier this channel belongs to (used for message routing).
-    fn tenant_id(&self) -> &str { "" }
+    fn tenant_id(&self) -> &str {
+        ""
+    }
 
     /// Start receiving messages from the channel.
     ///

@@ -9,11 +9,11 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
+use super::instance::PluginInstance;
 use libloading::Library;
 use opencarrier_types::plugin::{
     BotConfig, ChannelDescriptor, FfiJsonCallback, PluginConfig, PluginToolDef, PLUGIN_ABI_VERSION,
 };
-use super::instance::PluginInstance;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 

@@ -97,7 +97,10 @@ pub async fn build_router(
         .route("/login", axum::routing::get(crate::pages::login_page))
         .route("/logout", axum::routing::get(crate::pages::logout_page))
         .route("/agents", axum::routing::get(crate::pages::agents_page))
-        .route("/agents/{id}/chat", axum::routing::get(crate::pages::chat_page))
+        .route(
+            "/agents/{id}/chat",
+            axum::routing::get(crate::pages::chat_page),
+        )
         .route("/tasks", axum::routing::get(crate::pages::tasks_page))
         .route("/brain", axum::routing::get(crate::pages::brain_page))
         .with_state(state.clone());
@@ -200,9 +203,15 @@ pub async fn run_daemon(
             registry.register_channel("weixin", || {
                 Box::new(opencarrier_runtime::plugin::channels::weixin::TenantWatcher::new())
             });
-            registry.register_tool("weixin", || Box::new(opencarrier_runtime::plugin::channels::weixin::WeixinQrLoginTool));
-            registry.register_tool("weixin", || Box::new(opencarrier_runtime::plugin::channels::weixin::WeixinSendMessageTool));
-            registry.register_tool("weixin", || Box::new(opencarrier_runtime::plugin::channels::weixin::WeixinStatusTool));
+            registry.register_tool("weixin", || {
+                Box::new(opencarrier_runtime::plugin::channels::weixin::WeixinQrLoginTool)
+            });
+            registry.register_tool("weixin", || {
+                Box::new(opencarrier_runtime::plugin::channels::weixin::WeixinSendMessageTool)
+            });
+            registry.register_tool("weixin", || {
+                Box::new(opencarrier_runtime::plugin::channels::weixin::WeixinStatusTool)
+            });
 
             // Register built-in WeCom channel adapters and tools
             registry.register_channel("wecom", || {
@@ -211,19 +220,33 @@ pub async fn run_daemon(
             registry.register_channel("wecom", || {
                 Box::new(opencarrier_runtime::plugin::channels::wecom::WeComSmartBotWatcher::new())
             });
-            registry.register_tool("wecom", || Box::new(opencarrier_runtime::plugin::channels::wecom::SendMessageTool));
-            registry.register_tool("wecom", || Box::new(opencarrier_runtime::plugin::channels::wecom::BotGenerateTool));
-            registry.register_tool("wecom", || Box::new(opencarrier_runtime::plugin::channels::wecom::BotPollTool));
-            registry.register_tool("wecom", || Box::new(opencarrier_runtime::plugin::channels::wecom::QrCodeTool));
-            registry.register_tool("wecom", || Box::new(opencarrier_runtime::plugin::channels::wecom::BotRegisterTool));
-            registry.register_tool("wecom", || Box::new(opencarrier_runtime::plugin::channels::wecom::BotBindTool));
+            registry.register_tool("wecom", || {
+                Box::new(opencarrier_runtime::plugin::channels::wecom::SendMessageTool)
+            });
+            registry.register_tool("wecom", || {
+                Box::new(opencarrier_runtime::plugin::channels::wecom::BotGenerateTool)
+            });
+            registry.register_tool("wecom", || {
+                Box::new(opencarrier_runtime::plugin::channels::wecom::BotPollTool)
+            });
+            registry.register_tool("wecom", || {
+                Box::new(opencarrier_runtime::plugin::channels::wecom::QrCodeTool)
+            });
+            registry.register_tool("wecom", || {
+                Box::new(opencarrier_runtime::plugin::channels::wecom::BotRegisterTool)
+            });
+            registry.register_tool("wecom", || {
+                Box::new(opencarrier_runtime::plugin::channels::wecom::BotBindTool)
+            });
             opencarrier_runtime::plugin::channels::wecom::mcp::register_mcp_tools(&mut registry);
 
             // Register built-in Feishu channel adapter and tools
             registry.register_channel("feishu", || {
                 Box::new(opencarrier_runtime::plugin::channels::feishu::FeishuWatcher::new())
             });
-            opencarrier_runtime::plugin::channels::feishu::tools::register_feishu_tools(&mut registry);
+            opencarrier_runtime::plugin::channels::feishu::tools::register_feishu_tools(
+                &mut registry,
+            );
 
             // Register built-in DingTalk channel adapter
             registry.register_channel("dingtalk", || {
@@ -252,8 +275,7 @@ pub async fn run_daemon(
                                 continue;
                             }
                             if let Ok(content) = std::fs::read_to_string(&path) {
-                                if let Ok(tf) =
-                                    serde_json::from_str::<serde_json::Value>(&content)
+                                if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content)
                                 {
                                     if let (Some(name), Some(agent)) = (
                                         tf.get("name").and_then(|v| v.as_str()),

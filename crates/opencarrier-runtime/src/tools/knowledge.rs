@@ -193,13 +193,7 @@ impl ToolModule for KnowledgeTools {
             "skill_update" => Some(tool_skill_update(input, ctx.workspace_root).await),
             "skill_load" => Some(tool_skill_load(input, ctx.workspace_root).await),
             "session_summarize" => Some(
-                tool_session_summarize(
-                    input,
-                    ctx.kernel,
-                    ctx.caller_agent_id,
-                    ctx.sender_id,
-                )
-                .await,
+                tool_session_summarize(input, ctx.kernel, ctx.caller_agent_id, ctx.sender_id).await,
             ),
             _ => None,
         }
@@ -428,9 +422,7 @@ async fn tool_knowledge_extract(
     workspace_root: Option<&Path>,
 ) -> Result<String, String> {
     let root = workspace_root.ok_or("knowledge_extract requires a workspace root")?;
-    let title = input["title"]
-        .as_str()
-        .ok_or("Missing 'title' parameter")?;
+    let title = input["title"].as_str().ok_or("Missing 'title' parameter")?;
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
@@ -447,7 +439,9 @@ async fn tool_knowledge_extract(
     let saved = opencarrier_lifecycle::evolution::apply_evolution(root, &analysis);
     match saved.len() {
         0 => Ok("No knowledge extracted (nothing new to save).".to_string()),
-        n => Ok(format!("Extracted {n} knowledge item(s) and updated index.")),
+        n => Ok(format!(
+            "Extracted {n} knowledge item(s) and updated index."
+        )),
     }
 }
 
@@ -576,10 +570,7 @@ async fn tool_skill_load(
             .map_err(|e| format!("Read error: {e}"))?
         {
             let entry_name = entry.file_name().to_string_lossy().to_string();
-            if entry_name
-                .to_lowercase()
-                .contains(&name.to_lowercase())
-            {
+            if entry_name.to_lowercase().contains(&name.to_lowercase()) {
                 if entry_name.ends_with(".md") {
                     return tokio::fs::read_to_string(entry.path())
                         .await
@@ -615,8 +606,13 @@ async fn tool_session_summarize(
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let key = format!("session_summary:{date}");
 
-    kh.memory_store(agent_id, sid, &key, serde_json::Value::String(summary.to_string()))
-        .map_err(|e| format!("Failed to store summary: {e}"))?;
+    kh.memory_store(
+        agent_id,
+        sid,
+        &key,
+        serde_json::Value::String(summary.to_string()),
+    )
+    .map_err(|e| format!("Failed to store summary: {e}"))?;
 
     Ok(format!("Session summary stored for {date}."))
 }

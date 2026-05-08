@@ -35,7 +35,8 @@ pub fn tools() -> Vec<ToolSpec> {
                 "required": ["presentation_id", "slide_id", "replacements"]
             }),
             method: Method::POST,
-            path: "open-apis/slides/v1/xml_presentations/{presentation_id}/slides/{slide_id}/replace",
+            path:
+                "open-apis/slides/v1/xml_presentations/{presentation_id}/slides/{slide_id}/replace",
             param_mapper: |args| {
                 let presentation_id = args["presentation_id"].as_str().unwrap_or("").to_string();
                 let slide_id = args["slide_id"].as_str().unwrap_or("").to_string();

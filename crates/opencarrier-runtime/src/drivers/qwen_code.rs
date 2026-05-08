@@ -268,7 +268,7 @@ impl LlmDriver for QwenCodeDriver {
                     input_tokens: usage.input_tokens,
                     output_tokens: usage.output_tokens,
                 },
-            media: None,
+                media: None,
             });
         }
 
@@ -284,7 +284,7 @@ impl LlmDriver for QwenCodeDriver {
                 input_tokens: 0,
                 output_tokens: 0,
             },
-        media: None,
+            media: None,
         })
     }
 
@@ -408,7 +408,7 @@ impl LlmDriver for QwenCodeDriver {
             stop_reason: StopReason::EndTurn,
             tool_calls: Vec::new(),
             usage: final_usage,
-        media: None,
+            media: None,
         })
     }
 }

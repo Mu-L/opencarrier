@@ -29,13 +29,27 @@ pub fn tools() -> Vec<ToolSpec> {
             param_mapper: |args| {
                 let calendar_id = args["calendar_id"].as_str().unwrap_or("").to_string();
                 let mut body = serde_json::Map::new();
-                if let Some(v) = args.get("summary") { body.insert("summary".into(), v.clone()); }
-                if let Some(v) = args.get("description") { body.insert("description".into(), v.clone()); }
-                if let Some(v) = args.get("start_time") { body.insert("start_time".into(), v.clone()); }
-                if let Some(v) = args.get("end_time") { body.insert("end_time".into(), v.clone()); }
-                if let Some(v) = args.get("attendees") { body.insert("attendees".into(), v.clone()); }
-                if let Some(v) = args.get("visibility") { body.insert("visibility".into(), v.clone()); }
-                if let Some(v) = args.get("reminders") { body.insert("reminders".into(), v.clone()); }
+                if let Some(v) = args.get("summary") {
+                    body.insert("summary".into(), v.clone());
+                }
+                if let Some(v) = args.get("description") {
+                    body.insert("description".into(), v.clone());
+                }
+                if let Some(v) = args.get("start_time") {
+                    body.insert("start_time".into(), v.clone());
+                }
+                if let Some(v) = args.get("end_time") {
+                    body.insert("end_time".into(), v.clone());
+                }
+                if let Some(v) = args.get("attendees") {
+                    body.insert("attendees".into(), v.clone());
+                }
+                if let Some(v) = args.get("visibility") {
+                    body.insert("visibility".into(), v.clone());
+                }
+                if let Some(v) = args.get("reminders") {
+                    body.insert("reminders".into(), v.clone());
+                }
                 MappedParams {
                     path_params: HashMap::from([("calendar_id", calendar_id)]),
                     query: None,
@@ -60,7 +74,10 @@ pub fn tools() -> Vec<ToolSpec> {
                 let calendar_id = args["calendar_id"].as_str().unwrap_or("").to_string();
                 let event_id = args["event_id"].as_str().unwrap_or("").to_string();
                 MappedParams {
-                    path_params: HashMap::from([("calendar_id", calendar_id), ("event_id", event_id)]),
+                    path_params: HashMap::from([
+                        ("calendar_id", calendar_id),
+                        ("event_id", event_id),
+                    ]),
                     query: None,
                     body: None,
                 }
@@ -85,13 +102,25 @@ pub fn tools() -> Vec<ToolSpec> {
             param_mapper: |args| {
                 let calendar_id = args["calendar_id"].as_str().unwrap_or("").to_string();
                 let mut query = serde_json::Map::new();
-                if let Some(v) = args.get("start_time") { query.insert("start_time".into(), v.clone()); }
-                if let Some(v) = args.get("end_time") { query.insert("end_time".into(), v.clone()); }
-                if let Some(v) = args.get("page_size") { query.insert("page_size".into(), v.clone()); }
-                if let Some(v) = args.get("page_token") { query.insert("page_token".into(), v.clone()); }
+                if let Some(v) = args.get("start_time") {
+                    query.insert("start_time".into(), v.clone());
+                }
+                if let Some(v) = args.get("end_time") {
+                    query.insert("end_time".into(), v.clone());
+                }
+                if let Some(v) = args.get("page_size") {
+                    query.insert("page_size".into(), v.clone());
+                }
+                if let Some(v) = args.get("page_token") {
+                    query.insert("page_token".into(), v.clone());
+                }
                 MappedParams {
                     path_params: HashMap::from([("calendar_id", calendar_id)]),
-                    query: if query.is_empty() { None } else { Some(json!(query)) },
+                    query: if query.is_empty() {
+                        None
+                    } else {
+                        Some(json!(query))
+                    },
                     body: None,
                 }
             },
@@ -117,14 +146,29 @@ pub fn tools() -> Vec<ToolSpec> {
                 let calendar_id = args["calendar_id"].as_str().unwrap_or("").to_string();
                 let event_id = args["event_id"].as_str().unwrap_or("").to_string();
                 let mut body = serde_json::Map::new();
-                if let Some(v) = args.get("summary") { body.insert("summary".into(), v.clone()); }
-                if let Some(v) = args.get("description") { body.insert("description".into(), v.clone()); }
-                if let Some(v) = args.get("start_time") { body.insert("start_time".into(), v.clone()); }
-                if let Some(v) = args.get("end_time") { body.insert("end_time".into(), v.clone()); }
+                if let Some(v) = args.get("summary") {
+                    body.insert("summary".into(), v.clone());
+                }
+                if let Some(v) = args.get("description") {
+                    body.insert("description".into(), v.clone());
+                }
+                if let Some(v) = args.get("start_time") {
+                    body.insert("start_time".into(), v.clone());
+                }
+                if let Some(v) = args.get("end_time") {
+                    body.insert("end_time".into(), v.clone());
+                }
                 MappedParams {
-                    path_params: HashMap::from([("calendar_id", calendar_id), ("event_id", event_id)]),
+                    path_params: HashMap::from([
+                        ("calendar_id", calendar_id),
+                        ("event_id", event_id),
+                    ]),
                     query: None,
-                    body: if body.is_empty() { None } else { Some(json!(body)) },
+                    body: if body.is_empty() {
+                        None
+                    } else {
+                        Some(json!(body))
+                    },
                 }
             },
         },

@@ -109,7 +109,8 @@ impl BuiltinChannel for DingTalkChannel {
             let _ = tx.send(result);
         });
 
-        rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))?
+        rx.recv()
+            .map_err(|e| format!("Send thread disconnected: {e}"))?
     }
 
     fn stop(&mut self) {

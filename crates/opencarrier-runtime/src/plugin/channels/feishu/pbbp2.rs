@@ -338,7 +338,8 @@ impl FragmentCache {
         }
 
         // Evict expired entries
-        self.fragments.retain(|_, v| v.first_seen.elapsed().as_secs() < 10);
+        self.fragments
+            .retain(|_, v| v.first_seen.elapsed().as_secs() < 10);
 
         let entry = self
             .fragments

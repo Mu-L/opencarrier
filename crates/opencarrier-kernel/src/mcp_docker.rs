@@ -3,9 +3,7 @@
 //! Generates docker-compose.yml from .mcp.json manifests and provides
 //! start/stop/restart/status/logs operations via `docker compose`.
 
-use opencarrier_types::mcp_manifest::{
-    McpDockerInstall, McpInstallConfig, McpServerManifest,
-};
+use opencarrier_types::mcp_manifest::{McpDockerInstall, McpInstallConfig, McpServerManifest};
 use std::path::Path;
 use std::process::Stdio;
 use tracing::info;
@@ -27,8 +25,7 @@ pub fn generate_compose(manifest: &McpServerManifest, dir: &Path) -> Result<(), 
         _ => return Err("Not a Docker-type MCP server".to_string()),
     };
 
-    std::fs::create_dir_all(dir)
-        .map_err(|e| format!("Failed to create dir: {e}"))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create dir: {e}"))?;
 
     let compose = build_compose_yaml(manifest, install)?;
     let path = dir.join("docker-compose.yml");
@@ -40,7 +37,10 @@ pub fn generate_compose(manifest: &McpServerManifest, dir: &Path) -> Result<(), 
 }
 
 /// Build docker-compose.yml content.
-fn build_compose_yaml(manifest: &McpServerManifest, install: &McpDockerInstall) -> Result<String, String> {
+fn build_compose_yaml(
+    manifest: &McpServerManifest,
+    install: &McpDockerInstall,
+) -> Result<String, String> {
     // SECURITY: Sanitize all string inputs to prevent YAML injection.
     // Newlines in values could inject arbitrary YAML keys (e.g. "privileged: true").
 
@@ -48,8 +48,15 @@ fn build_compose_yaml(manifest: &McpServerManifest, install: &McpDockerInstall) 
     let image = sanitize_yaml_value(&install.image, "image")?;
 
     // Validate Docker image reference: allow alphanumeric, dots, colons, slashes, hyphens, underscores
-    if !install.image.chars().all(|c| c.is_alphanumeric() || c == '.' || c == ':' || c == '/' || c == '-' || c == '_') {
-        return Err(format!("Invalid Docker image reference: '{}'", install.image));
+    if !install
+        .image
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '.' || c == ':' || c == '/' || c == '-' || c == '_')
+    {
+        return Err(format!(
+            "Invalid Docker image reference: '{}'",
+            install.image
+        ));
     }
 
     let container_name = if install.container_name.is_empty() {
@@ -61,7 +68,11 @@ fn build_compose_yaml(manifest: &McpServerManifest, install: &McpDockerInstall) 
     // Validate restart policy against known set
     let valid_restart_policies = ["no", "always", "on-failure", "unless-stopped"];
     if !valid_restart_policies.contains(&install.restart_policy.as_str()) {
-        return Err(format!("Invalid restart policy: '{}'. Must be one of: {}", install.restart_policy, valid_restart_policies.join(", ")));
+        return Err(format!(
+            "Invalid restart policy: '{}'. Must be one of: {}",
+            install.restart_policy,
+            valid_restart_policies.join(", ")
+        ));
     }
     let restart_policy = &install.restart_policy;
 
@@ -73,10 +84,7 @@ fn build_compose_yaml(manifest: &McpServerManifest, install: &McpDockerInstall) 
         if vol.host == "/" || vol.host.starts_with("/etc") || vol.host.starts_with("/root") {
             return Err(format!("Dangerous volume mount blocked: '{}'", vol.host));
         }
-        volumes.push_str(&format!(
-            "      - {}:{}\n",
-            host, container
-        ));
+        volumes.push_str(&format!("      - {}:{}\n", host, container));
     }
 
     let mut environment = String::new();
@@ -90,7 +98,10 @@ fn build_compose_yaml(manifest: &McpServerManifest, install: &McpDockerInstall) 
     }
 
     let mut ports = String::new();
-    ports.push_str(&format!("      - \"{}:{}\"\n", install.mcp_port, install.mcp_port));
+    ports.push_str(&format!(
+        "      - \"{}:{}\"\n",
+        install.mcp_port, install.mcp_port
+    ));
     if let Some(web_port) = install.web_port {
         ports.push_str(&format!("      - \"{}:{}\"\n", web_port, web_port));
     }
@@ -127,7 +138,10 @@ services:
 /// Strip newlines and control characters from a YAML value to prevent injection.
 fn sanitize_yaml_value(value: &str, field: &str) -> Result<String, String> {
     if value.contains('\n') || value.contains('\r') {
-        return Err(format!("{} contains newlines (potential YAML injection)", field));
+        return Err(format!(
+            "{} contains newlines (potential YAML injection)",
+            field
+        ));
     }
     if value.chars().any(|c| c.is_control()) {
         return Err(format!("{} contains control characters", field));
@@ -138,8 +152,14 @@ fn sanitize_yaml_value(value: &str, field: &str) -> Result<String, String> {
 /// Sanitize a Docker/YAML identifier: lowercase alphanumeric, hyphens, underscores, dots.
 fn sanitize_yaml_identifier(value: &str, field: &str) -> Result<String, String> {
     sanitize_yaml_value(value, field)?;
-    if !value.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_' || c == '.') {
-        return Err(format!("{} '{}' contains invalid identifier characters", field, value));
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(format!(
+            "{} '{}' contains invalid identifier characters",
+            field, value
+        ));
     }
     Ok(value.to_string())
 }

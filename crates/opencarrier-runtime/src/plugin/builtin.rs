@@ -67,7 +67,8 @@ impl BuiltinPlugin {
     }
 
     /// Register a channel adapter.
-    pub fn register_channel(&mut self,
+    pub fn register_channel(
+        &mut self,
         mut adapter: Box<dyn BuiltinChannel>,
         sender: mpsc::Sender<PluginMessage>,
     ) -> Result<(), String> {
@@ -84,14 +85,15 @@ impl BuiltinPlugin {
             handle: std::ptr::null_mut(), // built-in: no opaque handle needed
         });
 
-        self.channel_adapters.lock().unwrap().insert(channel_type, adapter);
+        self.channel_adapters
+            .lock()
+            .unwrap()
+            .insert(channel_type, adapter);
         Ok(())
     }
 
     /// Register a tool provider.
-    pub fn register_tool(&mut self,
-        provider: Box<dyn ToolProvider>,
-    ) {
+    pub fn register_tool(&mut self, provider: Box<dyn ToolProvider>) {
         let def = provider.definition();
         self.tools.push(PluginToolDef {
             name: def.name.clone(),
@@ -143,7 +145,10 @@ impl PluginInstance for BuiltinPlugin {
         if let Some(adapter) = adapters.get(&channel.channel_type) {
             adapter.send(tenant_id, user_id, text)
         } else {
-            Err(format!("Built-in channel adapter '{}' not found", channel.channel_type))
+            Err(format!(
+                "Built-in channel adapter '{}' not found",
+                channel.channel_type
+            ))
         }
     }
 
@@ -153,15 +158,18 @@ impl PluginInstance for BuiltinPlugin {
         args_json: &str,
         context_json: &str,
     ) -> Result<String, String> {
-        let provider = self.tool_providers.get(tool_name)
+        let provider = self
+            .tool_providers
+            .get(tool_name)
             .ok_or_else(|| format!("Built-in tool '{}' not found", tool_name))?;
 
-        let args: serde_json::Value = serde_json::from_str(args_json)
-            .map_err(|e| format!("Args deserialization: {}", e))?;
+        let args: serde_json::Value =
+            serde_json::from_str(args_json).map_err(|e| format!("Args deserialization: {}", e))?;
         let ctx: opencarrier_types::plugin::PluginToolContext = serde_json::from_str(context_json)
             .map_err(|e| format!("Context deserialization: {}", e))?;
 
-        provider.execute(&args, &ctx.into_sdk_context())
+        provider
+            .execute(&args, &ctx.into_sdk_context())
             .map_err(|e| e.to_string())
     }
 
@@ -192,8 +200,6 @@ impl IntoSdkContext for opencarrier_types::plugin::PluginToolContext {
     fn into_sdk_context(self) -> opencarrier_plugin_sdk::PluginToolContext {
         // Since the types have identical layout (both come from the same source
         // in the SDK), serialize and deserialize is the safest bridge.
-        serde_json::from_str(
-            &serde_json::to_string(&self).unwrap_or_default()
-        ).unwrap_or_default()
+        serde_json::from_str(&serde_json::to_string(&self).unwrap_or_default()).unwrap_or_default()
     }
 }

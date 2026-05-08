@@ -155,7 +155,11 @@ impl InviteStore {
              LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         })?;
         rows.collect::<Result<Vec<_>, _>>()
     }

@@ -119,7 +119,6 @@ pub async fn execute_tool(
 
     // Phase 2: Remaining tools not yet extracted to modules
     let result = match tool_name {
-
         // Web tools
         "web_fetch" => {
             let url = input["url"].as_str().unwrap_or("");
@@ -142,19 +141,16 @@ pub async fn execute_tool(
                 None => Err("Web fetch not available".to_string()),
             }
         }
-        "web_search" => {
-            match web_ctx {
-                Some(ctx) => {
-                    let query = input["query"].as_str().unwrap_or("");
-                    let max_results = input["max_results"].as_u64().unwrap_or(5) as usize;
-                    ctx.search(query, max_results).await
-                }
-                None => Err("Web search not available".to_string()),
+        "web_search" => match web_ctx {
+            Some(ctx) => {
+                let query = input["query"].as_str().unwrap_or("");
+                let max_results = input["max_results"].as_u64().unwrap_or(5) as usize;
+                ctx.search(query, max_results).await
             }
-        }
+            None => Err("Web search not available".to_string()),
+        },
 
         // Browser automation tools are now handled by the browser_tool module
-
         other => {
             // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
             if mcp::is_mcp_tool(other) {
@@ -185,8 +181,7 @@ pub async fn execute_tool(
                     let known_keys: Vec<String> =
                         mcp_conns.iter().map(|e| e.key().clone()).collect();
                     let known_refs: Vec<&str> = known_keys.iter().map(|s| s.as_str()).collect();
-                    if let Some(server_key) =
-                        mcp::extract_mcp_server_from_known(other, &known_refs)
+                    if let Some(server_key) = mcp::extract_mcp_server_from_known(other, &known_refs)
                     {
                         // O(1) lookup by normalized server name — no global lock
                         if let Some(mut conn) = mcp_conns.get_mut(&server_key.to_string()) {
@@ -494,13 +489,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_agent_tools_without_kernel() {
-        let result = execute_tool(
-            "test-id",
-            "agent_list",
-            &serde_json::json!({}),
-            &noop_ctx(),
-        )
-        .await;
+        let result =
+            execute_tool("test-id", "agent_list", &serde_json::json!({}), &noop_ctx()).await;
         assert!(result.is_error);
         assert!(result.content.contains("Kernel handle not available"));
     }
@@ -638,5 +628,4 @@ mod tests {
         assert!(result.is_error);
         assert!(result.content.contains("Kernel handle not available"));
     }
-
 }

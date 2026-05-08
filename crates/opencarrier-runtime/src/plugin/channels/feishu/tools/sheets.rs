@@ -36,7 +36,8 @@ pub fn tools() -> Vec<ToolSpec> {
             method: Method::GET,
             path: "open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values/{range}",
             param_mapper: |args| {
-                let spreadsheet_token = args["spreadsheet_token"].as_str().unwrap_or("").to_string();
+                let spreadsheet_token =
+                    args["spreadsheet_token"].as_str().unwrap_or("").to_string();
                 let range = args["range"].as_str().unwrap_or("").to_string();
                 MappedParams {
                     path_params: HashMap::from([
@@ -63,7 +64,8 @@ pub fn tools() -> Vec<ToolSpec> {
             method: Method::PUT,
             path: "open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values",
             param_mapper: |args| {
-                let spreadsheet_token = args["spreadsheet_token"].as_str().unwrap_or("").to_string();
+                let spreadsheet_token =
+                    args["spreadsheet_token"].as_str().unwrap_or("").to_string();
                 let body = json!({
                     "valueRange": {
                         "range": args["range"],
@@ -92,7 +94,8 @@ pub fn tools() -> Vec<ToolSpec> {
             method: Method::POST,
             path: "open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/values_append",
             param_mapper: |args| {
-                let spreadsheet_token = args["spreadsheet_token"].as_str().unwrap_or("").to_string();
+                let spreadsheet_token =
+                    args["spreadsheet_token"].as_str().unwrap_or("").to_string();
                 let body = json!({
                     "valueRange": {
                         "range": args["range"],
@@ -121,7 +124,8 @@ pub fn tools() -> Vec<ToolSpec> {
             method: Method::POST,
             path: "open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/sheets/{sheet_id}/find",
             param_mapper: |args| {
-                let spreadsheet_token = args["spreadsheet_token"].as_str().unwrap_or("").to_string();
+                let spreadsheet_token =
+                    args["spreadsheet_token"].as_str().unwrap_or("").to_string();
                 let sheet_id = args["sheet_id"].as_str().unwrap_or("").to_string();
                 let body = json!({ "find_condition": args["find_condition"] });
                 MappedParams {
@@ -149,7 +153,8 @@ pub fn tools() -> Vec<ToolSpec> {
             method: Method::POST,
             path: "open-apis/sheets/v2/spreadsheets/{spreadsheet_token}/export",
             param_mapper: |args| {
-                let spreadsheet_token = args["spreadsheet_token"].as_str().unwrap_or("").to_string();
+                let spreadsheet_token =
+                    args["spreadsheet_token"].as_str().unwrap_or("").to_string();
                 let body = json!({
                     "sheet_id": args["sheet_id"],
                     "export_format": args["export_format"].as_str().unwrap_or("xlsx"),

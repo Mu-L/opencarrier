@@ -32,8 +32,8 @@ pub async fn zhihu_api(
         .map(|re: regex_lite::Regex| re.replace_all(&text, r#"$1"$2""#).to_string())
         .unwrap_or(text);
 
-    let json: Value = serde_json::from_str(&text)
-        .map_err(|e| format!("Zhihu API JSON parse error: {e}"))?;
+    let json: Value =
+        serde_json::from_str(&text).map_err(|e| format!("Zhihu API JSON parse error: {e}"))?;
 
     Ok(json)
 }

@@ -1,6 +1,6 @@
 //! Wiki (知识库) tools — 3 tools.
 
-use super::{MappedParams, ToolSpec, query_only};
+use super::{query_only, MappedParams, ToolSpec};
 use reqwest::Method;
 use serde_json::json;
 use std::collections::HashMap;

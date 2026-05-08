@@ -13,9 +13,7 @@ use std::sync::Arc;
 // ---------------------------------------------------------------------------
 
 /// GET /api/comms/topology -- Build agent topology graph from registry.
-pub async fn comms_topology(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn comms_topology(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     use opencarrier_types::comms::{EdgeKind, TopoEdge, TopoNode, Topology};
 
     let agents = state.kernel.registry.list();
@@ -272,9 +270,7 @@ pub async fn comms_events(
 /// GET /api/comms/events/stream -- SSE stream of inter-agent communication events.
 ///
 /// Polls the audit log every 500ms for new inter-agent events.
-pub async fn comms_events_stream(
-    State(state): State<Arc<AppState>>,
-) -> axum::response::Response {
+pub async fn comms_events_stream(State(state): State<Arc<AppState>>) -> axum::response::Response {
     use axum::response::sse::{Event, KeepAlive, Sse};
 
     let (tx, rx) = tokio::sync::mpsc::channel::<

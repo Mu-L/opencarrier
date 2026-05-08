@@ -90,7 +90,9 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
                 status: 0,
                 message: "base_url required for DashScope TTS format".to_string(),
             })?;
-            Ok(Arc::new(dashscope_tts::DashScopeTtsDriver::new(api_key, base_url)))
+            Ok(Arc::new(dashscope_tts::DashScopeTtsDriver::new(
+                api_key, base_url,
+            )))
         }
         ApiFormat::DashScopeImage => {
             let api_key = config.api_key.clone().ok_or_else(|| {
@@ -100,7 +102,9 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
                 status: 0,
                 message: "base_url required for DashScope image format".to_string(),
             })?;
-            Ok(Arc::new(dashscope_image::DashScopeImageDriver::new(api_key, base_url)))
+            Ok(Arc::new(dashscope_image::DashScopeImageDriver::new(
+                api_key, base_url,
+            )))
         }
         ApiFormat::DashScopeVideo => {
             let api_key = config.api_key.clone().ok_or_else(|| {
@@ -110,7 +114,9 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
                 status: 0,
                 message: "base_url required for DashScope video format".to_string(),
             })?;
-            Ok(Arc::new(dashscope_video::DashScopeVideoDriver::new(api_key, base_url)))
+            Ok(Arc::new(dashscope_video::DashScopeVideoDriver::new(
+                api_key, base_url,
+            )))
         }
         ApiFormat::Kling => {
             // Kling needs access_key + secret_key for JWT auth, passed via DriverConfig
@@ -133,7 +139,9 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
                     "Kling api_key must be in 'access_key:secret_key' format".to_string(),
                 ));
             }
-            Ok(Arc::new(kling::KlingDriver::new(access_key, secret_key, base_url)))
+            Ok(Arc::new(kling::KlingDriver::new(
+                access_key, secret_key, base_url,
+            )))
         }
     }
 }

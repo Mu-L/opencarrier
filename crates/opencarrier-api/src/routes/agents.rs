@@ -166,15 +166,13 @@ pub async fn spawn_agent(
 
     let name = manifest.name.clone();
     match state.kernel.spawn_agent(manifest) {
-        Ok(id) => {
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!(SpawnResponse {
-                    agent_id: id.to_string(),
-                    name,
-                })),
-            )
-        }
+        Ok(id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!(SpawnResponse {
+                agent_id: id.to_string(),
+                name,
+            })),
+        ),
         Err(e) => {
             tracing::warn!("Spawn failed: {e}");
             (
@@ -254,8 +252,7 @@ pub async fn restart_agent(
     _extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry)
-    {
+    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -328,11 +325,10 @@ pub async fn get_agent(
     Path(id): Path<String>,
     _extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) =
-        match parse_and_get_agent(&id, &state.kernel.registry) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     (
         StatusCode::OK,
@@ -377,11 +373,10 @@ pub async fn patch_agent(
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let (agent_id, _entry) =
-        match parse_and_get_agent(&id, &state.kernel.registry) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     // Apply partial updates using dedicated registry methods
     if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
@@ -1043,11 +1038,14 @@ pub async fn get_clone_access(
     let (access, _password) = read_access_config(&workspace);
     let is_private = access == "private";
 
-    (StatusCode::OK, Json(serde_json::json!({
-        "name": name,
-        "access": access,
-        "requires_password": is_private,
-    })))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "name": name,
+            "access": access,
+            "requires_password": is_private,
+        })),
+    )
 }
 
 /// POST /api/clones/{name}/verify-access — Verify password for private clone.
@@ -1095,9 +1093,7 @@ pub async fn verify_clone_access(
 ///
 /// Returns a minimal subset (name, display_name, profile, identity)
 /// so the share page can show a picker without authentication.
-pub async fn share_list_agents(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn share_list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let all_agents = state.kernel.registry.list();
     let agents: Vec<serde_json::Value> = all_agents
         .into_iter()
@@ -1145,12 +1141,12 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/agents/{id}/stop", routing::post(stop_agent))
         .route("/api/agents/{id}/suspend", routing::post(suspend_agent))
         .route("/api/agents/{id}/resume", routing::post(resume_agent))
-        .route("/api/agents/{id}/knowledge", routing::post(write_agent_knowledge))
-        // Clone access control (public, no auth required for share page)
         .route(
-            "/api/clones/{name}/access",
-            routing::get(get_clone_access),
+            "/api/agents/{id}/knowledge",
+            routing::post(write_agent_knowledge),
         )
+        // Clone access control (public, no auth required for share page)
+        .route("/api/clones/{name}/access", routing::get(get_clone_access))
         .route(
             "/api/clones/{name}/verify-access",
             routing::post(verify_clone_access),

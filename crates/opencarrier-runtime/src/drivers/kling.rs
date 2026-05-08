@@ -2,7 +2,7 @@
 //!
 //! Uses JWT authentication (access_key + secret_key) and async task polling.
 
-use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmError, LlmDriver};
+use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError};
 use async_trait::async_trait;
 use opencarrier_types::media::MediaOutput;
 use opencarrier_types::message::MessageContent;
@@ -190,9 +190,10 @@ impl LlmDriver for KlingDriver {
                 continue;
             }
 
-            let poll_result: serde_json::Value = poll_resp.json().await.map_err(|e| {
-                LlmError::Parse(format!("Failed to parse Kling task status: {e}"))
-            })?;
+            let poll_result: serde_json::Value = poll_resp
+                .json()
+                .await
+                .map_err(|e| LlmError::Parse(format!("Failed to parse Kling task status: {e}")))?;
 
             let task_status = poll_result
                 .pointer("/data/task_status")
@@ -202,10 +203,9 @@ impl LlmDriver for KlingDriver {
             match task_status {
                 "succeed" => {
                     // Extract results
-                    if let Some(results) =
-                        poll_result
-                            .pointer("/data/task_result")
-                            .and_then(|r| r.as_array())
+                    if let Some(results) = poll_result
+                        .pointer("/data/task_result")
+                        .and_then(|r| r.as_array())
                     {
                         // Video result
                         if let Some(video) = results.first().and_then(|r| r.get("url")) {
@@ -231,8 +231,15 @@ impl LlmDriver for KlingDriver {
                             let items: Vec<opencarrier_types::media::GeneratedImage> = images
                                 .iter()
                                 .filter_map(|img| {
-                                    let url = img.get("url").and_then(|u| u.as_str()).map(|s| s.to_string());
-                                    let b64 = img.get("b64_json").and_then(|b| b.as_str()).unwrap_or("").to_string();
+                                    let url = img
+                                        .get("url")
+                                        .and_then(|u| u.as_str())
+                                        .map(|s| s.to_string());
+                                    let b64 = img
+                                        .get("b64_json")
+                                        .and_then(|b| b.as_str())
+                                        .unwrap_or("")
+                                        .to_string();
                                     if url.is_some() || !b64.is_empty() {
                                         Some(opencarrier_types::media::GeneratedImage {
                                             data_base64: b64,

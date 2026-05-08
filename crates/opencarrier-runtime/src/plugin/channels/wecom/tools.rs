@@ -91,10 +91,15 @@ impl ToolProvider for BotGenerateTool {
             let http = reqwest::Client::new();
             let url = "https://work.weixin.qq.com/ai/qc/generate?source=wecom_cli_external&plat=1";
 
-            let resp = http.get(url).send().await
+            let resp = http
+                .get(url)
+                .send()
+                .await
                 .map_err(|e| PluginError::tool(format!("WeCom API request failed: {e}")))?;
 
-            let data: Value = resp.json().await
+            let data: Value = resp
+                .json()
+                .await
                 .map_err(|e| PluginError::tool(format!("WeCom API parse error: {e}")))?;
 
             let inner = data.get("data").unwrap_or(&data);
@@ -104,16 +109,21 @@ impl ToolProvider for BotGenerateTool {
                 return Err(PluginError::tool("WeCom API 返回了空的 scode"));
             }
 
-            let auth_url = inner.get("auth_url").and_then(|v| v.as_str())
+            let auth_url = inner
+                .get("auth_url")
+                .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| format!(
+                .unwrap_or_else(|| {
+                    format!(
                     "https://work.weixin.qq.com/ai/qc/gen?source=wecom_cli_external&scode={scode}"
-                ));
+                )
+                });
 
             Ok(serde_json::json!({
                 "scode": scode,
                 "auth_url": auth_url,
-            }).to_string())
+            })
+            .to_string())
         })
     }
 }
@@ -153,24 +163,34 @@ impl ToolProvider for BotPollTool {
             let http = reqwest::Client::new();
             let url = format!("https://work.weixin.qq.com/ai/qc/query_result?scode={scode}");
 
-            let resp = http.get(&url).send().await
+            let resp = http
+                .get(&url)
+                .send()
+                .await
                 .map_err(|e| PluginError::tool(format!("WeCom API request failed: {e}")))?;
 
-            let data: Value = resp.json().await
+            let data: Value = resp
+                .json()
+                .await
                 .map_err(|e| PluginError::tool(format!("WeCom API parse error: {e}")))?;
 
             let inner = data.get("data").unwrap_or(&data);
-            let status = inner.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let status = inner
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
 
             let mut result = serde_json::json!({ "status": status });
 
             if status == "success" {
                 if let Some(bot_info) = inner.get("bot_info") {
-                    result["bot_id"] = bot_info.get("botid")
+                    result["bot_id"] = bot_info
+                        .get("botid")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .into();
-                    result["secret"] = bot_info.get("secret")
+                    result["secret"] = bot_info
+                        .get("secret")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .into();
@@ -220,14 +240,22 @@ impl ToolProvider for QrCodeTool {
             );
 
             let http = reqwest::Client::new();
-            let resp = http.get(&qr_api).send().await
+            let resp = http
+                .get(&qr_api)
+                .send()
+                .await
                 .map_err(|e| PluginError::tool(format!("QR API request failed: {e}")))?;
 
             if !resp.status().is_success() {
-                return Err(PluginError::tool(format!("QR API returned {}", resp.status())));
+                return Err(PluginError::tool(format!(
+                    "QR API returned {}",
+                    resp.status()
+                )));
             }
 
-            let bytes = resp.bytes().await
+            let bytes = resp
+                .bytes()
+                .await
                 .map_err(|e| PluginError::tool(format!("QR API read error: {e}")))?;
 
             let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
@@ -235,7 +263,8 @@ impl ToolProvider for QrCodeTool {
             Ok(serde_json::json!({
                 "image_base64": b64,
                 "image_url": qr_api,
-            }).to_string())
+            })
+            .to_string())
         })
     }
 }
@@ -248,9 +277,7 @@ fn find_plugin_dir() -> Result<std::path::PathBuf, PluginError> {
     let home = std::env::var("OPENCARRIER_HOME")
         .ok()
         .map(std::path::PathBuf::from)
-        .or_else(|| {
-            dirs_home().map(|h| h.join(".opencarrier"))
-        })
+        .or_else(|| dirs_home().map(|h| h.join(".opencarrier")))
         .ok_or_else(|| PluginError::tool("Cannot determine OpenCarrier home directory"))?;
 
     // Try new built-in path first, then legacy path
@@ -322,13 +349,26 @@ impl ToolProvider for BotRegisterTool {
     }
 
     fn execute(&self, args: &Value, _ctx: &PluginToolContext) -> Result<String, PluginError> {
-        let name = args["name"].as_str().ok_or_else(|| PluginError::tool("Missing name"))?;
-        let bot_id = args["bot_id"].as_str().ok_or_else(|| PluginError::tool("Missing bot_id"))?;
-        let secret = args["secret"].as_str().ok_or_else(|| PluginError::tool("Missing secret"))?;
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| PluginError::tool("Missing name"))?;
+        let bot_id = args["bot_id"]
+            .as_str()
+            .ok_or_else(|| PluginError::tool("Missing bot_id"))?;
+        let secret = args["secret"]
+            .as_str()
+            .ok_or_else(|| PluginError::tool("Missing secret"))?;
 
         let trimmed = name.trim();
-        if trimmed.is_empty() || trimmed.len() > 64 || !trimmed.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c.is_ascii_punctuation()) {
-            return Err(PluginError::tool("Invalid name: use only alphanumeric, hyphen, underscore (max 64 chars)"));
+        if trimmed.is_empty()
+            || trimmed.len() > 64
+            || !trimmed
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c.is_ascii_punctuation())
+        {
+            return Err(PluginError::tool(
+                "Invalid name: use only alphanumeric, hyphen, underscore (max 64 chars)",
+            ));
         }
 
         let plugin_dir = find_plugin_dir()?;
@@ -360,7 +400,9 @@ impl ToolProvider for BotRegisterTool {
         if let Some(agent) = args["bind_agent"].as_str() {
             if !agent.is_empty() {
                 if uuid::Uuid::parse_str(agent).is_err() {
-                    return Err(PluginError::tool("bind_agent must be a valid UUID, not an agent name"));
+                    return Err(PluginError::tool(
+                        "bind_agent must be a valid UUID, not an agent name",
+                    ));
                 }
                 table.insert("bind_agent".into(), toml::Value::String(agent.to_string()));
             }
@@ -378,7 +420,8 @@ impl ToolProvider for BotRegisterTool {
             "name": trimmed,
             "bot_uuid": bot_uuid,
             "message": "机器人已注册，重启后生效"
-        }).to_string())
+        })
+        .to_string())
     }
 }
 
@@ -401,11 +444,17 @@ impl ToolProvider for BotBindTool {
     }
 
     fn execute(&self, args: &Value, _ctx: &PluginToolContext) -> Result<String, PluginError> {
-        let name = args["name"].as_str().ok_or_else(|| PluginError::tool("Missing name"))?;
-        let agent_id = args["agent_id"].as_str().ok_or_else(|| PluginError::tool("Missing agent_id"))?;
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| PluginError::tool("Missing name"))?;
+        let agent_id = args["agent_id"]
+            .as_str()
+            .ok_or_else(|| PluginError::tool("Missing agent_id"))?;
 
         if uuid::Uuid::parse_str(agent_id).is_err() {
-            return Err(PluginError::tool("agent_id must be a valid UUID, not an agent name"));
+            return Err(PluginError::tool(
+                "agent_id must be a valid UUID, not an agent name",
+            ));
         }
 
         let plugin_dir = find_plugin_dir()?;
@@ -415,11 +464,15 @@ impl ToolProvider for BotBindTool {
         let bot_toml_path = bot_dir.join("bot.toml");
         let content = std::fs::read_to_string(&bot_toml_path)
             .map_err(|e| PluginError::tool(format!("Read error: {e}")))?;
-        let mut doc = content.parse::<toml::Value>()
+        let mut doc = content
+            .parse::<toml::Value>()
             .map_err(|e| PluginError::tool(format!("Parse error: {e}")))?;
 
         if let Some(table) = doc.as_table_mut() {
-            table.insert("bind_agent".into(), toml::Value::String(agent_id.to_string()));
+            table.insert(
+                "bind_agent".into(),
+                toml::Value::String(agent_id.to_string()),
+            );
         }
 
         let new_content = toml::to_string_pretty(&doc)
@@ -433,6 +486,7 @@ impl ToolProvider for BotBindTool {
             "name": name,
             "bind_agent": agent_id,
             "message": "已绑定，重启后生效"
-        }).to_string())
+        })
+        .to_string())
     }
 }

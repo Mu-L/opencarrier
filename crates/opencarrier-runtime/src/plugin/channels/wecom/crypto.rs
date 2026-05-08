@@ -72,7 +72,10 @@ pub fn is_valid_wecom_signature(
 /// Decode a WeCom encrypted payload using the encoding AES key.
 ///
 /// Returns the decrypted message text.
-pub fn decode_wecom_payload(encoding_aes_key: &str, encrypted_payload: &str) -> Result<String, String> {
+pub fn decode_wecom_payload(
+    encoding_aes_key: &str,
+    encrypted_payload: &str,
+) -> Result<String, String> {
     use base64::{
         alphabet,
         engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},

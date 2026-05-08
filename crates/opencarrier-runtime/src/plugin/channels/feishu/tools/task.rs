@@ -63,13 +63,23 @@ pub fn tools() -> Vec<ToolSpec> {
             param_mapper: |args| {
                 let task_id = args["task_id"].as_str().unwrap_or("").to_string();
                 let mut body = serde_json::Map::new();
-                if let Some(v) = args.get("summary") { body.insert("summary".into(), v.clone()); }
-                if let Some(v) = args.get("description") { body.insert("description".into(), v.clone()); }
-                if let Some(v) = args.get("due_date") { body.insert("due_date".into(), v.clone()); }
+                if let Some(v) = args.get("summary") {
+                    body.insert("summary".into(), v.clone());
+                }
+                if let Some(v) = args.get("description") {
+                    body.insert("description".into(), v.clone());
+                }
+                if let Some(v) = args.get("due_date") {
+                    body.insert("due_date".into(), v.clone());
+                }
                 MappedParams {
                     path_params: HashMap::from([("task_id", task_id)]),
                     query: None,
-                    body: if body.is_empty() { None } else { Some(json!(body)) },
+                    body: if body.is_empty() {
+                        None
+                    } else {
+                        Some(json!(body))
+                    },
                 }
             },
         },

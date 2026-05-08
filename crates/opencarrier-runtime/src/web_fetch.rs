@@ -220,11 +220,7 @@ pub(crate) fn check_ssrf(url: &str) -> Result<(), String> {
     // Safe domain allowlist — known public platforms whose CDN may resolve to
     // edge nodes incorrectly flagged as private IPs in some network environments.
     let hostname_lower = hostname.to_lowercase();
-    let allowed_domains = [
-        "github.com",
-        "github.io",
-        "githubusercontent.com",
-    ];
+    let allowed_domains = ["github.com", "github.io", "githubusercontent.com"];
     for domain in &allowed_domains {
         if hostname_lower == *domain || hostname_lower.ends_with(&format!(".{domain}")) {
             return Ok(());

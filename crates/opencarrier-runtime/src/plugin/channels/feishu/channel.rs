@@ -4,9 +4,9 @@
 //! Connects to the Feishu WebSocket long-connection endpoint and dispatches
 //! inbound messages through the host's native `mpsc::Sender<PluginMessage>`.
 
-use crate::plugin::BuiltinChannel;
 use crate::plugin::channels::feishu::token::TenantTokenCache;
 use crate::plugin::channels::feishu::ws::FeishuWsClient;
+use crate::plugin::BuiltinChannel;
 use opencarrier_types::plugin::PluginMessage;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -87,9 +87,7 @@ impl BuiltinChannel for FeishuChannel {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    let _ = tx.send(Err(format!(
-                        "Failed to create send runtime: {e}"
-                    )));
+                    let _ = tx.send(Err(format!("Failed to create send runtime: {e}")));
                     return;
                 }
             };
@@ -116,7 +114,8 @@ impl BuiltinChannel for FeishuChannel {
             let _ = tx.send(result);
         });
 
-        rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))?
+        rx.recv()
+            .map_err(|e| format!("Send thread disconnected: {e}"))?
     }
 
     fn stop(&mut self) {
@@ -156,12 +155,7 @@ fn run_ws_loop(
         }
     };
 
-    let ws_client = FeishuWsClient::new(
-        tenant_name.to_string(),
-        bot_uuid,
-        token_cache,
-        shutdown,
-    );
+    let ws_client = FeishuWsClient::new(tenant_name.to_string(), bot_uuid, token_cache, shutdown);
 
     rt.block_on(async move {
         ws_client.run(&sender).await;

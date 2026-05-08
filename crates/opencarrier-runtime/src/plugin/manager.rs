@@ -75,11 +75,8 @@ impl PluginManager {
         }
 
         // 2. Load built-in plugins
-        let builtins = PluginLoader::load_builtin_plugins(
-            plugins_dir,
-            self.message_tx.clone(),
-            registry,
-        );
+        let builtins =
+            PluginLoader::load_builtin_plugins(plugins_dir, self.message_tx.clone(), registry);
         for builtin in builtins {
             let plugin_arc: Arc<dyn super::instance::PluginInstance> = Arc::new(builtin);
             self.tool_dispatcher.register(plugin_arc.clone());
@@ -273,12 +270,7 @@ impl PluginManager {
     /// Finds the plugin that owns the channel with `tenant_id == bot_uuid` and
     /// sends through it. Returns an error if no matching channel is found or the
     /// platform does not support proactive send.
-    pub fn channel_send(
-        &self,
-        bot_uuid: &str,
-        user_id: &str,
-        text: &str,
-    ) -> Result<(), String> {
+    pub fn channel_send(&self, bot_uuid: &str, user_id: &str, text: &str) -> Result<(), String> {
         for plugin in &self.loaded_plugins {
             for channel in plugin.channels() {
                 if channel.tenant_id == bot_uuid {
@@ -324,7 +316,11 @@ impl PluginManager {
                 name: p.name().to_string(),
                 version: p.version().to_string(),
                 loaded: true,
-                channels: p.channels().iter().map(|c| c.channel_type.clone()).collect(),
+                channels: p
+                    .channels()
+                    .iter()
+                    .map(|c| c.channel_type.clone())
+                    .collect(),
                 tools: p.tools().iter().map(|t| t.name.clone()).collect(),
                 tenant_count: 0,
                 last_error: None,

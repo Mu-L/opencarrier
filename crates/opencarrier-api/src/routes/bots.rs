@@ -246,7 +246,9 @@ pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse 
             } else {
                 plugin_dir_to_platform(dir_name).map(|p| p.to_string())
             };
-            let Some(ref platform) = platform else { continue };
+            let Some(ref platform) = platform else {
+                continue;
+            };
 
             bots.extend(scan_bots(&plugin_dir, dir_name, platform));
         }
@@ -264,14 +266,17 @@ pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse 
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content) {
                         let name = tf.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let ilink_bot_id = tf.get("ilink_bot_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let ilink_bot_id = tf
+                            .get("ilink_bot_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         let bind_agent = tf.get("bind_agent").and_then(|v| v.as_str());
                         let user_id = tf.get("user_id").and_then(|v| v.as_str()).unwrap_or("");
 
                         // Deduplicate: skip if this tenant already has a bot.toml entry
-                        let already_exists = bots.iter().any(|b| {
-                            b.get("tenant_name").and_then(|v| v.as_str()) == Some(name)
-                        });
+                        let already_exists = bots
+                            .iter()
+                            .any(|b| b.get("tenant_name").and_then(|v| v.as_str()) == Some(name));
                         if already_exists {
                             continue;
                         }
@@ -293,10 +298,13 @@ pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({
-        "bots": bots,
-        "count": bots.len(),
-    })))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "bots": bots,
+            "count": bots.len(),
+        })),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -433,19 +441,16 @@ pub async fn wecom_smartbot_poll(
                                 serde_json::Value::String(secret.to_string()),
                             );
                             // Auto-create bot and bind to agent
-                            let agent_name = WECOM_PENDING_AGENTS
-                                .lock()
-                                .unwrap()
-                                .remove(&query.scode);
+                            let agent_name =
+                                WECOM_PENDING_AGENTS.lock().unwrap().remove(&query.scode);
                             if let Some(agent_name) = agent_name {
                                 let creds = serde_json::json!({
                                     "bot_id": bot_id,
                                     "secret": secret,
                                 });
-                                if let Err(e) = auto_create_and_bind_bot(
-                                    &state, "wecom", &creds, &agent_name,
-                                )
-                                .await
+                                if let Err(e) =
+                                    auto_create_and_bind_bot(&state, "wecom", &creds, &agent_name)
+                                        .await
                                 {
                                     tracing::warn!(
                                         agent = %agent_name,
@@ -510,10 +515,7 @@ fn cleanup_expired_sessions() {
 
 /// Spawn a background task that polls DingTalk/Feishu for auth result
 /// and auto-creates + binds the bot when auth succeeds.
-fn spawn_background_device_poll(
-    state: Arc<AppState>,
-    session_id: String,
-) {
+fn spawn_background_device_poll(state: Arc<AppState>, session_id: String) {
     let session = {
         let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
         match sessions.get(&session_id).cloned() {
@@ -588,9 +590,9 @@ fn spawn_background_device_poll(
                     );
 
                     // Auto-create and bind
-                    if let Err(e) = auto_create_and_bind_bot(
-                        &state, &platform, &creds, &agent_name,
-                    ).await {
+                    if let Err(e) =
+                        auto_create_and_bind_bot(&state, &platform, &creds, &agent_name).await
+                    {
                         tracing::warn!(
                             session_id = %sid,
                             agent = %agent_name,
@@ -611,11 +613,7 @@ fn spawn_background_device_poll(
 }
 
 /// Spawn a background task that polls WeCom smartbot creation result.
-fn spawn_background_wecom_poll(
-    state: Arc<AppState>,
-    scode: String,
-    agent_name: String,
-) {
+fn spawn_background_wecom_poll(state: Arc<AppState>, scode: String, agent_name: String) {
     tokio::spawn(async move {
         let poll_interval = std::time::Duration::from_secs(2);
         let mut interval = tokio::time::interval(poll_interval);
@@ -660,10 +658,7 @@ fn spawn_background_wecom_poll(
 
             if status == "success" {
                 if let Some(bot_info) = inner.get("bot_info") {
-                    let bot_id = bot_info
-                        .get("botid")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let bot_id = bot_info.get("botid").and_then(|v| v.as_str()).unwrap_or("");
                     let secret = bot_info
                         .get("secret")
                         .and_then(|v| v.as_str())
@@ -680,9 +675,9 @@ fn spawn_background_wecom_poll(
                             "bot_id": bot_id,
                             "secret": secret,
                         });
-                        if let Err(e) = auto_create_and_bind_bot(
-                            &state, "wecom", &creds, &agent_name,
-                        ).await {
+                        if let Err(e) =
+                            auto_create_and_bind_bot(&state, "wecom", &creds, &agent_name).await
+                        {
                             tracing::warn!(
                                 agent = %agent_name,
                                 error = %e,
@@ -732,7 +727,10 @@ async fn poll_dingtalk(client: &reqwest::Client, device_code: &str) -> PollResul
 
     if status == "SUCCESS" {
         let client_id = res.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
-        let client_secret = res.get("client_secret").and_then(|v| v.as_str()).unwrap_or("");
+        let client_secret = res
+            .get("client_secret")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if !client_id.is_empty() && !client_secret.is_empty() {
             return PollResult::Success(serde_json::json!({
                 "client_id": client_id,
@@ -766,18 +764,26 @@ async fn poll_feishu(client: &reqwest::Client, device_code: &str, base_url: &str
         Err(_) => return PollResult::Pending,
     };
 
-    let status = res
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let status = res.get("status").and_then(|v| v.as_str()).unwrap_or("");
 
     let app_id = res.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
     let client_id = res.get("client_id").and_then(|v| v.as_str()).unwrap_or("");
     let app_secret = res.get("app_secret").and_then(|v| v.as_str()).unwrap_or("");
-    let client_secret = res.get("client_secret").and_then(|v| v.as_str()).unwrap_or("");
+    let client_secret = res
+        .get("client_secret")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
-    let id = if !app_id.is_empty() { app_id } else { client_id };
-    let secret = if !app_secret.is_empty() { app_secret } else { client_secret };
+    let id = if !app_id.is_empty() {
+        app_id
+    } else {
+        client_id
+    };
+    let secret = if !app_secret.is_empty() {
+        app_secret
+    } else {
+        client_secret
+    };
 
     if !id.is_empty() && !secret.is_empty() {
         return PollResult::Success(serde_json::json!({
@@ -854,10 +860,7 @@ pub async fn feishu_device_auth_begin(
         }
     };
 
-    let nonce = init_res
-        .get("nonce")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let nonce = init_res.get("nonce").and_then(|v| v.as_str()).unwrap_or("");
     if nonce.is_empty() {
         return (
             StatusCode::BAD_GATEWAY,
@@ -906,7 +909,9 @@ pub async fn feishu_device_auth_begin(
     if device_code.is_empty() || auth_url.is_empty() {
         return (
             StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": "飞书 begin 未返回 device_code 或 auth_url", "raw": begin_res })),
+            Json(
+                serde_json::json!({"error": "飞书 begin 未返回 device_code 或 auth_url", "raw": begin_res }),
+            ),
         );
     }
 
@@ -997,7 +1002,8 @@ pub async fn feishu_device_auth_poll(
     let poll_url = format!("{}/oauth/v1/app/registration", base_url);
     let poll_body = format!("action=poll&device_code={}", session.device_code);
 
-    let poll_res = match session.client
+    let poll_res = match session
+        .client
         .post(&poll_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(poll_body)
@@ -1051,8 +1057,16 @@ pub async fn feishu_device_auth_poll(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let id = if !app_id.is_empty() { app_id } else { client_id };
-    let secret = if !app_secret.is_empty() { app_secret } else { client_secret };
+    let id = if !app_id.is_empty() {
+        app_id
+    } else {
+        client_id
+    };
+    let secret = if !app_secret.is_empty() {
+        app_secret
+    } else {
+        client_secret
+    };
 
     if !id.is_empty() && !secret.is_empty() {
         let result = serde_json::json!({
@@ -1074,9 +1088,7 @@ pub async fn feishu_device_auth_poll(
                 "app_id": id,
                 "app_secret": secret,
             });
-            if let Err(e) = auto_create_and_bind_bot(
-                &state, "feishu", &creds, agent_name,
-            ).await {
+            if let Err(e) = auto_create_and_bind_bot(&state, "feishu", &creds, agent_name).await {
                 tracing::warn!(agent = %agent_name, error = %e, "Auto-create/bind Feishu bot failed");
             }
         }
@@ -1160,10 +1172,7 @@ pub async fn dingtalk_device_auth_begin(
         }
     };
 
-    let nonce = init_res
-        .get("nonce")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let nonce = init_res.get("nonce").and_then(|v| v.as_str()).unwrap_or("");
     if nonce.is_empty() {
         return (
             StatusCode::BAD_GATEWAY,
@@ -1207,7 +1216,9 @@ pub async fn dingtalk_device_auth_begin(
     if device_code.is_empty() || auth_url.is_empty() {
         return (
             StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": "钉钉 begin 未返回 device_code 或 auth_url", "raw": begin_res })),
+            Json(
+                serde_json::json!({"error": "钉钉 begin 未返回 device_code 或 auth_url", "raw": begin_res }),
+            ),
         );
     }
 
@@ -1217,7 +1228,10 @@ pub async fn dingtalk_device_auth_begin(
         .and_then(|v| v.as_u64())
         .unwrap_or(7200u64);
 
-    let agent_name = body.get("agent_name").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let agent_name = body
+        .get("agent_name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     let session = DeviceAuthSession {
         device_code: device_code.to_string(),
@@ -1280,7 +1294,8 @@ pub async fn dingtalk_device_auth_poll(
         );
     }
 
-    let poll_res = match session.client
+    let poll_res = match session
+        .client
         .post("https://oapi.dingtalk.com/app/registration/poll")
         .json(&serde_json::json!({"device_code": session.device_code}))
         .send()
@@ -1339,9 +1354,9 @@ pub async fn dingtalk_device_auth_poll(
                     "client_id": client_id,
                     "client_secret": client_secret,
                 });
-                if let Err(e) = auto_create_and_bind_bot(
-                    &state, "dingtalk", &creds, agent_name,
-                ).await {
+                if let Err(e) =
+                    auto_create_and_bind_bot(&state, "dingtalk", &creds, agent_name).await
+                {
                     tracing::warn!(agent = %agent_name, error = %e, "Auto-create/bind DingTalk bot failed");
                 }
             }
@@ -1395,7 +1410,11 @@ fn platform_user_id(platform: &str, body: &serde_json::Value) -> Option<String> 
 }
 
 /// Build bot.toml fields from request body for a given platform.
-fn build_bot_fields(platform: &str, body: &serde_json::Value, tenant_name: &str) -> toml::value::Table {
+fn build_bot_fields(
+    platform: &str,
+    body: &serde_json::Value,
+    tenant_name: &str,
+) -> toml::value::Table {
     let mut bot_fields = toml::value::Table::new();
     let mode = body
         .get("mode")
@@ -1509,7 +1528,9 @@ pub async fn create_bot(
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "不支持的平台，支持: wecom, feishu, dingtalk, weixin" })),
+                Json(
+                    serde_json::json!({ "error": "不支持的平台，支持: wecom, feishu, dingtalk, weixin" }),
+                ),
             );
         }
     };
@@ -1531,51 +1552,49 @@ pub async fn create_bot(
     // ── Deduplication: if same (platform, platform_user_id) exists, update it ──
     if let Some(ref uid) = puid {
         if !uid.is_empty() {
-        for existing in scan_bots(&plugin_dir, plugin_dir_name, platform) {
-            let existing_puid = match platform {
-                "weixin" => existing
-                    .get("ilink_user_id")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| existing.get("ilink_bot_id").and_then(|v| v.as_str())),
-                "wecom" => existing.get("bot_id").and_then(|v| v.as_str()),
-                "feishu" => existing.get("app_id").and_then(|v| v.as_str()),
-                "dingtalk" => existing
-                    .get("app_key")
-                    .and_then(|v| v.as_str()),
-                _ => None,
-            };
-            if existing_puid == Some(uid.as_str()) {
-                let existing_id = existing
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let bot_dir = plugin_dir.join("bot").join(&existing_id);
-                let bot_toml_path = bot_dir.join("bot.toml");
-
-                // Merge new fields into existing bot.toml
-                return match update_bot_toml(&bot_toml_path, |table| {
-                    let new_fields = build_bot_fields(platform, &body, &tenant_name);
-                    for (k, v) in new_fields {
-                        table.insert(k, v);
-                    }
-                    table.insert("name".into(), toml::Value::String(tenant_name.to_string()));
-                }) {
-                    Ok(()) => (
-                        StatusCode::OK,
-                        Json(serde_json::json!({
-                            "status": "updated",
-                            "message": "机器人已更新",
-                            "bot_id": existing_id,
-                        })),
-                    ),
-                    Err(e) => (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({ "error": e })),
-                    ),
+            for existing in scan_bots(&plugin_dir, plugin_dir_name, platform) {
+                let existing_puid = match platform {
+                    "weixin" => existing
+                        .get("ilink_user_id")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| existing.get("ilink_bot_id").and_then(|v| v.as_str())),
+                    "wecom" => existing.get("bot_id").and_then(|v| v.as_str()),
+                    "feishu" => existing.get("app_id").and_then(|v| v.as_str()),
+                    "dingtalk" => existing.get("app_key").and_then(|v| v.as_str()),
+                    _ => None,
                 };
+                if existing_puid == Some(uid.as_str()) {
+                    let existing_id = existing
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let bot_dir = plugin_dir.join("bot").join(&existing_id);
+                    let bot_toml_path = bot_dir.join("bot.toml");
+
+                    // Merge new fields into existing bot.toml
+                    return match update_bot_toml(&bot_toml_path, |table| {
+                        let new_fields = build_bot_fields(platform, &body, &tenant_name);
+                        for (k, v) in new_fields {
+                            table.insert(k, v);
+                        }
+                        table.insert("name".into(), toml::Value::String(tenant_name.to_string()));
+                    }) {
+                        Ok(()) => (
+                            StatusCode::OK,
+                            Json(serde_json::json!({
+                                "status": "updated",
+                                "message": "机器人已更新",
+                                "bot_id": existing_id,
+                            })),
+                        ),
+                        Err(e) => (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({ "error": e })),
+                        ),
+                    };
+                }
             }
-        }
         }
     }
 
@@ -1859,7 +1878,9 @@ pub async fn bind_bot(
                     // Add dynamic bridge binding
                     let tenant_name = tf.get("name").and_then(|v| v.as_str()).unwrap_or("");
                     if !tenant_name.is_empty() {
-                        state.kernel.set_default_plugin_tenant(&agent_uuid, &bot_uuid);
+                        state
+                            .kernel
+                            .set_default_plugin_tenant(&agent_uuid, &bot_uuid);
                         if let Some(ref pm) = state.plugin_manager {
                             let pm = pm.lock().await;
                             pm.add_channel_binding("weixin", &bot_uuid, &agent_uuid);
@@ -1934,7 +1955,11 @@ pub async fn unbind_bot(
             let name = std::fs::read_to_string(&bot_toml)
                 .ok()
                 .and_then(|c| c.parse::<toml::Value>().ok())
-                .and_then(|d| d.get("name").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                .and_then(|d| {
+                    d.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
                 .unwrap_or_default();
             (platform, name)
         };
@@ -2120,17 +2145,18 @@ async fn auto_create_and_bind_bot(
                         for (k, v) in new_fields {
                             table.insert(k, v);
                         }
-                        table.insert(
-                            "name".into(),
-                            toml::Value::String(tenant_name.to_string()),
-                        );
-                        table.insert(
-                            "bind_agent".into(),
-                            toml::Value::String(agent_uuid.clone()),
-                        );
+                        table.insert("name".into(), toml::Value::String(tenant_name.to_string()));
+                        table.insert("bind_agent".into(), toml::Value::String(agent_uuid.clone()));
                     })?;
-                    add_dynamic_binding(state, platform, &tenant_name, &existing_id, &agent_uuid, credentials)
-                        .await;
+                    add_dynamic_binding(
+                        state,
+                        platform,
+                        &tenant_name,
+                        &existing_id,
+                        &agent_uuid,
+                        credentials,
+                    )
+                    .await;
                     return Ok(existing_id);
                 }
             }
@@ -2140,21 +2166,26 @@ async fn auto_create_and_bind_bot(
     // Create new bot
     let mut bot_fields = build_bot_fields(platform, &body, &tenant_name);
     bot_fields.insert("name".into(), toml::Value::String(tenant_name.clone()));
-    bot_fields.insert(
-        "bind_agent".into(),
-        toml::Value::String(agent_uuid.clone()),
-    );
+    bot_fields.insert("bind_agent".into(), toml::Value::String(agent_uuid.clone()));
 
     let bot_uuid = uuid::Uuid::new_v4().to_string();
     let bot_dir = plugin_dir.join("bot").join(&bot_uuid);
     std::fs::create_dir_all(&bot_dir).map_err(|e| format!("创建目录失败: {e}"))?;
 
     let bot_toml_path = bot_dir.join("bot.toml");
-    let content =
-        toml::to_string_pretty(&toml::Value::Table(bot_fields)).map_err(|e| format!("序列化失败: {e}"))?;
+    let content = toml::to_string_pretty(&toml::Value::Table(bot_fields))
+        .map_err(|e| format!("序列化失败: {e}"))?;
     std::fs::write(&bot_toml_path, &content).map_err(|e| format!("写入失败: {e}"))?;
 
-    add_dynamic_binding(state, platform, &tenant_name, &bot_uuid, &agent_uuid, credentials).await;
+    add_dynamic_binding(
+        state,
+        platform,
+        &tenant_name,
+        &bot_uuid,
+        &agent_uuid,
+        credentials,
+    )
+    .await;
 
     Ok(bot_uuid)
 }
@@ -2187,8 +2218,14 @@ async fn add_dynamic_binding(
             pm.map_channel_tenant(channel_type, tenant_name, bot_uuid);
             // Dynamically start channel for the new bot (no restart needed)
             if platform == "wecom" {
-                let bot_id = credentials.get("bot_id").and_then(|v| v.as_str()).unwrap_or("");
-                let secret = credentials.get("secret").and_then(|v| v.as_str()).unwrap_or("");
+                let bot_id = credentials
+                    .get("bot_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let secret = credentials
+                    .get("secret")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 if !bot_id.is_empty() {
                     pm.start_dynamic_channel("wecom", tenant_name, bot_id, secret);
                 }
@@ -2270,9 +2307,10 @@ pub async fn get_bot(
             let Some(platform) = platform else { continue };
 
             let bots = scan_bots(&plugin_dir, dir_name, platform);
-            if let Some(bot) = bots.into_iter().find(|b| {
-                b.get("id").and_then(|v| v.as_str()) == Some(&bot_uuid)
-            }) {
+            if let Some(bot) = bots
+                .into_iter()
+                .find(|b| b.get("id").and_then(|v| v.as_str()) == Some(&bot_uuid))
+            {
                 return (StatusCode::OK, Json(bot));
             }
         }
@@ -2394,12 +2432,17 @@ pub async fn bot_send_message(
         if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
             for entry in entries.flatten() {
                 let plugin_dir = entry.path();
-                if !plugin_dir.is_dir() { continue; }
+                if !plugin_dir.is_dir() {
+                    continue;
+                }
                 let bot_toml = plugin_dir.join("bot").join(&bot_uuid).join("bot.toml");
-                if !bot_toml.exists() { continue; }
+                if !bot_toml.exists() {
+                    continue;
+                }
                 if let Ok(content) = std::fs::read_to_string(&bot_toml) {
                     if let Ok(doc) = content.parse::<toml::Value>() {
-                        found = doc.get("owner_id")
+                        found = doc
+                            .get("owner_id")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
                     }
@@ -2412,7 +2455,9 @@ pub async fn bot_send_message(
             _ => {
                 return (
                     StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({ "error": "user_id is required for proactive send (no owner_id in bot.toml)" })),
+                    Json(
+                        serde_json::json!({ "error": "user_id is required for proactive send (no owner_id in bot.toml)" }),
+                    ),
                 );
             }
         }
@@ -2461,13 +2506,13 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
             "/api/bots/dingtalk/device-auth/poll",
             routing::get(dingtalk_device_auth_poll),
         )
-        .route("/api/bots/{bot_uuid}", routing::get(get_bot).put(update_bot).delete(delete_bot))
+        .route(
+            "/api/bots/{bot_uuid}",
+            routing::get(get_bot).put(update_bot).delete(delete_bot),
+        )
         .route(
             "/api/bots/{bot_uuid}/bind",
             routing::put(bind_bot).delete(unbind_bot),
         )
-        .route(
-            "/api/bots/{bot_uuid}/send",
-            routing::post(bot_send_message),
-        )
+        .route("/api/bots/{bot_uuid}/send", routing::post(bot_send_message))
 }

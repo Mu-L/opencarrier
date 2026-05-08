@@ -116,7 +116,9 @@ pub async fn webhook_agent(
                     None => {
                         return (
                             StatusCode::NOT_FOUND,
-                            Json(serde_json::json!({"error": format!("Agent not found: {}", agent_ref)})),
+                            Json(
+                                serde_json::json!({"error": format!("Agent not found: {}", agent_ref)}),
+                            ),
                         );
                     }
                 };

@@ -1,6 +1,6 @@
 //! DashScope image generation driver — WanXiang via Alibaba DashScope API.
 
-use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmError, LlmDriver};
+use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError};
 use async_trait::async_trait;
 use opencarrier_types::media::{GeneratedImage, MediaOutput};
 use opencarrier_types::message::MessageContent;
@@ -26,7 +26,9 @@ fn extract_prompt(request: &CompletionRequest) -> String {
             MessageContent::Blocks(blocks) => blocks
                 .iter()
                 .filter_map(|b| match b {
-                    opencarrier_types::message::ContentBlock::Text { text, .. } => Some(text.as_str()),
+                    opencarrier_types::message::ContentBlock::Text { text, .. } => {
+                        Some(text.as_str())
+                    }
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -52,11 +54,7 @@ impl LlmDriver for DashScopeImageDriver {
             .get("size")
             .and_then(|v| v.as_str())
             .unwrap_or("1280*1280");
-        let n = request
-            .extra
-            .get("n")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(1) as u32;
+        let n = request.extra.get("n").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
 
         let body = serde_json::json!({
             "model": request.model,
@@ -94,10 +92,9 @@ impl LlmDriver for DashScopeImageDriver {
             });
         }
 
-        let result: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| LlmError::Parse(format!("Failed to parse DashScope image response: {e}")))?;
+        let result: serde_json::Value = response.json().await.map_err(|e| {
+            LlmError::Parse(format!("Failed to parse DashScope image response: {e}"))
+        })?;
 
         if let Some(code) = result.get("code").and_then(|c| c.as_str()) {
             if code != "Success" && code != "200" {

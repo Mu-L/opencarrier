@@ -45,7 +45,10 @@ impl FeishuTenantEntry {
             config.app_secret.clone(),
             &api_base,
         ));
-        Self { config, token_cache }
+        Self {
+            config,
+            token_cache,
+        }
     }
 }
 
@@ -104,10 +107,7 @@ fn scan_bot_configs(plugin_dir: &Path) -> Vec<(String, serde_json::Value)> {
             Ok(content) => {
                 if let Ok(mut val) = content.parse::<toml::Value>() {
                     if let Some(table) = val.as_table_mut() {
-                        table.insert(
-                            "_bot_id".to_string(),
-                            toml::Value::String(bot_uuid.clone()),
-                        );
+                        table.insert("_bot_id".to_string(), toml::Value::String(bot_uuid.clone()));
                     }
                     if let Ok(json) = serde_json::to_value(val) {
                         configs.push((bot_uuid, json));
@@ -131,7 +131,9 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<FeishuTenantEntry> 
     }
 
     // Read secret: try env var first, fall back to inline config value
-    let secret_env = bot_config["secret_env"].as_str().unwrap_or("FEISHU_APP_SECRET");
+    let secret_env = bot_config["secret_env"]
+        .as_str()
+        .unwrap_or("FEISHU_APP_SECRET");
     let app_secret = match std::env::var(secret_env) {
         Ok(s) if !s.is_empty() => s,
         _ => {
@@ -309,8 +311,8 @@ impl BuiltinChannel for FeishuWatcher {
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let plugin_dir = find_plugin_dir()
-            .ok_or_else(|| "Cannot find Feishu plugin directory".to_string())?;
+        let plugin_dir =
+            find_plugin_dir().ok_or_else(|| "Cannot find Feishu plugin directory".to_string())?;
 
         let shutdown = self.shutdown.clone();
         let handle = std::thread::Builder::new()
@@ -341,9 +343,7 @@ impl BuiltinChannel for FeishuWatcher {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    let _ = tx.send(Err(format!(
-                        "Runtime creation failed: {e}"
-                    )));
+                    let _ = tx.send(Err(format!("Runtime creation failed: {e}")));
                     return;
                 }
             };
@@ -354,8 +354,9 @@ impl BuiltinChannel for FeishuWatcher {
                     .map_err(|e| format!("Token error: {e}"))?;
                 let http = token_cache.http().clone();
                 let base = token_cache.api_base().to_string();
-                let resp = api::send_message(&http, &token, &base, &user_id, "open_id", "text", &content)
-                    .await?;
+                let resp =
+                    api::send_message(&http, &token, &base, &user_id, "open_id", "text", &content)
+                        .await?;
 
                 if resp.code != 0 {
                     return Err(format!(
@@ -368,7 +369,8 @@ impl BuiltinChannel for FeishuWatcher {
             let _ = tx.send(result);
         });
 
-        rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))?
+        rx.recv()
+            .map_err(|e| format!("Send thread disconnected: {e}"))?
     }
 
     fn stop(&mut self) {

@@ -53,29 +53,29 @@ struct XiaohongshuServer;
 #[tool_router(server_handler)]
 impl XiaohongshuServer {
     #[tool(description = "获取小红书创作者笔记列表")]
-    async fn xhs_creator_notes(
-        &self,
-        Parameters(params): Parameters<NotesParams>,
-    ) -> String {
+    async fn xhs_creator_notes(&self, Parameters(params): Parameters<NotesParams>) -> String {
         let limit = params.limit.unwrap_or(20);
         let query = format!("type=0&page_size={limit}&page_num=1");
         let path = format!("/api/galaxy/creator/datacenter/note/analyze/list?{query}");
         match api::xhs_api(&make_cookie(&params), &path, Method::GET).await {
             Ok(resp) => {
-                let notes = resp.pointer("/data/data")
+                let notes = resp
+                    .pointer("/data/data")
                     .and_then(|d| d.as_array())
                     .map(|arr| {
-                        arr.iter().map(|note| {
-                            serde_json::json!({
-                                "id": note.get("id"),
-                                "title": note.get("title"),
-                                "post_time": note.get("post_time"),
-                                "read_count": note.get("read_count"),
-                                "like_count": note.get("like_count"),
-                                "fav_count": note.get("fav_count"),
-                                "comment_count": note.get("comment_count"),
+                        arr.iter()
+                            .map(|note| {
+                                serde_json::json!({
+                                    "id": note.get("id"),
+                                    "title": note.get("title"),
+                                    "post_time": note.get("post_time"),
+                                    "read_count": note.get("read_count"),
+                                    "like_count": note.get("like_count"),
+                                    "fav_count": note.get("fav_count"),
+                                    "comment_count": note.get("comment_count"),
+                                })
                             })
-                        }).collect::<Vec<_>>()
+                            .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
                 json_to_string(&serde_json::Value::Array(notes))
@@ -93,7 +93,9 @@ impl XiaohongshuServer {
         let path = format!("/api/galaxy/creator/datacenter/note/base?{query}");
         match api::xhs_api(&make_cookie(&params), &path, Method::GET).await {
             Ok(resp) => {
-                let data = resp.pointer("/data/data").cloned()
+                let data = resp
+                    .pointer("/data/data")
+                    .cloned()
                     .unwrap_or_else(|| serde_json::json!({"error": "Note not found"}));
                 json_to_string(&data)
             }
@@ -102,11 +104,14 @@ impl XiaohongshuServer {
     }
 
     #[tool(description = "获取小红书创作者账号信息")]
-    async fn xhs_creator_profile(
-        &self,
-        Parameters(params): Parameters<ProfileParams>,
-    ) -> String {
-        match api::xhs_api(&make_cookie(&params), "/api/galaxy/creator/home/personal_info", Method::GET).await {
+    async fn xhs_creator_profile(&self, Parameters(params): Parameters<ProfileParams>) -> String {
+        match api::xhs_api(
+            &make_cookie(&params),
+            "/api/galaxy/creator/home/personal_info",
+            Method::GET,
+        )
+        .await
+        {
             Ok(resp) => {
                 let data = resp.pointer("/data/data");
                 let result = match data {
@@ -127,11 +132,14 @@ impl XiaohongshuServer {
     }
 
     #[tool(description = "获取小红书数据总览")]
-    async fn xhs_creator_stats(
-        &self,
-        Parameters(params): Parameters<StatsParams>,
-    ) -> String {
-        match api::xhs_api(&make_cookie(&params), "/api/galaxy/creator/data/note_detail_new", Method::GET).await {
+    async fn xhs_creator_stats(&self, Parameters(params): Parameters<StatsParams>) -> String {
+        match api::xhs_api(
+            &make_cookie(&params),
+            "/api/galaxy/creator/data/note_detail_new",
+            Method::GET,
+        )
+        .await
+        {
             Ok(resp) => {
                 let data = resp.pointer("/data/data");
                 let result = match data {
@@ -167,7 +175,8 @@ impl XiaohongshuServer {
             Err(e) => return format!("{{\"error\": \"{}\"}}", e),
         };
 
-        let notes = list_resp.pointer("/data/data")
+        let notes = list_resp
+            .pointer("/data/data")
             .and_then(|d| d.as_array())
             .cloned()
             .unwrap_or_default();
@@ -182,12 +191,18 @@ impl XiaohongshuServer {
             let title = note.get("title").and_then(|v| v.as_str()).unwrap_or("");
             let read_count = note.get("read_count").and_then(|v| v.as_i64()).unwrap_or(0);
             let like_count = note.get("like_count").and_then(|v| v.as_i64()).unwrap_or(0);
-            let comment_count = note.get("comment_count").and_then(|v| v.as_i64()).unwrap_or(0);
+            let comment_count = note
+                .get("comment_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
 
             // Fetch detail
             let detail_path = format!("/api/galaxy/creator/datacenter/note/base?note_id={note_id}");
             let detail = match api::xhs_api(&cookie, &detail_path, Method::GET).await {
-                Ok(r) => r.pointer("/data/data").cloned().unwrap_or(serde_json::Value::Null),
+                Ok(r) => r
+                    .pointer("/data/data")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
                 Err(_) => serde_json::Value::Null,
             };
 

@@ -39,8 +39,12 @@ pub fn tools() -> Vec<ToolSpec> {
             param_mapper: |args| {
                 let document_id = args["document_id"].as_str().unwrap_or("").to_string();
                 let mut query = serde_json::Map::new();
-                if let Some(v) = args.get("page_size") { query.insert("page_size".into(), v.clone()); }
-                if let Some(v) = args.get("page_token") { query.insert("page_token".into(), v.clone()); }
+                if let Some(v) = args.get("page_size") {
+                    query.insert("page_size".into(), v.clone());
+                }
+                if let Some(v) = args.get("page_token") {
+                    query.insert("page_token".into(), v.clone());
+                }
                 MappedParams {
                     path_params: HashMap::from([("document_id", document_id)]),
                     query: Some(json!(query)),

@@ -9,9 +9,7 @@ use std::sync::Arc;
 // ─── Agent Bindings API ────────────────────────────────────────────────
 
 /// GET /api/bindings — List all agent bindings.
-pub async fn list_bindings(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn list_bindings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let bindings = state.kernel.list_bindings();
     (
         StatusCode::OK,

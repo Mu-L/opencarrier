@@ -23,7 +23,10 @@ pub fn tools() -> Vec<ToolSpec> {
             method: Method::POST,
             path: "open-apis/im/v1/messages",
             param_mapper: |args| {
-                let receive_id_type = args["receive_id_type"].as_str().unwrap_or("open_id").to_string();
+                let receive_id_type = args["receive_id_type"]
+                    .as_str()
+                    .unwrap_or("open_id")
+                    .to_string();
                 let body = json!({
                     "receive_id": args["receive_id"],
                     "msg_type": args["msg_type"].as_str().unwrap_or("text"),
@@ -132,8 +135,12 @@ pub fn tools() -> Vec<ToolSpec> {
             param_mapper: |args| {
                 let chat_id = args["chat_id"].as_str().unwrap_or("").to_string();
                 let mut body = serde_json::Map::new();
-                if let Some(v) = args.get("name") { body.insert("name".into(), v.clone()); }
-                if let Some(v) = args.get("description") { body.insert("description".into(), v.clone()); }
+                if let Some(v) = args.get("name") {
+                    body.insert("name".into(), v.clone());
+                }
+                if let Some(v) = args.get("description") {
+                    body.insert("description".into(), v.clone());
+                }
                 MappedParams {
                     path_params: HashMap::from([("chat_id", chat_id)]),
                     query: None,

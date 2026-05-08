@@ -43,15 +43,13 @@ impl ToolProvider for McpToolProvider {
     }
 
     fn execute(&self, args: &Value, ctx: &PluginToolContext) -> Result<String, PluginError> {
-        let tenant = TOKEN_MANAGER
-            .get_tenant(&ctx.tenant_id)
-            .ok_or_else(|| {
-                PluginError::tool(format!(
-                    "Unknown tenant '{}'. Available tenants: {}",
-                    ctx.tenant_id,
-                    TOKEN_MANAGER.tenant_names().join(", ")
-                ))
-            })?;
+        let tenant = TOKEN_MANAGER.get_tenant(&ctx.tenant_id).ok_or_else(|| {
+            PluginError::tool(format!(
+                "Unknown tenant '{}'. Available tenants: {}",
+                ctx.tenant_id,
+                TOKEN_MANAGER.tenant_names().join(", ")
+            ))
+        })?;
 
         let (bot_id, bot_secret) = tenant
             .mcp_credentials()
@@ -92,13 +90,7 @@ impl ToolProvider for McpToolProvider {
                     let category = self.category.clone();
                     let bot_id = bot_id.to_string();
                     let bot_secret = bot_secret.to_string();
-                    config::get_category_url(
-                        &tenant_name,
-                        &category,
-                        &bot_id,
-                        &bot_secret,
-                        &http,
-                    )
+                    config::get_category_url(&tenant_name, &category, &bot_id, &bot_secret, &http)
                 };
 
                 let url = url.map_err(PluginError::tool)?;
@@ -130,9 +122,7 @@ pub fn build_mcp_tools() -> Vec<Box<dyn ToolProvider>> {
 }
 
 /// Register all MCP tool providers with the built-in plugin registry.
-pub fn register_mcp_tools(
-    registry: &mut crate::plugin::builtin_registry::BuiltinPluginRegistry,
-) {
+pub fn register_mcp_tools(registry: &mut crate::plugin::builtin_registry::BuiltinPluginRegistry) {
     for spec in schema::all_tools() {
         registry.register_tool("wecom", move || {
             Box::new(McpToolProvider::from_spec(&spec)) as Box<dyn ToolProvider>

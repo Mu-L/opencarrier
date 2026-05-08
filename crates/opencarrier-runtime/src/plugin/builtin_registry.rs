@@ -68,10 +68,12 @@ impl BuiltinPluginRegistry {
 
     /// Look up a plugin entry by name.
     pub fn get_plugin(&self, plugin_name: &str) -> Option<BuiltinPluginFactories<'_>> {
-        self.entries.get(plugin_name).map(|entry| BuiltinPluginFactories {
-            channels: &entry.channels,
-            tools: &entry.tools,
-        })
+        self.entries
+            .get(plugin_name)
+            .map(|entry| BuiltinPluginFactories {
+                channels: &entry.channels,
+                tools: &entry.tools,
+            })
     }
 
     /// Check if a plugin is registered as built-in.

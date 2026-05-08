@@ -148,11 +148,7 @@ pub async fn install_hub_template(
         }
     };
 
-    match state
-        .kernel
-        .clone_install(&name, &agx_bytes)
-        .await
-    {
+    match state.kernel.clone_install(&name, &agx_bytes).await {
         Ok((agent_id, agent_name)) => {
             let serial = allocate_serial_number(&state.kernel.config.data_dir);
             (

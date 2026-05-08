@@ -105,7 +105,10 @@ impl FeishuWsClient {
         .await?;
 
         if ws_resp.code != 0 {
-            return Err(format!("ws/endpoint error: code={} msg={}", ws_resp.code, ws_resp.msg));
+            return Err(format!(
+                "ws/endpoint error: code={} msg={}",
+                ws_resp.code, ws_resp.msg
+            ));
         }
 
         let ws_url = ws_resp
@@ -346,7 +349,12 @@ impl FeishuWsClient {
         self.evict_old_entries();
         self.dedup.insert(msg_id.to_string(), Instant::now());
 
-        if message.get("message_type").or_else(|| message.get("msg_type")).and_then(|v| v.as_str()) != Some("text") {
+        if message
+            .get("message_type")
+            .or_else(|| message.get("msg_type"))
+            .and_then(|v| v.as_str())
+            != Some("text")
+        {
             return;
         }
 
@@ -401,7 +409,10 @@ impl FeishuWsClient {
             content: PluginContent::Text(text),
             timestamp_ms: create_time_ms,
             is_group,
-            thread_id: message.get("chat_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            thread_id: message
+                .get("chat_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             metadata: Default::default(),
         };
 

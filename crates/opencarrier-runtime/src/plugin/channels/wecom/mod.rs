@@ -87,10 +87,7 @@ fn scan_bot_configs(plugin_dir: &Path) -> Vec<(String, serde_json::Value)> {
             Ok(content) => {
                 if let Ok(mut val) = content.parse::<toml::Value>() {
                     if let Some(table) = val.as_table_mut() {
-                        table.insert(
-                            "_bot_id".to_string(),
-                            toml::Value::String(bot_uuid.clone()),
-                        );
+                        table.insert("_bot_id".to_string(), toml::Value::String(bot_uuid.clone()));
                     }
                     if let Ok(json) = serde_json::to_value(val) {
                         configs.push((bot_uuid, json));
@@ -147,10 +144,7 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<token::TenantEntry>
                 return None;
             }
 
-            let corp_id_for_bot = bot_config["corp_id"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
+            let corp_id_for_bot = bot_config["corp_id"].as_str().unwrap_or("").to_string();
 
             let entry = token::TenantEntry::new_smartbot(
                 name.clone(),
@@ -174,9 +168,7 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<token::TenantEntry>
             let encoding_aes_key = bot_config["encoding_aes_key"]
                 .as_str()
                 .map(|s| s.to_string());
-            let callback_token = bot_config["callback_token"]
-                .as_str()
-                .map(|s| s.to_string());
+            let callback_token = bot_config["callback_token"].as_str().map(|s| s.to_string());
 
             let entry = token::TenantEntry::new_kf(
                 name.clone(),
@@ -213,9 +205,7 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<token::TenantEntry>
             let encoding_aes_key = bot_config["encoding_aes_key"]
                 .as_str()
                 .map(|s| s.to_string());
-            let callback_token = bot_config["callback_token"]
-                .as_str()
-                .map(|s| s.to_string());
+            let callback_token = bot_config["callback_token"].as_str().map(|s| s.to_string());
 
             let entry = token::TenantEntry::new_app(
                 name.clone(),
@@ -281,8 +271,8 @@ impl crate::plugin::BuiltinChannel for WeComAppKfWatcher {
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let plugin_dir = find_plugin_dir()
-            .ok_or_else(|| "Cannot find WeCom plugin directory".to_string())?;
+        let plugin_dir =
+            find_plugin_dir().ok_or_else(|| "Cannot find WeCom plugin directory".to_string())?;
 
         let configs = scan_bot_configs(&plugin_dir);
         if configs.is_empty() {
@@ -352,9 +342,7 @@ impl crate::plugin::BuiltinChannel for WeComAppKfWatcher {
                 token::send_kf_message(&tenant, user_id, text)?;
             }
             token::WecomMode::SmartBot { .. } => {
-                return Err(
-                    "SmartBot mode does not support send via app/kf watcher".to_string(),
-                );
+                return Err("SmartBot mode does not support send via app/kf watcher".to_string());
             }
         }
 
@@ -406,8 +394,8 @@ impl crate::plugin::BuiltinChannel for WeComSmartBotWatcher {
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let plugin_dir = find_plugin_dir()
-            .ok_or_else(|| "Cannot find WeCom plugin directory".to_string())?;
+        let plugin_dir =
+            find_plugin_dir().ok_or_else(|| "Cannot find WeCom plugin directory".to_string())?;
 
         let configs = scan_bot_configs(&plugin_dir);
         if configs.is_empty() {
@@ -482,7 +470,9 @@ impl crate::plugin::BuiltinChannel for WeComSmartBotWatcher {
             .build()
             .map_err(|e| format!("Runtime creation failed: {e}"))?;
         rt.block_on(token::send_smartbot_response_async(
-            &tenant.http, &response_url, text,
+            &tenant.http,
+            &response_url,
+            text,
         ))
     }
 

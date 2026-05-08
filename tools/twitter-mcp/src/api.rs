@@ -147,8 +147,8 @@ pub async fn twitter_graphql(
         return Err(format!("Twitter API HTTP {status}: {text}"));
     }
 
-    let json: Value = serde_json::from_str(&text)
-        .map_err(|e| format!("Twitter API JSON parse error: {e}"))?;
+    let json: Value =
+        serde_json::from_str(&text).map_err(|e| format!("Twitter API JSON parse error: {e}"))?;
 
     Ok(json)
 }

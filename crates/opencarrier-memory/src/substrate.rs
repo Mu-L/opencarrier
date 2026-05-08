@@ -41,8 +41,10 @@ impl MemorySubstrate {
     pub fn open(db_path: &Path, decay_rate: f32) -> OpenCarrierResult<Self> {
         let conn =
             Connection::open(db_path).map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;")
-            .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;",
+        )
+        .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         run_migrations(&conn).map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         let shared = Arc::new(Mutex::new(conn));
 
@@ -137,7 +139,12 @@ impl MemorySubstrate {
     }
 
     /// Delete a KV entry for an agent (per-user).
-    pub fn structured_delete(&self, agent_id: AgentId, sender_id: &str, key: &str) -> OpenCarrierResult<()> {
+    pub fn structured_delete(
+        &self,
+        agent_id: AgentId,
+        sender_id: &str,
+        key: &str,
+    ) -> OpenCarrierResult<()> {
         self.structured.delete(agent_id, sender_id, key)
     }
 
@@ -371,10 +378,7 @@ impl MemorySubstrate {
     }
 
     /// Claim the next pending task. Returns task JSON or None.
-    pub async fn task_claim(
-        &self,
-        agent_id: &str,
-    ) -> OpenCarrierResult<Option<serde_json::Value>> {
+    pub async fn task_claim(&self, agent_id: &str) -> OpenCarrierResult<Option<serde_json::Value>> {
         let conn = Arc::clone(&self.conn);
         let agent_id = agent_id.to_string();
 
@@ -427,11 +431,7 @@ impl MemorySubstrate {
     }
 
     /// Mark a task as completed with a result string.
-    pub async fn task_complete(
-        &self,
-        task_id: &str,
-        result: &str,
-    ) -> OpenCarrierResult<()> {
+    pub async fn task_complete(&self, task_id: &str, result: &str) -> OpenCarrierResult<()> {
         let conn = Arc::clone(&self.conn);
         let task_id = task_id.to_string();
         let result = result.to_string();
@@ -578,30 +578,21 @@ impl Memory for MemorySubstrate {
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    async fn add_entity(
-        &self,
-        entity: Entity,
-    ) -> OpenCarrierResult<String> {
+    async fn add_entity(&self, entity: Entity) -> OpenCarrierResult<String> {
         let store = self.knowledge.clone();
         tokio::task::spawn_blocking(move || store.add_entity(entity))
             .await
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    async fn add_relation(
-        &self,
-        relation: Relation,
-    ) -> OpenCarrierResult<String> {
+    async fn add_relation(&self, relation: Relation) -> OpenCarrierResult<String> {
         let store = self.knowledge.clone();
         tokio::task::spawn_blocking(move || store.add_relation(relation))
             .await
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?
     }
 
-    async fn query_graph(
-        &self,
-        pattern: GraphPattern,
-    ) -> OpenCarrierResult<Vec<GraphMatch>> {
+    async fn query_graph(&self, pattern: GraphPattern) -> OpenCarrierResult<Vec<GraphMatch>> {
         let store = self.knowledge.clone();
         tokio::task::spawn_blocking(move || store.query_graph(pattern))
             .await

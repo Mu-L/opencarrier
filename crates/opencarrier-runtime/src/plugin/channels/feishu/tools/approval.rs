@@ -22,7 +22,10 @@ pub fn tools() -> Vec<ToolSpec> {
             path: "open-apis/approval/v4/instances/{instance_id}",
             param_mapper: |args| {
                 let instance_id = args["instance_id"].as_str().unwrap_or("").to_string();
-                let user_id_type = args["user_id_type"].as_str().unwrap_or("open_id").to_string();
+                let user_id_type = args["user_id_type"]
+                    .as_str()
+                    .unwrap_or("open_id")
+                    .to_string();
                 MappedParams {
                     path_params: HashMap::from([("instance_id", instance_id)]),
                     query: Some(json!({ "user_id_type": user_id_type })),

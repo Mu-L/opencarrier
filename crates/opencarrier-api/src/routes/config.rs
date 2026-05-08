@@ -41,9 +41,7 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse
 /// Reads the config file, diffs against current config, validates the new config,
 /// and applies hot-reloadable actions (approval policy, cron limits, etc.).
 /// Returns the reload plan showing what changed and what was applied.
-pub async fn config_reload(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn config_reload(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // SECURITY: Record config reload in audit trail
     state.kernel.audit_log.record(
         "system",
@@ -83,9 +81,7 @@ pub async fn config_reload(
 // ---------------------------------------------------------------------------
 
 /// GET /api/config/schema — Return a simplified JSON description of the config structure.
-pub async fn config_schema(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn config_schema(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // Build modality options from Brain config (or legacy model catalog)
     let modalities: Vec<String> = state
         .kernel

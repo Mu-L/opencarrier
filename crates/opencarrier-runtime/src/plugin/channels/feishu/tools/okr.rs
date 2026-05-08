@@ -21,11 +21,19 @@ pub fn tools() -> Vec<ToolSpec> {
             path: "open-apis/okr/v1/cycles",
             param_mapper: |args| {
                 let mut query = serde_json::Map::new();
-                if let Some(v) = args.get("page_size") { query.insert("page_size".into(), v.clone()); }
-                if let Some(v) = args.get("page_token") { query.insert("page_token".into(), v.clone()); }
+                if let Some(v) = args.get("page_size") {
+                    query.insert("page_size".into(), v.clone());
+                }
+                if let Some(v) = args.get("page_token") {
+                    query.insert("page_token".into(), v.clone());
+                }
                 MappedParams {
                     path_params: HashMap::new(),
-                    query: if query.is_empty() { None } else { Some(json!(query)) },
+                    query: if query.is_empty() {
+                        None
+                    } else {
+                        Some(json!(query))
+                    },
                     body: None,
                 }
             },
@@ -47,11 +55,19 @@ pub fn tools() -> Vec<ToolSpec> {
             param_mapper: |args| {
                 let cycle_id = args["cycle_id"].as_str().unwrap_or("").to_string();
                 let mut query = serde_json::Map::new();
-                if let Some(v) = args.get("user_id") { query.insert("user_id".into(), v.clone()); }
-                if let Some(v) = args.get("page_size") { query.insert("page_size".into(), v.clone()); }
+                if let Some(v) = args.get("user_id") {
+                    query.insert("user_id".into(), v.clone());
+                }
+                if let Some(v) = args.get("page_size") {
+                    query.insert("page_size".into(), v.clone());
+                }
                 MappedParams {
                     path_params: HashMap::from([("cycle_id", cycle_id)]),
-                    query: if query.is_empty() { None } else { Some(json!(query)) },
+                    query: if query.is_empty() {
+                        None
+                    } else {
+                        Some(json!(query))
+                    },
                     body: None,
                 }
             },

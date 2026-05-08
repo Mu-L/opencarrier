@@ -70,13 +70,16 @@ pub async fn feishu_api(
     }
 
     // Parse JSON
-    let json: Value = serde_json::from_str(&text)
-        .map_err(|e| format!("Feishu API JSON parse error: {e}"))?;
+    let json: Value =
+        serde_json::from_str(&text).map_err(|e| format!("Feishu API JSON parse error: {e}"))?;
 
     // Check Feishu error code
     let code = json.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
     if code != 0 {
-        let msg = json.get("msg").and_then(|m| m.as_str()).unwrap_or("unknown");
+        let msg = json
+            .get("msg")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown");
         return Err(format!("Feishu API error: code={code} msg={msg}"));
     }
 
@@ -97,9 +100,7 @@ pub fn feishu_api_blocking(
         .build()
         .map_err(|e| format!("Runtime creation failed: {e}"))?;
 
-    rt.block_on(async {
-        feishu_api(http, token_cache, method, path, query, body).await
-    })
+    rt.block_on(async { feishu_api(http, token_cache, method, path, query, body).await })
 }
 
 /// Truncate result to fit within the FFI buffer.

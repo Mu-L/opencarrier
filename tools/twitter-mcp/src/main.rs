@@ -220,22 +220,25 @@ async fn gql<T: TokenHolder>(
 // ---------------------------------------------------------------------------
 
 fn parse_tweet(result: &Value) -> Option<Value> {
-    let tw = if result.get("__typename").and_then(|v| v.as_str()) == Some("TweetWithVisibilityResults") {
+    let tw = if result.get("__typename").and_then(|v| v.as_str())
+        == Some("TweetWithVisibilityResults")
+    {
         result.get("tweet")?
     } else {
         result
     };
 
     let rest_id = tw.get("rest_id")?.as_str()?.to_string();
-    let user = tw.get("core")
+    let user = tw
+        .get("core")
         .and_then(|c| c.get("user_results"))
         .and_then(|u| u.get("result"));
 
     let screen_name = user
         .and_then(|u| {
-            u.get("core").and_then(|c| c.get("screen_name")).or_else(|| {
-                u.get("legacy").and_then(|l| l.get("screen_name"))
-            })
+            u.get("core")
+                .and_then(|c| c.get("screen_name"))
+                .or_else(|| u.get("legacy").and_then(|l| l.get("screen_name")))
         })
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
@@ -248,7 +251,8 @@ fn parse_tweet(result: &Value) -> Option<Value> {
         .to_string();
 
     let legacy = tw.get("legacy");
-    let text = tw.get("note_tweet")
+    let text = tw
+        .get("note_tweet")
         .and_then(|n| n.get("note_tweet_results"))
         .and_then(|n| n.get("result"))
         .and_then(|r| r.get("text"))
@@ -267,7 +271,8 @@ fn parse_tweet(result: &Value) -> Option<Value> {
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
 
-    let views = tw.get("views")
+    let views = tw
+        .get("views")
         .and_then(|v| v.get("count"))
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<i64>().ok())
@@ -290,24 +295,35 @@ fn parse_tweet(result: &Value) -> Option<Value> {
     let media_urls: Vec<String> = media
         .and_then(|m| m.as_array())
         .map(|arr| {
-            arr.iter().filter_map(|m| {
-                let mtype = m.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                if mtype == "video" || mtype == "animated_gif" {
-                    m.get("video_info")
-                        .and_then(|vi| vi.get("variants"))
-                        .and_then(|v| v.as_array())
-                        .and_then(|vars| {
-                            vars.iter()
-                                .filter(|v| v.get("content_type").and_then(|t| t.as_str()) == Some("video/mp4"))
-                                .filter_map(|v| v.get("url").and_then(|u| u.as_str()))
-                                .next()
-                                .map(|s| s.to_string())
-                        })
-                        .or_else(|| m.get("media_url_https").and_then(|u| u.as_str()).map(|s| s.to_string()))
-                } else {
-                    m.get("media_url_https").and_then(|u| u.as_str()).map(|s| s.to_string())
-                }
-            }).collect()
+            arr.iter()
+                .filter_map(|m| {
+                    let mtype = m.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    if mtype == "video" || mtype == "animated_gif" {
+                        m.get("video_info")
+                            .and_then(|vi| vi.get("variants"))
+                            .and_then(|v| v.as_array())
+                            .and_then(|vars| {
+                                vars.iter()
+                                    .filter(|v| {
+                                        v.get("content_type").and_then(|t| t.as_str())
+                                            == Some("video/mp4")
+                                    })
+                                    .filter_map(|v| v.get("url").and_then(|u| u.as_str()))
+                                    .next()
+                                    .map(|s| s.to_string())
+                            })
+                            .or_else(|| {
+                                m.get("media_url_https")
+                                    .and_then(|u| u.as_str())
+                                    .map(|s| s.to_string())
+                            })
+                    } else {
+                        m.get("media_url_https")
+                            .and_then(|u| u.as_str())
+                            .map(|s| s.to_string())
+                    }
+                })
+                .collect()
         })
         .unwrap_or_default();
 
@@ -365,7 +381,11 @@ fn extract_tweets_from_instructions(instructions: &Value) -> Vec<Value> {
                 .and_then(|t| t.get("result"));
 
             if let Some(tweet) = result.and_then(|r| parse_tweet(r)) {
-                let id = tweet.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let id = tweet
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 if seen.insert(id.clone()) {
                     tweets.push(tweet);
                 }
@@ -386,7 +406,11 @@ fn extract_tweets_from_instructions(instructions: &Value) -> Vec<Value> {
                         .and_then(|t| t.get("result"));
 
                     if let Some(tweet) = result.and_then(|r| parse_tweet(r)) {
-                        let id = tweet.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        let id = tweet
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         if seen.insert(id.clone()) {
                             tweets.push(tweet);
                         }
@@ -421,10 +445,13 @@ impl TwitterServer {
         });
         match gql(&params, "SearchTimeline", variables, None, Method::GET).await {
             Ok(resp) => {
-                let instructions = resp.pointer("/data/search_by_raw_query/search_timeline/timeline/instructions")
+                let instructions = resp
+                    .pointer("/data/search_by_raw_query/search_timeline/timeline/instructions")
                     .cloned()
                     .unwrap_or(serde_json::json!([]));
-                json_to_string(&serde_json::Value::Array(extract_tweets_from_instructions(&instructions)))
+                json_to_string(&serde_json::Value::Array(extract_tweets_from_instructions(
+                    &instructions,
+                )))
             }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -442,13 +469,20 @@ impl TwitterServer {
         if timeline_type == "for-you" {
             variables["withCommunity"] = serde_json::json!(true);
         }
-        let op = if timeline_type == "following" { "HomeLatestTimeline" } else { "HomeTimeline" };
+        let op = if timeline_type == "following" {
+            "HomeLatestTimeline"
+        } else {
+            "HomeTimeline"
+        };
         match gql(&params, op, variables, None, Method::GET).await {
             Ok(resp) => {
-                let instructions = resp.pointer("/data/home/home_timeline_urt/instructions")
+                let instructions = resp
+                    .pointer("/data/home/home_timeline_urt/instructions")
                     .cloned()
                     .unwrap_or(serde_json::json!([]));
-                json_to_string(&serde_json::Value::Array(extract_tweets_from_instructions(&instructions)))
+                json_to_string(&serde_json::Value::Array(extract_tweets_from_instructions(
+                    &instructions,
+                )))
             }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -491,7 +525,10 @@ impl TwitterServer {
         });
         match gql(&params, "UserByScreenName", variables, None, Method::GET).await {
             Ok(resp) => {
-                let user = resp.pointer("/data/user/result").cloned().unwrap_or(serde_json::Value::Null);
+                let user = resp
+                    .pointer("/data/user/result")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
                 let legacy = user.get("legacy");
                 let result = serde_json::json!({
                     "screen_name": user.get("legacy").and_then(|l| l.get("screen_name")),
@@ -520,7 +557,8 @@ impl TwitterServer {
         });
         match gql(&params, "Followers", variables, None, Method::GET).await {
             Ok(resp) => {
-                let instructions = resp.pointer("/data/user/result/timeline/timeline/instructions")
+                let instructions = resp
+                    .pointer("/data/user/result/timeline/timeline/instructions")
                     .cloned()
                     .unwrap_or(serde_json::json!([]));
                 let mut users = Vec::new();
@@ -528,9 +566,13 @@ impl TwitterServer {
                     for inst in entries {
                         if let Some(entries) = inst.get("entries").and_then(|e| e.as_array()) {
                             for entry in entries {
-                                let entry_id = entry.get("entryId").and_then(|v| v.as_str()).unwrap_or("");
-                                if !entry_id.starts_with("user-") { continue; }
-                                let user = entry.get("content")
+                                let entry_id =
+                                    entry.get("entryId").and_then(|v| v.as_str()).unwrap_or("");
+                                if !entry_id.starts_with("user-") {
+                                    continue;
+                                }
+                                let user = entry
+                                    .get("content")
                                     .and_then(|c| c.get("itemContent"))
                                     .and_then(|i| i.get("user_results"))
                                     .and_then(|u| u.get("result"));
@@ -560,7 +602,8 @@ impl TwitterServer {
         });
         match gql(&params, "Following", variables, None, Method::GET).await {
             Ok(resp) => {
-                let instructions = resp.pointer("/data/user/result/timeline/timeline/instructions")
+                let instructions = resp
+                    .pointer("/data/user/result/timeline/timeline/instructions")
                     .cloned()
                     .unwrap_or(serde_json::json!([]));
                 let mut users = Vec::new();
@@ -568,9 +611,13 @@ impl TwitterServer {
                     for inst in entries {
                         if let Some(entries) = inst.get("entries").and_then(|e| e.as_array()) {
                             for entry in entries {
-                                let entry_id = entry.get("entryId").and_then(|v| v.as_str()).unwrap_or("");
-                                if !entry_id.starts_with("user-") { continue; }
-                                let user = entry.get("content")
+                                let entry_id =
+                                    entry.get("entryId").and_then(|v| v.as_str()).unwrap_or("");
+                                if !entry_id.starts_with("user-") {
+                                    continue;
+                                }
+                                let user = entry
+                                    .get("content")
                                     .and_then(|c| c.get("itemContent"))
                                     .and_then(|i| i.get("user_results"))
                                     .and_then(|u| u.get("result"));
@@ -607,10 +654,13 @@ impl TwitterServer {
         });
         match gql(&params, "TweetDetail", variables, None, Method::GET).await {
             Ok(resp) => {
-                let instructions = resp.pointer("/data/threaded_conversation_with_injections_v2/instructions")
+                let instructions = resp
+                    .pointer("/data/threaded_conversation_with_injections_v2/instructions")
                     .cloned()
                     .unwrap_or(serde_json::json!([]));
-                json_to_string(&serde_json::Value::Array(extract_tweets_from_instructions(&instructions)))
+                json_to_string(&serde_json::Value::Array(extract_tweets_from_instructions(
+                    &instructions,
+                )))
             }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -624,10 +674,13 @@ impl TwitterServer {
         });
         match gql(&params, "Bookmarks", variables, None, Method::GET).await {
             Ok(resp) => {
-                let instructions = resp.pointer("/data/bookmark_timeline_v2/timeline/instructions")
+                let instructions = resp
+                    .pointer("/data/bookmark_timeline_v2/timeline/instructions")
                     .cloned()
                     .unwrap_or(serde_json::json!([]));
-                json_to_string(&serde_json::Value::Array(extract_tweets_from_instructions(&instructions)))
+                json_to_string(&serde_json::Value::Array(extract_tweets_from_instructions(
+                    &instructions,
+                )))
             }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -641,11 +694,14 @@ impl TwitterServer {
         });
         match gql(&params, "Likes", variables, None, Method::GET).await {
             Ok(resp) => {
-                let instructions = resp.pointer("/data/user/result/timeline_v2/timeline/instructions")
+                let instructions = resp
+                    .pointer("/data/user/result/timeline_v2/timeline/instructions")
                     .or_else(|| resp.pointer("/data/user/result/timeline/timeline/instructions"))
                     .cloned()
                     .unwrap_or(serde_json::json!([]));
-                json_to_string(&serde_json::Value::Array(extract_tweets_from_instructions(&instructions)))
+                json_to_string(&serde_json::Value::Array(extract_tweets_from_instructions(
+                    &instructions,
+                )))
             }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -653,9 +709,18 @@ impl TwitterServer {
 
     #[tool(description = "获取 Twitter/X 列表")]
     async fn twitter_lists(&self, Parameters(params): Parameters<ListsParams>) -> String {
-        match gql(&params, "ListsManagementPageTimeline", serde_json::json!({}), None, Method::GET).await {
+        match gql(
+            &params,
+            "ListsManagementPageTimeline",
+            serde_json::json!({}),
+            None,
+            Method::GET,
+        )
+        .await
+        {
             Ok(resp) => {
-                let instructions = resp.pointer("/data/viewer/list_management_timeline/timeline/instructions")
+                let instructions = resp
+                    .pointer("/data/viewer/list_management_timeline/timeline/instructions")
                     .cloned()
                     .unwrap_or(serde_json::json!([]));
                 let mut lists = Vec::new();
@@ -663,7 +728,8 @@ impl TwitterServer {
                     for inst in insts {
                         if let Some(entries) = inst.get("entries").and_then(|e| e.as_array()) {
                             for entry in entries {
-                                let list = entry.get("content")
+                                let list = entry
+                                    .get("content")
                                     .and_then(|c| c.get("itemContent"))
                                     .and_then(|i| i.get("list_results"))
                                     .and_then(|l| l.get("result"));
@@ -687,29 +753,54 @@ impl TwitterServer {
     }
 
     #[tool(description = "获取 Twitter/X 列表推文")]
-    async fn twitter_list_tweets(&self, Parameters(params): Parameters<ListTweetsParams>) -> String {
+    async fn twitter_list_tweets(
+        &self,
+        Parameters(params): Parameters<ListTweetsParams>,
+    ) -> String {
         let variables = serde_json::json!({
             "listId": params.list_id,
             "count": params.limit.unwrap_or(20),
         });
-        match gql(&params, "ListLatestTweetsTimeline", variables, None, Method::GET).await {
+        match gql(
+            &params,
+            "ListLatestTweetsTimeline",
+            variables,
+            None,
+            Method::GET,
+        )
+        .await
+        {
             Ok(resp) => {
-                let instructions = resp.pointer("/data/list/tweets_timeline/timeline/instructions")
+                let instructions = resp
+                    .pointer("/data/list/tweets_timeline/timeline/instructions")
                     .cloned()
                     .unwrap_or(serde_json::json!([]));
-                json_to_string(&serde_json::Value::Array(extract_tweets_from_instructions(&instructions)))
+                json_to_string(&serde_json::Value::Array(extract_tweets_from_instructions(
+                    &instructions,
+                )))
             }
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
 
     #[tool(description = "获取 Twitter/X 通知")]
-    async fn twitter_notifications(&self, Parameters(params): Parameters<NotificationsParams>) -> String {
+    async fn twitter_notifications(
+        &self,
+        Parameters(params): Parameters<NotificationsParams>,
+    ) -> String {
         let variables = serde_json::json!({
             "count": params.limit.unwrap_or(20),
             "includePromotedContent": false,
         });
-        match gql(&params, "NotificationsTimeline", variables, None, Method::GET).await {
+        match gql(
+            &params,
+            "NotificationsTimeline",
+            variables,
+            None,
+            Method::GET,
+        )
+        .await
+        {
             Ok(resp) => {
                 let instructions = resp.pointer("/data/viewer/timeline_response/timeline/instructions")
                     .or_else(|| resp.pointer("/data/viewer_v2/user_results/result/notification_timeline/timeline/instructions"))
@@ -720,9 +811,13 @@ impl TwitterServer {
                     for inst in insts {
                         if let Some(entries) = inst.get("entries").and_then(|e| e.as_array()) {
                             for entry in entries {
-                                let entry_id = entry.get("entryId").and_then(|v| v.as_str()).unwrap_or("");
-                                if !entry_id.starts_with("notification-") { continue; }
-                                let content = entry.get("content").and_then(|c| c.get("itemContent"));
+                                let entry_id =
+                                    entry.get("entryId").and_then(|v| v.as_str()).unwrap_or("");
+                                if !entry_id.starts_with("notification-") {
+                                    continue;
+                                }
+                                let content =
+                                    entry.get("content").and_then(|c| c.get("itemContent"));
                                 if let Some(c) = content {
                                     notifications.push(serde_json::json!({
                                         "id": entry_id,
@@ -761,9 +856,18 @@ impl TwitterServer {
             "responsive_web_twitter_article_tweet_consumption_enabled": true,
             "responsive_web_enhance_cards_enabled": false,
         });
-        match gql(&params, "TweetResultByRestId", variables, Some(features), Method::GET).await {
+        match gql(
+            &params,
+            "TweetResultByRestId",
+            variables,
+            Some(features),
+            Method::GET,
+        )
+        .await
+        {
             Ok(resp) => {
-                let article = resp.pointer("/data/tweetResult/result/article/article_results/result");
+                let article =
+                    resp.pointer("/data/tweetResult/result/article/article_results/result");
                 let result = if let Some(a) = article {
                     serde_json::json!({
                         "title": a.get("title"),
@@ -836,7 +940,8 @@ impl TwitterServer {
         });
         match gql(&params, "CreateTweet", variables, None, Method::POST).await {
             Ok(resp) => {
-                let tweet_id = resp.pointer("/data/create_tweet/tweet_results/result/rest_id")
+                let tweet_id = resp
+                    .pointer("/data/create_tweet/tweet_results/result/rest_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
                 json_to_string(&serde_json::json!({

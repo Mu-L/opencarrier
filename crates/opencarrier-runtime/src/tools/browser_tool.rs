@@ -47,9 +47,9 @@ fn check_taint_net_fetch(url: &str) -> Option<String> {
 fn require_browser<'a>(
     ctx: &'a ToolContext<'_>,
 ) -> Result<(&'a crate::browser::BrowserManager, &'a str), String> {
-    let mgr = ctx.browser_ctx.ok_or(
-        "Browser tools not available. Ensure Chrome/Chromium is installed.".to_string(),
-    )?;
+    let mgr = ctx
+        .browser_ctx
+        .ok_or("Browser tools not available. Ensure Chrome/Chromium is installed.".to_string())?;
     let aid = ctx
         .caller_agent_id
         .ok_or("Missing caller agent identity".to_string())?;

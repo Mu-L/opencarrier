@@ -20,7 +20,9 @@ pub async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         let shared_id = opencarrier_types::agent::AgentId(uuid::Uuid::from_bytes([
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
         ]));
-        memory.structured_get(shared_id, "", "__health_check__").is_ok()
+        memory
+            .structured_get(shared_id, "", "__health_check__")
+            .is_ok()
     })
     .await
     .unwrap_or(false);
@@ -41,7 +43,9 @@ pub async fn health_detail(State(state): State<Arc<AppState>>) -> impl IntoRespo
         let shared_id = opencarrier_types::agent::AgentId(uuid::Uuid::from_bytes([
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
         ]));
-        memory.structured_get(shared_id, "", "__health_check__").is_ok()
+        memory
+            .structured_get(shared_id, "", "__health_check__")
+            .is_ok()
     })
     .await
     .unwrap_or(false);
@@ -73,9 +77,7 @@ pub async fn health_detail(State(state): State<Arc<AppState>>) -> impl IntoRespo
 /// - `opencarrier_tool_calls_total` — total tool calls (per agent)
 /// - `opencarrier_panics_total` — supervisor panic count
 /// - `opencarrier_restarts_total` — supervisor restart count
-pub async fn prometheus_metrics(
-    State(state): State<Arc<AppState>>,
-) -> axum::response::Response {
+pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> axum::response::Response {
     let mut out = String::with_capacity(2048);
 
     // Uptime
@@ -193,9 +195,7 @@ pub async fn audit_recent(
     .into_response()
 }
 /// GET /api/audit/verify — Verify the audit chain integrity.
-pub async fn audit_verify(
-    State(state): State<Arc<AppState>>,
-) -> axum::response::Response {
+pub async fn audit_verify(State(state): State<Arc<AppState>>) -> axum::response::Response {
     let entry_count = state.kernel.audit_log.len();
     match state.kernel.audit_log.verify_integrity() {
         Ok(()) => {
@@ -338,9 +338,7 @@ fn classify_audit_level(action: &str) -> &'static str {
 // ---------------------------------------------------------------------------
 
 /// GET /api/usage — Get per-agent usage statistics.
-pub async fn usage_stats(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn usage_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let all_agents = state.kernel.registry.list();
     let agents: Vec<serde_json::Value> = all_agents
         .iter()
@@ -367,15 +365,8 @@ pub async fn usage_stats(
 // ---------------------------------------------------------------------------
 
 /// GET /api/usage/summary — Get overall usage summary from UsageStore.
-pub async fn usage_summary(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    match state
-        .kernel
-        .memory
-        .usage()
-        .query_summary(None)
-    {
+pub async fn usage_summary(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.kernel.memory.usage().query_summary(None) {
         Ok(s) => Json(serde_json::json!({
             "total_input_tokens": s.total_input_tokens,
             "total_output_tokens": s.total_output_tokens,
@@ -391,9 +382,7 @@ pub async fn usage_summary(
     }
 }
 /// GET /api/usage/by-model — Get usage grouped by model.
-pub async fn usage_by_model(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub async fn usage_by_model(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.kernel.memory.usage().query_by_model() {
         Ok(models) => {
             let list: Vec<serde_json::Value> = models
@@ -413,14 +402,8 @@ pub async fn usage_by_model(
     }
 }
 /// GET /api/usage/daily — Get daily usage breakdown for the last 7 days.
-pub async fn usage_daily(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    let days = state
-        .kernel
-        .memory
-        .usage()
-        .query_daily_breakdown(7);
+pub async fn usage_daily(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let days = state.kernel.memory.usage().query_daily_breakdown(7);
     let first_event = state.kernel.memory.usage().query_first_event_date();
 
     let days_list = match days {

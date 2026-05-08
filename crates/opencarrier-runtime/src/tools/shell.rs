@@ -1,8 +1,8 @@
 //! Shell execution tool module.
 
 use super::ToolModule;
-use async_trait::async_trait;
 use crate::tool_context::ToolContext;
+use async_trait::async_trait;
 use opencarrier_types::config::ExecSecurityMode;
 use opencarrier_types::taint::{TaintLabel, TaintSink, TaintedValue};
 use opencarrier_types::tool::ToolDefinition;
@@ -127,15 +127,24 @@ async fn exec_shell(
                 "C:\\Program Files\\Git\\usr\\bin\\sh.exe",
                 "C:\\Program Files (x86)\\Git\\usr\\bin\\sh.exe",
             ];
-            SH_PATHS.iter().copied().find(|p| std::path::Path::new(p).exists())
+            SH_PATHS
+                .iter()
+                .copied()
+                .find(|p| std::path::Path::new(p).exists())
         };
         let (shell, shell_arg) = if cfg!(windows) {
             #[cfg(windows)]
             {
-                if let Some(sh) = git_sh { (sh, "-c") } else { ("cmd", "/C") }
+                if let Some(sh) = git_sh {
+                    (sh, "-c")
+                } else {
+                    ("cmd", "/C")
+                }
             }
             #[cfg(not(windows))]
-            { ("sh", "-c") }
+            {
+                ("sh", "-c")
+            }
         } else {
             ("sh", "-c")
         };

@@ -2,12 +2,12 @@
 
 use crate::routes::state::AppState;
 use crate::session_auth;
+use axum::body::Body;
 use axum::extract::State as AxumState;
 use axum::http::{Request, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
 use std::sync::Arc;
-use axum::body::Body;
 
 /// GET /api/auth/check — Return auth mode and current session status.
 pub async fn auth_check(
@@ -92,8 +92,13 @@ pub async fn auth_login(
 
     // Use API key as the HMAC secret for session tokens
     let secret = &state.kernel.config.api_key;
-    let token =
-        session_auth::create_session_token(None, "admin", username, secret, auth_config.session_ttl_hours);
+    let token = session_auth::create_session_token(
+        None,
+        "admin",
+        username,
+        secret,
+        auth_config.session_ttl_hours,
+    );
 
     (
         StatusCode::OK,
@@ -115,8 +120,16 @@ pub async fn change_credentials(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let current_password = body["current_password"].as_str().unwrap_or("").trim();
-    let new_username = body["new_username"].as_str().unwrap_or("").trim().to_string();
-    let new_password = body["new_password"].as_str().unwrap_or("").trim().to_string();
+    let new_username = body["new_username"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let new_password = body["new_password"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
     if current_password.is_empty() {
         return (
@@ -182,8 +195,14 @@ pub async fn change_credentials(
         .entry("auth".to_string())
         .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
     if let toml::Value::Table(ref mut t) = auth_table {
-        t.insert("username".to_string(), toml::Value::String(updated_username.clone()));
-        t.insert("password_hash".to_string(), toml::Value::String(updated_hash.clone()));
+        t.insert(
+            "username".to_string(),
+            toml::Value::String(updated_username.clone()),
+        );
+        t.insert(
+            "password_hash".to_string(),
+            toml::Value::String(updated_hash.clone()),
+        );
         t.insert("enabled".to_string(), toml::Value::Boolean(true));
     }
 
@@ -240,5 +259,8 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
     axum::Router::new()
         .route("/api/auth/check", routing::get(auth_check))
         .route("/api/auth/login", routing::post(auth_login))
-        .route("/api/auth/change-credentials", routing::post(change_credentials))
+        .route(
+            "/api/auth/change-credentials",
+            routing::post(change_credentials),
+        )
 }

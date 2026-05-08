@@ -30,12 +30,17 @@ impl StructuredStore {
             .lock()
             .map_err(|e| OpenCarrierError::Internal(e.to_string()))?;
         let mut stmt = conn
-            .prepare("SELECT value FROM kv_store WHERE agent_id = ?1 AND sender_id = ?2 AND key = ?3")
+            .prepare(
+                "SELECT value FROM kv_store WHERE agent_id = ?1 AND sender_id = ?2 AND key = ?3",
+            )
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
-        let result = stmt.query_row(rusqlite::params![agent_id.0.to_string(), sender_id, key], |row| {
-            let blob: Vec<u8> = row.get(0)?;
-            Ok(blob)
-        });
+        let result = stmt.query_row(
+            rusqlite::params![agent_id.0.to_string(), sender_id, key],
+            |row| {
+                let blob: Vec<u8> = row.get(0)?;
+                Ok(blob)
+            },
+        );
         match result {
             Ok(blob) => {
                 let value: serde_json::Value = serde_json::from_slice(&blob)
@@ -170,12 +175,15 @@ impl StructuredStore {
             )
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         let rows = stmt
-            .query_map(rusqlite::params![agent_id.0.to_string(), sender_id, key], |row| {
-                let blob: Vec<u8> = row.get(0)?;
-                let version: i64 = row.get(1)?;
-                let archived_at: String = row.get(2)?;
-                Ok((blob, version, archived_at))
-            })
+            .query_map(
+                rusqlite::params![agent_id.0.to_string(), sender_id, key],
+                |row| {
+                    let blob: Vec<u8> = row.get(0)?;
+                    let version: i64 = row.get(1)?;
+                    let archived_at: String = row.get(2)?;
+                    Ok((blob, version, archived_at))
+                },
+            )
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
         let mut history = Vec::new();
@@ -206,11 +214,14 @@ impl StructuredStore {
             .prepare("SELECT key, value FROM kv_store WHERE agent_id = ?1 AND sender_id = ?2 ORDER BY key")
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
         let rows = stmt
-            .query_map(rusqlite::params![agent_id.0.to_string(), sender_id], |row| {
-                let key: String = row.get(0)?;
-                let blob: Vec<u8> = row.get(1)?;
-                Ok((key, blob))
-            })
+            .query_map(
+                rusqlite::params![agent_id.0.to_string(), sender_id],
+                |row| {
+                    let key: String = row.get(0)?;
+                    let blob: Vec<u8> = row.get(1)?;
+                    Ok((key, blob))
+                },
+            )
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
         let mut pairs = Vec::new();
@@ -319,14 +330,7 @@ impl StructuredStore {
         });
 
         match result {
-            Ok((
-                name,
-                manifest_blob,
-                state_str,
-                created_str,
-                session_id_str,
-                identity_str,
-            )) => {
+            Ok((name, manifest_blob, state_str, created_str, session_id_str, identity_str)) => {
                 let manifest = rmp_serde::from_slice(&manifest_blob)
                     .map_err(|e| OpenCarrierError::Serialization(e.to_string()))?;
                 let state = serde_json::from_str(&state_str)
@@ -418,7 +422,8 @@ impl StructuredStore {
                 Option<String>,
                 Option<String>,
             )>,
-        > = stmt.query_map([], |row| Self::row_to_agent_parts(row, col_count))
+        > = stmt
+            .query_map([], |row| Self::row_to_agent_parts(row, col_count))
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?
             .collect();
 
@@ -427,21 +432,14 @@ impl StructuredStore {
         let mut repair_queue: Vec<(String, Vec<u8>, String)> = Vec::new();
 
         for row in row_data {
-            let (
-                id_str,
-                name,
-                manifest_blob,
-                state_str,
-                created_str,
-                session_id_str,
-                identity_str,
-            ) = match row {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("Skipping agent row with read error: {e}");
-                    continue;
-                }
-            };
+            let (id_str, name, manifest_blob, state_str, created_str, session_id_str, identity_str) =
+                match row {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::warn!("Skipping agent row with read error: {e}");
+                        continue;
+                    }
+                };
 
             // Deduplicate: skip agents with same name we've already seen
             let name_lower = name.to_lowercase();
@@ -587,8 +585,8 @@ impl StructuredStore {
             .prepare(sql)
             .map_err(|e| OpenCarrierError::Memory(e.to_string()))?;
 
-        let row_data: Vec<rusqlite::Result<(String, String, String)>> =
-            stmt.query_map([], |row| {
+        let row_data: Vec<rusqlite::Result<(String, String, String)>> = stmt
+            .query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -621,7 +619,12 @@ mod tests {
         let store = setup();
         let agent_id = AgentId::new();
         store
-            .set(agent_id, "user1", "test_key", serde_json::json!("test_value"))
+            .set(
+                agent_id,
+                "user1",
+                "test_key",
+                serde_json::json!("test_value"),
+            )
             .unwrap();
         let value = store.get(agent_id, "user1", "test_key").unwrap();
         assert_eq!(value, Some(serde_json::json!("test_value")));
@@ -651,8 +654,12 @@ mod tests {
     fn test_kv_update() {
         let store = setup();
         let agent_id = AgentId::new();
-        store.set(agent_id, "user1", "key", serde_json::json!("v1")).unwrap();
-        store.set(agent_id, "user1", "key", serde_json::json!("v2")).unwrap();
+        store
+            .set(agent_id, "user1", "key", serde_json::json!("v1"))
+            .unwrap();
+        store
+            .set(agent_id, "user1", "key", serde_json::json!("v2"))
+            .unwrap();
         let value = store.get(agent_id, "user1", "key").unwrap();
         assert_eq!(value, Some(serde_json::json!("v2")));
     }
@@ -661,9 +668,15 @@ mod tests {
     fn test_kv_update_preserves_history() {
         let store = setup();
         let agent_id = AgentId::new();
-        store.set(agent_id, "user1", "key", serde_json::json!("v1")).unwrap();
-        store.set(agent_id, "user1", "key", serde_json::json!("v2")).unwrap();
-        store.set(agent_id, "user1", "key", serde_json::json!("v3")).unwrap();
+        store
+            .set(agent_id, "user1", "key", serde_json::json!("v1"))
+            .unwrap();
+        store
+            .set(agent_id, "user1", "key", serde_json::json!("v2"))
+            .unwrap();
+        store
+            .set(agent_id, "user1", "key", serde_json::json!("v3"))
+            .unwrap();
 
         // Latest value is v3
         let value = store.get(agent_id, "user1", "key").unwrap();
@@ -699,12 +712,22 @@ mod tests {
     fn test_kv_per_user_isolation() {
         let store = setup();
         let agent_id = AgentId::new();
-        store.set(agent_id, "user_a", "pref", serde_json::json!("dark mode")).unwrap();
-        store.set(agent_id, "user_b", "pref", serde_json::json!("light mode")).unwrap();
+        store
+            .set(agent_id, "user_a", "pref", serde_json::json!("dark mode"))
+            .unwrap();
+        store
+            .set(agent_id, "user_b", "pref", serde_json::json!("light mode"))
+            .unwrap();
 
         // Each user sees their own value
-        assert_eq!(store.get(agent_id, "user_a", "pref").unwrap(), Some(serde_json::json!("dark mode")));
-        assert_eq!(store.get(agent_id, "user_b", "pref").unwrap(), Some(serde_json::json!("light mode")));
+        assert_eq!(
+            store.get(agent_id, "user_a", "pref").unwrap(),
+            Some(serde_json::json!("dark mode"))
+        );
+        assert_eq!(
+            store.get(agent_id, "user_b", "pref").unwrap(),
+            Some(serde_json::json!("light mode"))
+        );
 
         // list_kv is per-user
         let a_keys = store.list_kv(agent_id, "user_a").unwrap();

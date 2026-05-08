@@ -205,9 +205,9 @@ impl ToolModule for MediaTools {
             }
 
             // TTS/STT
-            "text_to_speech" => Some(
-                tool_text_to_speech(input, ctx.brain, ctx.workspace_root, ctx.sender_id).await,
-            ),
+            "text_to_speech" => {
+                Some(tool_text_to_speech(input, ctx.brain, ctx.workspace_root, ctx.sender_id).await)
+            }
             "speech_to_text" => {
                 Some(tool_speech_to_text(input, ctx.brain, ctx.workspace_root).await)
             }
@@ -480,7 +480,7 @@ async fn tool_media_describe(
         temperature: 0.3,
         system: None,
         thinking: None,
-            extra: Default::default(),
+        extra: Default::default(),
     };
 
     let response = brain
@@ -676,7 +676,8 @@ async fn tool_image_generate(
         let _ = std::fs::create_dir_all(&upload_dir);
         for image in &images {
             let file_id = uuid::Uuid::new_v4().to_string();
-            if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&image.data_base64)
+            if let Ok(decoded) =
+                base64::engine::general_purpose::STANDARD.decode(&image.data_base64)
             {
                 let path = upload_dir.join(&file_id);
                 if std::fs::write(&path, &decoded).is_ok() {
@@ -740,9 +741,11 @@ async fn tool_text_to_speech(
 
     let media = response.media.ok_or("TTS returned no media")?;
     let (audio_data, format, duration_ms) = match media {
-        opencarrier_types::media::MediaOutput::Audio { data, format, duration_ms } => {
-            (data, format, duration_ms)
-        }
+        opencarrier_types::media::MediaOutput::Audio {
+            data,
+            format,
+            duration_ms,
+        } => (data, format, duration_ms),
         _ => return Err("TTS returned non-audio media".into()),
     };
 

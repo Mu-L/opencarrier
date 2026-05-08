@@ -53,13 +53,9 @@ impl TenantTokenCache {
 
     /// Fetch a new tenant_access_token from Feishu API.
     async fn refresh(&self) -> Result<String, String> {
-        let resp = api::get_tenant_token(
-            &self.http,
-            &self.api_base,
-            &self.app_id,
-            &self.app_secret,
-        )
-        .await?;
+        let resp =
+            api::get_tenant_token(&self.http, &self.api_base, &self.app_id, &self.app_secret)
+                .await?;
 
         if resp.code != 0 {
             return Err(format!(
@@ -74,8 +70,8 @@ impl TenantTokenCache {
         let expire_secs = resp.expire.unwrap_or(7200);
 
         // Refresh 5 minutes early
-        let expires_at =
-            Instant::now() + std::time::Duration::from_secs(expire_secs.saturating_sub(TOKEN_REFRESH_AHEAD_SECS));
+        let expires_at = Instant::now()
+            + std::time::Duration::from_secs(expire_secs.saturating_sub(TOKEN_REFRESH_AHEAD_SECS));
 
         {
             let mut guard = self.token.lock().unwrap();

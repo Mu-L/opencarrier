@@ -78,16 +78,14 @@ impl ToolProvider for FeishuToolProvider {
     }
 
     fn execute(&self, args: &Value, ctx: &PluginToolContext) -> Result<String, PluginError> {
-        let entry = FEISHU_TENANTS
-            .get(&ctx.tenant_id)
-            .ok_or_else(|| {
-                let names: Vec<String> = FEISHU_TENANTS.iter().map(|e| e.key().clone()).collect();
-                PluginError::tool(format!(
-                    "Unknown tenant '{}'. Available tenants: {}",
-                    ctx.tenant_id,
-                    names.join(", ")
-                ))
-            })?;
+        let entry = FEISHU_TENANTS.get(&ctx.tenant_id).ok_or_else(|| {
+            let names: Vec<String> = FEISHU_TENANTS.iter().map(|e| e.key().clone()).collect();
+            PluginError::tool(format!(
+                "Unknown tenant '{}'. Available tenants: {}",
+                ctx.tenant_id,
+                names.join(", ")
+            ))
+        })?;
 
         let mapped = (self.param_mapper)(args);
 
@@ -103,11 +101,17 @@ impl ToolProvider for FeishuToolProvider {
         let query = mapped.query.clone();
         let body = mapped.body.clone();
 
-        let result = feishu_api_blocking(&http, &token_cache, method, &resolved_path, query.as_ref(), body.as_ref())
-            .map_err(PluginError::tool)?;
+        let result = feishu_api_blocking(
+            &http,
+            &token_cache,
+            method,
+            &resolved_path,
+            query.as_ref(),
+            body.as_ref(),
+        )
+        .map_err(PluginError::tool)?;
 
-        let text = serde_json::to_string(&result)
-            .unwrap_or_else(|_| result.to_string());
+        let text = serde_json::to_string(&result).unwrap_or_else(|_| result.to_string());
 
         Ok(truncate_result(text))
     }

@@ -110,7 +110,10 @@ where
         fn visit_none<E: de::Error>(self) -> Result<Option<String>, E> {
             Ok(None)
         }
-        fn visit_some<D: serde::Deserializer<'de>>(self, de: D) -> Result<Option<String>, D::Error> {
+        fn visit_some<D: serde::Deserializer<'de>>(
+            self,
+            de: D,
+        ) -> Result<Option<String>, D::Error> {
             de.deserialize_any(StringOrU64)
         }
         fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<String>, E> {

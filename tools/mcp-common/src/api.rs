@@ -90,8 +90,8 @@ impl ApiClient {
             ));
         }
 
-        let json: Value = serde_json::from_str(&text)
-            .map_err(|e| format!("API JSON parse error: {e}"))?;
+        let json: Value =
+            serde_json::from_str(&text).map_err(|e| format!("API JSON parse error: {e}"))?;
 
         Ok(json)
     }

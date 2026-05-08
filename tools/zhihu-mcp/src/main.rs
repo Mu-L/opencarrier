@@ -76,9 +76,17 @@ impl ZhihuServer {
     async fn zhihu_hot(&self, Parameters(params): Parameters<HotParams>) -> String {
         let limit = params.limit.unwrap_or(20);
         let query = format!("limit={limit}");
-        match api::zhihu_api(&make_cookie(&params), Method::GET, "/api/v3/feed/topstory/hot-lists/total", Some(&query)).await {
+        match api::zhihu_api(
+            &make_cookie(&params),
+            Method::GET,
+            "/api/v3/feed/topstory/hot-lists/total",
+            Some(&query),
+        )
+        .await
+        {
             Ok(resp) => {
-                let items = resp.pointer("/data")
+                let items = resp
+                    .pointer("/data")
                     .and_then(|d| d.as_array())
                     .cloned()
                     .unwrap_or_default();
@@ -106,7 +114,8 @@ impl ZhihuServer {
         let path = format!("/api/v4/questions/{}/answers", params.question_id);
         match api::zhihu_api(&make_cookie(&params), Method::GET, &path, Some(&query)).await {
             Ok(resp) => {
-                let items = resp.pointer("/data")
+                let items = resp
+                    .pointer("/data")
                     .and_then(|d| d.as_array())
                     .cloned()
                     .unwrap_or_default();
@@ -130,16 +139,28 @@ impl ZhihuServer {
     #[tool(description = "搜索知乎内容")]
     async fn zhihu_search(&self, Parameters(params): Parameters<SearchParams>) -> String {
         let limit = params.limit.unwrap_or(10);
-        let encoded: String = params.query.bytes().map(|b| {
-            match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+        let encoded: String = params
+            .query
+            .bytes()
+            .map(|b| match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    (b as char).to_string()
+                }
                 _ => format!("%{:02X}", b),
-            }
-        }).collect();
+            })
+            .collect();
         let query = format!("q={encoded}&t=general&offset=0&limit={limit}");
-        match api::zhihu_api(&make_cookie(&params), Method::GET, "/api/v4/search_v3", Some(&query)).await {
+        match api::zhihu_api(
+            &make_cookie(&params),
+            Method::GET,
+            "/api/v4/search_v3",
+            Some(&query),
+        )
+        .await
+        {
             Ok(resp) => {
-                let items = resp.pointer("/data")
+                let items = resp
+                    .pointer("/data")
                     .and_then(|d| d.as_array())
                     .cloned()
                     .unwrap_or_default();

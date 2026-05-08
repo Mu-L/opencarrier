@@ -4,9 +4,9 @@ use crate::routes::plugin_toml::*;
 use crate::routes::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use opencarrier_kernel::KernelHandle;
 use axum::response::IntoResponse;
 use axum::Json;
+use opencarrier_kernel::KernelHandle;
 use std::collections::HashMap;
 use std::sync::Arc;
 /// GET `/api/weixin/qrcode` — fetch a fresh QR code for WeChat scanning.
@@ -196,7 +196,10 @@ pub async fn weixin_qrcode_status(
                                     .and_then(|v| v.as_str())
                                     .unwrap_or(tenant)
                                     .to_string();
-                                let existing_bind = tf.get("bind_agent").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                let existing_bind = tf
+                                    .get("bind_agent")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
 
                                 tracing::info!(
                                     new_tenant = %tenant,
@@ -211,8 +214,10 @@ pub async fn weixin_qrcode_status(
                                     .unwrap_or_default()
                                     .as_secs() as i64;
                                 let mut updated = tf.clone();
-                                updated["bot_token"] = serde_json::Value::String(bot_token.to_string());
-                                updated["baseurl"] = serde_json::Value::String(raw_baseurl.to_string());
+                                updated["bot_token"] =
+                                    serde_json::Value::String(bot_token.to_string());
+                                updated["baseurl"] =
+                                    serde_json::Value::String(raw_baseurl.to_string());
                                 updated["ilink_bot_id"] =
                                     serde_json::Value::String(ilink_bot_id.to_string());
                                 updated["expires_at"] = serde_json::Value::Number(
@@ -223,7 +228,8 @@ pub async fn weixin_qrcode_status(
                                 let real_tenant_id = existing_tenant.clone();
 
                                 // Ensure token file has tenant_id
-                                updated["tenant_id"] = serde_json::Value::String(real_tenant_id.clone());
+                                updated["tenant_id"] =
+                                    serde_json::Value::String(real_tenant_id.clone());
 
                                 if let Ok(json) = serde_json::to_string_pretty(&updated) {
                                     let _ = atomic_write(&path, &json);
@@ -231,11 +237,20 @@ pub async fn weixin_qrcode_status(
 
                                 // Register dynamic bridge binding if bind_agent exists
                                 if let Some(ref agent_id) = existing_bind {
-                                    if !agent_id.is_empty() && uuid::Uuid::parse_str(agent_id).is_ok() {
+                                    if !agent_id.is_empty()
+                                        && uuid::Uuid::parse_str(agent_id).is_ok()
+                                    {
                                         if let Some(ref pm_arc) = state.plugin_manager {
                                             let pm = pm_arc.lock().await;
-                                            pm.add_channel_binding("weixin", &existing_tenant, agent_id);
-                                            state.kernel.set_default_plugin_tenant(agent_id, &existing_tenant);
+                                            pm.add_channel_binding(
+                                                "weixin",
+                                                &existing_tenant,
+                                                agent_id,
+                                            );
+                                            state.kernel.set_default_plugin_tenant(
+                                                agent_id,
+                                                &existing_tenant,
+                                            );
                                             tracing::info!(
                                                 tenant = %existing_tenant,
                                                 agent = %agent_id,
@@ -321,11 +336,30 @@ pub async fn weixin_save_token(
             );
         }
     };
-    let tenant_id = body.get("tenant_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let bot_token = body.get("bot_token").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let ilink_bot_id = body.get("ilink_bot_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let ilink_user_id = body.get("ilink_user_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let baseurl = body.get("baseurl").and_then(|v| v.as_str()).unwrap_or(WEIXIN_ILINK_BASE).to_string();
+    let tenant_id = body
+        .get("tenant_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let bot_token = body
+        .get("bot_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let ilink_bot_id = body
+        .get("ilink_bot_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let ilink_user_id = body
+        .get("ilink_user_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let baseurl = body
+        .get("baseurl")
+        .and_then(|v| v.as_str())
+        .unwrap_or(WEIXIN_ILINK_BASE)
+        .to_string();
 
     if bot_token.is_empty() || ilink_bot_id.is_empty() {
         return (
@@ -342,7 +376,11 @@ pub async fn weixin_save_token(
         );
     }
 
-    let bind_agent = body.get("bind_agent").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let bind_agent = body
+        .get("bind_agent")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -385,7 +423,9 @@ pub async fn weixin_save_token(
         if let Some(ref pm_arc) = state.plugin_manager {
             let pm = pm_arc.lock().await;
             pm.add_channel_binding("weixin", &tenant_name, &bind_agent);
-            state.kernel.set_default_plugin_tenant(&bind_agent, &tenant_name);
+            state
+                .kernel
+                .set_default_plugin_tenant(&bind_agent, &tenant_name);
             tracing::info!(
                 tenant = %tenant_name,
                 agent = %bind_agent,
@@ -395,10 +435,7 @@ pub async fn weixin_save_token(
     }
 
     tracing::info!(tenant = %tenant_name, ilink_bot_id, "WeChat ilink token saved");
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"ok": true})),
-    )
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
 /// GET `/api/weixin/status` — list all bound WeChat accounts with expiry info.
@@ -619,11 +656,14 @@ pub async fn channels_status(State(state): State<Arc<AppState>>) -> impl IntoRes
         }
     }
 
-    (StatusCode::OK, Json(serde_json::json!({
-        "weixin": { "tenants": weixin_tenants, "count": weixin_tenants.len() },
-        "wecom": { "tenants": wecom_tenants, "count": wecom_tenants.len() },
-        "feishu": { "tenants": feishu_tenants, "count": feishu_tenants.len() },
-    })))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "weixin": { "tenants": weixin_tenants, "count": weixin_tenants.len() },
+            "wecom": { "tenants": wecom_tenants, "count": wecom_tenants.len() },
+            "feishu": { "tenants": feishu_tenants, "count": feishu_tenants.len() },
+        })),
+    )
 }
 
 /// POST `/api/channels/wecom/tenants` — add a WeCom bot (creates bot.toml).

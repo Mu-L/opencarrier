@@ -9,10 +9,7 @@ use std::time::Duration;
 fn dingtalk_headers(token: &str) -> HeaderMap {
     let mut h = HeaderMap::new();
     h.insert("Content-Type", "application/json".parse().unwrap());
-    h.insert(
-        "x-acs-dingtalk-access-token",
-        token.parse().unwrap(),
-    );
+    h.insert("x-acs-dingtalk-access-token", token.parse().unwrap());
     h
 }
 
@@ -64,21 +61,16 @@ pub async fn open_gateway(
         client_id: client_id.to_string(),
         client_secret: client_secret.to_string(),
         ua: "opencarrier".to_string(),
-        subscriptions: vec![
-            Subscription {
-                r#type: "CALLBACK".to_string(),
-                topic: TOPIC_ROBOT.to_string(),
-            },
-        ],
+        subscriptions: vec![Subscription {
+            r#type: "CALLBACK".to_string(),
+            topic: TOPIC_ROBOT.to_string(),
+        }],
     };
 
     let mut headers = HeaderMap::new();
     headers.insert("Content-Type", "application/json".parse().unwrap());
     headers.insert("Accept", "application/json".parse().unwrap());
-    headers.insert(
-        "x-acs-dingtalk-access-token",
-        token.parse().unwrap(),
-    );
+    headers.insert("x-acs-dingtalk-access-token", token.parse().unwrap());
 
     let resp = http
         .post(&url)

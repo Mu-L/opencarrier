@@ -1,8 +1,8 @@
 //! Miscellaneous tool module (location, time).
 
 use super::ToolModule;
-use async_trait::async_trait;
 use crate::tool_context::ToolContext;
+use async_trait::async_trait;
 use opencarrier_types::tool::ToolDefinition;
 use serde_json::Value;
 

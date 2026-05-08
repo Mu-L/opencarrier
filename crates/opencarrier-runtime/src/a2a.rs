@@ -418,7 +418,10 @@ impl A2aClient {
         let response = self
             .client
             .get(&agent_json_url)
-            .header("User-Agent", format!("OpenCarrier/{} A2A", env!("CARGO_PKG_VERSION")))
+            .header(
+                "User-Agent",
+                format!("OpenCarrier/{} A2A", env!("CARGO_PKG_VERSION")),
+            )
             .send()
             .await
             .map_err(|e| format!("A2A discovery failed: {e}"))?;

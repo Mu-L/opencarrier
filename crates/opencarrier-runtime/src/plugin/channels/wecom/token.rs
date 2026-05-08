@@ -245,8 +245,8 @@ impl TenantEntry {
             .to_string();
         let expires_in = resp["expires_in"].as_u64().unwrap_or(7200);
 
-        let expires_at =
-            Instant::now() + Duration::from_secs(expires_in.saturating_sub(TOKEN_REFRESH_BUFFER_SECS));
+        let expires_at = Instant::now()
+            + Duration::from_secs(expires_in.saturating_sub(TOKEN_REFRESH_BUFFER_SECS));
 
         info!(tenant = %self.name, "Refreshed WeCom access token");
 
@@ -278,7 +278,10 @@ impl TokenManager {
     }
 
     /// Get a tenant entry by name.
-    pub fn get_tenant(&self, name: &str) -> Option<dashmap::mapref::one::Ref<'_, String, TenantEntry>> {
+    pub fn get_tenant(
+        &self,
+        name: &str,
+    ) -> Option<dashmap::mapref::one::Ref<'_, String, TenantEntry>> {
         self.tenants.get(name)
     }
 
@@ -336,11 +339,7 @@ pub async fn wedoc_post(
 }
 
 /// Send an application message to a WeCom user (App mode).
-pub fn send_app_message(
-    tenant: &TenantEntry,
-    user_id: &str,
-    content: &str,
-) -> Result<(), String> {
+pub fn send_app_message(tenant: &TenantEntry, user_id: &str, content: &str) -> Result<(), String> {
     let agent_id = tenant
         .agent_id()
         .ok_or("send_app_message requires App mode")?
@@ -375,16 +374,14 @@ pub fn send_app_message(
         let _ = tx.send(result);
     });
 
-    let _ = rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))??;
+    let _ = rx
+        .recv()
+        .map_err(|e| format!("Send thread disconnected: {e}"))??;
     Ok(())
 }
 
 /// Send a customer service message (Kf mode).
-pub fn send_kf_message(
-    tenant: &TenantEntry,
-    user_id: &str,
-    content: &str,
-) -> Result<(), String> {
+pub fn send_kf_message(tenant: &TenantEntry, user_id: &str, content: &str) -> Result<(), String> {
     let open_kfid = tenant
         .open_kfid()
         .ok_or("send_kf_message requires Kf mode")?
@@ -419,13 +416,19 @@ pub fn send_kf_message(
         let _ = tx.send(result);
     });
 
-    let _ = rx.recv().map_err(|e| format!("Send thread disconnected: {e}"))??;
+    let _ = rx
+        .recv()
+        .map_err(|e| format!("Send thread disconnected: {e}"))??;
     Ok(())
 }
 
 /// Send a reply via the SmartBot response_url (HTTP POST with markdown).
 #[allow(dead_code)]
-pub fn send_smartbot_response(http: &Client, response_url: &str, content: &str) -> Result<(), String> {
+pub fn send_smartbot_response(
+    http: &Client,
+    response_url: &str,
+    content: &str,
+) -> Result<(), String> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -434,7 +437,11 @@ pub fn send_smartbot_response(http: &Client, response_url: &str, content: &str) 
 }
 
 /// Async version of send_smartbot_response (for use within plugin's own runtime).
-pub async fn send_smartbot_response_async(http: &Client, response_url: &str, content: &str) -> Result<(), String> {
+pub async fn send_smartbot_response_async(
+    http: &Client,
+    response_url: &str,
+    content: &str,
+) -> Result<(), String> {
     let body = serde_json::json!({
         "msgtype": "markdown",
         "markdown": {

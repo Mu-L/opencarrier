@@ -19,16 +19,15 @@ pub async fn list_agent_files(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) =
-        match parse_and_get_agent(&id, &state.kernel.registry) {
-            Ok(r) => r,
-            Err((status, _)) => {
-                return (
-                    status,
-                    Json(serde_json::json!({"error": "Agent not found"})),
-                );
-            }
-        };
+    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
+        Err((status, _)) => {
+            return (
+                status,
+                Json(serde_json::json!({"error": "Agent not found"})),
+            );
+        }
+    };
 
     let workspace = match entry.manifest.workspace {
         Some(ref ws) => ws.clone(),
@@ -498,9 +497,7 @@ pub async fn upload_file(
     )
 }
 /// GET /api/uploads/{file_id} — Serve an uploaded file.
-pub async fn serve_upload(
-    Path(file_id): Path<String>,
-) -> impl IntoResponse {
+pub async fn serve_upload(Path(file_id): Path<String>) -> impl IntoResponse {
     // Validate file_id is a UUID to prevent path traversal
     if uuid::Uuid::parse_str(&file_id).is_err() {
         return (
@@ -573,11 +570,10 @@ pub async fn list_output_files(
     Path(id): Path<String>,
     Query(params): Query<OutputQuery>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) =
-        match parse_and_get_agent(&id, &state.kernel.registry) {
-            Ok(r) => r,
-            Err(resp) => return resp,
-        };
+    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
 
     let workspace = match entry.manifest.workspace {
         Some(ref ws) => ws.clone(),
@@ -656,7 +652,10 @@ pub async fn serve_output_file(
     let err = |status: StatusCode, msg: &str| -> axum::response::Response {
         (
             status,
-            [(axum::http::header::CONTENT_TYPE, "application/json".to_string())],
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "application/json".to_string(),
+            )],
             format!("{{\"error\":\"{}\"}}", msg).into_bytes(),
         )
             .into_response()
@@ -708,7 +707,9 @@ pub async fn serve_output_file(
         Err(_) => return err(StatusCode::NOT_FOUND, "File not found"),
     };
 
-    if !target_canonical.starts_with(&base_canonical) || !target_canonical.starts_with(&ws_canonical) {
+    if !target_canonical.starts_with(&base_canonical)
+        || !target_canonical.starts_with(&ws_canonical)
+    {
         return err(StatusCode::FORBIDDEN, "Path traversal denied");
     }
 
@@ -718,16 +719,16 @@ pub async fn serve_output_file(
     };
 
     // Extract filename for Content-Disposition
-    let filename = file_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(&file_path);
+    let filename = file_path.rsplit('/').next().unwrap_or(&file_path);
 
     // Force download — never execute/render in browser
     let resp = axum::response::Response::builder()
         .status(StatusCode::OK)
         .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
-        .header("content-disposition", format!("attachment; filename=\"{}\"", filename))
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{}\"", filename),
+        )
         .header("x-content-type-options", "nosniff")
         .body(data.into())
         .unwrap();
@@ -746,5 +747,8 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/agents/{id}/upload", routing::post(upload_file))
         .route("/api/uploads/{file_id}", routing::get(serve_upload))
         .route("/api/agents/{id}/output", routing::get(list_output_files))
-        .route("/api/agents/{id}/output/{*path}", routing::get(serve_output_file))
+        .route(
+            "/api/agents/{id}/output/{*path}",
+            routing::get(serve_output_file),
+        )
 }

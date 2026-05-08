@@ -46,9 +46,15 @@ trait CookieHolder {
 macro_rules! impl_cookie {
     ($t:ty) => {
         impl CookieHolder for $t {
-            fn sessdata(&self) -> Option<&str> { self.sessdata.as_deref() }
-            fn bili_jct(&self) -> Option<&str> { self.bili_jct.as_deref() }
-            fn dede_user_id(&self) -> Option<&str> { self.dede_user_id.as_deref() }
+            fn sessdata(&self) -> Option<&str> {
+                self.sessdata.as_deref()
+            }
+            fn bili_jct(&self) -> Option<&str> {
+                self.bili_jct.as_deref()
+            }
+            fn dede_user_id(&self) -> Option<&str> {
+                self.dede_user_id.as_deref()
+            }
         }
     };
 }
@@ -171,19 +177,31 @@ fn parse_video(item: &serde_json::Value) -> serde_json::Value {
 }
 
 fn parse_dynamic_item(item: &serde_json::Value) -> Option<serde_json::Value> {
-    let author = item.pointer("/modules/module_author/name")
-        .and_then(|v| v.as_str()).unwrap_or("");
+    let author = item
+        .pointer("/modules/module_author/name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let id_str = item.get("id_str").and_then(|v| v.as_str()).unwrap_or("");
-    let desc = item.pointer("/modules/module_dynamic/desc/text")
-        .and_then(|v| v.as_str()).unwrap_or("");
-    let archive_title = item.pointer("/modules/module_dynamic/major/archive/title")
-        .and_then(|v| v.as_str()).unwrap_or("");
-    let archive_url = item.pointer("/modules/module_dynamic/major/archive/jump_url")
-        .and_then(|v| v.as_str()).unwrap_or("");
-    let likes = item.pointer("/modules/module_stat/like/count")
-        .and_then(|v| v.as_i64()).unwrap_or(0);
-    let comments = item.pointer("/modules/module_stat/comment/count")
-        .and_then(|v| v.as_i64()).unwrap_or(0);
+    let desc = item
+        .pointer("/modules/module_dynamic/desc/text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let archive_title = item
+        .pointer("/modules/module_dynamic/major/archive/title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let archive_url = item
+        .pointer("/modules/module_dynamic/major/archive/jump_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let likes = item
+        .pointer("/modules/module_stat/like/count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let comments = item
+        .pointer("/modules/module_stat/comment/count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
 
     Some(json!({
         "id": id_str,
@@ -211,7 +229,15 @@ impl BilibiliServer {
         let cookie = make_cookie(&params);
         let mut m = HashMap::new();
         m.insert("bvid".into(), params.bvid);
-        match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/web-interface/view", &m, false).await {
+        match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/web-interface/view",
+            &m,
+            false,
+        )
+        .await
+        {
             Ok(resp) => {
                 let d = resp.pointer("/data");
                 let result = if let Some(d) = d {
@@ -249,34 +275,50 @@ impl BilibiliServer {
     #[tool(description = "搜索视频或用户")]
     async fn bilibili_search(&self, Parameters(params): Parameters<SearchParams>) -> String {
         let cookie = make_cookie(&params);
-        let search_type = if params.r#type.as_deref() == Some("user") { "bili_user" } else { "video" };
+        let search_type = if params.r#type.as_deref() == Some("user") {
+            "bili_user"
+        } else {
+            "video"
+        };
         let mut m = HashMap::new();
         m.insert("search_type".into(), search_type.into());
         m.insert("keyword".into(), params.query);
         m.insert("page".into(), params.page.unwrap_or(1).to_string());
         m.insert("page_size".into(), params.limit.unwrap_or(20).to_string());
 
-        match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/web-interface/wbi/search/type", &m, true).await {
+        match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/web-interface/wbi/search/type",
+            &m,
+            true,
+        )
+        .await
+        {
             Ok(resp) => {
-                let items = resp.get("data")
+                let items = resp
+                    .get("data")
                     .and_then(|d| d.get("result"))
                     .and_then(|r| r.as_array())
                     .map(|arr| {
-                        arr.iter().take(20).map(|item| {
-                            let is_user = item.get("mid").is_some();
-                            if is_user {
-                                json!({
-                                    "type": "user",
-                                    "name": item.get("uname"),
-                                    "mid": item.get("mid"),
-                                    "sign": item.get("usign"),
-                                    "fans": item.get("fans"),
-                                    "videos": item.get("videos"),
-                                })
-                            } else {
-                                parse_video(item)
-                            }
-                        }).collect::<Vec<_>>()
+                        arr.iter()
+                            .take(20)
+                            .map(|item| {
+                                let is_user = item.get("mid").is_some();
+                                if is_user {
+                                    json!({
+                                        "type": "user",
+                                        "name": item.get("uname"),
+                                        "mid": item.get("mid"),
+                                        "sign": item.get("usign"),
+                                        "fans": item.get("fans"),
+                                        "videos": item.get("videos"),
+                                    })
+                                } else {
+                                    parse_video(item)
+                                }
+                            })
+                            .collect::<Vec<_>>()
                     });
                 api::truncate_result(json!(items.unwrap_or_default()).to_string())
             }
@@ -292,13 +334,26 @@ impl BilibiliServer {
         let mut m = HashMap::new();
         m.insert("ps".into(), params.limit.unwrap_or(20).to_string());
         m.insert("pn".into(), "1".into());
-        match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/web-interface/popular", &m, false).await {
+        match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/web-interface/popular",
+            &m,
+            false,
+        )
+        .await
+        {
             Ok(resp) => {
-                let items = resp.pointer("/data/list")
+                let items = resp
+                    .pointer("/data/list")
                     .and_then(|l| l.as_array())
                     .cloned()
                     .unwrap_or_default();
-                let result: Vec<_> = items.iter().take(20).map(|item| parse_video(item)).collect();
+                let result: Vec<_> = items
+                    .iter()
+                    .take(20)
+                    .map(|item| parse_video(item))
+                    .collect();
                 api::truncate_result(json!(result).to_string())
             }
             Err(e) => json!({"error": e}).to_string(),
@@ -310,13 +365,26 @@ impl BilibiliServer {
     #[tool(description = "获取排行榜")]
     async fn bilibili_ranking(&self, Parameters(params): Parameters<RankingParams>) -> String {
         let cookie = make_cookie(&params);
-        match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/web-interface/ranking/v2", &HashMap::new(), false).await {
+        match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/web-interface/ranking/v2",
+            &HashMap::new(),
+            false,
+        )
+        .await
+        {
             Ok(resp) => {
-                let items = resp.pointer("/data/list")
+                let items = resp
+                    .pointer("/data/list")
                     .and_then(|l| l.as_array())
                     .cloned()
                     .unwrap_or_default();
-                let result: Vec<_> = items.iter().take(params.limit.unwrap_or(20) as usize).map(|item| parse_video(item)).collect();
+                let result: Vec<_> = items
+                    .iter()
+                    .take(params.limit.unwrap_or(20) as usize)
+                    .map(|item| parse_video(item))
+                    .collect();
                 api::truncate_result(json!(result).to_string())
             }
             Err(e) => json!({"error": e}).to_string(),
@@ -326,16 +394,31 @@ impl BilibiliServer {
     // ---- User Videos ----
 
     #[tool(description = "获取用户投稿视频")]
-    async fn bilibili_user_videos(&self, Parameters(params): Parameters<UserVideosParams>) -> String {
+    async fn bilibili_user_videos(
+        &self,
+        Parameters(params): Parameters<UserVideosParams>,
+    ) -> String {
         let cookie = make_cookie(&params);
         let mut m = HashMap::new();
         m.insert("mid".into(), params.uid);
         m.insert("pn".into(), params.page.unwrap_or(1).to_string());
         m.insert("ps".into(), params.limit.unwrap_or(20).to_string());
-        m.insert("order".into(), params.order.unwrap_or_else(|| "pubdate".into()));
-        match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/space/wbi/arc/search", &m, true).await {
+        m.insert(
+            "order".into(),
+            params.order.unwrap_or_else(|| "pubdate".into()),
+        );
+        match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/space/wbi/arc/search",
+            &m,
+            true,
+        )
+        .await
+        {
             Ok(resp) => {
-                let items = resp.pointer("/data/list/vlist")
+                let items = resp
+                    .pointer("/data/list/vlist")
                     .and_then(|l| l.as_array())
                     .cloned()
                     .unwrap_or_default();
@@ -362,7 +445,15 @@ impl BilibiliServer {
         let cookie = make_cookie(&params);
         let mut m = HashMap::new();
         m.insert("mid".into(), params.uid);
-        match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/space/wbi/acc/info", &m, true).await {
+        match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/space/wbi/acc/info",
+            &m,
+            true,
+        )
+        .await
+        {
             Ok(resp) => {
                 let d = resp.pointer("/data");
                 let result = if let Some(d) = d {
@@ -394,7 +485,15 @@ impl BilibiliServer {
         // Need to resolve bvid -> aid first
         let mut nav = HashMap::new();
         nav.insert("bvid".into(), params.bvid.clone());
-        let aid = match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/web-interface/view", &nav, false).await {
+        let aid = match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/web-interface/view",
+            &nav,
+            false,
+        )
+        .await
+        {
             Ok(resp) => resp.pointer("/data/aid").and_then(|v| v.as_i64()),
             Err(_) => None,
         };
@@ -411,7 +510,8 @@ impl BilibiliServer {
 
         match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/v2/reply/main", &m, true).await {
             Ok(resp) => {
-                let replies = resp.pointer("/data/replies")
+                let replies = resp
+                    .pointer("/data/replies")
                     .and_then(|r| r.as_array())
                     .cloned()
                     .unwrap_or_default();
@@ -440,13 +540,23 @@ impl BilibiliServer {
         if let Some(uid) = params.uid {
             m.insert("host_mid".into(), uid);
         }
-        match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/polymer/web-dynamic/v1/feed/all", &m, false).await {
+        match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/polymer/web-dynamic/v1/feed/all",
+            &m,
+            false,
+        )
+        .await
+        {
             Ok(resp) => {
-                let items = resp.pointer("/data/items")
+                let items = resp
+                    .pointer("/data/items")
                     .and_then(|i| i.as_array())
                     .cloned()
                     .unwrap_or_default();
-                let result: Vec<_> = items.iter()
+                let result: Vec<_> = items
+                    .iter()
                     .filter_map(|item| parse_dynamic_item(item))
                     .take(params.limit.unwrap_or(15) as usize)
                     .collect();
@@ -466,9 +576,18 @@ impl BilibiliServer {
         m.insert("pn".into(), params.page.unwrap_or(1).to_string());
         m.insert("ps".into(), params.limit.unwrap_or(50).to_string());
         m.insert("order".into(), "desc".into());
-        match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/relation/followings", &m, false).await {
+        match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/relation/followings",
+            &m,
+            false,
+        )
+        .await
+        {
             Ok(resp) => {
-                let items = resp.pointer("/data/list")
+                let items = resp
+                    .pointer("/data/list")
                     .and_then(|l| l.as_array())
                     .cloned()
                     .unwrap_or_default();
@@ -502,8 +621,17 @@ impl BilibiliServer {
 
         let mut folder_m = HashMap::new();
         folder_m.insert("up_mid".into(), uid.to_string());
-        let media_id = match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/v3/fav/folder/created/list-all", &folder_m, true).await {
-            Ok(resp) => resp.pointer("/data/list")
+        let media_id = match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/v3/fav/folder/created/list-all",
+            &folder_m,
+            true,
+        )
+        .await
+        {
+            Ok(resp) => resp
+                .pointer("/data/list")
                 .and_then(|l| l.as_array())
                 .and_then(|a| a.first())
                 .and_then(|f| f.get("id").and_then(|v| v.as_i64())),
@@ -518,9 +646,18 @@ impl BilibiliServer {
         m.insert("ps".into(), params.limit.unwrap_or(20).to_string());
         m.insert("platform".into(), "web".into());
 
-        match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/v3/fav/resource/list", &m, true).await {
+        match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/v3/fav/resource/list",
+            &m,
+            true,
+        )
+        .await
+        {
             Ok(resp) => {
-                let items = resp.pointer("/data/medias")
+                let items = resp
+                    .pointer("/data/medias")
                     .and_then(|m| m.as_array())
                     .cloned()
                     .unwrap_or_default();
@@ -545,9 +682,18 @@ impl BilibiliServer {
         let cookie = make_cookie(&params);
         let mut m = HashMap::new();
         m.insert("ps".into(), params.limit.unwrap_or(20).to_string());
-        match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/web-interface/history/cursor", &m, false).await {
+        match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/web-interface/history/cursor",
+            &m,
+            false,
+        )
+        .await
+        {
             Ok(resp) => {
-                let items = resp.pointer("/data/list")
+                let items = resp
+                    .pointer("/data/list")
                     .and_then(|l| l.as_array())
                     .cloned()
                     .unwrap_or_default();
@@ -577,7 +723,15 @@ impl BilibiliServer {
         // Need to resolve bvid -> cid
         let mut nav = HashMap::new();
         nav.insert("bvid".into(), params.bvid.clone());
-        let cid = match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/web-interface/view", &nav, false).await {
+        let cid = match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/web-interface/view",
+            &nav,
+            false,
+        )
+        .await
+        {
             Ok(resp) => resp.pointer("/data/cid").and_then(|v| v.as_i64()),
             Err(_) => None,
         };
@@ -592,7 +746,8 @@ impl BilibiliServer {
 
         match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/player/wbi/v2", &m, true).await {
             Ok(resp) => {
-                let subtitles = resp.pointer("/data/subtitle/subtitles")
+                let subtitles = resp
+                    .pointer("/data/subtitle/subtitles")
                     .and_then(|s| s.as_array())
                     .cloned()
                     .unwrap_or_default();
@@ -615,7 +770,15 @@ impl BilibiliServer {
     #[tool(description = "获取当前账号信息")]
     async fn bilibili_me(&self, Parameters(params): Parameters<MeParams>) -> String {
         let cookie = make_cookie(&params);
-        match api::bilibili_api(&cookie, reqwest::Method::GET, "/x/web-interface/nav", &HashMap::new(), false).await {
+        match api::bilibili_api(
+            &cookie,
+            reqwest::Method::GET,
+            "/x/web-interface/nav",
+            &HashMap::new(),
+            false,
+        )
+        .await
+        {
             Ok(resp) => {
                 let d = resp.pointer("/data");
                 let result = if let Some(d) = d {

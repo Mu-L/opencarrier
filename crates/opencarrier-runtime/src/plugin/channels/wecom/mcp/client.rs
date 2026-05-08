@@ -74,7 +74,11 @@ pub async fn call_tool(
         .ok_or_else(|| format!("MCP response missing result: {}", truncate_json(&body, 200)))?;
 
     // Check isError flag
-    if result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if result
+        .get("isError")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         let text = extract_text_content(result);
         return Err(format!("MCP tool error: {text}"));
     }

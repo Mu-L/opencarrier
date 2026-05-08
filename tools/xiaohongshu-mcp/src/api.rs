@@ -18,12 +18,6 @@ fn client(cookie_str: &str) -> ApiClient {
         .with_header("Origin", "https://creator.xiaohongshu.com")
 }
 
-pub async fn xhs_api(
-    cookie_str: &str,
-    path: &str,
-    method: Method,
-) -> Result<Value, String> {
-    client(cookie_str)
-        .request(method, path, None, None)
-        .await
+pub async fn xhs_api(cookie_str: &str, path: &str, method: Method) -> Result<Value, String> {
+    client(cookie_str).request(method, path, None, None).await
 }

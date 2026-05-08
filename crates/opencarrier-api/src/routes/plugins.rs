@@ -214,7 +214,11 @@ fn read_channels_from_toml(path: &std::path::Path) -> Vec<String> {
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|v| v.get("channel_type").and_then(|ct| ct.as_str()).map(String::from))
+                .filter_map(|v| {
+                    v.get("channel_type")
+                        .and_then(|ct| ct.as_str())
+                        .map(String::from)
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -229,15 +233,21 @@ fn read_toml_meta(path: &std::path::Path) -> (Vec<String>, String) {
         Ok(d) => d,
         Err(_) => return (vec![], "0.1.0".to_string()),
     };
-    let channels = doc.get("channels")
+    let channels = doc
+        .get("channels")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .filter_map(|v| v.get("channel_type").and_then(|ct| ct.as_str()).map(String::from))
+                .filter_map(|v| {
+                    v.get("channel_type")
+                        .and_then(|ct| ct.as_str())
+                        .map(String::from)
+                })
                 .collect()
         })
         .unwrap_or_default();
-    let version = doc.get("plugin")
+    let version = doc
+        .get("plugin")
         .and_then(|p| p.get("version"))
         .and_then(|v| v.as_str())
         .unwrap_or("0.1.0")

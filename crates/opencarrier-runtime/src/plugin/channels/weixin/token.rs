@@ -84,11 +84,7 @@ impl TenantState {
 
     /// Get the cached context_token for a user.
     pub fn get_context_token(&self, user_id: &str) -> Option<String> {
-        self.context_tokens
-            .lock()
-            .unwrap()
-            .get(user_id)
-            .cloned()
+        self.context_tokens.lock().unwrap().get(user_id).cloned()
     }
 
     /// Cache a typing_ticket for a user (valid 24h, we cache for 23h).
@@ -285,7 +281,10 @@ impl WeixinState {
     }
 
     /// Get a tenant state by name.
-    pub fn get_tenant(&self, name: &str) -> Option<dashmap::mapref::one::Ref<'_, String, TenantState>> {
+    pub fn get_tenant(
+        &self,
+        name: &str,
+    ) -> Option<dashmap::mapref::one::Ref<'_, String, TenantState>> {
         self.tenants.get(name)
     }
 
