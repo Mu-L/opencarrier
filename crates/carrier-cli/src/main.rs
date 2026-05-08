@@ -1880,7 +1880,7 @@ fn cmd_doctor(json: bool, repair: bool) {
         }
 
         // --- Check 6: Database file ---
-        let db_path = carrier_dir.join("data").join("carrier.db");
+        let db_path = carrier_dir.join("data").join("opencarrier.db");
         if db_path.exists() {
             // Quick SQLite magic bytes check
             if let Ok(bytes) = std::fs::read(&db_path) {

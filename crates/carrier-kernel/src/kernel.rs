@@ -445,7 +445,7 @@ impl CarrierKernel {
             .memory
             .sqlite_path
             .clone()
-            .unwrap_or_else(|| config.data_dir.join("carrier.db"));
+            .unwrap_or_else(|| config.data_dir.join("opencarrier.db"));
         let memory = Arc::new(
             MemorySubstrate::open(&db_path, config.memory.decay_rate)
                 .map_err(|e| KernelError::BootFailed(format!("Memory init failed: {e}")))?,
