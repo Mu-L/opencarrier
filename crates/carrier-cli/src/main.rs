@@ -11,7 +11,7 @@ mod templates;
 mod ui;
 
 use carrier_api::server::read_daemon_info;
-use carrier_kernel::{CarrierKernel, KernelHandle};
+use carrier_kernel::CarrierKernel;
 use carrier_types::agent::{AgentId, AgentManifest};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
@@ -922,76 +922,6 @@ fn cmd_start(config: Option<PathBuf>) {
                 std::process::exit(1);
             }
         };
-
-        // ── Install default clones from Hub (only if missing) ─────────
-        const DEFAULT_CLONES: &[&str] = &["clone-creator", "clone-trainer"];
-        let hub = &kernel.config.hub;
-        if let Ok(api_key) = std::env::var(&hub.api_key_env) {
-            for clone_name in DEFAULT_CLONES {
-                if kernel.registry.find_by_name(clone_name).is_some() {
-                    continue; // already installed
-                }
-
-                let url = format!(
-                    "{}/api/templates/{}/download",
-                    hub.url.trim_end_matches('/'),
-                    clone_name
-                );
-                eprintln!("  Installing default clone '{}' from Hub...", clone_name);
-
-                let device_id = carrier_clone::hub::get_or_create_device_id(&kernel.config.home_dir)
-                    .unwrap_or_else(|_| "unknown".to_string());
-
-                match reqwest::Client::new()
-                    .get(&url)
-                    .bearer_auth(&api_key)
-                    .header("X-Device-ID", &device_id)
-                    .send()
-                    .await
-                {
-                    Ok(resp) => {
-                        if resp.status().is_success() {
-                            match resp.bytes().await {
-                                Ok(bytes) => {
-                                    match kernel.clone_install(clone_name, &bytes).await {
-                                        Ok((id, name)) => {
-                                            eprintln!("  ✓ Clone '{}' installed (id={})", name, id);
-                                        }
-                                        Err(e) => {
-                                            eprintln!(
-                                                "  ⚠ Failed to install clone '{}': {}",
-                                                clone_name, e
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "  ⚠ Failed to read .agx for '{}': {}",
-                                        clone_name, e
-                                    );
-                                }
-                            }
-                        } else {
-                            let status = resp.status();
-                            let body = resp.text().await.unwrap_or_default();
-                            eprintln!(
-                                "  ⚠ Hub returned {} for '{}': {}",
-                                status,
-                                clone_name,
-                                body
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "  ⚠ Cannot download '{}': {}",
-                            clone_name, e
-                        );
-                    }
-                }
-            }
-        }
 
         let listen_addr = kernel.config.api_listen.clone();
         let daemon_info_path = kernel.config.home_dir.join("daemon.json");
