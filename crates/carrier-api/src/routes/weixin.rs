@@ -38,8 +38,11 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<Strin
         .header("X-Device-ID", &device_id)
         .timeout(std::time::Duration::from_secs(30));
 
-    // Use API key if available
-    if let Ok(key) = carrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env) {
+    // Read Hub API key from .env file directly
+    let api_key_env = &state.kernel.config.hub.api_key_env;
+    let key_result = carrier_clone::hub::read_api_key(api_key_env);
+    tracing::info!(env_var = %api_key_env, has_key = key_result.is_ok(), "Hub API key lookup for auto-install");
+    if let Ok(key) = key_result {
         req = req.bearer_auth(&key);
     }
 
