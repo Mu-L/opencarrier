@@ -35,7 +35,7 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<Strin
 
     let mut req = reqwest::Client::new()
         .get(&download_url)
-        .header("X-Device-ID", &device_id)
+        // X-Device-ID causes 401 on Hub download, skip it
         .timeout(std::time::Duration::from_secs(30));
 
     // Read Hub API key from .env file directly
