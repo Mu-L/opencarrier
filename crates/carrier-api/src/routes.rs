@@ -19,6 +19,7 @@ pub mod observability;
 pub mod plugin_toml;
 pub mod plugins;
 pub mod providers;
+pub mod sender_routes;
 pub mod sessions;
 pub mod state;
 pub mod tools_skills;

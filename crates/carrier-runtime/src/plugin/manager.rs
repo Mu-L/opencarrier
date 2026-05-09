@@ -12,6 +12,7 @@ use tracing::{error, info};
 use super::bridge::PluginBridgeManager;
 use super::builtin_registry::BuiltinPluginRegistry;
 use super::loader::PluginLoader;
+use super::router::SenderRouter;
 use super::tool_dispatch::PluginToolDispatcher;
 use crate::kernel_handle::KernelHandle;
 
@@ -35,6 +36,8 @@ pub struct PluginManager {
     bridge_bindings: Option<Arc<DashMap<(String, String), String>>>,
     /// Shared tenant-to-bot map (kept after start() for dynamic additions).
     bridge_tenant_map: Option<Arc<DashMap<(String, String), String>>>,
+    /// Sender-based router (sender_id → agent_id), set before start().
+    sender_router: Option<Arc<SenderRouter>>,
 }
 
 impl PluginManager {
@@ -49,7 +52,13 @@ impl PluginManager {
             kernel,
             bridge_bindings: None,
             bridge_tenant_map: None,
+            sender_router: None,
         }
+    }
+
+    /// Set the sender-based router (must be called before start()).
+    pub fn set_sender_router(&mut self, router: Arc<SenderRouter>) {
+        self.sender_router = Some(router);
     }
 
     /// Load all plugins from the given directory.
@@ -117,6 +126,12 @@ impl PluginManager {
 
         // Build channel bindings from bot.toml files
         let mut bridge = PluginBridgeManager::new(self.kernel.clone());
+
+        // Set sender router if configured (enables sender_id-based routing)
+        if let Some(ref router) = self.sender_router {
+            bridge.set_sender_router(router.clone());
+        }
+
         for plugin in &self.loaded_plugins {
             bridge.add_plugin(plugin.clone());
 
@@ -206,6 +221,15 @@ impl PluginManager {
         self.bridge_bindings = Some(bridge.shared_bindings());
         self.bridge_tenant_map = Some(bridge.shared_tenant_map());
 
+        // Set first agent on sender router from discovered bindings
+        if let Some(ref router) = self.sender_router {
+            if let Some(ref bindings) = self.bridge_bindings {
+                if let Some(first_binding) = bindings.iter().next() {
+                    router.set_first_agent(first_binding.value().clone());
+                }
+            }
+        }
+
         // Start bridge in a background task
         if let Some(rx) = self.message_rx.take() {
             tokio::spawn(async move {
@@ -252,6 +276,31 @@ impl PluginManager {
     pub fn remove_channel_tenant_map(&self, channel_type: &str, tenant_id: &str) {
         if let Some(ref map) = self.bridge_tenant_map {
             map.remove(&(channel_type.to_string(), tenant_id.to_string()));
+        }
+    }
+
+    /// Set a sender route (sender_id → agent_id).
+    pub fn set_sender_route(&self, sender_id: &str, agent_id: &str) {
+        if let Some(ref router) = self.sender_router {
+            router.set_route(sender_id, agent_id);
+        }
+    }
+
+    /// Get a sender's current route (no auto-assign).
+    pub fn get_sender_route(&self, sender_id: &str) -> Option<String> {
+        self.sender_router.as_ref()?.get_route(sender_id)
+    }
+
+    /// Remove a sender's route.
+    pub fn remove_sender_route(&self, sender_id: &str) -> Option<String> {
+        self.sender_router.as_ref()?.remove_route(sender_id)
+    }
+
+    /// List all sender routes.
+    pub fn list_sender_routes(&self) -> Vec<(String, String)> {
+        match &self.sender_router {
+            Some(router) => router.list_routes(),
+            None => Vec::new(),
         }
     }
 

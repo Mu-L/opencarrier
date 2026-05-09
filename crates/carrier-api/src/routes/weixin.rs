@@ -251,6 +251,8 @@ pub async fn weixin_qrcode_status(
                                                 agent_id,
                                                 &existing_tenant,
                                             );
+                                            // Create sender route for the QR-scanning user
+                                            pm.set_sender_route(uid, agent_id);
                                             tracing::info!(
                                                 tenant = %existing_tenant,
                                                 agent = %agent_id,
@@ -337,6 +339,12 @@ pub async fn weixin_qrcode_status(
                     let pm = pm_arc.lock().await;
                     pm.add_channel_binding("weixin", tenant, agent_id);
                     state.kernel.set_default_plugin_tenant(agent_id, tenant);
+                    // Create sender route for the QR-scanning user
+                    if let Some(uid) = ilink_user_id {
+                        if !uid.is_empty() {
+                            pm.set_sender_route(uid, agent_id);
+                        }
+                    }
                 }
             }
         }

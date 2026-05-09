@@ -14,6 +14,7 @@ pub mod channels;
 pub mod instance;
 pub mod loader;
 pub mod manager;
+pub mod router;
 pub mod tool_dispatch;
 
 pub use builtin::{BuiltinChannel, BuiltinPlugin};

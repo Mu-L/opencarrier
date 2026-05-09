@@ -128,6 +128,7 @@ pub async fn build_router(
         .merge(routes::tools_skills::router())
         .merge(routes::webhooks::router())
         .merge(routes::weixin::router())
+        .merge(routes::sender_routes::router())
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
         .route("/api/commands", axum::routing::get(routes::list_commands))
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
@@ -198,6 +199,14 @@ pub async fn run_daemon(
             let kernel_handle: Arc<dyn carrier_runtime::kernel_handle::KernelHandle> =
                 kernel.clone();
             let mut pm = PluginManager::new(kernel_handle);
+            // Always create sender-based router (auto-assigns first agent for new senders)
+            {
+                let router = std::sync::Arc::new(
+                    carrier_runtime::plugin::router::SenderRouter::new(&kernel.config.home_dir),
+                );
+                pm.set_sender_router(router);
+                info!("Sender-based routing enabled");
+            }
             let mut registry = carrier_runtime::plugin::BuiltinPluginRegistry::new();
             // Register built-in WeChat channel adapters and tools
             registry.register_channel("weixin", || {
