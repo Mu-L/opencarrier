@@ -1091,11 +1091,13 @@ pub async fn verify_clone_access(
 /// Build a router with all routes for this module.
 /// GET /api/share/agents — Public agent list for the share page.
 ///
-/// Returns a minimal subset (name, display_name, profile, identity)
-/// so the share page can show a picker without authentication.
+/// Returns local running agents + Hub templates so the share page
+/// can show a picker without authentication.
 pub async fn share_list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let all_agents = state.kernel.registry.list();
-    let agents: Vec<serde_json::Value> = all_agents
+    let mut agents: Vec<serde_json::Value> = state
+        .kernel
+        .registry
+        .list()
         .into_iter()
         .filter(|e| matches!(e.state, carrier_types::agent::AgentState::Running))
         .map(|e| {
@@ -1104,6 +1106,7 @@ pub async fn share_list_agents(State(state): State<Arc<AppState>>) -> impl IntoR
                 "display_name": e.manifest.display_name,
                 "profile": e.manifest.profile,
                 "description": e.manifest.description,
+                "source": "local",
                 "identity": {
                     "emoji": e.identity.emoji,
                     "avatar_url": e.identity.avatar_url,
@@ -1111,6 +1114,39 @@ pub async fn share_list_agents(State(state): State<Arc<AppState>>) -> impl IntoR
             })
         })
         .collect();
+
+    // Also fetch Hub templates
+    let hub_url = state.kernel.config.hub.url.trim_end_matches('/').to_string();
+    if !hub_url.is_empty() {
+        let url = format!("{}/api/templates?limit=50&visibility=public", hub_url);
+        match reqwest::Client::new().get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(data) = resp.json::<serde_json::Value>().await {
+                    if let Some(templates) = data.get("templates").and_then(|t| t.as_array()) {
+                        for t in templates {
+                            if t.get("visibility").and_then(|v| v.as_str()) == Some("public") {
+                                agents.push(serde_json::json!({
+                                    "name": t.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                                    "display_name": t.get("display_name").and_then(|v| v.as_str())
+                                        .or_else(|| t.get("name").and_then(|v| v.as_str()))
+                                        .unwrap_or(""),
+                                    "description": t.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+                                    "source": "hub",
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(resp) => {
+                tracing::warn!(status = %resp.status(), "Hub returned non-success for templates");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to fetch Hub templates");
+            }
+        }
+    }
+
     Json(serde_json::json!({"agents": agents}))
 }
 
