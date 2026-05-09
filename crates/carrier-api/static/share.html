@@ -471,14 +471,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     function doPoll() {
       var url = '/api/weixin/qrcode-status?tenant=' + encodeURIComponent(tenant);
       if (qrcode) url += '&qrcode=' + encodeURIComponent(qrcode);
+      if (targetAgentName) url += '&agent_name=' + encodeURIComponent(targetAgentName);
       api('GET', url).then(function(data){
         var status = data.status || (data.data && data.data.status);
         if (status === 'confirmed' || status === 'scaned_confirmed') {
           stopPoll(); clearPendingAuth(); showAuthSuccess('微信授权成功');
-          createBotAndBind('weixin', tenant, {
-            ilink_bot_id: data.ilink_bot_id || '', ilink_user_id: data.ilink_user_id || '',
-            bot_token: data.bot_token || '', baseurl: data.baseurl || ''
-          });
+          // Backend handles token save + binding — just show done
+          showDone();
         } else if (status === 'expired') {
           stopPoll(); clearPendingAuth(); showAuthTimeout('授权已过期');
         } else if (Date.now() - started > 120000) {

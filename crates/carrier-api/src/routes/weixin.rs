@@ -283,18 +283,70 @@ pub async fn weixin_qrcode_status(
             }
         }
 
-        // New user — don't save token here, return iLink data for frontend to save after onboard
+        // New user — save token and optionally bind to agent
         let baseurl = if weixin_validate_baseurl(raw_baseurl) {
             raw_baseurl
         } else {
             WEIXIN_ILINK_BASE
         };
 
+        // Save ilink token file
+        let token_dir = state.kernel.config.home_dir.join("weixin-tokens");
+        let _ = std::fs::create_dir_all(&token_dir);
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let agent_name_param = params.get("agent_name").map(|s| s.as_str()).unwrap_or("");
+        let resolved_agent = if !agent_name_param.is_empty() {
+            if uuid::Uuid::parse_str(agent_name_param).is_ok() {
+                Some(agent_name_param.to_string())
+            } else {
+                let agents = state.kernel.list_agents();
+                agents
+                    .iter()
+                    .find(|a| a.name == agent_name_param)
+                    .map(|a| a.id.clone())
+            }
+        } else {
+            None
+        };
+
+        let token_data = serde_json::json!({
+            "name": tenant,
+            "bot_token": bot_token,
+            "baseurl": baseurl,
+            "ilink_bot_id": ilink_bot_id,
+            "user_id": ilink_user_id,
+            "expires_at": now + 86400,
+            "bind_agent": resolved_agent.as_deref().unwrap_or(""),
+        });
+
+        let filename = ilink_user_id.unwrap_or(tenant);
+        let token_path = token_dir.join(format!("{filename}.json"));
+        if let Ok(json) = serde_json::to_string_pretty(&token_data) {
+            let _ = atomic_write(&token_path, &json);
+        }
+
+        // Register dynamic binding if agent was resolved
+        if let Some(ref agent_id) = resolved_agent {
+            if uuid::Uuid::parse_str(agent_id).is_ok() {
+                if let Some(ref pm_arc) = state.plugin_manager {
+                    let pm = pm_arc.lock().await;
+                    pm.add_channel_binding("weixin", tenant, agent_id);
+                    state.kernel.set_default_plugin_tenant(agent_id, tenant);
+                }
+            }
+        }
+
         tracing::info!(
             tenant,
             ilink_bot_id,
             user_id = ?ilink_user_id,
-            "WeChat iLink QR scan confirmed — new user, returning ilink data"
+            agent = ?resolved_agent,
+            "WeChat iLink QR scan confirmed — new user, token saved"
         );
 
         return (
@@ -303,10 +355,12 @@ pub async fn weixin_qrcode_status(
                 "tenant": tenant,
                 "status": "confirmed",
                 "existing": false,
+                "saved": true,
                 "ilink_bot_id": ilink_bot_id,
                 "ilink_user_id": ilink_user_id,
                 "bot_token": bot_token,
                 "baseurl": baseurl,
+                "bind_agent": resolved_agent,
                 "data": data,
             })),
         );
