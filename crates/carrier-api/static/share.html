@@ -497,8 +497,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       api('GET', '/api/bots/wecom/smartbot/poll?scode=' + encodeURIComponent(scode)).then(function(res){
         if (res.status === 'success') {
           stopPoll(); clearPendingAuth(); showAuthSuccess('企业微信授权成功');
-          platformCredentials.wecom = { bot_id: res.bot_id || '', secret: res.secret || '' };
-          createBotAndBind('wecom');
+          // Backend handles bot creation + binding — just show done
+          showDone();
         } else if (res.status === 'expired') {
           stopPoll(); clearPendingAuth(); showAuthTimeout('授权已过期');
         } else if (Date.now() - started > 120000) {
