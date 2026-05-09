@@ -9,6 +9,72 @@ use axum::Json;
 use carrier_kernel::KernelHandle;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Try to auto-install a Hub template when the agent is not found locally.
+/// Returns the agent_id on success, or None if install fails.
+async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<String> {
+    let hub_url = state.kernel.config.hub.url.trim_end_matches('/').to_string();
+    if hub_url.is_empty() {
+        return None;
+    }
+    if let Err(e) = carrier_clone::hub::validate_hub_url(&hub_url) {
+        tracing::warn!(error = %e, "Hub URL validation failed for auto-install");
+        return None;
+    }
+
+    let device_id = carrier_clone::hub::get_or_create_device_id(&state.kernel.config.home_dir)
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let download_url = format!(
+        "{}/api/templates/{}/download",
+        hub_url,
+        urlencoding::encode(name)
+    );
+
+    tracing::info!(template = %name, "Auto-installing Hub template for QR binding");
+
+    let mut req = reqwest::Client::new()
+        .get(&download_url)
+        .header("X-Device-ID", &device_id)
+        .timeout(std::time::Duration::from_secs(30));
+
+    // Use API key if available
+    if let Ok(key) = carrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env) {
+        req = req.bearer_auth(&key);
+    }
+
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "Hub download request failed");
+            return None;
+        }
+    };
+
+    if !resp.status().is_success() {
+        tracing::warn!(status = %resp.status(), "Hub download failed for auto-install");
+        return None;
+    }
+
+    let agx_bytes = match resp.bytes().await {
+        Ok(b) => b.to_vec(),
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to read Hub download");
+            return None;
+        }
+    };
+
+    match state.kernel.clone_install(name, &agx_bytes).await {
+        Ok((agent_id, agent_name)) => {
+            tracing::info!(%agent_id, %agent_name, "Hub template auto-installed for QR binding");
+            Some(agent_id)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Hub template install failed");
+            None
+        }
+    }
+}
 /// GET `/api/weixin/qrcode` — fetch a fresh QR code for WeChat scanning.
 ///
 /// Query params: `?tenant=<name>` (optional, defaults to "default")
@@ -178,6 +244,23 @@ pub async fn weixin_qrcode_status(
             .and_then(|v| v.as_str())
             .or_else(|| data.get("user_id").and_then(|v| v.as_str()));
 
+        // Resolve agent_name early so both rebind and new-user paths can use it
+        let agent_name_param = params.get("agent_name").map(|s| s.as_str()).unwrap_or("");
+        let resolved_agent = if !agent_name_param.is_empty() {
+            if uuid::Uuid::parse_str(agent_name_param).is_ok() {
+                Some(agent_name_param.to_string())
+            } else {
+                let agents = state.kernel.list_agents();
+                if let Some(agent) = agents.iter().find(|a| a.name == agent_name_param) {
+                    Some(agent.id.clone())
+                } else {
+                    try_install_from_hub(&state, agent_name_param).await
+                }
+            }
+        } else {
+            None
+        };
+
         // Check if this WeChat user already has a tenant (dedup by user_id)
         let token_dir = state.kernel.config.home_dir.join("weixin-tokens");
         if let Some(uid) = ilink_user_id {
@@ -235,30 +318,42 @@ pub async fn weixin_qrcode_status(
                                     let _ = atomic_write(&path, &json);
                                 }
 
-                                // Register dynamic bridge binding if bind_agent exists
-                                if let Some(ref agent_id) = existing_bind {
-                                    if !agent_id.is_empty()
-                                        && uuid::Uuid::parse_str(agent_id).is_ok()
-                                    {
-                                        if let Some(ref pm_arc) = state.plugin_manager {
-                                            let pm = pm_arc.lock().await;
-                                            pm.add_channel_binding(
-                                                "weixin",
-                                                &existing_tenant,
-                                                agent_id,
-                                            );
-                                            state.kernel.set_default_plugin_tenant(
-                                                agent_id,
-                                                &existing_tenant,
-                                            );
-                                            // Create sender route for the QR-scanning user
-                                            pm.set_sender_route(uid, agent_id);
-                                            tracing::info!(
-                                                tenant = %existing_tenant,
-                                                agent = %agent_id,
-                                                "Dynamically bound WeChat bot to agent (rebind)"
-                                            );
-                                        }
+                                // Use resolved_agent from query param if provided,
+                                // otherwise fall back to existing_bind
+                                let effective_agent = resolved_agent
+                                    .as_ref()
+                                    .or(existing_bind.as_ref())
+                                    .filter(|a| !a.is_empty() && uuid::Uuid::parse_str(a).is_ok())
+                                    .cloned();
+
+                                // Update bind_agent in token file if a new agent was resolved
+                                if let Some(ref new_agent) = resolved_agent {
+                                    updated["bind_agent"] =
+                                        serde_json::Value::String(new_agent.clone());
+                                    if let Ok(json) = serde_json::to_string_pretty(&updated) {
+                                        let _ = atomic_write(&path, &json);
+                                    }
+                                }
+
+                                // Register dynamic bridge binding
+                                if let Some(ref agent_id) = effective_agent {
+                                    if let Some(ref pm_arc) = state.plugin_manager {
+                                        let pm = pm_arc.lock().await;
+                                        pm.add_channel_binding(
+                                            "weixin",
+                                            &existing_tenant,
+                                            agent_id,
+                                        );
+                                        state.kernel.set_default_plugin_tenant(
+                                            agent_id,
+                                            &existing_tenant,
+                                        );
+                                        pm.set_sender_route(uid, agent_id);
+                                        tracing::info!(
+                                            tenant = %existing_tenant,
+                                            agent = %agent_id,
+                                            "Dynamically bound WeChat bot to agent (rebind)"
+                                        );
                                     }
                                 }
 
@@ -270,7 +365,7 @@ pub async fn weixin_qrcode_status(
                                         "tenant_id": real_tenant_id,
                                         "status": "confirmed",
                                         "existing": true,
-                                        "bind_agent": existing_bind,
+                                        "bind_agent": effective_agent,
                                         "ilink_bot_id": ilink_bot_id,
                                         "ilink_user_id": ilink_user_id,
                                         "bot_token": bot_token,
@@ -300,21 +395,6 @@ pub async fn weixin_qrcode_status(
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-
-        let agent_name_param = params.get("agent_name").map(|s| s.as_str()).unwrap_or("");
-        let resolved_agent = if !agent_name_param.is_empty() {
-            if uuid::Uuid::parse_str(agent_name_param).is_ok() {
-                Some(agent_name_param.to_string())
-            } else {
-                let agents = state.kernel.list_agents();
-                agents
-                    .iter()
-                    .find(|a| a.name == agent_name_param)
-                    .map(|a| a.id.clone())
-            }
-        } else {
-            None
-        };
 
         let token_data = serde_json::json!({
             "name": tenant,
