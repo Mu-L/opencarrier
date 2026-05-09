@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
@@ -31,7 +31,7 @@ pub struct TenantState {
     /// The WeChat user ID who scanned the QR code.
     pub user_id: Option<String>,
     /// Unix timestamp (seconds) when this token expires.
-    pub expires_at: i64,
+    pub expires_at: AtomicI64,
     /// Shared HTTP client.
     pub http: Client,
     /// Per-user context_token cache: user_id → context_token.
@@ -53,7 +53,7 @@ impl TenantState {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        now >= self.expires_at
+        now >= self.expires_at.load(Ordering::Relaxed)
     }
 
     /// Check if this tenant's token will expire within the given number of seconds.
@@ -62,7 +62,7 @@ impl TenantState {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        now >= self.expires_at - within_secs
+        now >= self.expires_at.load(Ordering::Relaxed) - within_secs
     }
 
     /// Seconds remaining until expiry.
@@ -71,7 +71,7 @@ impl TenantState {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        (self.expires_at - now).max(0)
+        (self.expires_at.load(Ordering::Relaxed) - now).max(0)
     }
 
     /// Store a context_token for a user (from an inbound message).
@@ -176,7 +176,7 @@ impl WeixinState {
                                         baseurl: tf.baseurl,
                                         ilink_bot_id: tf.ilink_bot_id,
                                         user_id: tf.user_id,
-                                        expires_at: tf.expires_at,
+                                        expires_at: AtomicI64::new(tf.expires_at),
                                         http: Client::new(),
                                         context_tokens: Mutex::new(HashMap::new()),
                                         typing_tickets: Mutex::new(HashMap::new()),
@@ -224,7 +224,7 @@ impl WeixinState {
             baseurl: baseurl.to_string(),
             ilink_bot_id: ilink_bot_id.to_string(),
             user_id: user_id.map(|s| s.to_string()),
-            expires_at: now + SESSION_DURATION_SECS,
+            expires_at: AtomicI64::new(now + SESSION_DURATION_SECS),
             http: Client::new(),
             context_tokens: Mutex::new(HashMap::new()),
             typing_tickets: Mutex::new(HashMap::new()),
@@ -263,7 +263,7 @@ impl WeixinState {
             baseurl: state.baseurl.clone(),
             ilink_bot_id: state.ilink_bot_id.clone(),
             user_id: state.user_id.clone(),
-            expires_at: state.expires_at,
+            expires_at: state.expires_at.load(Ordering::Relaxed),
             bind_agent: state.bind_agent.clone(),
         };
 
@@ -326,8 +326,18 @@ impl WeixinState {
                 Ok(t) => t,
                 Err(_) => continue,
             };
-            // Skip if already loaded in memory
-            if self.tenants.contains_key(&tf.name) {
+            // Refresh existing tenant if token file was updated (re-scan)
+            if let Some(mut existing) = self.tenants.get_mut(&tf.name) {
+                if existing.bot_token != tf.bot_token || existing.is_expired() {
+                    info!(tenant = %tf.name, "Refreshing iLink tenant from updated token file");
+                    existing.bot_token = tf.bot_token;
+                    existing.baseurl = tf.baseurl;
+                    existing.ilink_bot_id = tf.ilink_bot_id;
+                    existing.user_id = tf.user_id;
+                    existing.expires_at.store(tf.expires_at, Ordering::Relaxed);
+                    existing.active.store(true, Ordering::Relaxed);
+                    existing.bind_agent = tf.bind_agent;
+                }
                 continue;
             }
             if now >= tf.expires_at {
@@ -340,7 +350,7 @@ impl WeixinState {
                 baseurl: tf.baseurl,
                 ilink_bot_id: tf.ilink_bot_id,
                 user_id: tf.user_id,
-                expires_at: tf.expires_at,
+                expires_at: AtomicI64::new(tf.expires_at),
                 http: Client::new(),
                 context_tokens: Mutex::new(HashMap::new()),
                 typing_tickets: Mutex::new(HashMap::new()),
@@ -362,7 +372,7 @@ impl WeixinState {
                     "name": state.name,
                     "ilink_bot_id": state.ilink_bot_id,
                     "user_id": state.user_id,
-                    "expires_at": state.expires_at,
+                    "expires_at": state.expires_at.load(Ordering::Relaxed),
                     "remaining_secs": state.remaining_secs(),
                     "expired": state.is_expired(),
                     "active": state.active.load(Ordering::Relaxed),
