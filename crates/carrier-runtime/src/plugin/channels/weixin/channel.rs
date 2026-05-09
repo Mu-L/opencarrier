@@ -262,8 +262,34 @@ async fn poll_loop_inner(
                 }
 
                 if let Some(msgs) = resp.msgs {
+                    // Renew session expiry on every successful getUpdates
+                    if let Some(state) = WEIXIN_STATE.tenants.get(tenant_name) {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64;
+                        state.expires_at.store(
+                            now + SESSION_DURATION_SECS,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        state.active.store(true, std::sync::atomic::Ordering::Relaxed);
+                        // Persist updated expiry to disk
+                        WEIXIN_STATE.save_tenant(&state);
+                    }
                     for msg in msgs {
                         process_inbound_message(tenant_name, &msg, &sender);
+                    }
+                } else {
+                    // No messages but successful poll — still renew to keep session alive
+                    if let Some(state) = WEIXIN_STATE.tenants.get(tenant_name) {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64;
+                        state.expires_at.store(
+                            now + SESSION_DURATION_SECS,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
                     }
                 }
             }
