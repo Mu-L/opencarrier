@@ -271,13 +271,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       agents.forEach(function(a){
         var card = document.createElement('div');
         card.className = 'agent-card';
-        var name = a.display_name || a.name || a.id || '';
+        var displayName = a.display_name || a.name || a.id || '';
+        var agentId = a.name || a.id || '';
         var desc = a.description || a.profile || '';
         card.innerHTML =
-          '<div class="agent-avatar">' + emoji(name) + '</div>' +
-          '<div class="info"><h4>' + esc(name) + '</h4><p>' + esc(desc) + '</p></div>';
+          '<div class="agent-avatar">' + emoji(displayName) + '</div>' +
+          '<div class="info"><h4>' + esc(displayName) + '</h4><p>' + esc(desc) + '</p></div>';
         card.onclick = function(){
-          targetAgentName = name;
+          targetAgentName = agentId;
           startAuth();
         };
         listEl.appendChild(card);
