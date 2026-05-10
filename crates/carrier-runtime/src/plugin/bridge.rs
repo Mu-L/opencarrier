@@ -33,6 +33,8 @@ pub struct PluginBridgeManager {
     owned_bots: Arc<Mutex<HashSet<String>>>,
     /// Sender-based routing (sender_id → agent_id). Takes priority over channel_bindings.
     sender_router: Option<Arc<SenderRouter>>,
+    /// sender_id of users currently in the "naming" flow (waiting for agent name).
+    pending_naming: DashMap<String, String>,
 }
 
 impl PluginBridgeManager {
@@ -45,6 +47,7 @@ impl PluginBridgeManager {
             sender_channels: DashMap::new(),
             owned_bots: Arc::new(Mutex::new(HashSet::new())),
             sender_router: None,
+            pending_naming: DashMap::new(),
         }
     }
 
@@ -118,7 +121,64 @@ impl PluginBridgeManager {
             );
         }
 
-        // Resolve agent: sender_id routing > channel binding > default
+        // 1. Check if sender is in naming flow
+        if let Some((_, agent_id)) = self.pending_naming.remove(&msg.sender_id) {
+            let name = text.trim().to_string();
+            if !name.is_empty() {
+                if let Some(ref router) = self.sender_router {
+                    router.set_alias(&msg.sender_id, &name, &agent_id);
+                }
+                let confirm = format!("好的，我现在叫{name}。以后叫我{name}我就出来啦！");
+                self.send_response(&msg, &confirm);
+            } else {
+                // Empty name, keep in pending
+                self.pending_naming.insert(msg.sender_id.clone(), agent_id);
+                self.send_response(&msg, "名字不能为空哦，请再告诉我你想叫我什么？");
+            }
+            return;
+        }
+
+        // 2. Try name-based routing (message starts with an alias)
+        if let Some((agent_id, remaining)) = self.try_route_by_name(&text, &msg) {
+            info!(
+                channel = %msg.channel_type,
+                bot = %msg.bot_id,
+                agent = %agent_id,
+                sender = %msg.sender_id,
+                "Routing by name to agent"
+            );
+
+            // Update sender's default route to this agent
+            if let Some(ref router) = self.sender_router {
+                router.set_route(&msg.sender_id, &agent_id);
+            }
+
+            let msg_text = if remaining.is_empty() { "你好".to_string() } else { remaining };
+            match self
+                .kernel
+                .send_to_agent(
+                    &agent_id,
+                    &msg_text,
+                    Some(&msg.sender_id),
+                    Some(&msg.sender_name),
+                    None,
+                )
+                .await
+            {
+                Ok(response) => self.send_response(&msg, &response),
+                Err(e) => error!(agent = %agent_id, error = %e, "Failed to send message to agent"),
+            }
+            return;
+        }
+
+        // 3. /list command
+        if text.trim().eq_ignore_ascii_case("/list") {
+            let response = self.format_agent_list(&msg.sender_id);
+            self.send_response(&msg, &response);
+            return;
+        }
+
+        // 4. Default routing via sender_id
         let agent_id = self.resolve_agent(&msg);
         if agent_id.is_empty() {
             warn!(
@@ -128,6 +188,15 @@ impl PluginBridgeManager {
                 "No agent resolved, dropping message"
             );
             return;
+        }
+
+        // 5. Check if this agent needs a name
+        if let Some(ref router) = self.sender_router {
+            if router.needs_naming(&msg.sender_id) {
+                self.pending_naming.insert(msg.sender_id.clone(), agent_id.clone());
+                self.send_response(&msg, "请给我取个名字吧！以后叫这个名字我就会出来。");
+                return;
+            }
         }
 
         info!(
@@ -160,6 +229,115 @@ impl PluginBridgeManager {
                 );
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Name-based routing
+    // -----------------------------------------------------------------------
+
+    /// Try to route by matching the start of the text against sender aliases.
+    /// Returns (agent_id, remaining_text) if matched, None otherwise.
+    fn try_route_by_name(&self, text: &str, msg: &PluginMessage) -> Option<(String, String)> {
+        let router = self.sender_router.as_ref()?;
+        if msg.sender_id.is_empty() {
+            return None;
+        }
+
+        let aliases = router.list_aliases(&msg.sender_id);
+        if aliases.is_empty() {
+            return None;
+        }
+
+        let text_lower = text.to_lowercase();
+
+        // Find longest matching alias at the start of text
+        let mut best_name: Option<&str> = None;
+        let mut best_agent_id: Option<String> = None;
+        let mut best_len = 0;
+
+        for (name, agent_id) in &aliases {
+            if text_lower.starts_with(name.as_str()) && name.len() > best_len {
+                // Name must be followed by a separator or end of text
+                let rest = &text_lower[name.len()..];
+                if rest.is_empty() || rest.starts_with('，') || rest.starts_with(',') || rest.starts_with(' ') || rest.starts_with('！') || rest.starts_with('!') || rest.starts_with('？') || rest.starts_with('?') {
+                    best_name = Some(name);
+                    best_agent_id = Some(agent_id.clone());
+                    best_len = name.len();
+                }
+            }
+        }
+
+        match (best_name, best_agent_id) {
+            (Some(_), Some(agent_id)) => {
+                // Strip the name and separator from the text
+                let remaining = text[best_len..]
+                    .trim_start_matches(['，', ',', ' ', '！', '!', '？', '?'])
+                    .to_string();
+                info!(
+                    sender = %msg.sender_id,
+                    agent = %agent_id,
+                    "Name-based route matched"
+                );
+                Some((agent_id, remaining))
+            }
+            _ => None,
+        }
+    }
+
+    /// Format the agent list for a sender, showing aliases and available agents.
+    fn format_agent_list(&self, sender_id: &str) -> String {
+        let agents = self.kernel.list_agents();
+        let mut lines = Vec::new();
+
+        if let Some(ref router) = self.sender_router {
+            let aliases = router.list_aliases(sender_id);
+            let current_agent = router.get_route(sender_id);
+
+            if !aliases.is_empty() {
+                lines.push("你的助手：".to_string());
+                for (name, agent_id) in &aliases {
+                    let agent_name = agents
+                        .iter()
+                        .find(|a| &a.id == agent_id)
+                        .map(|a| a.name.as_str())
+                        .unwrap_or("?");
+                    let is_current = current_agent.as_ref() == Some(agent_id);
+                    let marker = if is_current { " ★" } else { "" };
+                    lines.push(format!("  {name}（{agent_name}）{marker}"));
+                }
+            }
+
+            // Show agents without aliases
+            let aliased_agents: Vec<String> = aliases.iter().map(|(_, aid)| aid.clone()).collect();
+            let unnamed: Vec<_> = agents
+                .iter()
+                .filter(|a| !aliased_agents.contains(&a.id))
+                .collect();
+            if !unnamed.is_empty() {
+                lines.push(String::new());
+                lines.push("可用但未命名的助手：".to_string());
+                for agent in unnamed {
+                    let is_current = current_agent.as_ref() == Some(&agent.id);
+                    let marker = if is_current { " ★" } else { "" };
+                    let desc = if agent.description.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {}", agent.description)
+                    };
+                    lines.push(format!("  {}（{}）{}{marker}", agent.id, agent.name, desc));
+                }
+            }
+        } else {
+            lines.push("助手列表：".to_string());
+            for agent in &agents {
+                lines.push(format!("  {} — {}", agent.name, agent.description));
+            }
+        }
+
+        lines.push(String::new());
+        lines.push("提示：直接叫助手名字就能对话，比如\"小明，帮我查一下\"".to_string());
+
+        lines.join("\n")
     }
 
     /// Resolve which agent handles a message via sender_id routing.
