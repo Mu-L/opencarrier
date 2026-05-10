@@ -326,10 +326,12 @@ impl WeixinState {
                 Ok(t) => t,
                 Err(_) => continue,
             };
-            // Refresh existing tenant if token file was updated (re-scan)
+            // Refresh existing tenant only if a new bot_token was written (re-scan).
+            // Do NOT refresh just because in-memory is expired — the iLink server
+            // may have invalidated the session while the local file still looks valid.
             if let Some(mut existing) = self.tenants.get_mut(&tf.name) {
-                if tf.expires_at > 0 && (existing.bot_token != tf.bot_token || existing.is_expired()) {
-                    info!(tenant = %tf.name, "Refreshing iLink tenant from updated token file");
+                if existing.bot_token != tf.bot_token {
+                    info!(tenant = %tf.name, "Refreshing iLink tenant from updated token file (new bot_token)");
                     existing.bot_token = tf.bot_token;
                     existing.baseurl = tf.baseurl;
                     existing.ilink_bot_id = tf.ilink_bot_id;
