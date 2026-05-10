@@ -311,11 +311,6 @@ pub async fn weixin_qrcode_status(
                                 if let Some(ref agent_id) = effective_agent {
                                     if let Some(ref pm_arc) = state.plugin_manager {
                                         let pm = pm_arc.lock().await;
-                                        pm.add_channel_binding(
-                                            "weixin",
-                                            &existing_bot,
-                                            agent_id,
-                                        );
                                         pm.set_sender_route(uid, agent_id);
                                         tracing::info!(
                                             bot = %existing_bot,
@@ -329,7 +324,6 @@ pub async fn weixin_qrcode_status(
                                 return (
                                     StatusCode::OK,
                                     Json(serde_json::json!({
-                                        "bot_id": existing_bot,
                                         "bot_id": real_bot_id,
                                         "status": "confirmed",
                                         "existing": true,
@@ -385,7 +379,6 @@ pub async fn weixin_qrcode_status(
             if uuid::Uuid::parse_str(agent_id).is_ok() {
                 if let Some(ref pm_arc) = state.plugin_manager {
                     let pm = pm_arc.lock().await;
-                    pm.add_channel_binding("weixin", bot, agent_id);
                     // Create sender route for the QR-scanning user
                     if let Some(uid) = ilink_user_id {
                         if !uid.is_empty() {
@@ -531,7 +524,6 @@ pub async fn weixin_save_token(
     if !bind_agent.is_empty() && uuid::Uuid::parse_str(&bind_agent).is_ok() {
         if let Some(ref pm_arc) = state.plugin_manager {
             let pm = pm_arc.lock().await;
-            pm.add_channel_binding("weixin", &bot_name, &bind_agent);
             // WeChat uses user_id as route key
             if let Some(ref uid) = ilink_user_id {
                 if !uid.is_empty() {
@@ -1156,7 +1148,6 @@ pub async fn weixin_bind_bot(
                 // Register dynamic binding
                 if let Some(ref pm_arc) = state.plugin_manager {
                     let pm = pm_arc.lock().await;
-                    pm.add_channel_binding("weixin", &name, &agent_uuid);
                     // WeChat uses user_id as route key
                     let uid = tf.get("user_id").and_then(|v| v.as_str()).unwrap_or("");
                     if !uid.is_empty() {

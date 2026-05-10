@@ -131,82 +131,10 @@ impl WeixinState {
         let home = carrier_types::config::home_dir();
         let token_dir = home.join("weixin-sessions");
 
-        // Auto-migrate from old weixin-tokens/ directory
-        let old_dir = home.join("weixin-tokens");
-        if old_dir.exists() && !token_dir.exists() {
-            Self::migrate_old_tokens(&old_dir, &token_dir);
-        }
-
         Self {
             bots: DashMap::new(),
             token_dir,
             http: Client::new(),
-        }
-    }
-
-    /// Migrate token files from weixin-tokens/ to weixin-sessions/,
-    /// converting the old `"name"` field to `"bot_id"`.
-    fn migrate_old_tokens(old_dir: &Path, new_dir: &Path) {
-        if let Err(e) = std::fs::create_dir_all(new_dir) {
-            warn!(dir = %new_dir.display(), "Failed to create weixin-sessions dir for migration: {e}");
-            return;
-        }
-
-        let entries = match std::fs::read_dir(old_dir) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!(dir = %old_dir.display(), "Failed to read old weixin-tokens dir: {e}");
-                return;
-            }
-        };
-
-        let mut migrated = 0;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let mut tf: serde_json::Value = match serde_json::from_str(&content) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            // Rename "name" → "bot_id"
-            let bot_id = tf
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            if !bot_id.is_empty() {
-                if let Some(o) = tf.as_object_mut() {
-                    o.remove("name");
-                    o.insert("bot_id".into(), serde_json::Value::String(bot_id.clone()));
-                }
-            }
-
-            let new_path = new_dir.join(format!("{}.json", bot_id));
-            match serde_json::to_string_pretty(&tf) {
-                Ok(json) => {
-                    if let Err(e) = std::fs::write(&new_path, &json) {
-                        warn!(path = %new_path.display(), "Failed to write migrated token file: {e}");
-                        continue;
-                    }
-                }
-                Err(_) => continue,
-            }
-            migrated += 1;
-        }
-
-        if migrated > 0 {
-            info!(count = migrated, "Migrated weixin-tokens → weixin-sessions");
-            // Remove old directory after successful migration
-            if let Err(e) = std::fs::remove_dir_all(old_dir) {
-                warn!(dir = %old_dir.display(), "Failed to remove old weixin-tokens dir: {e}");
-            }
         }
     }
 
@@ -375,24 +303,22 @@ impl WeixinState {
         self.bots.get(user_id)
     }
 
-    /// Find a bot session that matches the given bot_id and has a context_token
-    /// for the given user_id. Used by send() to find the right session.
+    /// Find a bot session for sending a message. Uses user_id as primary key,
+    /// falls back to scanning by bot_id if needed.
     pub fn get_session_for_send(
         &self,
-        bot_id: &str,
+        _bot_id: &str,
         user_id: &str,
     ) -> Option<dashmap::mapref::one::Ref<'_, String, BotSession>> {
-        // First try direct lookup by user_id (most common path)
+        // Direct lookup by user_id (most common path)
         if let Some(state) = self.bots.get(user_id) {
-            if state.bot_id == bot_id || bot_id.is_empty() || bot_id == "default" {
-                return Some(state);
-            }
+            return Some(state);
         }
         // Fallback: find the key for a session with matching bot_id, then get() it
         let found_key = self
             .bots
             .iter()
-            .find(|entry| entry.value().bot_id == bot_id)
+            .find(|entry| entry.value().bot_id == _bot_id)
             .map(|entry| entry.key().clone())?;
         self.bots.get(&found_key)
     }

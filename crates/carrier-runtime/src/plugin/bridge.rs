@@ -1,8 +1,6 @@
 //! Plugin bridge — routes messages between plugin channels and the kernel.
 
-use std::collections::HashSet;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use carrier_types::plugin::PluginMessage;
 use dashmap::DashMap;
@@ -22,16 +20,9 @@ use crate::kernel_handle::KernelHandle;
 pub struct PluginBridgeManager {
     /// Kernel handle for sending messages to agents.
     kernel: Arc<dyn KernelHandle>,
-    /// Loaded plugins (for channel_send responses and plugin directory paths).
+    /// Loaded plugins (for channel_send responses).
     plugins: Vec<Arc<dyn PluginInstance>>,
-    /// (channel_type, bot_id) → agent_id bindings.
-    /// Shared via Arc so PluginManager can add dynamic bindings.
-    channel_bindings: Arc<DashMap<(String, String), String>>,
-    /// sender_id → (channel_type, bot_id) cache for outbound routing.
-    sender_channels: DashMap<String, (String, String)>,
-    /// Bot IDs that already have an owner set (avoids repeated file reads).
-    owned_bots: Arc<Mutex<HashSet<String>>>,
-    /// Sender-based routing (sender_id → agent_id). Takes priority over channel_bindings.
+    /// Sender-based routing (route_key → agent_id).
     sender_router: Option<Arc<SenderRouter>>,
     /// route_key of users currently in the "naming" flow (waiting for agent name).
     pending_naming: DashMap<String, String>,
@@ -43,50 +34,19 @@ impl PluginBridgeManager {
         Self {
             kernel,
             plugins: Vec::new(),
-            channel_bindings: Arc::new(DashMap::new()),
-            sender_channels: DashMap::new(),
-            owned_bots: Arc::new(Mutex::new(HashSet::new())),
             sender_router: None,
             pending_naming: DashMap::new(),
         }
     }
 
-    /// Set the sender-based router (enables sender_id routing).
+    /// Set the sender-based router (enables route_key routing).
     pub fn set_sender_router(&mut self, router: Arc<SenderRouter>) {
         self.sender_router = Some(router);
-    }
-
-    /// Get a shared reference to the channel bindings map.
-    pub fn shared_bindings(&self) -> Arc<DashMap<(String, String), String>> {
-        Arc::clone(&self.channel_bindings)
     }
 
     /// Add a loaded plugin to the bridge.
     pub fn add_plugin(&mut self, plugin: Arc<dyn PluginInstance>) {
         self.plugins.push(plugin);
-    }
-
-    /// Bind a specific (channel_type, bot_id) to an agent.
-    pub fn bind_channel(&mut self, channel_type: String, bot_id: String, agent_id: String) {
-        info!(
-            channel = %channel_type,
-            bot = %bot_id,
-            agent = %agent_id,
-            "Bound channel+bot to agent"
-        );
-        self.channel_bindings
-            .insert((channel_type, bot_id), agent_id);
-    }
-
-    /// Remove a (channel_type, bot_id) binding.
-    pub fn unbind_channel(&mut self, channel_type: &str, bot_id: &str) {
-        self.channel_bindings
-            .remove(&(channel_type.to_string(), bot_id.to_string()));
-    }
-
-    /// Mark a bot as already having an owner (called at startup).
-    pub fn mark_bot_owned(&mut self, bot_id: String) {
-        self.owned_bots.lock().unwrap().insert(bot_id);
     }
 
     /// Run the message processing loop (consumes self).
@@ -119,23 +79,12 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     async fn handle_inbound(&self, msg: PluginMessage) {
-        // Set owner on first message
-        self.try_set_owner(&msg).await;
-
         let text = match msg.content.as_text() {
             Some(t) => t.to_string(),
             None => self.describe_non_text_content(&msg),
         };
 
         let rk = self.route_key(&msg);
-
-        // Cache sender → (channel_type, bot_id) for outbound routing
-        if !msg.sender_id.is_empty() && !msg.bot_id.is_empty() {
-            self.sender_channels.insert(
-                msg.sender_id.clone(),
-                (msg.channel_type.clone(), msg.bot_id.clone()),
-            );
-        }
 
         // 1. Check if route is in naming flow
         if let Some((_, agent_id)) = self.pending_naming.remove(&rk) {
@@ -370,60 +319,6 @@ impl PluginBridgeManager {
         String::new()
     }
 
-    /// If this bot has no owner yet, set the message sender as owner.
-    async fn try_set_owner(&self, msg: &PluginMessage) {
-        let bot_id = &msg.bot_id;
-        if bot_id.is_empty() || msg.sender_id.is_empty() {
-            return;
-        }
-
-        {
-            let owned = self.owned_bots.lock().unwrap();
-            if owned.contains(bot_id) {
-                return;
-            }
-        }
-
-        // Find the plugin directory for this bot
-        let bot_toml_path = match self.find_bot_toml(&msg.channel_type, bot_id) {
-            Some(p) => p,
-            None => return,
-        };
-
-        match write_owner_id(&bot_toml_path, &msg.sender_id) {
-            Ok(()) => {
-                info!(
-                    bot = %bot_id,
-                    owner = %msg.sender_id,
-                    "Set bot owner (first message)"
-                );
-                self.owned_bots.lock().unwrap().insert(bot_id.clone());
-            }
-            Err(e) => {
-                warn!(
-                    bot = %bot_id,
-                    error = %e,
-                    "Failed to write owner_id to bot.toml"
-                );
-            }
-        }
-    }
-
-    /// Find the bot.toml path for a given (channel_type, bot_id).
-    fn find_bot_toml(&self, channel_type: &str, bot_id: &str) -> Option<std::path::PathBuf> {
-        for plugin in &self.plugins {
-            for channel in plugin.channels() {
-                if channel.channel_type == channel_type && channel.bot_id == bot_id {
-                    let path = plugin.path().join("bot").join(bot_id).join("bot.toml");
-                    if path.exists() {
-                        return Some(path);
-                    }
-                }
-            }
-        }
-        None
-    }
-
     fn describe_non_text_content(&self, msg: &PluginMessage) -> String {
         use carrier_types::plugin::PluginContent;
         match &msg.content {
@@ -509,26 +404,4 @@ impl PluginBridgeManager {
             "No plugin channel found for response"
         );
     }
-}
-
-// ---------------------------------------------------------------------------
-// bot.toml owner write helper
-// ---------------------------------------------------------------------------
-
-/// Write `owner_id` into a bot.toml file (read → parse → insert → write).
-fn write_owner_id(path: &Path, owner_id: &str) -> Result<(), String> {
-    let content = std::fs::read_to_string(path).map_err(|e| format!("读取失败: {e}"))?;
-    let mut doc = content
-        .parse::<toml::Value>()
-        .map_err(|e| format!("解析失败: {e}"))?;
-    let table = doc
-        .as_table_mut()
-        .ok_or("Invalid bot.toml structure".to_string())?;
-    table.insert("owner_id".into(), toml::Value::String(owner_id.to_string()));
-    let new_content = toml::to_string_pretty(&doc).map_err(|e| format!("序列化失败: {e}"))?;
-    // Atomic write: write to tmp file then rename
-    let tmp_path = path.with_extension("toml.tmp");
-    std::fs::write(&tmp_path, &new_content).map_err(|e| format!("写入临时文件失败: {e}"))?;
-    std::fs::rename(&tmp_path, path).map_err(|e| format!("重命名失败: {e}"))?;
-    Ok(())
 }

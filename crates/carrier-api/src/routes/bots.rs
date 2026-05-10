@@ -1812,11 +1812,6 @@ pub async fn bind_bot(
                         // Add dynamic bridge bindings
                         if let Some(ref pm) = state.plugin_manager {
                             let pm = pm.lock().await;
-                            pm.add_channel_binding(channel_type, &bot_uuid, &agent_uuid);
-                            // weixin/wecom still use bot_id in PluginMessage
-                            if channel_type == "wecom" || channel_type == "weixin" {
-                                pm.add_channel_binding(channel_type, &bot_id, &agent_uuid);
-                            }
                             // Set sender route: WeCom/Feishu/DingTalk use bot_id as route key
                             if channel_type != "weixin" {
                                 pm.set_sender_route(&bot_uuid, &agent_uuid);
@@ -1879,7 +1874,6 @@ pub async fn bind_bot(
                     if !bot_id.is_empty() {
                         if let Some(ref pm) = state.plugin_manager {
                             let pm = pm.lock().await;
-                            pm.add_channel_binding("weixin", bot_id, &agent_uuid);
                             // WeChat uses user_id (sender_id) as route key
                             if !user_id.is_empty() {
                                 pm.set_sender_route(&user_id, &agent_uuid);
@@ -1944,7 +1938,7 @@ pub async fn unbind_bot(
         }
 
         // Extract platform and bot_id for dynamic binding removal
-        let (platform, bot_id) = {
+        let (_platform, _bot_id) = {
             let dir_name = plugin_dir
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -1966,14 +1960,6 @@ pub async fn unbind_bot(
             table.remove("bind_agent");
         }) {
             Ok(()) => {
-                // Remove dynamic bridge bindings immediately
-                if let Some(ref pm) = state.plugin_manager {
-                    let pm = pm.lock().await;
-                    pm.remove_channel_binding(platform, &bot_uuid);
-                    if platform == "wecom" || platform == "weixin" {
-                        pm.remove_channel_binding(platform, &bot_id);
-                    }
-                }
                 (
                     StatusCode::OK,
                     Json(serde_json::json!({
@@ -2010,7 +1996,7 @@ pub async fn unbind_bot(
                 if user_id != bot_uuid {
                     continue;
                 }
-                let bot_id = tf
+                let _bot_id = tf
                     .get("bot_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
@@ -2020,12 +2006,6 @@ pub async fn unbind_bot(
                     let _ = std::fs::write(&path, updated);
                 }
                 // Remove dynamic bridge binding immediately
-                if let Some(ref pm) = state.plugin_manager {
-                    let pm = pm.lock().await;
-                    if !bot_id.is_empty() {
-                        pm.remove_channel_binding("weixin", &bot_id);
-                    }
-                }
                 return (
                     StatusCode::OK,
                     Json(serde_json::json!({
@@ -2206,10 +2186,6 @@ async fn add_dynamic_binding(
     if !channel_type.is_empty() && !bot_id.is_empty() {
         if let Some(ref pm) = state.plugin_manager {
             let pm = pm.lock().await;
-            pm.add_channel_binding(channel_type, bot_uuid, agent_uuid);
-            if channel_type == "wecom" || channel_type == "weixin" {
-                pm.add_channel_binding(channel_type, bot_id, agent_uuid);
-            }
             // Set sender route: WeCom/Feishu/DingTalk use bot_id as route key
             if channel_type != "weixin" {
                 pm.set_sender_route(bot_uuid, agent_uuid);

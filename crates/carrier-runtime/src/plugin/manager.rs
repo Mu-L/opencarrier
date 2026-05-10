@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use carrier_types::plugin::PluginMessage;
 use carrier_types::tool::ToolDefinition;
-use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
@@ -32,9 +31,7 @@ pub struct PluginManager {
     loaded_plugins: Vec<Arc<dyn super::instance::PluginInstance>>,
     /// Kernel handle for bridge routing.
     kernel: Arc<dyn KernelHandle>,
-    /// Shared channel bindings (kept after start() for dynamic additions).
-    bridge_bindings: Option<Arc<DashMap<(String, String), String>>>,
-    /// Sender-based router (sender_id → agent_id), set before start().
+    /// Sender-based router (route_key → agent_id), set before start().
     sender_router: Option<Arc<SenderRouter>>,
 }
 
@@ -48,7 +45,6 @@ impl PluginManager {
             message_rx: Some(rx),
             loaded_plugins: Vec::new(),
             kernel,
-            bridge_bindings: None,
             sender_router: None,
         }
     }
@@ -59,10 +55,6 @@ impl PluginManager {
     }
 
     /// Load all plugins from the given directory.
-    ///
-    /// Loads external (.so) plugins and built-in plugins (compiled into the binary).
-    /// Built-in plugins are identified by `builtin = true` in `plugin.toml` and
-    /// constructed using the provided `BuiltinPluginRegistry`.
     pub fn load_all(&mut self, plugins_dir: &Path, registry: &BuiltinPluginRegistry) {
         // 1. Load external (.so) plugins
         let results = PluginLoader::load_all(plugins_dir, self.message_tx.clone());
@@ -97,9 +89,6 @@ impl PluginManager {
     }
 
     /// Start all channel adapters and the bridge.
-    ///
-    /// Discovers bot configs from `<plugin>/<uuid>/bot.toml` files and binds
-    /// channels to agents based on `bind_agent` (agent UUID) in each bot config.
     pub async fn start(&mut self, _plugins_dir: &Path) {
         // Start channel adapters
         for plugin in &self.loaded_plugins {
@@ -121,18 +110,19 @@ impl PluginManager {
             }
         }
 
-        // Build channel bindings from bot.toml files
+        // Build bridge
         let mut bridge = PluginBridgeManager::new(self.kernel.clone());
 
-        // Set sender router if configured (enables sender_id-based routing)
+        // Set sender router if configured
         if let Some(ref router) = self.sender_router {
             bridge.set_sender_router(router.clone());
         }
 
+        // Discover bots and register sender routes
+        let mut first_agent: Option<String> = None;
         for plugin in &self.loaded_plugins {
             bridge.add_plugin(plugin.clone());
 
-            // Discover bots from <plugin-dir>/<uuid>/bot.toml
             let plugin_dir = plugin.path();
             let bots = super::loader::PluginLoader::discover_bots(plugin_dir);
             let channels: Vec<String> = plugin
@@ -142,11 +132,6 @@ impl PluginManager {
                 .collect();
 
             for (bot_uuid, bot_config) in &bots {
-                // Mark bots that already have an owner
-                if bot_config.owner_id.is_some() {
-                    bridge.mark_bot_owned(bot_uuid.clone());
-                }
-
                 if let Some(ref agent_uuid) = bot_config.bind_agent {
                     if uuid::Uuid::parse_str(agent_uuid).is_err() {
                         error!(
@@ -157,8 +142,15 @@ impl PluginManager {
                         continue;
                     }
 
+                    // Register sender route: route_key depends on channel type
                     for ch in &channels {
-                        bridge.bind_channel(ch.clone(), bot_uuid.clone(), agent_uuid.clone());
+                        if ch == "weixin" {
+                            // WeChat uses user_id as route key — skip here,
+                            // WeChat routes are registered from token files
+                        } else {
+                            // WeCom/Feishu/DingTalk use bot_uuid as route key
+                            self.set_sender_route(bot_uuid, agent_uuid);
+                        }
                         info!(
                             channel = %ch,
                             bot = %bot_config.name,
@@ -166,6 +158,10 @@ impl PluginManager {
                             agent_id = %agent_uuid,
                             "Bound bot to agent"
                         );
+                    }
+
+                    if first_agent.is_none() {
+                        first_agent = Some(agent_uuid.clone());
                     }
                 } else {
                     info!(
@@ -177,15 +173,10 @@ impl PluginManager {
             }
         }
 
-        // Keep shared references for dynamic binding additions
-        self.bridge_bindings = Some(bridge.shared_bindings());
-
-        // Set first agent on sender router from discovered bindings
+        // Set first agent on sender router
         if let Some(ref router) = self.sender_router {
-            if let Some(ref bindings) = self.bridge_bindings {
-                if let Some(first_binding) = bindings.iter().next() {
-                    router.set_first_agent(first_binding.value().clone());
-                }
+            if let Some(agent_id) = first_agent {
+                router.set_first_agent(agent_id);
             }
         }
 
@@ -197,34 +188,10 @@ impl PluginManager {
         }
     }
 
-    /// Dynamically add a channel binding (e.g., when a bot is bound to an agent via API).
-    /// This takes effect immediately without restarting the bridge.
-    pub fn add_channel_binding(&self, channel_type: &str, key: &str, agent_id: &str) {
-        if let Some(ref bindings) = self.bridge_bindings {
-            bindings.insert(
-                (channel_type.to_string(), key.to_string()),
-                agent_id.to_string(),
-            );
-            info!(
-                channel = %channel_type,
-                key = %key,
-                agent = %agent_id,
-                "Dynamically bound channel to agent"
-            );
-        }
-    }
-
-    /// Remove a dynamic channel binding (e.g., when a bot is unbound via API).
-    pub fn remove_channel_binding(&self, channel_type: &str, key: &str) {
-        if let Some(ref bindings) = self.bridge_bindings {
-            bindings.remove(&(channel_type.to_string(), key.to_string()));
-        }
-    }
-
-    /// Set a sender route (sender_id → agent_id).
-    pub fn set_sender_route(&self, sender_id: &str, agent_id: &str) {
+    /// Set a sender route (route_key → agent_id).
+    pub fn set_sender_route(&self, route_key: &str, agent_id: &str) {
         if let Some(ref router) = self.sender_router {
-            router.set_route(sender_id, agent_id);
+            router.set_route(route_key, agent_id);
         }
     }
 
@@ -257,10 +224,6 @@ impl PluginManager {
     }
 
     /// Send a text message through a channel by bot ID.
-    ///
-    /// Finds the plugin that owns the channel with `bot_id` matching and
-    /// sends through it. Returns an error if no matching channel is found or the
-    /// platform does not support proactive send.
     pub fn channel_send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
         for plugin in &self.loaded_plugins {
             for channel in plugin.channels() {
@@ -273,9 +236,6 @@ impl PluginManager {
     }
 
     /// Dynamically start a channel for a newly created bot (no restart needed).
-    ///
-    /// Registers the bot with the platform's token manager and spawns
-    /// a WebSocket connection so it can immediately receive messages.
     pub fn start_dynamic_channel(
         &self,
         platform: &str,

@@ -1,8 +1,7 @@
 //! WeChat iLink built-in channel adapter and tools.
 //!
 //! Provides:
-//! - `ILinkChannel` — per-bot long-polling message receiver
-//! - `SessionWatcher` — dynamic tenant discovery and polling
+//! - `SessionWatcher` — dynamic session discovery and polling
 //! - `WeixinQrLoginTool` — trigger QR code login
 //! - `WeixinSendMessageTool` — send messages to WeChat users
 //! - `WeixinStatusTool` — show bot status
@@ -15,5 +14,5 @@ pub mod token;
 pub mod tools;
 pub mod types;
 
-pub use channel::{ILinkChannel, SessionWatcher};
+pub use channel::SessionWatcher;
 pub use tools::{WeixinQrLoginTool, WeixinSendMessageTool, WeixinStatusTool};
