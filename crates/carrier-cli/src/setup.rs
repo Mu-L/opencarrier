@@ -5,18 +5,7 @@
 //! User can change username/password later in the dashboard UI.
 
 use colored::Colorize;
-use serde::Deserialize;
 use std::path::Path;
-
-#[derive(Deserialize)]
-struct AuthResponse {
-    token: String,
-}
-
-#[derive(Deserialize)]
-struct KeyResponse {
-    key: String,
-}
 
 /// Generate a random alphanumeric string of the given length.
 fn random_string(len: usize) -> String {
@@ -162,55 +151,24 @@ async fn register_and_get_key(
     email: &str,
     password: &str,
 ) -> Result<String, String> {
-    let client = reqwest::Client::new();
-    let base = hub_url.trim_end_matches('/');
-
-    // Register
-    let resp = client
-        .post(format!("{}/api/auth/register", base))
-        .json(&serde_json::json!({
-            "username": username,
-            "email": email,
-            "password": password,
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Connection failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if status == reqwest::StatusCode::CONFLICT {
-            println!(
-                "  {} Device already registered, logging in...",
-                "-".bright_yellow()
-            );
-            return login_and_get_key(hub_url, username, password).await;
+    let jwt = match carrier_clone::hub::register(hub_url, username, email, password).await {
+        Ok(token) => token,
+        Err(e) => {
+            // Check if it's a conflict (already registered)
+            if e.to_string().contains("409") {
+                println!(
+                    "  {} Device already registered, logging in...",
+                    "-".bright_yellow()
+                );
+                return login_and_get_key(hub_url, username, password).await;
+            }
+            return Err(format!("Registration failed: {e}"));
         }
-        return Err(format!("Registration failed ({}): {}", status, body));
-    }
+    };
 
-    let auth: AuthResponse = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
-
-    // Create API key
-    let key_resp = client
-        .post(format!("{}/api/keys", base))
-        .bearer_auth(&auth.token)
-        .json(&serde_json::json!({ "name": "carrier" }))
-        .send()
+    carrier_clone::hub::create_api_key(hub_url, &jwt, "carrier")
         .await
-        .map_err(|e| format!("Key creation failed: {e}"))?;
-
-    if !key_resp.status().is_success() {
-        let body = key_resp.text().await.unwrap_or_default();
-        return Err(format!("Failed to create API key: {}", body));
-    }
-
-    let key_data: KeyResponse = key_resp
-        .json()
-        .await
-        .map_err(|e| format!("Parse error: {e}"))?;
-    Ok(key_data.key)
+        .map_err(|e| format!("Failed to create API key: {e}"))
 }
 
 async fn login_and_get_key(
@@ -218,90 +176,17 @@ async fn login_and_get_key(
     username: &str,
     password: &str,
 ) -> Result<String, String> {
-    let client = reqwest::Client::new();
-    let base = hub_url.trim_end_matches('/');
-
-    let resp = client
-        .post(format!("{}/api/auth/login", base))
-        .json(&serde_json::json!({
-            "login": username,
-            "password": password,
-        }))
-        .send()
+    let jwt = carrier_clone::hub::login(hub_url, username, password)
         .await
-        .map_err(|e| format!("Connection failed: {e}"))?;
+        .map_err(|e| format!("Login failed: {e}"))?;
 
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Login failed: {}", body));
-    }
-
-    let auth: AuthResponse = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
-
-    // Check if there's already a key named "carrier"
-    let list_resp = client
-        .get(format!("{}/api/keys", base))
-        .bearer_auth(&auth.token)
-        .send()
+    carrier_clone::hub::create_api_key(hub_url, &jwt, "carrier")
         .await
-        .map_err(|e| format!("Key list failed: {e}"))?;
-
-    if list_resp.status().is_success() {
-        let keys: serde_json::Value = list_resp.json().await.unwrap_or_default();
-        if let Some(keys_arr) = keys.as_array() {
-            for k in keys_arr {
-                if k["name"].as_str() == Some("carrier") {
-                    if let Some(key) = k["key"].as_str() {
-                        return Ok(key.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    // Create new API key
-    let key_resp = client
-        .post(format!("{}/api/keys", base))
-        .bearer_auth(&auth.token)
-        .json(&serde_json::json!({ "name": "carrier" }))
-        .send()
-        .await
-        .map_err(|e| format!("Key creation failed: {e}"))?;
-
-    if !key_resp.status().is_success() {
-        let body = key_resp.text().await.unwrap_or_default();
-        return Err(format!("Failed to create API key: {}", body));
-    }
-
-    let key_data: KeyResponse = key_resp
-        .json()
-        .await
-        .map_err(|e| format!("Parse error: {e}"))?;
-    Ok(key_data.key)
+        .map_err(|e| format!("Failed to create API key: {e}"))
 }
 
 /// Check for updates on Hub. Returns the latest version string if newer than current.
 pub async fn check_for_update(hub_url: &str) -> Option<String> {
-    let base = hub_url.trim_end_matches('/');
-    let client = reqwest::Client::new();
-
-    let resp = client
-        .get(format!("{}/api/releases", base))
-        .send()
-        .await
-        .ok()?;
-
-    if !resp.status().is_success() {
-        return None;
-    }
-
-    let data: serde_json::Value = resp.json().await.ok()?;
-    let latest = data["latest"].as_str()?;
-
     let current = env!("CARGO_PKG_VERSION");
-    if latest != current && !latest.is_empty() {
-        Some(latest.to_string())
-    } else {
-        None
-    }
+    carrier_clone::hub::check_update(hub_url, current).await.ok().flatten()
 }

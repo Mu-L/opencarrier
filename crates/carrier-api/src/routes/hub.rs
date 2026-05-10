@@ -7,18 +7,10 @@ use axum::response::IntoResponse;
 use axum::Json;
 use carrier_runtime::kernel_handle::KernelHandle;
 use std::sync::Arc;
-// ========== Hub template marketplace endpoints ==========
 
 /// GET /api/hub/templates — List templates from the connected Hub.
 pub async fn list_hub_templates(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let hub_url = state.kernel.config.hub.url.clone();
-    // SECURITY: Validate hub URL before fetching
-    if let Err(e) = carrier_clone::hub::validate_hub_url(&hub_url) {
-        return (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": e.to_string()})),
-        );
-    }
     let hub_api_key = match carrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env) {
         Ok(k) => k,
         Err(e) => {
@@ -31,55 +23,23 @@ pub async fn list_hub_templates(State(state): State<Arc<AppState>>) -> impl Into
         }
     };
 
-    let url = format!("{}/api/templates?limit=50", hub_url.trim_end_matches('/'));
-
-    let resp = match reqwest::Client::new()
-        .get(&url)
-        .bearer_auth(&hub_api_key)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": format!("Hub unreachable: {e}")})),
-            );
-        }
-    };
-
-    if !resp.status().is_success() {
-        return (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({
-                "error": format!("Hub returned {}", resp.status())
-            })),
-        );
-    }
-
-    match resp.json::<serde_json::Value>().await {
+    match carrier_clone::hub::search_templates_json(&hub_url, &hub_api_key, None, Some(50)).await {
         Ok(body) => (StatusCode::OK, Json(body)),
         Err(e) => (
             StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": format!("Failed to parse Hub response: {e}")})),
+            Json(serde_json::json!({"error": format!("Hub request failed: {e}")})),
         ),
     }
 }
+
 /// POST /api/hub/templates/{name}/install — Download and install a template from Hub.
 pub async fn install_hub_template(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let _ = body; // body kept for forward compatibility
+    let _ = body;
     let hub_url = state.kernel.config.hub.url.clone();
-    // SECURITY: Validate hub URL before fetching
-    if let Err(e) = carrier_clone::hub::validate_hub_url(&hub_url) {
-        return (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({"error": e.to_string()})),
-        );
-    }
     let hub_api_key = match carrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env) {
         Ok(k) => k,
         Err(e) => {
@@ -92,47 +52,14 @@ pub async fn install_hub_template(
         }
     };
 
-    let base = hub_url.trim_end_matches('/');
-    let download_url = format!(
-        "{}/api/templates/{}/download",
-        base,
-        urlencoding::encode(&name)
-    );
-
     tracing::info!(template = %name, "Downloading from Hub for install");
 
-    let resp = match carrier_clone::hub::hub_get(&download_url, &hub_api_key)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-    {
-        Ok(r) => r,
+    let agx_bytes = match carrier_clone::hub::download_template_bytes(&hub_url, &hub_api_key, &name, None).await {
+        Ok(b) => b,
         Err(e) => {
             return (
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": format!("Hub unreachable: {e}")})),
-            );
-        }
-    };
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        tracing::warn!(%status, %body, key_prefix = &hub_api_key[..8.min(hub_api_key.len())], "Hub download failed");
-        return (
-            StatusCode::BAD_GATEWAY,
-            Json(
-                serde_json::json!({"error": format!("Hub download failed: {} — {}", status, body)}),
-            ),
-        );
-    }
-
-    let agx_bytes = match resp.bytes().await {
-        Ok(b) => b.to_vec(),
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": format!("Failed to read download: {e}")})),
+                Json(serde_json::json!({"error": format!("Hub download failed: {e}")})),
             );
         }
     };

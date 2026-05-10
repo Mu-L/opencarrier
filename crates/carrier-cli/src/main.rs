@@ -3752,7 +3752,7 @@ async fn cmd_hub(cmd: HubCommands) {
     match cmd {
         HubCommands::Search { query } => {
             let q = query.unwrap_or_default();
-            match carrier_clone::hub::search(&hub_url, &api_key, &q).await {
+            match carrier_clone::hub::search_templates(&hub_url, &api_key, &q).await {
                 Ok(output) => println!("{output}"),
                 Err(e) => eprintln!("搜索失败: {e}"),
             }
@@ -3763,7 +3763,7 @@ async fn cmd_hub(cmd: HubCommands) {
                 eprintln!("分身 '{}' 已存在: {}", name, workspace_dir.display());
                 std::process::exit(1);
             }
-            match carrier_clone::hub::install(
+            match carrier_clone::hub::install_template(
                 &hub_url,
                 &api_key,
                 &name,

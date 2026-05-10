@@ -147,43 +147,27 @@ pub struct CarrierKernel {
 // ── Internal boot helpers ──────────────────────────────────
 
 impl CarrierKernel {
-    /// Fetch brain configuration from Hub (blocking HTTP).
-    fn fetch_brain_from_hub_sync(
+    /// Fetch brain configuration from Hub (blocking wrapper).
+    fn fetch_brain_from_hub(
         hub: &carrier_types::config::HubConfig,
         brain_path: &std::path::Path,
     ) -> Result<carrier_types::brain::BrainConfig, String> {
         let api_key = std::env::var(&hub.api_key_env)
             .map_err(|_| format!("Environment variable {} not set", hub.api_key_env))?;
 
-        carrier_clone::hub::validate_hub_url(&hub.url)
-            .map_err(|e| format!("Invalid hub URL: {e}"))?;
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("Failed to create tokio runtime: {e}"))?;
+        let json_value = rt.block_on(
+            carrier_clone::hub::fetch_brain_config(&hub.url, &api_key)
+        )
+        .map_err(|e| format!("Hub brain config fetch failed: {e}"))?;
 
-        let url = format!("{}/api/brain/config", hub.url.trim_end_matches('/'));
+        let json_str = serde_json::to_string(&json_value)
+            .map_err(|e| format!("Failed to serialize brain config: {e}"))?;
 
-        let resp = reqwest::blocking::Client::new()
-            .get(&url)
-            .bearer_auth(&api_key)
-            .send()
-            .map_err(|e| format!("HTTP request failed: {e}"))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            return Err(format!(
-                "Hub returned {}: {}",
-                status,
-                resp.text().unwrap_or_default()
-            ));
-        }
-
-        let json_str = resp
-            .text()
-            .map_err(|e| format!("Failed to read response body: {e}"))?;
-
-        // Validate JSON before saving
         let config: carrier_types::brain::BrainConfig = serde_json::from_str(&json_str)
             .map_err(|e| format!("Invalid brain config from Hub: {e}"))?;
 
-        // Save to disk for subsequent boots
         if let Some(parent) = brain_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -464,7 +448,7 @@ impl CarrierKernel {
         } else {
             // No local brain.json — try fetching from Hub.
             info!("Brain config not found locally; attempting to fetch from Hub...");
-            match Self::fetch_brain_from_hub_sync(&config.hub, &brain_path) {
+            match Self::fetch_brain_from_hub(&config.hub, &brain_path) {
                 Ok(brain_config) => {
                     let brain = Brain::new(brain_config)
                         .map_err(|e| KernelError::BootFailed(format!("Brain init failed: {e}")))?;

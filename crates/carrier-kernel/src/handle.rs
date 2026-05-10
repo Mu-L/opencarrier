@@ -738,7 +738,7 @@ impl KernelHandle for CarrierKernel {
         let api_key = carrier_clone::hub::read_api_key(&self.config.hub.api_key_env)
             .map_err(|e| format!("Hub API Key 未配置: {e}"))?;
 
-        let result = carrier_clone::hub::publish(
+        let result = carrier_clone::hub::publish_template(
             &hub_url, &api_key, agx_bytes, None, None,
         )
         .await

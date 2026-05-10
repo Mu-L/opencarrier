@@ -17,10 +17,6 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<Strin
     if hub_url.is_empty() {
         return None;
     }
-    if let Err(e) = carrier_clone::hub::validate_hub_url(&hub_url) {
-        tracing::warn!(error = %e, "Hub URL validation failed for auto-install");
-        return None;
-    }
 
     let api_key = match carrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env) {
         Ok(k) => k,
@@ -30,35 +26,12 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<Strin
         }
     };
 
-    let download_url = format!(
-        "{}/api/templates/{}/download",
-        hub_url,
-        urlencoding::encode(name)
-    );
-
     tracing::info!(template = %name, "Auto-installing Hub template for QR binding");
 
-    let resp = match carrier_clone::hub::hub_get(&download_url, &api_key)
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
-    {
-        Ok(r) => r,
+    let agx_bytes = match carrier_clone::hub::download_template_bytes(&hub_url, &api_key, name, None).await {
+        Ok(b) => b,
         Err(e) => {
-            tracing::warn!(error = %e, "Hub download request failed");
-            return None;
-        }
-    };
-
-    if !resp.status().is_success() {
-        tracing::warn!(status = %resp.status(), "Hub download failed for auto-install");
-        return None;
-    }
-
-    let agx_bytes = match resp.bytes().await {
-        Ok(b) => b.to_vec(),
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to read Hub download");
+            tracing::warn!(error = %e, "Hub download failed for auto-install");
             return None;
         }
     };

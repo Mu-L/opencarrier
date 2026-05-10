@@ -497,6 +497,7 @@ name = "carrier-lifecycle"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "carrier-clone",
  "carrier-types",
  "chrono",
  "notify",
