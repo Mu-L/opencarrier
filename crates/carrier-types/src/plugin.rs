@@ -54,8 +54,8 @@ pub struct PluginStatus {
     pub channels: Vec<String>,
     /// Tool names provided.
     pub tools: Vec<String>,
-    /// Number of configured tenants.
-    pub tenant_count: usize,
+    /// Number of configured bots.
+    pub bot_count: usize,
     /// Last error message (if any).
     #[serde(default)]
     pub last_error: Option<String>,

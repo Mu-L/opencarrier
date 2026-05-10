@@ -103,7 +103,7 @@ fn scan_bots(
             continue;
         };
 
-        let tenant_name = doc
+        let bot_id = doc
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
@@ -113,7 +113,7 @@ fn scan_bots(
             "id": bot_uuid,
             "platform": platform,
             "plugin": dir_name,
-            "tenant_name": tenant_name,
+            "bot_id": bot_id,
             "mode": doc.get("mode").and_then(|v| v.as_str()).unwrap_or(""),
             "bind_agent": if bind_agent.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(bind_agent.to_string()) },
             "owner_id": doc.get("owner_id").and_then(|v| v.as_str()).map(|s| serde_json::Value::String(s.to_string())).unwrap_or(serde_json::Value::Null),
@@ -255,7 +255,7 @@ pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     }
 
     // ── WeChat iLink bots from token files (fallback for bots without bot.toml) ──
-    let token_dir = home.join("weixin-tokens");
+    let token_dir = home.join("weixin-sessions");
     if token_dir.exists() {
         if let Ok(entries) = std::fs::read_dir(&token_dir) {
             for entry in entries.flatten() {
@@ -265,7 +265,7 @@ pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse 
                 }
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content) {
-                        let name = tf.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let bot_id = tf.get("bot_id").and_then(|v| v.as_str()).unwrap_or("unknown");
                         let ilink_bot_id = tf
                             .get("ilink_bot_id")
                             .and_then(|v| v.as_str())
@@ -273,10 +273,10 @@ pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse 
                         let bind_agent = tf.get("bind_agent").and_then(|v| v.as_str());
                         let user_id = tf.get("user_id").and_then(|v| v.as_str()).unwrap_or("");
 
-                        // Deduplicate: skip if this tenant already has a bot.toml entry
+                        // Deduplicate: skip if this bot already has a bot.toml entry
                         let already_exists = bots
                             .iter()
-                            .any(|b| b.get("tenant_name").and_then(|v| v.as_str()) == Some(name));
+                            .any(|b| b.get("bot_id").and_then(|v| v.as_str()) == Some(bot_id));
                         if already_exists {
                             continue;
                         }
@@ -285,7 +285,7 @@ pub async fn list_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse 
                             "id": user_id,
                             "platform": "weixin",
                             "plugin": "weixin",
-                            "tenant_name": name,
+                            "bot_id": bot_id,
                             "mode": "ilink",
                             "bind_agent": bind_agent,
                             "owner_id": null,
@@ -1413,7 +1413,7 @@ fn platform_user_id(platform: &str, body: &serde_json::Value) -> Option<String> 
 fn build_bot_fields(
     platform: &str,
     body: &serde_json::Value,
-    tenant_name: &str,
+    bot_id: &str,
 ) -> toml::value::Table {
     let mut bot_fields = toml::value::Table::new();
     let mode = body
@@ -1434,7 +1434,7 @@ fn build_bot_fields(
                     bot_fields.insert("bot_id".into(), toml::Value::String(v.to_string()));
                 }
             }
-            let secret_env = format!("WECOM_BOT_SECRET_{tenant_name}").to_uppercase();
+            let secret_env = format!("WECOM_BOT_SECRET_{bot_id}").to_uppercase();
             bot_fields.insert("secret_env".into(), toml::Value::String(secret_env));
             if let Some(v) = body.get("secret").and_then(|v| v.as_str()) {
                 if !v.is_empty() {
@@ -1502,7 +1502,7 @@ pub async fn create_bot(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let tenant_name = match body.get("name").and_then(|v| v.as_str()) {
+    let bot_id = match body.get("name").and_then(|v| v.as_str()) {
         Some(n) => match channel_sanitize_name(n) {
             Some(s) => s,
             None => {
@@ -1574,11 +1574,11 @@ pub async fn create_bot(
 
                     // Merge new fields into existing bot.toml
                     return match update_bot_toml(&bot_toml_path, |table| {
-                        let new_fields = build_bot_fields(platform, &body, &tenant_name);
+                        let new_fields = build_bot_fields(platform, &body, &bot_id);
                         for (k, v) in new_fields {
                             table.insert(k, v);
                         }
-                        table.insert("name".into(), toml::Value::String(tenant_name.to_string()));
+                        table.insert("name".into(), toml::Value::String(bot_id.to_string()));
                     }) {
                         Ok(()) => (
                             StatusCode::OK,
@@ -1599,7 +1599,7 @@ pub async fn create_bot(
     }
 
     // Build bot.toml fields
-    let mut bot_fields = build_bot_fields(platform, &body, &tenant_name);
+    let mut bot_fields = build_bot_fields(platform, &body, &bot_id);
 
     // bind_agent — resolve agent name to UUID
     if let Some(v) = body.get("bind_agent").and_then(|v| v.as_str()) {
@@ -1634,7 +1634,7 @@ pub async fn create_bot(
         );
     }
 
-    bot_fields.insert("name".into(), toml::Value::String(tenant_name.clone()));
+    bot_fields.insert("name".into(), toml::Value::String(bot_id.clone()));
     let bot_toml_path = bot_dir.join("bot.toml");
     let content = match toml::to_string_pretty(&toml::Value::Table(bot_fields)) {
         Ok(c) => c,
@@ -1790,7 +1790,7 @@ pub async fn bind_bot(
                     .unwrap_or("");
                 let platform = plugin_dir_to_platform(dir_name);
                 if let Some(platform) = platform {
-                    let tenant_name = std::fs::read_to_string(&bot_toml)
+                    let bot_id = std::fs::read_to_string(&bot_toml)
                         .ok()
                         .and_then(|c| c.parse::<toml::Value>().ok())
                         .and_then(|d| {
@@ -1808,23 +1808,18 @@ pub async fn bind_bot(
                         _ => "",
                     };
 
-                    if !channel_type.is_empty() && !tenant_name.is_empty() {
-                        // Set default plugin tenant
-                        state
-                            .kernel
-                            .set_default_plugin_tenant(&agent_uuid, &bot_uuid);
+                    if !channel_type.is_empty() && !bot_id.is_empty() {
                         // Add dynamic bridge bindings
                         if let Some(ref pm) = state.plugin_manager {
                             let pm = pm.lock().await;
                             pm.add_channel_binding(channel_type, &bot_uuid, &agent_uuid);
-                            // weixin/wecom still use tenant_name in PluginMessage
+                            // weixin/wecom still use bot_id in PluginMessage
                             if channel_type == "wecom" || channel_type == "weixin" {
-                                pm.add_channel_binding(channel_type, &tenant_name, &agent_uuid);
+                                pm.add_channel_binding(channel_type, &bot_id, &agent_uuid);
                             }
-                            pm.map_channel_tenant(channel_type, &tenant_name, &bot_uuid);
                             tracing::info!(
                                 platform = %platform,
-                                tenant = %tenant_name,
+                                bot = %bot_id,
                                 agent = %agent_uuid,
                                 "Dynamic bridge binding added"
                             );
@@ -1848,9 +1843,9 @@ pub async fn bind_bot(
         };
     }
 
-    // Fallback: check weixin-tokens for iLink bots
+    // Fallback: check weixin-sessions for iLink bots
     {
-        let token_dir = home.join("weixin-tokens");
+        let token_dir = home.join("weixin-sessions");
         if token_dir.exists() {
             if let Ok(entries) = std::fs::read_dir(&token_dir) {
                 for entry in entries.flatten() {
@@ -1876,19 +1871,14 @@ pub async fn bind_bot(
                         let _ = std::fs::write(&path, updated);
                     }
                     // Add dynamic bridge binding
-                    let tenant_name = tf.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                    if !tenant_name.is_empty() {
-                        state
-                            .kernel
-                            .set_default_plugin_tenant(&agent_uuid, &bot_uuid);
+                    let bot_id = tf.get("bot_id").and_then(|v| v.as_str()).unwrap_or("");
+                    if !bot_id.is_empty() {
                         if let Some(ref pm) = state.plugin_manager {
                             let pm = pm.lock().await;
-                            pm.add_channel_binding("weixin", &bot_uuid, &agent_uuid);
-                            pm.add_channel_binding("weixin", tenant_name, &agent_uuid);
-                            pm.map_channel_tenant("weixin", tenant_name, &bot_uuid);
+                            pm.add_channel_binding("weixin", bot_id, &agent_uuid);
                             tracing::info!(
                                 platform = "weixin",
-                                tenant = %tenant_name,
+                                bot = %bot_id,
                                 agent = %agent_uuid,
                                 "Dynamic bridge binding added (iLink)"
                             );
@@ -1945,8 +1935,8 @@ pub async fn unbind_bot(
             continue;
         }
 
-        // Extract platform and tenant_name for dynamic binding removal
-        let (platform, tenant_name) = {
+        // Extract platform and bot_id for dynamic binding removal
+        let (platform, bot_id) = {
             let dir_name = plugin_dir
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -1973,9 +1963,8 @@ pub async fn unbind_bot(
                     let pm = pm.lock().await;
                     pm.remove_channel_binding(platform, &bot_uuid);
                     if platform == "wecom" || platform == "weixin" {
-                        pm.remove_channel_binding(platform, &tenant_name);
+                        pm.remove_channel_binding(platform, &bot_id);
                     }
-                    pm.remove_channel_tenant_map(platform, &tenant_name);
                 }
                 (
                     StatusCode::OK,
@@ -1992,8 +1981,8 @@ pub async fn unbind_bot(
         };
     }
 
-    // Fallback: check weixin-tokens for iLink bots
-    let token_dir = home.join("weixin-tokens");
+    // Fallback: check weixin-sessions for iLink bots
+    let token_dir = home.join("weixin-sessions");
     if token_dir.exists() {
         if let Ok(entries) = std::fs::read_dir(&token_dir) {
             for entry in entries.flatten() {
@@ -2013,8 +2002,8 @@ pub async fn unbind_bot(
                 if user_id != bot_uuid {
                     continue;
                 }
-                let tenant_name = tf
-                    .get("name")
+                let bot_id = tf
+                    .get("bot_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
@@ -2022,12 +2011,11 @@ pub async fn unbind_bot(
                 if let Ok(updated) = serde_json::to_string_pretty(&tf) {
                     let _ = std::fs::write(&path, updated);
                 }
-                // Remove dynamic bridge bindings immediately
+                // Remove dynamic bridge binding immediately
                 if let Some(ref pm) = state.plugin_manager {
                     let pm = pm.lock().await;
-                    pm.remove_channel_binding("weixin", &bot_uuid);
-                    if !tenant_name.is_empty() {
-                        pm.remove_channel_binding("weixin", &tenant_name);
+                    if !bot_id.is_empty() {
+                        pm.remove_channel_binding("weixin", &bot_id);
                     }
                 }
                 return (
@@ -2072,7 +2060,7 @@ async fn auto_create_and_bind_bot(
     };
 
     let bot_name = format!("{}-{}", agent_name, platform);
-    let tenant_name = match channel_sanitize_name(&bot_name) {
+    let bot_id = match channel_sanitize_name(&bot_name) {
         Some(s) => s,
         None => return Err("名称无效".to_string()),
     };
@@ -2141,17 +2129,17 @@ async fn auto_create_and_bind_bot(
                     let bot_dir = plugin_dir.join("bot").join(&existing_id);
                     let bot_toml_path = bot_dir.join("bot.toml");
                     update_bot_toml(&bot_toml_path, |table| {
-                        let new_fields = build_bot_fields(platform, &body, &tenant_name);
+                        let new_fields = build_bot_fields(platform, &body, &bot_id);
                         for (k, v) in new_fields {
                             table.insert(k, v);
                         }
-                        table.insert("name".into(), toml::Value::String(tenant_name.to_string()));
+                        table.insert("name".into(), toml::Value::String(bot_id.to_string()));
                         table.insert("bind_agent".into(), toml::Value::String(agent_uuid.clone()));
                     })?;
                     add_dynamic_binding(
                         state,
                         platform,
-                        &tenant_name,
+                        &bot_id,
                         &existing_id,
                         &agent_uuid,
                         credentials,
@@ -2164,8 +2152,8 @@ async fn auto_create_and_bind_bot(
     }
 
     // Create new bot
-    let mut bot_fields = build_bot_fields(platform, &body, &tenant_name);
-    bot_fields.insert("name".into(), toml::Value::String(tenant_name.clone()));
+    let mut bot_fields = build_bot_fields(platform, &body, &bot_id);
+    bot_fields.insert("name".into(), toml::Value::String(bot_id.clone()));
     bot_fields.insert("bind_agent".into(), toml::Value::String(agent_uuid.clone()));
 
     let bot_uuid = uuid::Uuid::new_v4().to_string();
@@ -2180,7 +2168,7 @@ async fn auto_create_and_bind_bot(
     add_dynamic_binding(
         state,
         platform,
-        &tenant_name,
+        &bot_id,
         &bot_uuid,
         &agent_uuid,
         credentials,
@@ -2194,7 +2182,7 @@ async fn auto_create_and_bind_bot(
 async fn add_dynamic_binding(
     state: &Arc<AppState>,
     platform: &str,
-    tenant_name: &str,
+    bot_id: &str,
     bot_uuid: &str,
     agent_uuid: &str,
     credentials: &serde_json::Value,
@@ -2207,15 +2195,13 @@ async fn add_dynamic_binding(
         _ => "",
     };
 
-    if !channel_type.is_empty() && !tenant_name.is_empty() {
-        state.kernel.set_default_plugin_tenant(agent_uuid, bot_uuid);
+    if !channel_type.is_empty() && !bot_id.is_empty() {
         if let Some(ref pm) = state.plugin_manager {
             let pm = pm.lock().await;
             pm.add_channel_binding(channel_type, bot_uuid, agent_uuid);
             if channel_type == "wecom" || channel_type == "weixin" {
-                pm.add_channel_binding(channel_type, tenant_name, agent_uuid);
+                pm.add_channel_binding(channel_type, bot_id, agent_uuid);
             }
-            pm.map_channel_tenant(channel_type, tenant_name, bot_uuid);
             // Dynamically start channel for the new bot (no restart needed)
             if platform == "wecom" {
                 let bot_id = credentials
@@ -2227,12 +2213,12 @@ async fn add_dynamic_binding(
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 if !bot_id.is_empty() {
-                    pm.start_dynamic_channel("wecom", tenant_name, bot_id, secret);
+                    pm.start_dynamic_channel("wecom", bot_id, bot_id, secret);
                 }
             }
             tracing::info!(
                 platform = %platform,
-                tenant = %tenant_name,
+                bot = %bot_id,
                 agent = %agent_uuid,
                 bot = %bot_uuid,
                 "Auto-bind: dynamic bridge binding added"

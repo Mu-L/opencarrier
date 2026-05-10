@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 pub struct DingTalkChannel {
-    tenant_name: String,
+    bot_id: String,
     bot_uuid: String,
     token_cache: Arc<AccessTokenCache>,
     shutdown: Arc<AtomicBool>,
@@ -21,9 +21,9 @@ pub struct DingTalkChannel {
 }
 
 impl DingTalkChannel {
-    pub fn new(tenant_name: String, bot_uuid: String, token_cache: Arc<AccessTokenCache>) -> Self {
+    pub fn new(bot_id: String, bot_uuid: String, token_cache: Arc<AccessTokenCache>) -> Self {
         Self {
-            tenant_name,
+            bot_id,
             bot_uuid,
             token_cache,
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -38,21 +38,22 @@ impl BuiltinChannel for DingTalkChannel {
     }
 
     fn name(&self) -> &str {
-        &self.tenant_name
+        &self.bot_id
     }
 
-    fn tenant_id(&self) -> &str {
+    #[allow(clippy::misnamed_getters)]
+    fn bot_id(&self) -> &str {
         &self.bot_uuid
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let tenant_name = self.tenant_name.clone();
+        let bot_id = self.bot_id.clone();
         let bot_uuid = self.bot_uuid.clone();
         let token_cache = self.token_cache.clone();
         let shutdown = self.shutdown.clone();
 
         let handle = std::thread::Builder::new()
-            .name(format!("dingtalk-ws-{tenant_name}"))
+            .name(format!("dingtalk-ws-{bot_id}"))
             .spawn(move || {
                 let rt = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -60,15 +61,15 @@ impl BuiltinChannel for DingTalkChannel {
                 {
                     Ok(rt) => rt,
                     Err(e) => {
-                        warn!(tenant = %tenant_name, "Failed to create tokio runtime: {e}");
+                        warn!(tenant = %bot_id, "Failed to create tokio runtime: {e}");
                         return;
                     }
                 };
 
                 let client =
-                    DingTalkWsClient::new(tenant_name.clone(), bot_uuid, token_cache, shutdown);
+                    DingTalkWsClient::new(bot_id.clone(), bot_uuid, token_cache, shutdown);
                 rt.block_on(client.run(&sender));
-                info!(tenant = %tenant_name, "DingTalk WS client exited");
+                info!(tenant = %bot_id, "DingTalk WS client exited");
             })
             .map_err(|e| format!("Failed to spawn DingTalk channel thread: {e}"))?;
 
@@ -76,7 +77,7 @@ impl BuiltinChannel for DingTalkChannel {
         Ok(())
     }
 
-    fn send(&self, _tenant_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+    fn send(&self, _bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
         let token_cache = self.token_cache.clone();
         let user_id = user_id.to_string();
         let text = text.to_string();
@@ -117,10 +118,10 @@ impl BuiltinChannel for DingTalkChannel {
         self.shutdown.store(true, Ordering::Relaxed);
         if let Some(handle) = self.thread_handle.take() {
             match handle.join() {
-                Ok(()) => info!(tenant = %self.tenant_name, "DingTalk channel thread joined"),
+                Ok(()) => info!(tenant = %self.bot_id, "DingTalk channel thread joined"),
                 Err(e) => {
                     if let Some(s) = e.downcast_ref::<&str>() {
-                        warn!(tenant = %self.tenant_name, "DingTalk channel thread panicked: {s}");
+                        warn!(tenant = %self.bot_id, "DingTalk channel thread panicked: {s}");
                     }
                 }
             }

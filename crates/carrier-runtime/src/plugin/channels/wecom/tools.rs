@@ -39,8 +39,8 @@ impl ToolProvider for SendMessageTool {
             .ok_or_else(|| PluginError::tool("Missing content"))?;
 
         let tenant = crate::plugin::channels::wecom::TOKEN_MANAGER
-            .get_tenant(&ctx.tenant_id)
-            .ok_or_else(|| PluginError::tool(format!("Unknown tenant: {}", ctx.tenant_id)))?;
+            .get_bot(&ctx.bot_id)
+            .ok_or_else(|| PluginError::tool(format!("Unknown tenant: {}", ctx.bot_id)))?;
 
         match &tenant.mode {
             token::WecomMode::App { .. } => {

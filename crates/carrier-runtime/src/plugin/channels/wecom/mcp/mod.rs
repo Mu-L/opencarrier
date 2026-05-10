@@ -43,11 +43,11 @@ impl ToolProvider for McpToolProvider {
     }
 
     fn execute(&self, args: &Value, ctx: &PluginToolContext) -> Result<String, PluginError> {
-        let tenant = TOKEN_MANAGER.get_tenant(&ctx.tenant_id).ok_or_else(|| {
+        let tenant = TOKEN_MANAGER.get_bot(&ctx.bot_id).ok_or_else(|| {
             PluginError::tool(format!(
                 "Unknown tenant '{}'. Available tenants: {}",
-                ctx.tenant_id,
-                TOKEN_MANAGER.tenant_names().join(", ")
+                ctx.bot_id,
+                TOKEN_MANAGER.bot_ids().join(", ")
             ))
         })?;
 
@@ -62,7 +62,7 @@ impl ToolProvider for McpToolProvider {
 
         let url = {
             let http = tenant.http.clone();
-            let tenant_name = ctx.tenant_id.clone();
+            let tenant_name = ctx.bot_id.clone();
             let category = self.category.clone();
             let bot_id = bot_id.to_string();
             let bot_secret = bot_secret.to_string();
@@ -82,11 +82,11 @@ impl ToolProvider for McpToolProvider {
             Ok(text) => Ok(truncate_result(text)),
             Err(e) if e == "MCP_AUTH_EXPIRED" => {
                 // Invalidate cache and retry once
-                config::invalidate_cache(&ctx.tenant_id);
+                config::invalidate_cache(&ctx.bot_id);
 
                 let url = {
                     let http = tenant.http.clone();
-                    let tenant_name = ctx.tenant_id.clone();
+                    let tenant_name = ctx.bot_id.clone();
                     let category = self.category.clone();
                     let bot_id = bot_id.to_string();
                     let bot_secret = bot_secret.to_string();

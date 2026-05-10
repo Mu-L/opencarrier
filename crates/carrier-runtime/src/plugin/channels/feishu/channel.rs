@@ -4,7 +4,7 @@
 //! Connects to the Feishu WebSocket long-connection endpoint and dispatches
 //! inbound messages through the host's native `mpsc::Sender<PluginMessage>`.
 
-use crate::plugin::channels::feishu::token::TenantTokenCache;
+use crate::plugin::channels::feishu::token::BotTokenCache;
 use crate::plugin::channels::feishu::ws::FeishuWsClient;
 use crate::plugin::BuiltinChannel;
 use carrier_types::plugin::PluginMessage;
@@ -15,17 +15,17 @@ use tracing::info;
 
 /// Channel adapter for a single Feishu tenant (one app_id).
 pub struct FeishuChannel {
-    tenant_name: String,
+    bot_id: String,
     bot_uuid: String,
-    token_cache: Arc<TenantTokenCache>,
+    token_cache: Arc<BotTokenCache>,
     shutdown: Arc<AtomicBool>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl FeishuChannel {
-    pub fn new(tenant_name: String, bot_uuid: String, token_cache: Arc<TenantTokenCache>) -> Self {
+    pub fn new(bot_id: String, bot_uuid: String, token_cache: Arc<BotTokenCache>) -> Self {
         Self {
-            tenant_name,
+            bot_id,
             bot_uuid,
             token_cache,
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -40,38 +40,39 @@ impl BuiltinChannel for FeishuChannel {
     }
 
     fn name(&self) -> &str {
-        &self.tenant_name
+        &self.bot_id
     }
 
-    fn tenant_id(&self) -> &str {
+    #[allow(clippy::misnamed_getters)]
+    fn bot_id(&self) -> &str {
         &self.bot_uuid
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let tenant_name = self.tenant_name.clone();
+        let bot_id = self.bot_id.clone();
         let bot_uuid = self.bot_uuid.clone();
         let token_cache = self.token_cache.clone();
         let shutdown = self.shutdown.clone();
-        let thread_tenant = tenant_name.clone();
+        let thread_tenant = bot_id.clone();
 
         let handle = std::thread::Builder::new()
-            .name(format!("feishu-ws-{tenant_name}"))
+            .name(format!("feishu-ws-{bot_id}"))
             .spawn(move || {
                 run_ws_loop(&thread_tenant, bot_uuid, token_cache, shutdown, sender);
             })
             .map_err(|e| format!("Failed to spawn Feishu WS thread: {e}"))?;
 
         self.thread_handle = Some(handle);
-        info!(tenant = %tenant_name, "FeishuChannel started");
+        info!(tenant = %bot_id, "FeishuChannel started");
         Ok(())
     }
 
-    fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
         // Verify tenant matches (by bot_uuid)
-        if tenant_id != self.bot_uuid {
+        if bot_id != self.bot_uuid {
             return Err(format!(
                 "Tenant mismatch: expected {}, got {}",
-                self.bot_uuid, tenant_id
+                self.bot_uuid, bot_id
             ));
         }
 
@@ -123,24 +124,24 @@ impl BuiltinChannel for FeishuChannel {
 
         if let Some(handle) = self.thread_handle.take() {
             match handle.join() {
-                Ok(()) => info!(tenant = %self.tenant_name, "WS thread joined cleanly"),
+                Ok(()) => info!(tenant = %self.bot_id, "WS thread joined cleanly"),
                 Err(e) => {
                     if let Some(s) = e.downcast_ref::<&str>() {
-                        tracing::error!(tenant = %self.tenant_name, "WS thread panicked: {s}");
+                        tracing::error!(tenant = %self.bot_id, "WS thread panicked: {s}");
                     }
                 }
             }
         }
 
-        info!(tenant = %self.tenant_name, "FeishuChannel stopped");
+        info!(tenant = %self.bot_id, "FeishuChannel stopped");
     }
 }
 
 /// Main WebSocket loop (runs in a dedicated thread with its own runtime).
 fn run_ws_loop(
-    tenant_name: &str,
+    bot_id: &str,
     bot_uuid: String,
-    token_cache: Arc<TenantTokenCache>,
+    token_cache: Arc<BotTokenCache>,
     shutdown: Arc<AtomicBool>,
     sender: mpsc::Sender<PluginMessage>,
 ) {
@@ -150,12 +151,12 @@ fn run_ws_loop(
     {
         Ok(rt) => rt,
         Err(e) => {
-            tracing::error!(tenant = tenant_name, "Failed to create tokio runtime: {e}");
+            tracing::error!(tenant = bot_id, "Failed to create tokio runtime: {e}");
             return;
         }
     };
 
-    let ws_client = FeishuWsClient::new(tenant_name.to_string(), bot_uuid, token_cache, shutdown);
+    let ws_client = FeishuWsClient::new(bot_id.to_string(), bot_uuid, token_cache, shutdown);
 
     rt.block_on(async move {
         ws_client.run(&sender).await;

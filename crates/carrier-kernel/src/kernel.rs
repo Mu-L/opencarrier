@@ -64,13 +64,6 @@ pub struct KernelPlugins {
     /// Plugin tool dispatcher — routes plugin tool calls to loaded shared libraries.
     pub plugin_tool_dispatcher:
         std::sync::Mutex<Option<Arc<carrier_runtime::plugin::tool_dispatch::PluginToolDispatcher>>>,
-    /// Source tenant_id (bot UUID) for the current message being processed per agent.
-    /// Set by bridge before agent loop, read by execute_plugin_tool.
-    /// Safe because per-agent mutex ensures single concurrent message per agent.
-    pub source_tenant_id: dashmap::DashMap<AgentId, String>,
-    /// Default plugin tenant per agent — set during boot from bot bindings.
-    /// Used as fallback when no channel context is available (e.g. REST API calls).
-    pub default_plugin_tenant: dashmap::DashMap<AgentId, String>,
     /// Per-server consecutive reconnection failure count for exponential backoff.
     /// Key: normalized server name, Value: failure count.
     pub mcp_reconnect_failures: dashmap::DashMap<String, u32>,
@@ -566,8 +559,6 @@ impl CarrierKernel {
                 mcp_tools: std::sync::Mutex::new(Vec::new()),
                 effective_mcp_servers: std::sync::RwLock::new(all_mcp_servers),
                 plugin_tool_dispatcher: std::sync::Mutex::new(None),
-                source_tenant_id: dashmap::DashMap::new(),
-                default_plugin_tenant: dashmap::DashMap::new(),
                 mcp_reconnect_failures: dashmap::DashMap::new(),
             },
             runtime: KernelRuntime {

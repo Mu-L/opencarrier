@@ -20,11 +20,11 @@ use crate::plugin::channels::wecom::token;
 // Global response_url store (shared across all SmartBot instances)
 // ---------------------------------------------------------------------------
 
-/// Global store for pending response_urls keyed by "{tenant_name}:{user_id}".
+/// Global store for pending response_urls keyed by "{bot_id}:{user_id}".
 /// Shared across all SmartBotChannel instances so that the kernel dispatch
 /// (which picks the first matching channel_type) can find response_urls
 /// regardless of which channel stored them.
-/// Global store for pending response_urls keyed by "{tenant_name}:{user_id}".
+/// Global store for pending response_urls keyed by "{bot_id}:{user_id}".
 pub static RESPONSE_URLS: std::sync::OnceLock<Arc<Mutex<HashMap<String, String>>>> =
     std::sync::OnceLock::new();
 
@@ -105,16 +105,16 @@ struct EventDetail {
 /// When the host calls `send()`, it looks up the stored `response_url` for
 /// the user and sends the reply via HTTP POST (markdown format).
 pub struct SmartBotChannel {
-    tenant_name: String,
+    bot_name: String,
     corp_id: String,
     bot_id: String,
     secret: String,
 }
 
 impl SmartBotChannel {
-    pub fn new(tenant_name: String, corp_id: String, bot_id: String, secret: String) -> Self {
+    pub fn new(bot_name: String, corp_id: String, bot_id: String, secret: String) -> Self {
         Self {
-            tenant_name,
+            bot_name,
             corp_id,
             bot_id,
             secret,
@@ -131,14 +131,14 @@ impl crate::plugin::BuiltinChannel for SmartBotChannel {
         "WeChat Work SmartBot"
     }
 
-    fn tenant_id(&self) -> &str {
-        &self.tenant_name
+    fn bot_id(&self) -> &str {
+        &self.bot_id
     }
 
     fn start(&mut self, sender: tokio::sync::mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let bot_id = self.bot_id.clone();
+        let bot_name = self.bot_name.clone();
         let secret = self.secret.clone();
-        let tenant_name = self.tenant_name.clone();
+        let bot_id = self.bot_id.clone();
         let corp_id = self.corp_id.clone();
         let response_urls = RESPONSE_URLS
             .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
@@ -154,9 +154,9 @@ impl crate::plugin::BuiltinChannel for SmartBotChannel {
                 .expect("Failed to create tokio runtime for SmartBot");
             eprintln!("[SmartBot] Runtime created, starting WS loop...");
             rt.block_on(run_ws_loop(
-                bot_id,
+                bot_name,
                 secret,
-                tenant_name,
+                bot_id,
                 corp_id,
                 sender,
                 response_urls,
@@ -164,7 +164,7 @@ impl crate::plugin::BuiltinChannel for SmartBotChannel {
         });
 
         info!(
-            tenant = %self.tenant_name,
+            bot = %self.bot_name,
             bot_id = %self.bot_id,
             "SmartBot channel started"
         );
@@ -172,11 +172,11 @@ impl crate::plugin::BuiltinChannel for SmartBotChannel {
         Ok(())
     }
 
-    fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), String> {
-        // Use the passed tenant_id (from the original message's tenant_id field)
-        // rather than self.tenant_name, because the kernel dispatch picks channels
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+        // Use the passed bot_id (from the original message's bot_id field)
+        // rather than self.bot_id, because the kernel dispatch picks channels
         // by channel_type only and may route to a different SmartBotChannel instance.
-        let key = format!("{}:{}", tenant_id, user_id);
+        let key = format!("{}:{}", bot_id, user_id);
         let response_url = RESPONSE_URLS
             .get()
             .expect("RESPONSE_URLS not initialized")
@@ -187,16 +187,16 @@ impl crate::plugin::BuiltinChannel for SmartBotChannel {
                 "No response_url available for this user. SmartBot can only reply within callback context.".to_string()
             })?;
 
-        let tenant = crate::plugin::channels::wecom::TOKEN_MANAGER
-            .get_tenant(tenant_id)
-            .ok_or_else(|| format!("Unknown tenant: {tenant_id}"))?;
+        let bot = crate::plugin::channels::wecom::TOKEN_MANAGER
+            .get_bot(bot_id)
+            .ok_or_else(|| format!("Unknown tenant: {bot_id}"))?;
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| format!("Runtime creation failed: {e}"))?;
         rt.block_on(token::send_smartbot_response_async(
-            &tenant.http,
+            &bot.http,
             &response_url,
             text,
         ))
@@ -212,18 +212,18 @@ impl crate::plugin::BuiltinChannel for SmartBotChannel {
 // ---------------------------------------------------------------------------
 
 async fn run_ws_loop(
-    bot_id: String,
+    bot_name: String,
     secret: String,
-    tenant_name: String,
+    bot_id: String,
     corp_id: String,
     sender: tokio::sync::mpsc::Sender<PluginMessage>,
     response_urls: ResponseUrlStore,
 ) {
     loop {
         match connect_and_handle(
-            &bot_id,
+            &bot_name,
             &secret,
-            &tenant_name,
+            &bot_id,
             &corp_id,
             &sender,
             &response_urls,
@@ -245,9 +245,9 @@ async fn run_ws_loop(
 }
 
 async fn connect_and_handle(
-    bot_id: &str,
+    _bot_name: &str,
     secret: &str,
-    tenant_name: &str,
+    bot_id: &str,
     _corp_id: &str,
     sender: &tokio::sync::mpsc::Sender<PluginMessage>,
     response_urls: &ResponseUrlStore,
@@ -332,7 +332,7 @@ async fn connect_and_handle(
                     _ => continue,
                 };
 
-                if let Err(e) = handle_ws_message(&text, bot_id, tenant_name, sender, response_urls).await {
+                if let Err(e) = handle_ws_message(&text, bot_id, sender, response_urls).await {
                     warn!("SmartBot message handling error: {}", e);
                 }
             }
@@ -343,7 +343,6 @@ async fn connect_and_handle(
 async fn handle_ws_message(
     raw: &str,
     bot_id: &str,
-    tenant_name: &str,
     sender: &tokio::sync::mpsc::Sender<PluginMessage>,
     response_urls: &ResponseUrlStore,
 ) -> Result<(), String> {
@@ -403,7 +402,7 @@ async fn handle_ws_message(
 
             // Store response_url for later reply via send()
             if let Some(ref url) = body.response_url {
-                let key = format!("{}:{}", tenant_name, user_id);
+                let key = format!("{}:{}", bot_id, user_id);
                 response_urls.lock().unwrap().insert(key, url.clone());
             }
 
@@ -424,7 +423,7 @@ async fn handle_ws_message(
                 platform_message_id: body.msgid.clone(),
                 sender_id: user_id.clone(),
                 sender_name: user_id.clone(),
-                tenant_id: tenant_name.to_string(),
+                bot_id: bot_id.to_string(),
                 content: PluginContent::Text(content),
                 timestamp_ms,
                 is_group: chattype == "group",

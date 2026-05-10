@@ -94,7 +94,7 @@ fn scan_bot_configs(plugin_dir: &Path) -> Vec<(String, serde_json::Value)> {
     configs
 }
 
-fn load_bot_config(bot_config: &serde_json::Value) -> Option<token::TenantEntry> {
+fn load_bot_config(bot_config: &serde_json::Value) -> Option<token::BotEntry> {
     let bot_uuid = bot_config["_bot_id"].as_str().unwrap_or("").to_string();
     let mode = bot_config["mode"].as_str().unwrap_or("app");
     let name = bot_config["name"].as_str().unwrap_or("").to_string();
@@ -139,7 +139,7 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<token::TenantEntry>
 
             let corp_id_for_bot = bot_config["corp_id"].as_str().unwrap_or("").to_string();
 
-            let entry = token::TenantEntry::new_smartbot(
+            let entry = token::BotEntry::new_smartbot(
                 name.clone(),
                 corp_id_for_bot,
                 wecom_bot_id,
@@ -163,7 +163,7 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<token::TenantEntry>
                 .map(|s| s.to_string());
             let callback_token = bot_config["callback_token"].as_str().map(|s| s.to_string());
 
-            let entry = token::TenantEntry::new_kf(
+            let entry = token::BotEntry::new_kf(
                 name.clone(),
                 corp_id,
                 open_kfid,
@@ -200,7 +200,7 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<token::TenantEntry>
                 .map(|s| s.to_string());
             let callback_token = bot_config["callback_token"].as_str().map(|s| s.to_string());
 
-            let entry = token::TenantEntry::new_app(
+            let entry = token::BotEntry::new_app(
                 name.clone(),
                 corp_id,
                 agent_id,
@@ -259,7 +259,7 @@ impl crate::plugin::BuiltinChannel for WeComAppKfWatcher {
         "WeCom App/Kf Watcher"
     }
 
-    fn tenant_id(&self) -> &str {
+    fn bot_id(&self) -> &str {
         ""
     }
 
@@ -286,13 +286,13 @@ impl crate::plugin::BuiltinChannel for WeComAppKfWatcher {
                 }
                 token::WecomMode::App { .. } | token::WecomMode::Kf { .. } => {
                     let is_kf = entry.open_kfid().is_some();
-                    let tenant_name = entry.name.clone();
+                    let bot_id = entry.name.clone();
                     let corp_id = entry.corp_id.clone();
                     let webhook_port = entry.webhook_port;
                     let encoding_aes_key = entry.encoding_aes_key.clone();
                     let callback_token = entry.callback_token.clone();
 
-                    TOKEN_MANAGER.add_tenant(entry);
+                    TOKEN_MANAGER.add_bot(entry);
 
                     let tx = sender.clone();
                     std::thread::spawn(move || {
@@ -302,7 +302,7 @@ impl crate::plugin::BuiltinChannel for WeComAppKfWatcher {
                             .expect("Failed to create tokio runtime for WeCom channel");
                         rt.block_on(async {
                             let mut ch = channel::WeComChannel::new(
-                                tenant_name.clone(),
+                                bot_id.clone(),
                                 corp_id,
                                 webhook_port,
                                 encoding_aes_key,
@@ -310,7 +310,7 @@ impl crate::plugin::BuiltinChannel for WeComAppKfWatcher {
                                 is_kf,
                             );
                             if let Err(e) = ch.start(tx) {
-                                warn!(tenant = %tenant_name, "WeCom channel start error: {e}");
+                                warn!(bot = %bot_id, "WeCom channel start error: {e}");
                             }
                         });
                     });
@@ -322,17 +322,17 @@ impl crate::plugin::BuiltinChannel for WeComAppKfWatcher {
         Ok(())
     }
 
-    fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), String> {
-        let tenant = TOKEN_MANAGER
-            .get_tenant(tenant_id)
-            .ok_or_else(|| format!("Unknown tenant: {tenant_id}"))?;
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+        let bot = TOKEN_MANAGER
+            .get_bot(bot_id)
+            .ok_or_else(|| format!("Unknown bot: {bot_id}"))?;
 
-        match &tenant.mode {
+        match &bot.mode {
             token::WecomMode::App { .. } => {
-                token::send_app_message(&tenant, user_id, text)?;
+                token::send_app_message(bot.value(), user_id, text)?;
             }
             token::WecomMode::Kf { .. } => {
-                token::send_kf_message(&tenant, user_id, text)?;
+                token::send_kf_message(bot.value(), user_id, text)?;
             }
             token::WecomMode::SmartBot { .. } => {
                 return Err("SmartBot mode does not support send via app/kf watcher".to_string());
@@ -382,7 +382,7 @@ impl crate::plugin::BuiltinChannel for WeComSmartBotWatcher {
         "WeCom SmartBot Watcher"
     }
 
-    fn tenant_id(&self) -> &str {
+    fn bot_id(&self) -> &str {
         ""
     }
 
@@ -404,12 +404,12 @@ impl crate::plugin::BuiltinChannel for WeComSmartBotWatcher {
 
             match &entry.mode {
                 token::WecomMode::SmartBot { .. } => {
-                    let tenant_name = entry.name.clone();
+                    let bot_name = entry.name.clone();
                     let corp_id = entry.corp_id.clone();
                     let bot_id = entry.bot_id().unwrap_or("").to_string();
                     let secret = entry.bot_secret().unwrap_or("").to_string();
 
-                    TOKEN_MANAGER.add_tenant(entry);
+                    TOKEN_MANAGER.add_bot(entry);
 
                     let tx = sender.clone();
                     std::thread::spawn(move || {
@@ -419,13 +419,13 @@ impl crate::plugin::BuiltinChannel for WeComSmartBotWatcher {
                             .expect("Failed to create tokio runtime for SmartBot");
                         rt.block_on(async {
                             let mut ch = smartbot::SmartBotChannel::new(
-                                tenant_name.clone(),
+                                bot_name.clone(),
                                 corp_id,
                                 bot_id,
                                 secret,
                             );
                             if let Err(e) = ch.start(tx) {
-                                warn!(tenant = %tenant_name, "SmartBot channel start error: {e}");
+                                warn!(bot = %bot_name, "SmartBot channel start error: {e}");
                             }
                         });
                     });
@@ -441,8 +441,8 @@ impl crate::plugin::BuiltinChannel for WeComSmartBotWatcher {
         Ok(())
     }
 
-    fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), String> {
-        let key = format!("{}:{}", tenant_id, user_id);
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+        let key = format!("{}:{}", bot_id, user_id);
         let response_url = smartbot::RESPONSE_URLS
             .get()
             .ok_or_else(|| "RESPONSE_URLS not initialized".to_string())?
@@ -454,16 +454,16 @@ impl crate::plugin::BuiltinChannel for WeComSmartBotWatcher {
                     .to_string()
             })?;
 
-        let tenant = TOKEN_MANAGER
-            .get_tenant(tenant_id)
-            .ok_or_else(|| format!("Unknown tenant: {tenant_id}"))?;
+        let bot = TOKEN_MANAGER
+            .get_bot(bot_id)
+            .ok_or_else(|| format!("Unknown bot: {bot_id}"))?;
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| format!("Runtime creation failed: {e}"))?;
         rt.block_on(token::send_smartbot_response_async(
-            &tenant.http,
+            &bot.http,
             &response_url,
             text,
         ))
@@ -477,21 +477,21 @@ impl crate::plugin::BuiltinChannel for WeComSmartBotWatcher {
 /// Dynamically register and start a smartbot channel (no restart needed).
 pub fn register_and_start_smartbot(
     sender: tokio::sync::mpsc::Sender<PluginMessage>,
-    tenant_name: String,
+    bot_name: String,
     bot_id: String,
     secret: String,
 ) {
-    let entry = token::TenantEntry::new_smartbot(
-        tenant_name.clone(),
+    let entry = token::BotEntry::new_smartbot(
+        bot_name.clone(),
         String::new(),
         bot_id.clone(),
         secret.clone(),
     );
-    TOKEN_MANAGER.add_tenant(entry);
-    tracing::info!(tenant = %tenant_name, bot_id = %bot_id, "Dynamically registered WeCom smartbot");
+    TOKEN_MANAGER.add_bot(entry);
+    tracing::info!(bot = %bot_name, bot_id = %bot_id, "Dynamically registered WeCom smartbot");
 
     let tx = sender;
-    let tn = tenant_name.clone();
+    let tn = bot_name.clone();
     let bid = bot_id;
     let sec = secret;
     std::thread::spawn(move || {
@@ -502,7 +502,7 @@ pub fn register_and_start_smartbot(
         rt.block_on(async {
             let mut ch = smartbot::SmartBotChannel::new(tn.clone(), String::new(), bid, sec);
             if let Err(e) = ch.start(tx) {
-                tracing::warn!(tenant = %tn, "Dynamic SmartBot channel start error: {e}");
+                tracing::warn!(bot = %tn, "Dynamic SmartBot channel start error: {e}");
             }
         });
     });

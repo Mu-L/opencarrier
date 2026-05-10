@@ -19,7 +19,7 @@ pub mod whiteboard;
 pub mod wiki;
 
 use super::api_ext::{feishu_api_blocking, truncate_result};
-use super::FEISHU_TENANTS;
+use super::FEISHU_BOTS;
 use carrier_plugin_sdk::{PluginError, PluginToolContext, ToolDef, ToolProvider};
 use reqwest::Method;
 use serde_json::Value;
@@ -78,11 +78,11 @@ impl ToolProvider for FeishuToolProvider {
     }
 
     fn execute(&self, args: &Value, ctx: &PluginToolContext) -> Result<String, PluginError> {
-        let entry = FEISHU_TENANTS.get(&ctx.tenant_id).ok_or_else(|| {
-            let names: Vec<String> = FEISHU_TENANTS.iter().map(|e| e.key().clone()).collect();
+        let entry = FEISHU_BOTS.get(&ctx.bot_id).ok_or_else(|| {
+            let names: Vec<String> = FEISHU_BOTS.iter().map(|e| e.key().clone()).collect();
             PluginError::tool(format!(
                 "Unknown tenant '{}'. Available tenants: {}",
-                ctx.tenant_id,
+                ctx.bot_id,
                 names.join(", ")
             ))
         })?;

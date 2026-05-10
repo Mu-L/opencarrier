@@ -280,10 +280,10 @@ pub struct SendTypingRequest {
 // Token persistence
 // ---------------------------------------------------------------------------
 
-/// Serialized form of a tenant's iLink credentials, stored on disk.
+/// Serialized form of a bot's iLink credentials, stored on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TenantTokenFile {
-    pub name: String,
+pub struct BotTokenFile {
+    pub bot_id: String,
     pub bot_token: String,
     pub baseurl: String,
     pub ilink_bot_id: String,

@@ -20,11 +20,11 @@ const QR_POLL_INTERVAL_SECS: u64 = 1;
 
 /// Perform QR code login and return the new tenant name.
 ///
-/// Returns `(tenant_name, qr_url)` on first call, then blocks until scanned.
+/// Returns `(bot_id, qr_url)` on first call, then blocks until scanned.
 /// This is a blocking function meant to be called from a tool or API handler.
 pub async fn qr_login(
     http: &Client,
-    tenant_name: &str,
+    bot_id: &str,
     bind_agent: Option<&str>,
 ) -> Result<String, String> {
     let mut base_url = ILINK_API_BASE.to_string();
@@ -68,7 +68,7 @@ pub async fn qr_login(
 
                         // Register the tenant
                         WEIXIN_STATE.register_from_qr(
-                            tenant_name,
+                            bot_id,
                             &bot_token,
                             &baseurl,
                             &ilink_bot_id,
@@ -76,10 +76,10 @@ pub async fn qr_login(
                             bind_agent,
                         );
 
-                        info!(tenant = tenant_name, "QR login successful");
+                        info!(tenant = bot_id, "QR login successful");
                         return Ok(format!(
                             "WeChat account linked: {} (bot_id: {})",
-                            tenant_name, ilink_bot_id
+                            bot_id, ilink_bot_id
                         ));
                     }
                     "expired" => {

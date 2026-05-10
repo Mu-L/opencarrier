@@ -13,7 +13,7 @@ use crate::error::PluginError;
 /// 1. The host calls `channel_type()` and `name()` during loading.
 /// 2. The host calls `start(sender)` to begin receiving messages.
 /// 3. The adapter calls `sender.send(msg)` when inbound messages arrive.
-/// 4. The host calls `send(tenant_id, user_id, text)` for outbound replies.
+/// 4. The host calls `send(bot_id, user_id, text)` for outbound replies.
 /// 5. The host calls `stop()` when shutting down.
 pub trait ChannelAdapter: Send + Sync {
     /// Channel type identifier (e.g. "wecom", "telegram").
@@ -22,8 +22,8 @@ pub trait ChannelAdapter: Send + Sync {
     /// Human-readable channel name.
     fn name(&self) -> &str;
 
-    /// Tenant identifier this channel belongs to (used for message routing).
-    fn tenant_id(&self) -> &str {
+    /// Bot identifier this channel belongs to (used for message routing).
+    fn bot_id(&self) -> &str {
         ""
     }
 
@@ -33,7 +33,7 @@ pub trait ChannelAdapter: Send + Sync {
     fn start(&mut self, sender: MessageSender) -> Result<(), PluginError>;
 
     /// Send a text message through the channel.
-    fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), PluginError>;
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), PluginError>;
 
     /// Stop the channel and release resources. Default is a no-op.
     fn stop(&mut self) {}

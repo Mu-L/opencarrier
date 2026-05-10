@@ -32,7 +32,7 @@ struct CallbackParams {
 
 /// A WeCom channel that receives messages via webhook and sends via API.
 pub struct WeComChannel {
-    tenant_name: String,
+    bot_id: String,
     corp_id: String,
     webhook_port: u16,
     encoding_aes_key: Option<String>,
@@ -42,7 +42,7 @@ pub struct WeComChannel {
 
 impl WeComChannel {
     pub fn new(
-        tenant_name: String,
+        bot_id: String,
         corp_id: String,
         webhook_port: u16,
         encoding_aes_key: Option<String>,
@@ -50,7 +50,7 @@ impl WeComChannel {
         is_kf: bool,
     ) -> Self {
         Self {
-            tenant_name,
+            bot_id,
             corp_id,
             webhook_port,
             encoding_aes_key,
@@ -69,12 +69,12 @@ impl crate::plugin::BuiltinChannel for WeComChannel {
         "WeChat Work"
     }
 
-    fn tenant_id(&self) -> &str {
-        &self.tenant_name
+    fn bot_id(&self) -> &str {
+        &self.bot_id
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let tenant_name = self.tenant_name.clone();
+        let bot_id = self.bot_id.clone();
         let corp_id = self.corp_id.clone();
         let encoding_aes_key = self.encoding_aes_key.clone();
         let callback_token = self.callback_token.clone();
@@ -89,7 +89,7 @@ impl crate::plugin::BuiltinChannel for WeComChannel {
                 .expect("Failed to create tokio runtime for WeCom webhook");
             rt.block_on(async move {
                 run_webhook_server(
-                    tenant_name,
+                    bot_id,
                     corp_id,
                     encoding_aes_key,
                     callback_token,
@@ -102,7 +102,7 @@ impl crate::plugin::BuiltinChannel for WeComChannel {
         });
 
         info!(
-            tenant = %self.tenant_name,
+            bot = %self.bot_id,
             port = self.webhook_port,
             kf = self.is_kf,
             "WeCom channel started"
@@ -111,17 +111,17 @@ impl crate::plugin::BuiltinChannel for WeComChannel {
         Ok(())
     }
 
-    fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), String> {
-        let tenant = crate::plugin::channels::wecom::TOKEN_MANAGER
-            .get_tenant(tenant_id)
-            .ok_or_else(|| format!("Unknown tenant: {tenant_id}"))?;
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+        let bot = crate::plugin::channels::wecom::TOKEN_MANAGER
+            .get_bot(bot_id)
+            .ok_or_else(|| format!("Unknown bot: {bot_id}"))?;
 
-        match &tenant.mode {
+        match &bot.mode {
             token::WecomMode::App { .. } => {
-                token::send_app_message(tenant.value(), user_id, text)?;
+                token::send_app_message(bot.value(), user_id, text)?;
             }
             token::WecomMode::Kf { .. } => {
-                token::send_kf_message(tenant.value(), user_id, text)?;
+                token::send_kf_message(bot.value(), user_id, text)?;
             }
             token::WecomMode::SmartBot { .. } => {
                 return Err(
@@ -144,7 +144,7 @@ impl crate::plugin::BuiltinChannel for WeComChannel {
 // ---------------------------------------------------------------------------
 
 async fn run_webhook_server(
-    tenant_name: String,
+    bot_id: String,
     corp_id: String,
     encoding_aes_key: Option<String>,
     callback_token: Option<String>,
@@ -153,7 +153,7 @@ async fn run_webhook_server(
     tx: mpsc::Sender<PluginMessage>,
 ) {
     let state = WebhookState {
-        tenant_name,
+        bot_id,
         corp_id,
         encoding_aes_key,
         callback_token,
@@ -182,7 +182,7 @@ async fn run_webhook_server(
 
 #[derive(Clone)]
 struct WebhookState {
-    tenant_name: String,
+    bot_id: String,
     #[allow(dead_code)]
     corp_id: String,
     encoding_aes_key: Option<String>,
@@ -316,8 +316,8 @@ async fn webhook_post(
         .unwrap_or_default()
         .as_millis() as u64;
 
-    // Build tenant_id as tenant_name for routing
-    let tenant_id = state.tenant_name.clone();
+    // Build bot_id for routing
+    let bot_id = state.bot_id.clone();
 
     // Handle text messages
     if msg_type == "text" {
@@ -328,7 +328,7 @@ async fn webhook_post(
             platform_message_id: msg_id,
             sender_id: from_user.clone(),
             sender_name: from_user.clone(),
-            tenant_id,
+            bot_id,
             content: PluginContent::Text(content),
             timestamp_ms,
             is_group: false,
@@ -343,7 +343,7 @@ async fn webhook_post(
             platform_message_id: msg_id,
             sender_id: from_user.clone(),
             sender_name: from_user.clone(),
-            tenant_id,
+            bot_id,
             content: PluginContent::Command {
                 name: event.to_string(),
                 args: vec![],

@@ -115,7 +115,7 @@ macro_rules! declare_plugin {
                 channel_descs.push($crate::ChannelDescriptor {
                     channel_type: adapter.channel_type().to_string(),
                     name: adapter.name().to_string(),
-                    tenant_id: adapter.tenant_id().to_string(),
+                    bot_id: adapter.bot_id().to_string(),
                 });
                 channels.push(_OcChannelEntry { adapter });
             }
@@ -272,13 +272,13 @@ macro_rules! declare_plugin {
                 Err(_) => return -1,
             };
 
-            let tenant_id = msg["tenant_id"].as_str().unwrap_or("");
+            let bot_id = msg["bot_id"].as_str().unwrap_or("");
             let user_id = msg["user_id"].as_str().unwrap_or("");
             let text = msg["text"].as_str().unwrap_or("");
 
             match state.channels[idx - 1]
                 .adapter
-                .send(tenant_id, user_id, text)
+                .send(bot_id, user_id, text)
             {
                 Ok(()) => 0,
                 Err(_) => -1,

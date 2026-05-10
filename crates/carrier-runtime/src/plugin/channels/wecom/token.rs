@@ -35,11 +35,11 @@ pub enum WecomMode {
 }
 
 // ---------------------------------------------------------------------------
-// Tenant entry
+// Bot entry
 // ---------------------------------------------------------------------------
 
-/// Per-tenant configuration and cached token.
-pub struct TenantEntry {
+/// Per-bot configuration and cached token.
+pub struct BotEntry {
     /// Unique tenant name (used as DashMap key).
     pub name: String,
     /// Enterprise corp ID (not used for Bot mode).
@@ -63,12 +63,12 @@ pub struct TenantEntry {
     pub mcp_bot_secret: Option<String>,
 }
 
-impl TenantEntry {
+impl BotEntry {
     // -----------------------------------------------------------------------
     // Constructors per mode
     // -----------------------------------------------------------------------
 
-    /// Create an enterprise application tenant.
+    /// Create an enterprise application bot.
     #[allow(clippy::too_many_arguments)]
     pub fn new_app(
         name: String,
@@ -96,7 +96,7 @@ impl TenantEntry {
         }
     }
 
-    /// Create a customer service tenant.
+    /// Create a customer service bot.
     #[allow(clippy::too_many_arguments)]
     pub fn new_kf(
         name: String,
@@ -124,7 +124,7 @@ impl TenantEntry {
         }
     }
 
-    /// Create a smart dialog bot tenant.
+    /// Create a smart dialog bot.
     pub fn new_smartbot(name: String, corp_id: String, bot_id: String, secret: String) -> Self {
         Self {
             name,
@@ -145,7 +145,7 @@ impl TenantEntry {
     // Access helpers
     // -----------------------------------------------------------------------
 
-    /// Get agent_id if this is an App-mode tenant.
+    /// Get agent_id if this is an App-mode bot.
     pub fn agent_id(&self) -> Option<&str> {
         match &self.mode {
             WecomMode::App { agent_id } => Some(agent_id),
@@ -153,7 +153,7 @@ impl TenantEntry {
         }
     }
 
-    /// Get open_kfid if this is a Kf-mode tenant.
+    /// Get open_kfid if this is a Kf-mode bot.
     pub fn open_kfid(&self) -> Option<&str> {
         match &self.mode {
             WecomMode::Kf { open_kfid } => Some(open_kfid),
@@ -161,7 +161,7 @@ impl TenantEntry {
         }
     }
 
-    /// Get bot_id if this is a SmartBot-mode tenant.
+    /// Get bot_id if this is a SmartBot-mode bot.
     pub fn bot_id(&self) -> Option<&str> {
         match &self.mode {
             WecomMode::SmartBot { bot_id, .. } => Some(bot_id),
@@ -169,7 +169,7 @@ impl TenantEntry {
         }
     }
 
-    /// Get bot secret if this is a SmartBot-mode tenant.
+    /// Get bot secret if this is a SmartBot-mode bot.
     pub fn bot_secret(&self) -> Option<&str> {
         match &self.mode {
             WecomMode::SmartBot { secret, .. } => Some(secret),
@@ -248,7 +248,7 @@ impl TenantEntry {
         let expires_at = Instant::now()
             + Duration::from_secs(expires_in.saturating_sub(TOKEN_REFRESH_BUFFER_SECS));
 
-        info!(tenant = %self.name, "Refreshed WeCom access token");
+        info!(bot = %self.name, "Refreshed WeCom access token");
 
         *self.cached_token.lock().unwrap() = Some((token.clone(), expires_at));
         Ok(token)
@@ -259,44 +259,44 @@ impl TenantEntry {
 // Token manager
 // ---------------------------------------------------------------------------
 
-/// Multi-tenant token manager keyed by tenant name.
+/// Multi-bot token manager keyed by bot name.
 pub struct TokenManager {
-    pub tenants: DashMap<String, TenantEntry>,
+    pub bots: DashMap<String, BotEntry>,
 }
 
 impl TokenManager {
     pub fn new() -> Self {
         Self {
-            tenants: DashMap::new(),
+            bots: DashMap::new(),
         }
     }
 
-    /// Add a tenant.
-    pub fn add_tenant(&self, entry: TenantEntry) {
+    /// Add a bot.
+    pub fn add_bot(&self, entry: BotEntry) {
         let name = entry.name.clone();
-        self.tenants.insert(name, entry);
+        self.bots.insert(name, entry);
     }
 
-    /// Get a tenant entry by name.
-    pub fn get_tenant(
+    /// Get a bot entry by name.
+    pub fn get_bot(
         &self,
         name: &str,
-    ) -> Option<dashmap::mapref::one::Ref<'_, String, TenantEntry>> {
-        self.tenants.get(name)
+    ) -> Option<dashmap::mapref::one::Ref<'_, String, BotEntry>> {
+        self.bots.get(name)
     }
 
-    /// Get all tenant names.
-    pub fn tenant_names(&self) -> Vec<String> {
-        self.tenants.iter().map(|e| e.key().clone()).collect()
+    /// Get all bot IDs.
+    pub fn bot_ids(&self) -> Vec<String> {
+        self.bots.iter().map(|e| e.key().clone()).collect()
     }
 
-    /// Get access token for a tenant.
+    /// Get access token for a bot.
     #[allow(dead_code)]
     pub fn get_access_token(&self, name: &str) -> Result<String, String> {
         let entry = self
-            .tenants
+            .bots
             .get(name)
-            .ok_or_else(|| format!("Unknown tenant: {name}"))?;
+            .ok_or_else(|| format!("Unknown bot: {name}"))?;
         entry.get_access_token()
     }
 }
@@ -339,14 +339,14 @@ pub async fn wedoc_post(
 }
 
 /// Send an application message to a WeCom user (App mode).
-pub fn send_app_message(tenant: &TenantEntry, user_id: &str, content: &str) -> Result<(), String> {
-    let agent_id = tenant
+pub fn send_app_message(bot: &BotEntry, user_id: &str, content: &str) -> Result<(), String> {
+    let agent_id = bot
         .agent_id()
         .ok_or("send_app_message requires App mode")?
         .to_string();
-    let token = tenant.get_access_token()?;
+    let token = bot.get_access_token()?;
 
-    let http = tenant.http.clone();
+    let http = bot.http.clone();
     let user_id = user_id.to_string();
     let content = content.to_string();
 
@@ -381,14 +381,14 @@ pub fn send_app_message(tenant: &TenantEntry, user_id: &str, content: &str) -> R
 }
 
 /// Send a customer service message (Kf mode).
-pub fn send_kf_message(tenant: &TenantEntry, user_id: &str, content: &str) -> Result<(), String> {
-    let open_kfid = tenant
+pub fn send_kf_message(bot: &BotEntry, user_id: &str, content: &str) -> Result<(), String> {
+    let open_kfid = bot
         .open_kfid()
         .ok_or("send_kf_message requires Kf mode")?
         .to_string();
-    let token = tenant.get_access_token()?;
+    let token = bot.get_access_token()?;
 
-    let http = tenant.http.clone();
+    let http = bot.http.clone();
     let user_id = user_id.to_string();
     let content = content.to_string();
 

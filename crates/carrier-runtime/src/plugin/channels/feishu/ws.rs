@@ -11,7 +11,7 @@
 
 use crate::plugin::channels::feishu::api;
 use crate::plugin::channels::feishu::pbbp2::*;
-use crate::plugin::channels::feishu::token::TenantTokenCache;
+use crate::plugin::channels::feishu::token::BotTokenCache;
 use crate::plugin::channels::feishu::types::*;
 use carrier_types::plugin::{PluginContent, PluginMessage};
 use dashmap::DashMap;
@@ -34,22 +34,22 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(120);
 
 pub struct FeishuWsClient {
-    tenant_name: String,
+    bot_id: String,
     bot_uuid: String,
-    token_cache: Arc<TenantTokenCache>,
+    token_cache: Arc<BotTokenCache>,
     shutdown: Arc<AtomicBool>,
     dedup: DashMap<String, Instant>,
 }
 
 impl FeishuWsClient {
     pub fn new(
-        tenant_name: String,
+        bot_id: String,
         bot_uuid: String,
-        token_cache: Arc<TenantTokenCache>,
+        token_cache: Arc<BotTokenCache>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         Self {
-            tenant_name,
+            bot_id,
             bot_uuid,
             token_cache,
             shutdown,
@@ -63,7 +63,7 @@ impl FeishuWsClient {
 
         loop {
             if self.shutdown.load(Ordering::Relaxed) {
-                info!(tenant = %self.tenant_name, "Shutdown requested, exiting WS loop");
+                info!(tenant = %self.bot_id, "Shutdown requested, exiting WS loop");
                 return;
             }
 
@@ -72,10 +72,10 @@ impl FeishuWsClient {
                     if self.shutdown.load(Ordering::Relaxed) {
                         return;
                     }
-                    warn!(tenant = %self.tenant_name, "WebSocket disconnected, reconnecting...");
+                    warn!(tenant = %self.bot_id, "WebSocket disconnected, reconnecting...");
                 }
                 Err(e) => {
-                    error!(tenant = %self.tenant_name, "WebSocket error: {e}");
+                    error!(tenant = %self.bot_id, "WebSocket error: {e}");
                 }
             }
 
@@ -120,7 +120,7 @@ impl FeishuWsClient {
         let service_id = parse_service_id(&ws_url).unwrap_or(0);
 
         info!(
-            tenant = %self.tenant_name,
+            tenant = %self.bot_id,
             service_id,
             "Connecting to Feishu WebSocket..."
         );
@@ -129,7 +129,7 @@ impl FeishuWsClient {
             .await
             .map_err(|e| format!("WebSocket connect failed: {e}"))?;
 
-        info!(tenant = %self.tenant_name, "Feishu WebSocket connected");
+        info!(tenant = %self.bot_id, "Feishu WebSocket connected");
 
         let (mut write, mut read) = ws_stream.split();
 
@@ -140,7 +140,7 @@ impl FeishuWsClient {
 
         loop {
             if self.shutdown.load(Ordering::Relaxed) {
-                info!(tenant = %self.tenant_name, "Shutdown during WS listen");
+                info!(tenant = %self.bot_id, "Shutdown during WS listen");
                 let _ = write.close().await;
                 return Ok(());
             }
@@ -149,29 +149,29 @@ impl FeishuWsClient {
                 msg_result = read.next() => {
                     match msg_result {
                         None => {
-                            warn!(tenant = %self.tenant_name, "WS stream ended");
+                            warn!(tenant = %self.bot_id, "WS stream ended");
                             return Ok(());
                         }
                         Some(Ok(Message::Binary(data))) => {
                             let hex_preview: Vec<String> = data.iter().take(50).map(|b| format!("{b:02x}")).collect();
-                            info!(tenant = %self.tenant_name, len = data.len(), hex = %hex_preview.join(""), "WS binary frame received");
+                            info!(tenant = %self.bot_id, len = data.len(), hex = %hex_preview.join(""), "WS binary frame received");
                             self.handle_binary_frame(&data, &mut write, &mut fragments, sender).await;
                         }
                         Some(Ok(Message::Text(text))) => {
-                            info!(tenant = %self.tenant_name, len = text.len(), "WS text frame received");
+                            info!(tenant = %self.bot_id, len = text.len(), "WS text frame received");
                         }
                         Some(Ok(Message::Ping(data))) => {
-                            info!(tenant = %self.tenant_name, len = data.len(), "WS protocol ping received");
+                            info!(tenant = %self.bot_id, len = data.len(), "WS protocol ping received");
                         }
                         Some(Ok(Message::Pong(data))) => {
-                            info!(tenant = %self.tenant_name, len = data.len(), "WS protocol pong received");
+                            info!(tenant = %self.bot_id, len = data.len(), "WS protocol pong received");
                         }
                         Some(Ok(Message::Close(_))) => {
-                            warn!(tenant = %self.tenant_name, "WebSocket close frame received");
+                            warn!(tenant = %self.bot_id, "WebSocket close frame received");
                             return Ok(());
                         }
                         Some(Ok(Message::Frame(_))) => {
-                            info!(tenant = %self.tenant_name, "WS raw frame received");
+                            info!(tenant = %self.bot_id, "WS raw frame received");
                         }
                         Some(Err(e)) => {
                             return Err(format!("WebSocket read error: {e}"));
@@ -182,7 +182,7 @@ impl FeishuWsClient {
                     let ping = Pbbp2Frame::ping(service_id);
                     let encoded = ping.encode();
                     let hex: Vec<String> = encoded.iter().map(|b| format!("{b:02x}")).collect();
-                    info!(tenant = %self.tenant_name, len = encoded.len(), hex = %hex.join(""), "Sending app-level ping");
+                    info!(tenant = %self.bot_id, len = encoded.len(), hex = %hex.join(""), "Sending app-level ping");
                     if let Err(e) = write.send(Message::Binary(encoded)).await {
                         return Err(format!("WS ping send failed: {e}"));
                     }
@@ -207,7 +207,7 @@ impl FeishuWsClient {
         let frame = match Pbbp2Frame::decode(data) {
             Some(f) => f,
             None => {
-                warn!(tenant = %self.tenant_name, len = data.len(), "Failed to decode binary frame as pbbp2.Frame");
+                warn!(tenant = %self.bot_id, len = data.len(), "Failed to decode binary frame as pbbp2.Frame");
                 return;
             }
         };
@@ -218,7 +218,7 @@ impl FeishuWsClient {
                 self.handle_data(&frame, write, fragments, sender).await;
             }
             _ => {
-                warn!(tenant = %self.tenant_name, method = frame.method, "Unknown frame method");
+                warn!(tenant = %self.bot_id, method = frame.method, "Unknown frame method");
             }
         }
     }
@@ -231,7 +231,7 @@ impl FeishuWsClient {
             "pong" => {
                 let payload_str = String::from_utf8_lossy(&frame.payload);
                 info!(
-                    tenant = %self.tenant_name,
+                    tenant = %self.bot_id,
                     payload = %payload_str,
                     "WS pong received"
                 );
@@ -241,7 +241,7 @@ impl FeishuWsClient {
                 if let Some(status) = frame.header("handshake-status") {
                     let msg = frame.header("handshake-msg").unwrap_or("");
                     info!(
-                        tenant = %self.tenant_name,
+                        tenant = %self.bot_id,
                         status,
                         msg,
                         "WS handshake"
@@ -249,7 +249,7 @@ impl FeishuWsClient {
                 }
             }
             other => {
-                info!(tenant = %self.tenant_name, frame_type = other, "Unknown control frame type");
+                info!(tenant = %self.bot_id, frame_type = other, "Unknown control frame type");
             }
         }
     }
@@ -285,7 +285,7 @@ impl FeishuWsClient {
                 // Still collecting fragments — send ACK for this part
                 let ack = Pbbp2Frame::ack_for(frame, start.elapsed().as_millis() as i64);
                 if let Err(e) = write.send(Message::Binary(ack.encode())).await {
-                    warn!(tenant = %self.tenant_name, "ACK send failed: {e}");
+                    warn!(tenant = %self.bot_id, "ACK send failed: {e}");
                 }
                 return;
             }
@@ -294,12 +294,12 @@ impl FeishuWsClient {
         // Send ACK for complete event
         let ack = Pbbp2Frame::ack_for(frame, start.elapsed().as_millis() as i64);
         if let Err(e) = write.send(Message::Binary(ack.encode())).await {
-            warn!(tenant = %self.tenant_name, "ACK send failed: {e}");
+            warn!(tenant = %self.bot_id, "ACK send failed: {e}");
         }
 
         let payload_str = String::from_utf8_lossy(&payload);
         info!(
-            tenant = %self.tenant_name,
+            tenant = %self.bot_id,
             payload_len = payload.len(),
             payload_preview = %&payload_str[..payload_str.len().min(300)],
             "WS event data received"
@@ -313,7 +313,7 @@ impl FeishuWsClient {
         let event: serde_json::Value = match serde_json::from_str(payload_str) {
             Ok(v) => v,
             Err(e) => {
-                warn!(tenant = %self.tenant_name, "Failed to parse event JSON: {e}");
+                warn!(tenant = %self.bot_id, "Failed to parse event JSON: {e}");
                 return;
             }
         };
@@ -328,7 +328,7 @@ impl FeishuWsClient {
             .unwrap_or("");
 
         if event_type != "im.message.receive_v1" {
-            info!(tenant = %self.tenant_name, event_type, "Ignoring non-message event");
+            info!(tenant = %self.bot_id, event_type, "Ignoring non-message event");
             return;
         }
 
@@ -393,7 +393,7 @@ impl FeishuWsClient {
             });
 
         info!(
-            tenant = %self.tenant_name,
+            tenant = %self.bot_id,
             from = %sender_id,
             chat_type,
             text_len = text.len(),
@@ -405,7 +405,7 @@ impl FeishuWsClient {
             platform_message_id: msg_id.to_string(),
             sender_id: sender_id.clone(),
             sender_name,
-            tenant_id: self.bot_uuid.clone(),
+            bot_id: self.bot_uuid.clone(),
             content: PluginContent::Text(text),
             timestamp_ms: create_time_ms,
             is_group,

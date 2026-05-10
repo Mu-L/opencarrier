@@ -54,14 +54,14 @@ const MCP_CONFIG_ENDPOINT: &str = "https://qyapi.weixin.qq.com/cgi-bin/aibot/cli
 /// Returns `Err("MCP_NO_CREDENTIALS")` if the tenant has no bot credentials.
 /// Returns `Err("MCP_AUTH_EXPIRED")` if the fetched config has no URL for this category.
 pub fn get_category_url(
-    tenant_name: &str,
+    bot_name: &str,
     category: &str,
     bot_id: &str,
     bot_secret: &str,
     http: &Client,
 ) -> Result<String, String> {
     // Check cache
-    if let Some(entry) = MCP_CONFIG_CACHE.get(tenant_name) {
+    if let Some(entry) = MCP_CONFIG_CACHE.get(bot_name) {
         if entry.fetched_at.elapsed().as_secs() < CONFIG_TTL_SECS {
             if let Some(url) = entry.categories.get(category) {
                 return Ok(url.clone());
@@ -76,7 +76,7 @@ pub fn get_category_url(
             }
             return Err(format!(
                 "MCP category '{}' not found in config for tenant '{}'",
-                category, tenant_name
+                category, bot_name
             ));
         }
     }
@@ -105,7 +105,7 @@ pub fn get_category_url(
 
     // Cache it
     MCP_CONFIG_CACHE.insert(
-        tenant_name.to_string(),
+        bot_name.to_string(),
         CachedConfig {
             categories,
             auth_status,
@@ -117,8 +117,8 @@ pub fn get_category_url(
 }
 
 /// Invalidate cached config for a tenant (e.g., on auth error).
-pub fn invalidate_cache(tenant_name: &str) {
-    MCP_CONFIG_CACHE.remove(tenant_name);
+pub fn invalidate_cache(bot_id: &str) {
+    MCP_CONFIG_CACHE.remove(bot_id);
 }
 
 // ---------------------------------------------------------------------------

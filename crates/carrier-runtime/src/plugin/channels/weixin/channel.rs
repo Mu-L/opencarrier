@@ -17,9 +17,9 @@ use uuid::Uuid;
 
 use crate::plugin::BuiltinChannel;
 
-/// Channel adapter for a single iLink tenant (one scanned WeChat account).
+/// Channel adapter for a single iLink bot (one scanned WeChat account).
 pub struct ILinkChannel {
-    tenant_name: String,
+    bot_id: String,
     /// Shutdown signal for the polling thread (set to true to stop).
     shutdown: Arc<AtomicBool>,
     /// Handle to the polling thread (for join on stop).
@@ -27,9 +27,9 @@ pub struct ILinkChannel {
 }
 
 impl ILinkChannel {
-    pub fn new(tenant_name: String) -> Self {
+    pub fn new(bot_id: String) -> Self {
         Self {
-            tenant_name,
+            bot_id,
             shutdown: Arc::new(AtomicBool::new(false)),
             thread_handle: None,
         }
@@ -42,46 +42,46 @@ impl BuiltinChannel for ILinkChannel {
     }
 
     fn name(&self) -> &str {
-        &self.tenant_name
+        &self.bot_id
     }
 
-    fn tenant_id(&self) -> &str {
-        &self.tenant_name
+    fn bot_id(&self) -> &str {
+        &self.bot_id
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let tenant_name = self.tenant_name.clone();
+        let bot_id = self.bot_id.clone();
 
-        // Mark tenant as active
-        if let Some(state) = WEIXIN_STATE.tenants.get(&tenant_name) {
+        // Mark bot as active
+        if let Some(state) = WEIXIN_STATE.bots.get(&bot_id) {
             state.active.store(true, Ordering::Relaxed);
         } else {
-            info!(tenant = %tenant_name, "ILinkChannel starting in waiting mode (no token yet)");
+            info!(bot_id = %bot_id, "ILinkChannel starting in waiting mode (no token yet)");
         }
 
         let shutdown = self.shutdown.clone();
-        let thread_tenant = tenant_name.clone();
+        let thread_bot_id = bot_id.clone();
         let handle = std::thread::Builder::new()
-            .name(format!("weixin-poll-{tenant_name}"))
+            .name(format!("weixin-poll-{bot_id}"))
             .spawn(move || {
-                run_poll_loop(&thread_tenant, sender, &shutdown);
+                run_poll_loop(&thread_bot_id, sender, &shutdown);
             })
             .map_err(|e| format!("Failed to spawn polling thread: {e}"))?;
 
         self.thread_handle = Some(handle);
-        info!(tenant = %tenant_name, "ILinkChannel started");
+        info!(bot_id = %bot_id, "ILinkChannel started");
         Ok(())
     }
 
-    fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
         let state = WEIXIN_STATE
-            .tenants
-            .get(tenant_id)
-            .ok_or_else(|| format!("Unknown tenant: {tenant_id}"))?;
+            .bots
+            .get(bot_id)
+            .ok_or_else(|| format!("Unknown bot: {bot_id}"))?;
 
         if state.is_expired() {
             return Err(format!(
-                "Token expired for tenant {tenant_id}, please re-scan QR code"
+                "Token expired for bot {bot_id}, please re-scan QR code"
             ));
         }
 
@@ -135,62 +135,62 @@ impl BuiltinChannel for ILinkChannel {
     fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
 
-        if let Some(state) = WEIXIN_STATE.tenants.get(&self.tenant_name) {
+        if let Some(state) = WEIXIN_STATE.bots.get(&self.bot_id) {
             state.active.store(false, Ordering::Relaxed);
         }
 
         if let Some(handle) = self.thread_handle.take() {
             match handle.join() {
-                Ok(()) => info!(tenant = %self.tenant_name, "Polling thread joined cleanly"),
-                Err(e) => error!(tenant = %self.tenant_name, "Polling thread panicked: {e:?}"),
+                Ok(()) => info!(bot_id = %self.bot_id, "Polling thread joined cleanly"),
+                Err(e) => error!(bot_id = %self.bot_id, "Polling thread panicked: {e:?}"),
             }
         }
 
-        info!(tenant = %self.tenant_name, "ILinkChannel stopped");
+        info!(bot_id = %self.bot_id, "ILinkChannel stopped");
     }
 }
 
 /// Main polling loop (runs in a dedicated thread with its own runtime).
-fn run_poll_loop(tenant_name: &str, sender: mpsc::Sender<PluginMessage>, shutdown: &AtomicBool) {
+fn run_poll_loop(bot_id: &str, sender: mpsc::Sender<PluginMessage>, shutdown: &AtomicBool) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
         Err(e) => {
-            error!(tenant = tenant_name, "Failed to create tokio runtime: {e}");
+            error!(bot_id = bot_id, "Failed to create tokio runtime: {e}");
             return;
         }
     };
 
     rt.block_on(async move {
-        poll_loop_inner(tenant_name, sender, shutdown).await;
+        poll_loop_inner(bot_id, sender, shutdown).await;
     });
 }
 
 async fn poll_loop_inner(
-    tenant_name: &str,
+    bot_id: &str,
     sender: mpsc::Sender<PluginMessage>,
     shutdown: &AtomicBool,
 ) {
-    info!(tenant = tenant_name, "Poll loop started");
+    info!(bot_id = bot_id, "Poll loop started");
 
     loop {
         if shutdown.load(Ordering::Relaxed) {
             info!(
-                tenant = tenant_name,
+                bot_id = bot_id,
                 "Shutdown signal received, exiting poll loop"
             );
             return;
         }
 
         let (bot_token, baseurl, http) = {
-            let state = match WEIXIN_STATE.tenants.get(tenant_name) {
+            let state = match WEIXIN_STATE.bots.get(bot_id) {
                 Some(s) => s,
                 None => {
                     for _ in 0..10 {
                         if shutdown.load(Ordering::Relaxed) {
-                            info!(tenant = tenant_name, "Shutdown during wait, exiting");
+                            info!(bot_id = bot_id, "Shutdown during wait, exiting");
                             return;
                         }
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -203,7 +203,7 @@ async fn poll_loop_inner(
                 for _ in 0..10 {
                     if shutdown.load(Ordering::Relaxed) {
                         info!(
-                            tenant = tenant_name,
+                            bot_id = bot_id,
                             "Shutdown during inactive wait, exiting"
                         );
                         return;
@@ -221,8 +221,8 @@ async fn poll_loop_inner(
         };
 
         let cursor = WEIXIN_STATE
-            .tenants
-            .get(tenant_name)
+            .bots
+            .get(bot_id)
             .map(|s| s.cursor.lock().unwrap().clone())
             .unwrap_or_default();
 
@@ -231,8 +231,8 @@ async fn poll_loop_inner(
                 if resp.errcode == Some(SESSION_EXPIRED_ERRCODE)
                     || resp.ret == Some(SESSION_EXPIRED_ERRCODE)
                 {
-                    warn!(tenant = tenant_name, "Session expired, stopping poll");
-                    if let Some(state) = WEIXIN_STATE.tenants.get(tenant_name) {
+                    warn!(bot_id = bot_id, "Session expired, stopping poll");
+                    if let Some(state) = WEIXIN_STATE.bots.get(bot_id) {
                         state.active.store(false, Ordering::Relaxed);
                         // Only update in-memory; don't write expires_at=0 back to disk
                         // which would cause the file watcher to reload an expired token
@@ -245,7 +245,7 @@ async fn poll_loop_inner(
                 if let Some(ret) = resp.ret {
                     if ret != 0 {
                         warn!(
-                            tenant = tenant_name,
+                            bot_id = bot_id,
                             ret, "getUpdates returned non-zero ret"
                         );
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -255,7 +255,7 @@ async fn poll_loop_inner(
 
                 if let Some(new_cursor) = &resp.get_updates_buf {
                     if !new_cursor.is_empty() {
-                        if let Some(state) = WEIXIN_STATE.tenants.get(tenant_name) {
+                        if let Some(state) = WEIXIN_STATE.bots.get(bot_id) {
                             *state.cursor.lock().unwrap() = new_cursor.clone();
                         }
                     }
@@ -263,7 +263,7 @@ async fn poll_loop_inner(
 
                 if let Some(msgs) = resp.msgs {
                     // Renew session expiry on every successful getUpdates
-                    if let Some(state) = WEIXIN_STATE.tenants.get(tenant_name) {
+                    if let Some(state) = WEIXIN_STATE.bots.get(bot_id) {
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
@@ -274,14 +274,14 @@ async fn poll_loop_inner(
                         );
                         state.active.store(true, std::sync::atomic::Ordering::Relaxed);
                         // Persist updated expiry to disk
-                        WEIXIN_STATE.save_tenant(&state);
+                        WEIXIN_STATE.save_session(&state);
                     }
                     for msg in msgs {
-                        process_inbound_message(tenant_name, &msg, &sender);
+                        process_inbound_message(bot_id, &msg, &sender);
                     }
                 } else {
                     // No messages but successful poll — still renew to keep session alive
-                    if let Some(state) = WEIXIN_STATE.tenants.get(tenant_name) {
+                    if let Some(state) = WEIXIN_STATE.bots.get(bot_id) {
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
@@ -294,7 +294,7 @@ async fn poll_loop_inner(
                 }
             }
             Err(e) => {
-                error!(tenant = tenant_name, "getUpdates error: {e}");
+                error!(bot_id = bot_id, "getUpdates error: {e}");
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         }
@@ -302,7 +302,7 @@ async fn poll_loop_inner(
 }
 
 fn process_inbound_message(
-    tenant_name: &str,
+    bot_id: &str,
     msg: &ILnkMessage,
     sender: &mpsc::Sender<PluginMessage>,
 ) {
@@ -333,13 +333,13 @@ fn process_inbound_message(
         .unwrap_or_default();
 
     if let Some(ctx_token) = &msg.context_token {
-        if let Some(state) = WEIXIN_STATE.tenants.get(tenant_name) {
+        if let Some(state) = WEIXIN_STATE.bots.get(bot_id) {
             state.store_context_token(&from_user_id, ctx_token);
         }
     }
 
     info!(
-        tenant = tenant_name,
+        bot_id = bot_id,
         from = %from_user_id,
         text_len = text.len(),
         "Inbound WeChat message"
@@ -350,7 +350,7 @@ fn process_inbound_message(
         platform_message_id: msg.message_id.map(|id| id.to_string()).unwrap_or_default(),
         sender_id: from_user_id.clone(),
         sender_name: from_user_id.clone(),
-        tenant_id: tenant_name.to_string(),
+        bot_id: bot_id.to_string(),
         content: PluginContent::Text(text),
         timestamp_ms: msg.create_time_ms.unwrap_or_else(|| {
             std::time::SystemTime::now()
@@ -369,23 +369,23 @@ fn process_inbound_message(
 }
 
 // ---------------------------------------------------------------------------
-// TenantWatcher — monitors for new tenants added after plugin startup
+// SessionWatcher — monitors for new bots added after plugin startup
 // ---------------------------------------------------------------------------
 
-/// Dynamic tenant watcher that polls `WEIXIN_STATE` for new tenants and
-/// starts polling threads for them. Handles outbound `send()` for any tenant.
-pub struct TenantWatcher {
+/// Dynamic session watcher that polls `WEIXIN_STATE` for new bots and
+/// starts polling threads for them. Handles outbound `send()` for any bot.
+pub struct SessionWatcher {
     shutdown: Arc<AtomicBool>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
-impl Default for TenantWatcher {
+impl Default for SessionWatcher {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl TenantWatcher {
+impl SessionWatcher {
     pub fn new() -> Self {
         Self {
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -394,7 +394,7 @@ impl TenantWatcher {
     }
 }
 
-impl BuiltinChannel for TenantWatcher {
+impl BuiltinChannel for SessionWatcher {
     fn channel_type(&self) -> &str {
         "weixin"
     }
@@ -403,31 +403,31 @@ impl BuiltinChannel for TenantWatcher {
         "__watcher__"
     }
 
-    fn tenant_id(&self) -> &str {
+    fn bot_id(&self) -> &str {
         ""
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
         let shutdown = self.shutdown.clone();
         let handle = std::thread::Builder::new()
-            .name("weixin-tenant-watcher".to_string())
+            .name("weixin-session-watcher".to_string())
             .spawn(move || {
                 watcher_loop(sender, shutdown);
             })
             .map_err(|e| format!("Failed to spawn watcher thread: {e}"))?;
         self.thread_handle = Some(handle);
-        info!("WeChat TenantWatcher started");
+        info!("WeChat SessionWatcher started");
         Ok(())
     }
 
-    fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
         let state = WEIXIN_STATE
-            .tenants
-            .get(tenant_id)
-            .ok_or_else(|| format!("Unknown tenant: {tenant_id}"))?;
+            .bots
+            .get(bot_id)
+            .ok_or_else(|| format!("Unknown bot: {bot_id}"))?;
 
         if state.is_expired() {
-            return Err(format!("Token expired for tenant {tenant_id}"));
+            return Err(format!("Token expired for bot {bot_id}"));
         }
 
         let context_token = state.get_context_token(user_id).ok_or_else(|| {
@@ -477,11 +477,11 @@ impl BuiltinChannel for TenantWatcher {
         self.shutdown.store(true, Ordering::Relaxed);
         if let Some(handle) = self.thread_handle.take() {
             match handle.join() {
-                Ok(()) => info!("TenantWatcher thread joined cleanly"),
-                Err(e) => error!("TenantWatcher thread panicked: {e:?}"),
+                Ok(()) => info!("SessionWatcher thread joined cleanly"),
+                Err(e) => error!("SessionWatcher thread panicked: {e:?}"),
             }
         }
-        info!("TenantWatcher stopped");
+        info!("SessionWatcher stopped");
     }
 }
 
@@ -502,13 +502,13 @@ fn watcher_loop(sender: mpsc::Sender<PluginMessage>, shutdown: Arc<AtomicBool>) 
 
         loop {
             if shutdown.load(Ordering::Relaxed) {
-                info!("TenantWatcher shutdown signal received");
+                info!("SessionWatcher shutdown signal received");
                 return;
             }
 
             WEIXIN_STATE.load_new_from_dir();
 
-            for entry in WEIXIN_STATE.tenants.iter() {
+            for entry in WEIXIN_STATE.bots.iter() {
                 let name = entry.key().clone();
                 let state = entry.value();
                 if spawned.contains(&name) {
@@ -532,14 +532,14 @@ fn watcher_loop(sender: mpsc::Sender<PluginMessage>, shutdown: Arc<AtomicBool>) 
                 let sh = shutdown.clone();
                 let thread_name = name.clone();
                 let poll_name = name.clone();
-                info!(tenant = %name, "TenantWatcher spawning poll thread for new tenant");
+                info!(bot_id = %name, "SessionWatcher spawning poll thread for new bot");
                 if let Err(e) = std::thread::Builder::new()
                     .name(format!("weixin-dyn-{thread_name}"))
                     .spawn(move || {
                         run_poll_loop(&poll_name, s, &sh);
                     })
                 {
-                    error!(tenant = %name, "Failed to spawn poll thread: {e}");
+                    error!(bot_id = %name, "Failed to spawn poll thread: {e}");
                 }
             }
 

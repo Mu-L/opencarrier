@@ -34,8 +34,6 @@ pub struct PluginManager {
     kernel: Arc<dyn KernelHandle>,
     /// Shared channel bindings (kept after start() for dynamic additions).
     bridge_bindings: Option<Arc<DashMap<(String, String), String>>>,
-    /// Shared tenant-to-bot map (kept after start() for dynamic additions).
-    bridge_tenant_map: Option<Arc<DashMap<(String, String), String>>>,
     /// Sender-based router (sender_id → agent_id), set before start().
     sender_router: Option<Arc<SenderRouter>>,
 }
@@ -51,7 +49,6 @@ impl PluginManager {
             loaded_plugins: Vec::new(),
             kernel,
             bridge_bindings: None,
-            bridge_tenant_map: None,
             sender_router: None,
         }
     }
@@ -151,7 +148,6 @@ impl PluginManager {
                 }
 
                 if let Some(ref agent_uuid) = bot_config.bind_agent {
-                    // bind_agent must be a UUID — agent names are not unique across tenants
                     if uuid::Uuid::parse_str(agent_uuid).is_err() {
                         error!(
                             bot = %bot_config.name,
@@ -171,42 +167,6 @@ impl PluginManager {
                             "Bound bot to agent"
                         );
                     }
-
-                    // Also bind using channel descriptor tenant_id (may differ from bot_uuid).
-                    // Plugins like weixin/feishu use the tenant name as tenant_id in messages.
-                    for channel in plugin.channels() {
-                        let ch_type = &channel.channel_type;
-                        if ch_type != "weixin" && ch_type != "feishu" && ch_type != "dingtalk" {
-                            continue;
-                        }
-                        if !channel.tenant_id.is_empty() && channel.tenant_id != *bot_uuid {
-                            bridge.bind_channel(
-                                channel.channel_type.clone(),
-                                channel.tenant_id.clone(),
-                                agent_uuid.clone(),
-                            );
-                            bridge.map_channel_tenant(
-                                channel.channel_type.clone(),
-                                channel.tenant_id.clone(),
-                                bot_uuid.clone(),
-                            );
-                            info!(
-                                channel = %channel.channel_type,
-                                tenant_id = %channel.tenant_id,
-                                agent_id = %agent_uuid,
-                                "Bound channel tenant_id to agent"
-                            );
-                        }
-                    }
-
-                    // Feishu / DingTalk per-bot bindings are handled by the bot_uuid binding above.
-                    // Channel plugins now send bot_uuid as tenant_id in PluginMessage,
-                    // so the tenant_name-based binding is no longer needed.
-                    // map_channel_tenant is retained for backward-compatible resolution
-                    // in find_bot_toml (bridge.rs).
-
-                    // Set default plugin tenant for the agent (used when no channel context)
-                    self.kernel.set_default_plugin_tenant(agent_uuid, bot_uuid);
                 } else {
                     info!(
                         bot = %bot_config.name,
@@ -219,7 +179,6 @@ impl PluginManager {
 
         // Keep shared references for dynamic binding additions
         self.bridge_bindings = Some(bridge.shared_bindings());
-        self.bridge_tenant_map = Some(bridge.shared_tenant_map());
 
         // Set first agent on sender router from discovered bindings
         if let Some(ref router) = self.sender_router {
@@ -255,27 +214,10 @@ impl PluginManager {
         }
     }
 
-    /// Dynamically map a channel's tenant_id to its bot UUID.
-    pub fn map_channel_tenant(&self, channel_type: &str, tenant_id: &str, bot_uuid: &str) {
-        if let Some(ref map) = self.bridge_tenant_map {
-            map.insert(
-                (channel_type.to_string(), tenant_id.to_string()),
-                bot_uuid.to_string(),
-            );
-        }
-    }
-
     /// Remove a dynamic channel binding (e.g., when a bot is unbound via API).
     pub fn remove_channel_binding(&self, channel_type: &str, key: &str) {
         if let Some(ref bindings) = self.bridge_bindings {
             bindings.remove(&(channel_type.to_string(), key.to_string()));
-        }
-    }
-
-    /// Remove a dynamic channel tenant mapping.
-    pub fn remove_channel_tenant_map(&self, channel_type: &str, tenant_id: &str) {
-        if let Some(ref map) = self.bridge_tenant_map {
-            map.remove(&(channel_type.to_string(), tenant_id.to_string()));
         }
     }
 
@@ -314,30 +256,30 @@ impl PluginManager {
         self.tool_dispatcher.clone()
     }
 
-    /// Send a text message through a channel by bot UUID.
+    /// Send a text message through a channel by bot ID.
     ///
-    /// Finds the plugin that owns the channel with `tenant_id == bot_uuid` and
+    /// Finds the plugin that owns the channel with `bot_id` matching and
     /// sends through it. Returns an error if no matching channel is found or the
     /// platform does not support proactive send.
-    pub fn channel_send(&self, bot_uuid: &str, user_id: &str, text: &str) -> Result<(), String> {
+    pub fn channel_send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
         for plugin in &self.loaded_plugins {
             for channel in plugin.channels() {
-                if channel.tenant_id == bot_uuid {
-                    return plugin.channel_send(channel, bot_uuid, user_id, text);
+                if channel.bot_id == bot_id {
+                    return plugin.channel_send(channel, bot_id, user_id, text);
                 }
             }
         }
-        Err(format!("Channel not found for bot: {bot_uuid}"))
+        Err(format!("Channel not found for bot: {bot_id}"))
     }
 
     /// Dynamically start a channel for a newly created bot (no restart needed).
     ///
-    /// Registers the bot with the platform's token/tenant manager and spawns
+    /// Registers the bot with the platform's token manager and spawns
     /// a WebSocket connection so it can immediately receive messages.
     pub fn start_dynamic_channel(
         &self,
         platform: &str,
-        tenant_name: &str,
+        bot_name: &str,
         bot_id: &str,
         secret: &str,
     ) {
@@ -346,7 +288,7 @@ impl PluginManager {
             "wecom" => {
                 crate::plugin::channels::wecom::register_and_start_smartbot(
                     sender,
-                    tenant_name.to_string(),
+                    bot_name.to_string(),
                     bot_id.to_string(),
                     secret.to_string(),
                 );
@@ -371,7 +313,7 @@ impl PluginManager {
                     .map(|c| c.channel_type.clone())
                     .collect(),
                 tools: p.tools().iter().map(|t| t.name.clone()).collect(),
-                tenant_count: 0,
+                bot_count: 0,
                 last_error: None,
             })
             .collect()

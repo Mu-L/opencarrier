@@ -702,7 +702,7 @@ async fn tool_agent_send(
 
     crate::tool_runner::AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.send_to_agent(agent_id, message, None, None, caller_agent_id, None)
+            kh.send_to_agent(agent_id, message, None, None, caller_agent_id)
                 .await
         })
         .await

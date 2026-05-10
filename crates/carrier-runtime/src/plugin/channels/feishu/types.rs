@@ -176,7 +176,7 @@ pub struct TextContent {
 
 /// Per-tenant configuration parsed from bot.toml.
 #[derive(Debug, Clone)]
-pub struct FeishuTenantConfig {
+pub struct FeishuBotConfig {
     pub name: String,
     pub bot_uuid: String,
     pub app_id: String,
@@ -185,7 +185,7 @@ pub struct FeishuTenantConfig {
     pub brand: String,
 }
 
-impl FeishuTenantConfig {
+impl FeishuBotConfig {
     /// Get the API base URL for this tenant's brand.
     pub fn api_base(&self) -> &'static str {
         if self.brand == "lark" {

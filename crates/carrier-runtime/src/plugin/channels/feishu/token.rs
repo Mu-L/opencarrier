@@ -17,7 +17,7 @@ struct CachedToken {
 }
 
 /// Thread-safe cache for a single tenant's access token.
-pub struct TenantTokenCache {
+pub struct BotTokenCache {
     app_id: String,
     app_secret: String,
     api_base: String,
@@ -25,7 +25,7 @@ pub struct TenantTokenCache {
     token: Mutex<Option<CachedToken>>,
 }
 
-impl TenantTokenCache {
+impl BotTokenCache {
     pub fn new(app_id: String, app_secret: String, api_base: &str) -> Self {
         Self {
             app_id,

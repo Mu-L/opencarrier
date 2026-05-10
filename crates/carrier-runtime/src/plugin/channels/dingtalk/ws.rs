@@ -21,7 +21,7 @@ const DEDUP_MAX_ENTRIES: usize = 10_000;
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 pub struct DingTalkWsClient {
-    tenant_name: String,
+    bot_id: String,
     bot_uuid: String,
     token_cache: Arc<AccessTokenCache>,
     shutdown: Arc<AtomicBool>,
@@ -30,13 +30,13 @@ pub struct DingTalkWsClient {
 
 impl DingTalkWsClient {
     pub fn new(
-        tenant_name: String,
+        bot_id: String,
         bot_uuid: String,
         token_cache: Arc<AccessTokenCache>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         Self {
-            tenant_name,
+            bot_id,
             bot_uuid,
             token_cache,
             shutdown,
@@ -50,7 +50,7 @@ impl DingTalkWsClient {
 
         loop {
             if self.shutdown.load(Ordering::Relaxed) {
-                info!(tenant = %self.tenant_name, "Shutdown requested, exiting WS loop");
+                info!(tenant = %self.bot_id, "Shutdown requested, exiting WS loop");
                 return;
             }
 
@@ -59,10 +59,10 @@ impl DingTalkWsClient {
                     if self.shutdown.load(Ordering::Relaxed) {
                         return;
                     }
-                    warn!(tenant = %self.tenant_name, "WebSocket disconnected, reconnecting...");
+                    warn!(tenant = %self.bot_id, "WebSocket disconnected, reconnecting...");
                 }
                 Err(e) => {
-                    error!(tenant = %self.tenant_name, "WebSocket error: {e}");
+                    error!(tenant = %self.bot_id, "WebSocket error: {e}");
                 }
             }
 
@@ -104,7 +104,7 @@ impl DingTalkWsClient {
         let ws_url = format!("{endpoint}?ticket={ticket}");
 
         info!(
-            tenant = %self.tenant_name,
+            tenant = %self.bot_id,
             endpoint = %endpoint.chars().take(80).collect::<String>(),
             ticket_len = ticket.len(),
             "Gateway opened, connecting to WS"
@@ -116,7 +116,7 @@ impl DingTalkWsClient {
             .map_err(|e| format!("WebSocket connect failed: {e}"))?;
 
         info!(
-            tenant = %self.tenant_name,
+            tenant = %self.bot_id,
             status = %response.status(),
             "DingTalk WebSocket connected"
         );
@@ -127,14 +127,14 @@ impl DingTalkWsClient {
         //    starts pushing data immediately after WS connection)
         loop {
             if self.shutdown.load(Ordering::Relaxed) {
-                info!(tenant = %self.tenant_name, "Shutdown during WS listen");
+                info!(tenant = %self.bot_id, "Shutdown during WS listen");
                 let _ = write.close().await;
                 return Ok(());
             }
 
             match read.next().await {
                 None => {
-                    warn!(tenant = %self.tenant_name, "WS stream ended");
+                    warn!(tenant = %self.bot_id, "WS stream ended");
                     return Ok(());
                 }
                 Some(Ok(Message::Text(text))) => {
@@ -144,11 +144,11 @@ impl DingTalkWsClient {
                     let _ = write.send(Message::Pong(data)).await;
                 }
                 Some(Ok(Message::Close(_))) => {
-                    warn!(tenant = %self.tenant_name, "WebSocket close frame received");
+                    warn!(tenant = %self.bot_id, "WebSocket close frame received");
                     return Ok(());
                 }
                 Some(Ok(Message::Binary(data))) => {
-                    info!(tenant = %self.tenant_name, len = data.len(), "Unexpected binary frame");
+                    info!(tenant = %self.bot_id, len = data.len(), "Unexpected binary frame");
                 }
                 Some(Err(e)) => {
                     return Err(format!("WebSocket read error: {e}"));
@@ -173,7 +173,7 @@ impl DingTalkWsClient {
         let frame: WsDownStream = match serde_json::from_str(text) {
             Ok(f) => f,
             Err(e) => {
-                warn!(tenant = %self.tenant_name, "Failed to parse WS frame: {e}");
+                warn!(tenant = %self.bot_id, "Failed to parse WS frame: {e}");
                 return;
             }
         };
@@ -204,7 +204,7 @@ impl DingTalkWsClient {
                             "data": frame.data
                         })) {
                             if let Err(e) = write.send(Message::Text(ack)).await {
-                                warn!(tenant = %self.tenant_name, "Ping echo failed: {e}");
+                                warn!(tenant = %self.bot_id, "Ping echo failed: {e}");
                             }
                         }
                     }
@@ -212,11 +212,11 @@ impl DingTalkWsClient {
                         // Just reset liveness, no response needed
                     }
                     "disconnect" => {
-                        warn!(tenant = %self.tenant_name, "Server sent disconnect");
+                        warn!(tenant = %self.bot_id, "Server sent disconnect");
                     }
                     _ => {
                         info!(
-                            tenant = %self.tenant_name,
+                            tenant = %self.bot_id,
                             topic,
                             "SYSTEM frame"
                         );
@@ -234,7 +234,7 @@ impl DingTalkWsClient {
                     self.dispatch_callback(&message_id, &frame, write, sender)
                         .await;
                 } else {
-                    info!(tenant = %self.tenant_name, topic, "Ignoring unknown callback topic");
+                    info!(tenant = %self.bot_id, topic, "Ignoring unknown callback topic");
                     // ACK even unknown topics
                     if !message_id.is_empty() {
                         let ack = WsAck::for_message(&message_id);
@@ -245,7 +245,7 @@ impl DingTalkWsClient {
                 }
             }
             _ => {
-                info!(tenant = %self.tenant_name, frame_type, "Unknown frame type");
+                info!(tenant = %self.bot_id, frame_type, "Unknown frame type");
             }
         }
     }
@@ -268,7 +268,7 @@ impl DingTalkWsClient {
             let ack = WsAck::for_message(message_id);
             if let Ok(ack_json) = serde_json::to_string(&ack) {
                 if let Err(e) = write.send(Message::Text(ack_json)).await {
-                    warn!(tenant = %self.tenant_name, "ACK send failed: {e}");
+                    warn!(tenant = %self.bot_id, "ACK send failed: {e}");
                 }
             }
         }
@@ -282,7 +282,7 @@ impl DingTalkWsClient {
         let msg: DingTalkInboundMessage = match serde_json::from_str(data_str) {
             Ok(m) => m,
             Err(e) => {
-                warn!(tenant = %self.tenant_name, "Failed to parse callback data: {e}");
+                warn!(tenant = %self.bot_id, "Failed to parse callback data: {e}");
                 return;
             }
         };
@@ -326,7 +326,7 @@ impl DingTalkWsClient {
         let conversation_id = msg.conversation_id.clone();
 
         info!(
-            tenant = %self.tenant_name,
+            tenant = %self.bot_id,
             from = %sender_id,
             staff_id = ?sender_staff_id,
             user_id = %user_id,
@@ -346,7 +346,7 @@ impl DingTalkWsClient {
             platform_message_id: message_id.to_string(),
             sender_id: user_id.clone(),
             sender_name: sender_nick,
-            tenant_id: self.bot_uuid.clone(),
+            bot_id: self.bot_uuid.clone(),
             content: PluginContent::Text(content),
             timestamp_ms: now_ms,
             is_group,

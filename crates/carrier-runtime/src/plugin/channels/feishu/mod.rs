@@ -2,7 +2,7 @@
 //!
 //! Provides:
 //! - `FeishuWatcher` — scans bot.toml and spawns WebSocket connections
-//! - `FeishuChannel` — per-tenant WebSocket message receiver
+//! - `FeishuChannel` — per-bot WebSocket message receiver
 //! - 80+ Feishu Open API tools via `BuiltinPluginRegistry`
 
 pub mod api;
@@ -31,16 +31,16 @@ use crate::plugin::BuiltinChannel;
 // Global tenant registry
 // ---------------------------------------------------------------------------
 
-/// Runtime entry stored in FEISHU_TENANTS — config + pre-built token cache.
-pub(crate) struct FeishuTenantEntry {
-    pub config: types::FeishuTenantConfig,
-    pub token_cache: Arc<token::TenantTokenCache>,
+/// Runtime entry stored in FEISHU_BOTS — config + pre-built token cache.
+pub(crate) struct FeishuBotEntry {
+    pub config: types::FeishuBotConfig,
+    pub token_cache: Arc<token::BotTokenCache>,
 }
 
-impl FeishuTenantEntry {
-    pub fn new(config: types::FeishuTenantConfig) -> Self {
+impl FeishuBotEntry {
+    pub fn new(config: types::FeishuBotConfig) -> Self {
         let api_base = config.api_base().to_string();
-        let token_cache = Arc::new(token::TenantTokenCache::new(
+        let token_cache = Arc::new(token::BotTokenCache::new(
             config.app_id.clone(),
             config.app_secret.clone(),
             &api_base,
@@ -53,7 +53,7 @@ impl FeishuTenantEntry {
 }
 
 /// Global registry of all configured Feishu tenants.
-pub(crate) static FEISHU_TENANTS: std::sync::LazyLock<DashMap<String, FeishuTenantEntry>> =
+pub(crate) static FEISHU_BOTS: std::sync::LazyLock<DashMap<String, FeishuBotEntry>> =
     std::sync::LazyLock::new(DashMap::new);
 
 // ---------------------------------------------------------------------------
@@ -114,7 +114,7 @@ fn scan_bot_configs(plugin_dir: &Path) -> Vec<(String, serde_json::Value)> {
     configs
 }
 
-fn load_bot_config(bot_config: &serde_json::Value) -> Option<FeishuTenantEntry> {
+fn load_bot_config(bot_config: &serde_json::Value) -> Option<FeishuBotEntry> {
     let bot_uuid = bot_config["_bot_id"].as_str().unwrap_or("").to_string();
     let name = bot_config["name"].as_str().unwrap_or("").to_string();
 
@@ -150,7 +150,7 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<FeishuTenantEntry> 
 
     let brand = bot_config["brand"].as_str().unwrap_or("feishu").to_string();
 
-    let cfg = types::FeishuTenantConfig {
+    let cfg = types::FeishuBotConfig {
         name: name.clone(),
         bot_uuid: bot_uuid.clone(),
         app_id,
@@ -159,7 +159,7 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<FeishuTenantEntry> 
     };
 
     tracing::info!(bot = %name, bot_uuid = %bot_uuid, brand = %cfg.brand, "Registered Feishu bot");
-    Some(FeishuTenantEntry::new(cfg))
+    Some(FeishuBotEntry::new(cfg))
 }
 
 // ---------------------------------------------------------------------------
@@ -205,17 +205,17 @@ fn feishu_watcher_loop(
                 Some(e) => e,
                 None => continue,
             };
-            let tenant_name = entry.config.name.clone();
+            let bot_id = entry.config.name.clone();
             let token_cache = entry.token_cache.clone();
-            FEISHU_TENANTS.insert(bot_uuid.clone(), entry);
+            FEISHU_BOTS.insert(bot_uuid.clone(), entry);
             spawned.insert(bot_uuid.clone());
 
             let tx = sender.clone();
             let bu = bot_uuid.clone();
             std::thread::spawn(move || {
-                let mut ch = channel::FeishuChannel::new(tenant_name.clone(), bu, token_cache);
+                let mut ch = channel::FeishuChannel::new(bot_id.clone(), bu, token_cache);
                 if let Err(e) = ch.start(tx) {
-                    warn!(tenant = %tenant_name, "Feishu channel start error: {e}");
+                    warn!(bot = %bot_id, "Feishu channel start error: {e}");
                 }
             });
         }
@@ -241,17 +241,17 @@ fn scan_and_spawn(
             None => continue,
         };
 
-        let tenant_name = entry.config.name.clone();
+        let bot_id = entry.config.name.clone();
         let token_cache = entry.token_cache.clone();
-        FEISHU_TENANTS.insert(bot_uuid.clone(), entry);
+        FEISHU_BOTS.insert(bot_uuid.clone(), entry);
 
         let tx = sender.clone();
-        let tn = tenant_name.clone();
+        let tn = bot_id.clone();
         let bu = bot_uuid.clone();
         std::thread::spawn(move || {
             let mut ch = channel::FeishuChannel::new(tn.clone(), bu, token_cache);
             if let Err(e) = ch.start(tx) {
-                warn!(tenant = %tn, "Feishu channel start error: {e}");
+                warn!(bot = %tn, "Feishu channel start error: {e}");
             }
         });
 
@@ -269,7 +269,7 @@ fn scan_and_spawn(
 /// Watcher for Feishu/Lark bots.
 ///
 /// Scans `plugins/feishu/bot/<uuid>/bot.toml` on start, loads tenants into
-/// `FEISHU_TENANTS`, and spawns a `FeishuChannel` for each bot.
+/// `FEISHU_BOTS`, and spawns a `FeishuChannel` for each bot.
 pub struct FeishuWatcher {
     shutdown: Arc<AtomicBool>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
@@ -299,7 +299,7 @@ impl BuiltinChannel for FeishuWatcher {
         "Feishu Watcher"
     }
 
-    fn tenant_id(&self) -> &str {
+    fn bot_id(&self) -> &str {
         ""
     }
 
@@ -319,10 +319,10 @@ impl BuiltinChannel for FeishuWatcher {
         Ok(())
     }
 
-    fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), String> {
-        let entry = FEISHU_TENANTS
-            .get(tenant_id)
-            .ok_or_else(|| format!("Unknown tenant: {tenant_id}"))?;
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+        let entry = FEISHU_BOTS
+            .get(bot_id)
+            .ok_or_else(|| format!("Unknown bot: {bot_id}"))?;
 
         let content = serde_json::json!({ "text": text }).to_string();
         let token_cache = entry.token_cache.clone();

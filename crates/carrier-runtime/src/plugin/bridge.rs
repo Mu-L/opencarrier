@@ -27,8 +27,8 @@ pub struct PluginBridgeManager {
     /// (channel_type, bot_id) → agent_id bindings.
     /// Shared via Arc so PluginManager can add dynamic bindings.
     channel_bindings: Arc<DashMap<(String, String), String>>,
-    /// Maps (channel_type, channel_tenant_id) → bot UUID for finding bot.toml.
-    channel_tenant_to_bot_uuid: Arc<DashMap<(String, String), String>>,
+    /// sender_id → (channel_type, bot_id) cache for outbound routing.
+    sender_channels: DashMap<String, (String, String)>,
     /// Bot IDs that already have an owner set (avoids repeated file reads).
     owned_bots: Arc<Mutex<HashSet<String>>>,
     /// Sender-based routing (sender_id → agent_id). Takes priority over channel_bindings.
@@ -42,7 +42,7 @@ impl PluginBridgeManager {
             kernel,
             plugins: Vec::new(),
             channel_bindings: Arc::new(DashMap::new()),
-            channel_tenant_to_bot_uuid: Arc::new(DashMap::new()),
+            sender_channels: DashMap::new(),
             owned_bots: Arc::new(Mutex::new(HashSet::new())),
             sender_router: None,
         }
@@ -56,11 +56,6 @@ impl PluginBridgeManager {
     /// Get a shared reference to the channel bindings map.
     pub fn shared_bindings(&self) -> Arc<DashMap<(String, String), String>> {
         Arc::clone(&self.channel_bindings)
-    }
-
-    /// Get a shared reference to the tenant-to-bot-UUID map.
-    pub fn shared_tenant_map(&self) -> Arc<DashMap<(String, String), String>> {
-        Arc::clone(&self.channel_tenant_to_bot_uuid)
     }
 
     /// Add a loaded plugin to the bridge.
@@ -80,27 +75,10 @@ impl PluginBridgeManager {
             .insert((channel_type, bot_id), agent_id);
     }
 
-    /// Map a channel's tenant_id to its bot UUID (for finding bot.toml on disk).
-    pub fn map_channel_tenant(
-        &mut self,
-        channel_type: String,
-        tenant_id: String,
-        bot_uuid: String,
-    ) {
-        self.channel_tenant_to_bot_uuid
-            .insert((channel_type, tenant_id), bot_uuid);
-    }
-
     /// Remove a (channel_type, bot_id) binding.
     pub fn unbind_channel(&mut self, channel_type: &str, bot_id: &str) {
         self.channel_bindings
             .remove(&(channel_type.to_string(), bot_id.to_string()));
-    }
-
-    /// Remove a channel tenant mapping.
-    pub fn unmap_channel_tenant(&mut self, channel_type: &str, tenant_id: &str) {
-        self.channel_tenant_to_bot_uuid
-            .remove(&(channel_type.to_string(), tenant_id.to_string()));
     }
 
     /// Mark a bot as already having an owner (called at startup).
@@ -132,12 +110,20 @@ impl PluginBridgeManager {
             None => self.describe_non_text_content(&msg),
         };
 
+        // Cache sender → (channel_type, bot_id) for outbound routing
+        if !msg.sender_id.is_empty() && !msg.bot_id.is_empty() {
+            self.sender_channels.insert(
+                msg.sender_id.clone(),
+                (msg.channel_type.clone(), msg.bot_id.clone()),
+            );
+        }
+
         // Resolve agent: sender_id routing > channel binding > default
         let agent_id = self.resolve_agent(&msg);
         if agent_id.is_empty() {
             warn!(
                 channel = %msg.channel_type,
-                bot = %msg.tenant_id,
+                bot = %msg.bot_id,
                 sender = %msg.sender_id,
                 "No agent resolved, dropping message"
             );
@@ -146,7 +132,7 @@ impl PluginBridgeManager {
 
         info!(
             channel = %msg.channel_type,
-            tenant = %msg.tenant_id,
+            bot = %msg.bot_id,
             agent = %agent_id,
             sender = %msg.sender_id,
             "Routing plugin message to agent"
@@ -160,7 +146,6 @@ impl PluginBridgeManager {
                 Some(&msg.sender_id),
                 Some(&msg.sender_name),
                 None,
-                Some(&msg.tenant_id),
             )
             .await
         {
@@ -192,7 +177,7 @@ impl PluginBridgeManager {
 
     /// If this bot has no owner yet, set the message sender as owner.
     async fn try_set_owner(&self, msg: &PluginMessage) {
-        let bot_id = &msg.tenant_id;
+        let bot_id = &msg.bot_id;
         if bot_id.is_empty() || msg.sender_id.is_empty() {
             return;
         }
@@ -229,19 +214,12 @@ impl PluginBridgeManager {
         }
     }
 
-    /// Find the bot.toml path for a given (channel_type, tenant_id).
-    fn find_bot_toml(&self, channel_type: &str, tenant_id: &str) -> Option<std::path::PathBuf> {
-        // Resolve tenant_id to bot UUID via mapping, or use tenant_id directly
-        let resolved = self
-            .channel_tenant_to_bot_uuid
-            .get(&(channel_type.to_string(), tenant_id.to_string()))
-            .map(|r| r.value().clone());
-        let dir_name = resolved.as_deref().unwrap_or(tenant_id);
-
+    /// Find the bot.toml path for a given (channel_type, bot_id).
+    fn find_bot_toml(&self, channel_type: &str, bot_id: &str) -> Option<std::path::PathBuf> {
         for plugin in &self.plugins {
             for channel in plugin.channels() {
-                if channel.channel_type == channel_type && channel.tenant_id == tenant_id {
-                    let path = plugin.path().join("bot").join(dir_name).join("bot.toml");
+                if channel.channel_type == channel_type && channel.bot_id == bot_id {
+                    let path = plugin.path().join("bot").join(bot_id).join("bot.toml");
                     if path.exists() {
                         return Some(path);
                     }
@@ -285,21 +263,21 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     fn send_response(&self, original: &PluginMessage, response: &str) {
-        // Try exact match first (tenant_id matches a specific LoadedChannel)
+        // Try exact match first (bot_id matches a specific LoadedChannel)
         for plugin in &self.plugins {
             for channel in plugin.channels() {
                 if channel.channel_type == original.channel_type
-                    && channel.tenant_id == original.tenant_id
+                    && channel.bot_id == original.bot_id
                 {
                     if let Err(e) = plugin.channel_send(
                         channel,
-                        &original.tenant_id,
+                        &original.bot_id,
                         &original.sender_id,
                         response,
                     ) {
                         error!(
                             channel = %channel.channel_type,
-                            tenant = %channel.tenant_id,
+                            bot = %channel.bot_id,
                             error = %e,
                             "Failed to send response through channel"
                         );
@@ -308,20 +286,20 @@ impl PluginBridgeManager {
                 }
             }
         }
-        // Fallback: any channel of the same type handles dynamic tenants.
-        // The channel adapter's send() looks up the tenant in its own state.
+        // Fallback: any channel of the same type handles dynamic bots.
+        // The channel adapter's send() looks up the bot in its own state.
         for plugin in &self.plugins {
             for channel in plugin.channels() {
                 if channel.channel_type == original.channel_type {
                     if let Err(e) = plugin.channel_send(
                         channel,
-                        &original.tenant_id,
+                        &original.bot_id,
                         &original.sender_id,
                         response,
                     ) {
                         error!(
                             channel = %channel.channel_type,
-                            tenant = %original.tenant_id,
+                            bot = %original.bot_id,
                             error = %e,
                             "Failed to send response through fallback channel"
                         );
@@ -332,7 +310,7 @@ impl PluginBridgeManager {
         }
         warn!(
             channel = %original.channel_type,
-            tenant = %original.tenant_id,
+            bot = %original.bot_id,
             "No plugin channel found for response"
         );
     }

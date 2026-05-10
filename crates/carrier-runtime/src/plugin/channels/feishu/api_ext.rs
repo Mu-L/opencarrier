@@ -1,9 +1,9 @@
 //! Generic Feishu/Lark REST API caller.
 //!
 //! All tool implementations use `feishu_api()` to make authenticated requests
-//! against the Feishu Open API. Token management is handled by TenantTokenCache.
+//! against the Feishu Open API. Token management is handled by BotTokenCache.
 
-use crate::plugin::channels::feishu::token::TenantTokenCache;
+use crate::plugin::channels::feishu::token::BotTokenCache;
 use reqwest::{Client, Method};
 use serde_json::Value;
 use std::time::Duration;
@@ -20,7 +20,7 @@ pub const MAX_RESULT_BYTES: usize = 60_000;
 /// - 30s timeout
 pub async fn feishu_api(
     http: &Client,
-    token_cache: &TenantTokenCache,
+    token_cache: &BotTokenCache,
     method: Method,
     path: &str,
     query: Option<&Value>,
@@ -89,7 +89,7 @@ pub async fn feishu_api(
 /// Call feishu_api using the synchronous blocking pattern (for built-in plugin context).
 pub fn feishu_api_blocking(
     http: &Client,
-    token_cache: &TenantTokenCache,
+    token_cache: &BotTokenCache,
     method: Method,
     path: &str,
     query: Option<&Value>,

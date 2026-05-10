@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Current plugin ABI version. Bumped on breaking changes.
-pub const PLUGIN_ABI_VERSION: u32 = 2;
+pub const PLUGIN_ABI_VERSION: u32 = 3;
 
 // ---------------------------------------------------------------------------
 // Plugin metadata
@@ -64,9 +64,9 @@ pub struct ChannelDescriptor {
     /// Human-readable name.
     #[serde(default)]
     pub name: String,
-    /// Tenant identifier this channel belongs to.
+    /// Bot identifier this channel belongs to.
     #[serde(default)]
-    pub tenant_id: String,
+    pub bot_id: String,
 }
 
 /// Content types that can be exchanged with a channel.
@@ -111,9 +111,9 @@ pub struct PluginMessage {
     /// Display name of the sender.
     #[serde(default)]
     pub sender_name: String,
-    /// Bot UUID — identifies which bot this message came from.
+    /// Bot identifier — which bot this message came from.
     #[serde(default)]
-    pub tenant_id: String,
+    pub bot_id: String,
     /// Message content.
     pub content: PluginContent,
     /// Unix timestamp in milliseconds.
@@ -147,9 +147,9 @@ pub struct PluginToolDef {
 /// Context provided when executing a plugin tool.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginToolContext {
-    /// Tenant identifier — the plugin uses this to select credentials.
+    /// Bot identifier — the plugin uses this to select credentials.
     #[serde(default)]
-    pub tenant_id: String,
+    pub bot_id: String,
     /// Platform user ID of the message sender.
     #[serde(default)]
     pub sender_id: String,

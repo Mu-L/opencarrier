@@ -7,7 +7,7 @@ use crate::routes::state::AppState;
 use crate::webchat;
 use crate::ws;
 use axum::Router;
-use carrier_kernel::{CarrierKernel, KernelHandle};
+use carrier_kernel::CarrierKernel;
 use carrier_runtime::plugin::PluginManager;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -210,7 +210,7 @@ pub async fn run_daemon(
             let mut registry = carrier_runtime::plugin::BuiltinPluginRegistry::new();
             // Register built-in WeChat channel adapters and tools
             registry.register_channel("weixin", || {
-                Box::new(carrier_runtime::plugin::channels::weixin::TenantWatcher::new())
+                Box::new(carrier_runtime::plugin::channels::weixin::SessionWatcher::new())
             });
             registry.register_tool("weixin", || {
                 Box::new(carrier_runtime::plugin::channels::weixin::WeixinQrLoginTool)
@@ -273,7 +273,7 @@ pub async fn run_daemon(
             // Register WeChat bindings from token files (weixin uses token files,
             // not bot.toml, so the plugin manager never discovers them at startup)
             {
-                let token_dir = kernel.config.home_dir.join("weixin-tokens");
+                let token_dir = kernel.config.home_dir.join("weixin-sessions");
                 if token_dir.exists() {
                     if let Ok(entries) = std::fs::read_dir(&token_dir) {
                         for entry in entries.flatten() {
@@ -284,15 +284,14 @@ pub async fn run_daemon(
                             if let Ok(content) = std::fs::read_to_string(&path) {
                                 if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content)
                                 {
-                                    if let (Some(name), Some(agent)) = (
-                                        tf.get("name").and_then(|v| v.as_str()),
+                                    if let (Some(bot_id), Some(agent)) = (
+                                        tf.get("bot_id").and_then(|v| v.as_str()),
                                         tf.get("bind_agent").and_then(|v| v.as_str()),
                                     ) {
                                         if uuid::Uuid::parse_str(agent).is_ok() {
-                                            pm.add_channel_binding("weixin", name, agent);
-                                            kernel.set_default_plugin_tenant(agent, name);
+                                            pm.add_channel_binding("weixin", bot_id, agent);
                                             info!(
-                                                tenant = %name,
+                                                bot = %bot_id,
                                                 agent = %agent,
                                                 "Registered WeChat binding from token file"
                                             );

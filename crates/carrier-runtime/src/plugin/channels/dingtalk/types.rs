@@ -222,7 +222,7 @@ pub struct SendGroupRequest {
 
 /// Per-tenant configuration parsed from bot.toml.
 #[derive(Debug, Clone)]
-pub struct DingTalkTenantConfig {
+pub struct DingTalkBotConfig {
     pub name: String,
     pub bot_uuid: String,
     pub app_key: String,

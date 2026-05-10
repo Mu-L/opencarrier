@@ -24,14 +24,14 @@ pub trait BuiltinChannel: Send + Sync {
     /// Human-readable channel name.
     fn name(&self) -> &str;
 
-    /// Tenant identifier this channel belongs to.
-    fn tenant_id(&self) -> &str;
+    /// Bot identifier this channel belongs to.
+    fn bot_id(&self) -> &str;
 
     /// Start receiving messages from the channel.
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String>;
 
     /// Send a text message through the channel.
-    fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), String>;
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String>;
 
     /// Stop the channel and release resources.
     fn stop(&mut self);
@@ -74,14 +74,14 @@ impl BuiltinPlugin {
     ) -> Result<(), String> {
         let channel_type = adapter.channel_type().to_string();
         let name = adapter.name().to_string();
-        let tenant_id = adapter.tenant_id().to_string();
+        let bot_id = adapter.bot_id().to_string();
 
         adapter.start(sender)?;
 
         self.channels.push(LoadedChannel {
             channel_type: channel_type.clone(),
             name,
-            tenant_id,
+            bot_id,
             handle: std::ptr::null_mut(), // built-in: no opaque handle needed
         });
 
@@ -137,13 +137,13 @@ impl PluginInstance for BuiltinPlugin {
     fn channel_send(
         &self,
         channel: &LoadedChannel,
-        tenant_id: &str,
+        bot_id: &str,
         user_id: &str,
         text: &str,
     ) -> Result<(), String> {
         let adapters = self.channel_adapters.lock().unwrap();
         if let Some(adapter) = adapters.get(&channel.channel_type) {
-            adapter.send(tenant_id, user_id, text)
+            adapter.send(bot_id, user_id, text)
         } else {
             Err(format!(
                 "Built-in channel adapter '{}' not found",

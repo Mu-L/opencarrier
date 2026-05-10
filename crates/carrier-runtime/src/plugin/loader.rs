@@ -85,8 +85,8 @@ pub struct LoadedChannel {
     pub channel_type: String,
     /// Human-readable name.
     pub name: String,
-    /// Bot UUID (tenant_id) this channel is bound to.
-    pub tenant_id: String,
+    /// Bot ID this channel is bound to.
+    pub bot_id: String,
     /// Opaque channel handle from the plugin.
     pub handle: *mut std::os::raw::c_void,
 }
@@ -121,13 +121,13 @@ impl LoadedPlugin {
     pub fn channel_send(
         &self,
         channel: &LoadedChannel,
-        tenant_id: &str,
+        bot_id: &str,
         user_id: &str,
         text: &str,
     ) -> Result<(), String> {
         if let Some(fn_send) = self.fn_channel_send {
             let msg = serde_json::json!({
-                "tenant_id": tenant_id,
+                "bot_id": bot_id,
                 "user_id": user_id,
                 "text": text,
             });
@@ -267,11 +267,11 @@ impl super::instance::PluginInstance for LoadedPlugin {
     fn channel_send(
         &self,
         channel: &LoadedChannel,
-        tenant_id: &str,
+        bot_id: &str,
         user_id: &str,
         text: &str,
     ) -> Result<(), String> {
-        self.channel_send(channel, tenant_id, user_id, text)
+        self.channel_send(channel, bot_id, user_id, text)
     }
 
     fn tool_execute(
@@ -654,7 +654,7 @@ impl PluginLoader {
             .map(|(i, desc)| LoadedChannel {
                 channel_type: desc.channel_type,
                 name: desc.name,
-                tenant_id: desc.tenant_id,
+                bot_id: desc.bot_id,
                 handle: (i + 1) as *mut std::os::raw::c_void,
             })
             .collect()

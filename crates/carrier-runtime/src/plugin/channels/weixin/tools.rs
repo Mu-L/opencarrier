@@ -18,12 +18,12 @@ impl ToolProvider for WeixinQrLoginTool {
         ToolDef {
             name: "weixin_qr_login".to_string(),
             description: "Trigger WeChat iLink QR code login. Returns a QR code URL for the user to scan with WeChat. After scanning, the bot token is saved automatically.".to_string(),
-            parameters_json: r#"{"type":"object","properties":{"tenant_name":{"type":"string","description":"Name for this WeChat account (used as tenant ID)"}},"required":["tenant_name"]}"#.to_string(),
+            parameters_json: r#"{"type":"object","properties":{"bot_id":{"type":"string","description":"Name for this WeChat account (used as tenant ID)"}},"required":["bot_id"]}"#.to_string(),
         }
     }
 
     fn execute(&self, args: &Value, _context: &PluginToolContext) -> Result<String, PluginError> {
-        let tenant_name = args["tenant_name"]
+        let bot_id = args["bot_id"]
             .as_str()
             .unwrap_or("default")
             .to_string();
@@ -34,8 +34,8 @@ impl ToolProvider for WeixinQrLoginTool {
             .build()
             .map_err(|e| PluginError::tool(format!("Runtime error: {e}")))?;
 
-        let tenant = tenant_name.clone();
-        let result = rt.block_on(async { auth::qr_login(&http, &tenant, None).await });
+        let bot = bot_id.clone();
+        let result = rt.block_on(async { auth::qr_login(&http, &bot, None).await });
 
         result.map_err(PluginError::tool)
     }
@@ -53,14 +53,14 @@ impl ToolProvider for WeixinSendMessageTool {
         ToolDef {
             name: "weixin_send_message".to_string(),
             description: "Send a text message to a WeChat user via iLink. Requires an active QR-logged-in session. You can only reply to users who have already sent a message (context_token required).".to_string(),
-            parameters_json: r#"{"type":"object","properties":{"tenant_name":{"type":"string","description":"Tenant name (WeChat account)"},"user_id":{"type":"string","description":"iLink user ID to send to"},"text":{"type":"string","description":"Message text"}},"required":["tenant_name","user_id","text"]}"#.to_string(),
+            parameters_json: r#"{"type":"object","properties":{"bot_id":{"type":"string","description":"Bot ID (WeChat account)"},"user_id":{"type":"string","description":"iLink user ID to send to"},"text":{"type":"string","description":"Message text"}},"required":["bot_id","user_id","text"]}"#.to_string(),
         }
     }
 
     fn execute(&self, args: &Value, _context: &PluginToolContext) -> Result<String, PluginError> {
-        let tenant_name = args["tenant_name"]
+        let bot_id = args["bot_id"]
             .as_str()
-            .ok_or_else(|| PluginError::tool("missing tenant_name"))?;
+            .ok_or_else(|| PluginError::tool("missing bot_id"))?;
         let user_id = args["user_id"]
             .as_str()
             .ok_or_else(|| PluginError::tool("missing user_id"))?;
@@ -69,9 +69,9 @@ impl ToolProvider for WeixinSendMessageTool {
             .ok_or_else(|| PluginError::tool("missing text"))?;
 
         let state = WEIXIN_STATE
-            .tenants
-            .get(tenant_name)
-            .ok_or_else(|| PluginError::tool(format!("Unknown tenant: {tenant_name}")))?;
+            .bots
+            .get(bot_id)
+            .ok_or_else(|| PluginError::tool(format!("Unknown bot: {bot_id}")))?;
 
         if state.is_expired() {
             return Err(PluginError::tool("Token expired, please re-scan QR code"));
@@ -115,14 +115,14 @@ impl ToolProvider for WeixinSendMessageTool {
 // Status tool
 // ---------------------------------------------------------------------------
 
-/// Tool: Show status of all iLink tenants.
+/// Tool: Show status of all iLink bots.
 pub struct WeixinStatusTool;
 
 impl ToolProvider for WeixinStatusTool {
     fn definition(&self) -> ToolDef {
         ToolDef {
             name: "weixin_status".to_string(),
-            description: "Show status of all linked WeChat accounts (tenants). Shows which are active, expired, or waiting for QR scan.".to_string(),
+            description: "Show status of all linked WeChat accounts (bots). Shows which are active, expired, or waiting for QR scan.".to_string(),
             parameters_json: r#"{"type":"object","properties":{}}"#.to_string(),
         }
     }

@@ -25,7 +25,7 @@ pub trait PluginInstance: Send + Sync {
     fn channel_send(
         &self,
         channel: &LoadedChannel,
-        tenant_id: &str,
+        bot_id: &str,
         user_id: &str,
         text: &str,
     ) -> Result<(), String>;

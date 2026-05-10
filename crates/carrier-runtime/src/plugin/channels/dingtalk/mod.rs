@@ -2,7 +2,7 @@
 //!
 //! Provides:
 //! - `DingTalkWatcher` — scans bot.toml and spawns WebSocket connections
-//! - `DingTalkChannel` — per-tenant WebSocket message receiver
+//! - `DingTalkChannel` — per-bot WebSocket message receiver
 
 pub mod api;
 pub mod channel;
@@ -27,13 +27,13 @@ use crate::plugin::BuiltinChannel;
 // Global tenant registry
 // ---------------------------------------------------------------------------
 
-pub(crate) struct DingTalkTenantEntry {
-    pub config: types::DingTalkTenantConfig,
+pub(crate) struct DingTalkBotEntry {
+    pub config: types::DingTalkBotConfig,
     pub token_cache: Arc<token::AccessTokenCache>,
 }
 
-impl DingTalkTenantEntry {
-    pub fn new(config: types::DingTalkTenantConfig) -> Self {
+impl DingTalkBotEntry {
+    pub fn new(config: types::DingTalkBotConfig) -> Self {
         let token_cache = Arc::new(token::AccessTokenCache::new(
             config.app_key.clone(),
             config.app_secret.clone(),
@@ -45,7 +45,7 @@ impl DingTalkTenantEntry {
     }
 }
 
-pub(crate) static DINGTALK_TENANTS: std::sync::LazyLock<DashMap<String, DingTalkTenantEntry>> =
+pub(crate) static DINGTALK_BOTS: std::sync::LazyLock<DashMap<String, DingTalkBotEntry>> =
     std::sync::LazyLock::new(DashMap::new);
 
 // ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ fn scan_bot_configs(plugin_dir: &Path) -> Vec<(String, serde_json::Value)> {
     configs
 }
 
-fn load_bot_config(bot_config: &serde_json::Value) -> Option<DingTalkTenantEntry> {
+fn load_bot_config(bot_config: &serde_json::Value) -> Option<DingTalkBotEntry> {
     let bot_uuid = bot_config["_bot_id"].as_str().unwrap_or("").to_string();
     let name = bot_config["name"].as_str().unwrap_or("").to_string();
 
@@ -139,14 +139,14 @@ fn load_bot_config(bot_config: &serde_json::Value) -> Option<DingTalkTenantEntry
         return None;
     }
 
-    let cfg = types::DingTalkTenantConfig {
+    let cfg = types::DingTalkBotConfig {
         name: name.clone(),
         bot_uuid: bot_uuid.clone(),
         app_key,
         app_secret,
     };
 
-    Some(DingTalkTenantEntry::new(cfg))
+    Some(DingTalkBotEntry::new(cfg))
 }
 
 // ---------------------------------------------------------------------------
@@ -189,19 +189,19 @@ fn dingtalk_watcher_loop(
                 None => continue,
             };
 
-            let tenant_name = entry.config.name.clone();
+            let bot_id = entry.config.name.clone();
             let token_cache = entry.token_cache.clone();
-            DINGTALK_TENANTS.insert(bot_uuid.clone(), entry);
+            DINGTALK_BOTS.insert(bot_uuid.clone(), entry);
             spawned.insert(bot_uuid.clone());
 
-            info!(tenant = %tenant_name, bot_uuid = %bot_uuid, "New DingTalk bot discovered, spawning channel");
+            info!(bot = %bot_id, bot_uuid = %bot_uuid, "New DingTalk bot discovered, spawning channel");
 
             let tx = sender.clone();
             let bu = bot_uuid.clone();
             std::thread::spawn(move || {
-                let mut ch = channel::DingTalkChannel::new(tenant_name.clone(), bu, token_cache);
+                let mut ch = channel::DingTalkChannel::new(bot_id.clone(), bu, token_cache);
                 if let Err(e) = ch.start(tx) {
-                    warn!(tenant = %tenant_name, "DingTalk channel start error: {e}");
+                    warn!(bot = %bot_id, "DingTalk channel start error: {e}");
                 }
             });
         }
@@ -225,17 +225,17 @@ fn scan_and_spawn(
             None => continue,
         };
 
-        let tenant_name = entry.config.name.clone();
+        let bot_id = entry.config.name.clone();
         let token_cache = entry.token_cache.clone();
-        DINGTALK_TENANTS.insert(bot_uuid.clone(), entry);
+        DINGTALK_BOTS.insert(bot_uuid.clone(), entry);
 
         let tx = sender.clone();
         let bu = bot_uuid.clone();
-        let tn = tenant_name.clone();
+        let tn = bot_id.clone();
         std::thread::spawn(move || {
             let mut ch = channel::DingTalkChannel::new(tn.clone(), bu, token_cache);
             if let Err(e) = ch.start(tx) {
-                warn!(tenant = %tn, "DingTalk channel start error: {e}");
+                warn!(bot = %tn, "DingTalk channel start error: {e}");
             }
         });
 
@@ -279,7 +279,7 @@ impl BuiltinChannel for DingTalkWatcher {
         "DingTalk Watcher"
     }
 
-    fn tenant_id(&self) -> &str {
+    fn bot_id(&self) -> &str {
         ""
     }
 
@@ -299,10 +299,10 @@ impl BuiltinChannel for DingTalkWatcher {
         Ok(())
     }
 
-    fn send(&self, tenant_id: &str, user_id: &str, text: &str) -> Result<(), String> {
-        let entry = DINGTALK_TENANTS
-            .get(tenant_id)
-            .ok_or_else(|| format!("Unknown DingTalk tenant: {tenant_id}"))?;
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+        let entry = DINGTALK_BOTS
+            .get(bot_id)
+            .ok_or_else(|| format!("Unknown DingTalk tenant: {bot_id}"))?;
 
         let token_cache = entry.token_cache.clone();
         let user_id = user_id.to_string();

@@ -67,7 +67,6 @@ impl KernelHandle for CarrierKernel {
         sender_id: Option<&str>,
         sender_name: Option<&str>,
         _caller_agent_id: Option<&str>,
-        source_tenant_id: Option<&str>,
     ) -> Result<String, String> {
         let (id, _target_entry): (AgentId, carrier_types::agent::AgentEntry) = match agent_id.parse() {
             Ok(id) => {
@@ -93,10 +92,6 @@ impl KernelHandle for CarrierKernel {
             .and_then(|w| w.upgrade())
             .map(|arc| arc as Arc<dyn KernelHandle>);
 
-        if let Some(tid) = source_tenant_id {
-            self.plugins.source_tenant_id.insert(id, tid.to_string());
-        }
-
         let result = self
             .send_message_with_handle(
                 id,
@@ -107,8 +102,6 @@ impl KernelHandle for CarrierKernel {
             )
             .await
             .map_err(|e| format!("Send failed: {e}"))?;
-
-        self.plugins.source_tenant_id.remove(&id);
 
         Ok(result.response)
     }
@@ -762,28 +755,8 @@ impl KernelHandle for CarrierKernel {
     ) -> Result<String, String> {
         let guard = self.plugins.plugin_tool_dispatcher.lock().unwrap();
         if let Some(ref dispatcher) = *guard {
-            let agent_uuid = uuid::Uuid::parse_str(agent_id)
-                .ok()
-                .map(carrier_types::agent::AgentId);
-            let tenant_id = agent_uuid
-                .as_ref()
-                .and_then(|id| {
-                    self.plugins
-                        .source_tenant_id
-                        .get(id)
-                        .map(|v| v.value().clone())
-                })
-                .or_else(|| {
-                    agent_uuid.as_ref().and_then(|id| {
-                        self.plugins
-                            .default_plugin_tenant
-                            .get(id)
-                            .map(|v| v.value().clone())
-                    })
-                })
-                .unwrap_or_default();
             let context = carrier_types::plugin::PluginToolContext {
-                tenant_id,
+                bot_id: String::new(),
                 sender_id: sender_id.to_string(),
                 agent_id: agent_id.to_string(),
                 channel_type: String::new(),
@@ -791,14 +764,6 @@ impl KernelHandle for CarrierKernel {
             dispatcher.execute(tool_name, args, &context)
         } else {
             Err(format!("Unknown tool: {tool_name}"))
-        }
-    }
-
-    fn set_default_plugin_tenant(&self, agent_id: &str, tenant_id: &str) {
-        if let Ok(id) = agent_id.parse() {
-            self.plugins
-                .default_plugin_tenant
-                .insert(id, tenant_id.to_string());
         }
     }
 }

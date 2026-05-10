@@ -1,7 +1,7 @@
 //! Token storage and management for the WeChat iLink Bot plugin.
 //!
-//! Manages per-tenant bot_tokens (24h expiry) and per-user context_tokens.
-//! Tokens are persisted to `~/.opencarrier/weixin-tokens/<name>.json`.
+//! Manages per-bot bot_tokens (24h expiry) and per-user context_tokens.
+//! Tokens are persisted to `~/.opencarrier/weixin-sessions/<bot_id>.json`.
 
 use dashmap::DashMap;
 use reqwest::Client;
@@ -15,13 +15,13 @@ use tracing::{info, warn};
 use crate::plugin::channels::weixin::types::*;
 
 // ---------------------------------------------------------------------------
-// Per-tenant runtime state
+// Per-bot runtime state
 // ---------------------------------------------------------------------------
 
-/// Runtime state for a single iLink tenant (one scanned WeChat account).
-pub struct TenantState {
-    /// Tenant name (used as routing key).
-    pub name: String,
+/// Runtime state for a single iLink bot session (one scanned WeChat account).
+pub struct BotSession {
+    /// Bot ID (used as routing key).
+    pub bot_id: String,
     /// iLink bot_token (from QR scan, valid 24h).
     pub bot_token: String,
     /// iLink base URL (from QR scan, usually same as ILINK_API_BASE).
@@ -46,8 +46,8 @@ pub struct TenantState {
     pub bind_agent: Option<String>,
 }
 
-impl TenantState {
-    /// Check if this tenant's token has expired.
+impl BotSession {
+    /// Check if this bot's token has expired.
     pub fn is_expired(&self) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -56,7 +56,7 @@ impl TenantState {
         now >= self.expires_at.load(Ordering::Relaxed)
     }
 
-    /// Check if this tenant's token will expire within the given number of seconds.
+    /// Check if this bot's token will expire within the given number of seconds.
     pub fn is_near_expiry(&self, within_secs: i64) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -116,10 +116,10 @@ impl TenantState {
 // Global state manager
 // ---------------------------------------------------------------------------
 
-/// Global state manager for all iLink tenants.
+/// Global state manager for all iLink bots.
 pub struct WeixinState {
-    /// Per-tenant state keyed by tenant name.
-    pub tenants: DashMap<String, TenantState>,
+    /// Per-bot state keyed by bot_id.
+    pub bots: DashMap<String, BotSession>,
     /// Directory for persisting token files.
     pub token_dir: PathBuf,
     /// Shared HTTP client for API routes (QR code login).
@@ -128,11 +128,85 @@ pub struct WeixinState {
 
 impl WeixinState {
     fn new() -> Self {
-        let token_dir = carrier_types::config::home_dir().join("weixin-tokens");
+        let home = carrier_types::config::home_dir();
+        let token_dir = home.join("weixin-sessions");
+
+        // Auto-migrate from old weixin-tokens/ directory
+        let old_dir = home.join("weixin-tokens");
+        if old_dir.exists() && !token_dir.exists() {
+            Self::migrate_old_tokens(&old_dir, &token_dir);
+        }
+
         Self {
-            tenants: DashMap::new(),
+            bots: DashMap::new(),
             token_dir,
             http: Client::new(),
+        }
+    }
+
+    /// Migrate token files from weixin-tokens/ to weixin-sessions/,
+    /// converting the old `"name"` field to `"bot_id"`.
+    fn migrate_old_tokens(old_dir: &Path, new_dir: &Path) {
+        if let Err(e) = std::fs::create_dir_all(new_dir) {
+            warn!(dir = %new_dir.display(), "Failed to create weixin-sessions dir for migration: {e}");
+            return;
+        }
+
+        let entries = match std::fs::read_dir(old_dir) {
+            Ok(e) => e,
+            Err(e) => {
+                warn!(dir = %old_dir.display(), "Failed to read old weixin-tokens dir: {e}");
+                return;
+            }
+        };
+
+        let mut migrated = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let mut tf: serde_json::Value = match serde_json::from_str(&content) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            // Rename "name" → "bot_id"
+            let bot_id = tf
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !bot_id.is_empty() {
+                if let Some(o) = tf.as_object_mut() {
+                    o.remove("name");
+                    o.insert("bot_id".into(), serde_json::Value::String(bot_id.clone()));
+                }
+            }
+
+            let new_path = new_dir.join(format!("{}.json", bot_id));
+            match serde_json::to_string_pretty(&tf) {
+                Ok(json) => {
+                    if let Err(e) = std::fs::write(&new_path, &json) {
+                        warn!(path = %new_path.display(), "Failed to write migrated token file: {e}");
+                        continue;
+                    }
+                }
+                Err(_) => continue,
+            }
+            migrated += 1;
+        }
+
+        if migrated > 0 {
+            info!(count = migrated, "Migrated weixin-tokens → weixin-sessions");
+            // Remove old directory after successful migration
+            if let Err(e) = std::fs::remove_dir_all(old_dir) {
+                warn!(dir = %old_dir.display(), "Failed to remove old weixin-tokens dir: {e}");
+            }
         }
     }
 
@@ -156,22 +230,22 @@ impl WeixinState {
                     }
                     match std::fs::read_to_string(&path) {
                         Ok(content) => {
-                            match serde_json::from_str::<TenantTokenFile>(&content) {
+                            match serde_json::from_str::<BotTokenFile>(&content) {
                                 Ok(tf) => {
                                     if now >= tf.expires_at {
                                         info!(
-                                            tenant = %tf.name,
+                                            bot_id = %tf.bot_id,
                                             "Skipping expired iLink token"
                                         );
                                         continue;
                                     }
                                     info!(
-                                        tenant = %tf.name,
+                                        bot_id = %tf.bot_id,
                                         expires_in = tf.expires_at - now,
                                         "Loaded iLink token"
                                     );
-                                    let state = TenantState {
-                                        name: tf.name.clone(),
+                                    let state = BotSession {
+                                        bot_id: tf.bot_id.clone(),
                                         bot_token: tf.bot_token,
                                         baseurl: tf.baseurl,
                                         ilink_bot_id: tf.ilink_bot_id,
@@ -184,7 +258,7 @@ impl WeixinState {
                                         active: AtomicBool::new(false), // Will be set to true when channel starts
                                         bind_agent: tf.bind_agent,
                                     };
-                                    self.tenants.insert(tf.name, state);
+                                    self.bots.insert(tf.bot_id, state);
                                 }
                                 Err(e) => {
                                     warn!(path = %path.display(), "Failed to parse token file: {e}");
@@ -203,10 +277,10 @@ impl WeixinState {
         }
     }
 
-    /// Register a new tenant from a successful QR scan.
+    /// Register a new bot from a successful QR scan.
     pub fn register_from_qr(
         &self,
-        name: &str,
+        bot_id: &str,
         bot_token: &str,
         baseurl: &str,
         ilink_bot_id: &str,
@@ -218,8 +292,8 @@ impl WeixinState {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let state = TenantState {
-            name: name.to_string(),
+        let state = BotSession {
+            bot_id: bot_id.to_string(),
             bot_token: bot_token.to_string(),
             baseurl: baseurl.to_string(),
             ilink_bot_id: ilink_bot_id.to_string(),
@@ -234,31 +308,31 @@ impl WeixinState {
         };
 
         // Persist to disk
-        self.save_tenant(&state);
+        self.save_session(&state);
 
         // Insert/update in-memory
-        if let Some(mut existing) = self.tenants.get_mut(name) {
+        if let Some(mut existing) = self.bots.get_mut(bot_id) {
             // Preserve cursor and context_tokens from existing session if possible
             let old_cursor = existing.cursor.lock().unwrap().clone();
             *state.cursor.lock().unwrap() = old_cursor;
             *existing = state;
         } else {
-            self.tenants.insert(name.to_string(), state);
+            self.bots.insert(bot_id.to_string(), state);
         }
 
-        info!(tenant = name, "Registered iLink tenant from QR scan");
+        info!(bot_id = bot_id, "Registered iLink bot from QR scan");
     }
 
-    /// Save a tenant's state to disk.
-    pub fn save_tenant(&self, state: &TenantState) {
+    /// Save a bot session's state to disk.
+    pub fn save_session(&self, state: &BotSession) {
         let dir = &self.token_dir;
         if let Err(e) = std::fs::create_dir_all(dir) {
             warn!(dir = %dir.display(), "Failed to create token directory: {e}");
             return;
         }
 
-        let tf = TenantTokenFile {
-            name: state.name.clone(),
+        let tf = BotTokenFile {
+            bot_id: state.bot_id.clone(),
             bot_token: state.bot_token.clone(),
             baseurl: state.baseurl.clone(),
             ilink_bot_id: state.ilink_bot_id.clone(),
@@ -267,7 +341,7 @@ impl WeixinState {
             bind_agent: state.bind_agent.clone(),
         };
 
-        let path = dir.join(format!("{}.json", state.name));
+        let path = dir.join(format!("{}.json", state.bot_id));
         match serde_json::to_string_pretty(&tf) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
@@ -275,30 +349,30 @@ impl WeixinState {
                 }
             }
             Err(e) => {
-                warn!("Failed to serialize tenant token: {e}");
+                warn!("Failed to serialize bot token: {e}");
             }
         }
     }
 
-    /// Get a tenant state by name.
-    pub fn get_tenant(
+    /// Get a bot session by bot_id.
+    pub fn get_session(
         &self,
-        name: &str,
-    ) -> Option<dashmap::mapref::one::Ref<'_, String, TenantState>> {
-        self.tenants.get(name)
+        bot_id: &str,
+    ) -> Option<dashmap::mapref::one::Ref<'_, String, BotSession>> {
+        self.bots.get(bot_id)
     }
 
-    /// List all active (non-expired) tenant names.
-    pub fn active_tenant_names(&self) -> Vec<String> {
-        self.tenants
+    /// List all active (non-expired) bot IDs.
+    pub fn active_bot_ids(&self) -> Vec<String> {
+        self.bots
             .iter()
             .filter(|e| !e.value().is_expired())
             .map(|e| e.key().clone())
             .collect()
     }
 
-    /// Load new tenants from the token directory (skips already-loaded tenants).
-    /// Used by the dynamic tenant watcher to pick up QR-scanned tenants.
+    /// Load new bots from the token directory (skips already-loaded bots).
+    /// Used by the dynamic session watcher to pick up QR-scanned bots.
     pub fn load_new_from_dir(&self) {
         if !self.token_dir.exists() {
             return;
@@ -322,16 +396,16 @@ impl WeixinState {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            let tf = match serde_json::from_str::<TenantTokenFile>(&content) {
+            let tf = match serde_json::from_str::<BotTokenFile>(&content) {
                 Ok(t) => t,
                 Err(_) => continue,
             };
-            // Refresh existing tenant only if a new bot_token was written (re-scan).
+            // Refresh existing bot only if a new bot_token was written (re-scan).
             // Do NOT refresh just because in-memory is expired — the iLink server
             // may have invalidated the session while the local file still looks valid.
-            if let Some(mut existing) = self.tenants.get_mut(&tf.name) {
+            if let Some(mut existing) = self.bots.get_mut(&tf.bot_id) {
                 if existing.bot_token != tf.bot_token {
-                    info!(tenant = %tf.name, "Refreshing iLink tenant from updated token file (new bot_token)");
+                    info!(bot_id = %tf.bot_id, "Refreshing iLink bot from updated token file (new bot_token)");
                     existing.bot_token = tf.bot_token;
                     existing.baseurl = tf.baseurl;
                     existing.ilink_bot_id = tf.ilink_bot_id;
@@ -345,9 +419,9 @@ impl WeixinState {
             if now >= tf.expires_at {
                 continue;
             }
-            info!(tenant = %tf.name, "Dynamic watcher loaded new iLink tenant");
-            let state = TenantState {
-                name: tf.name.clone(),
+            info!(bot_id = %tf.bot_id, "Dynamic watcher loaded new iLink bot");
+            let state = BotSession {
+                bot_id: tf.bot_id.clone(),
                 bot_token: tf.bot_token,
                 baseurl: tf.baseurl,
                 ilink_bot_id: tf.ilink_bot_id,
@@ -360,18 +434,18 @@ impl WeixinState {
                 active: AtomicBool::new(false), // Will be set true when poll thread starts
                 bind_agent: tf.bind_agent,
             };
-            self.tenants.insert(tf.name, state);
+            self.bots.insert(tf.bot_id, state);
         }
     }
 
-    /// Get status of all tenants for the API.
+    /// Get status of all bots for the API.
     pub fn status_list(&self) -> Vec<serde_json::Value> {
-        self.tenants
+        self.bots
             .iter()
             .map(|entry| {
                 let state = entry.value();
                 serde_json::json!({
-                    "name": state.name,
+                    "bot_id": state.bot_id,
                     "ilink_bot_id": state.ilink_bot_id,
                     "user_id": state.user_id,
                     "expires_at": state.expires_at.load(Ordering::Relaxed),
