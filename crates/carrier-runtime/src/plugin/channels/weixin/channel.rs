@@ -52,10 +52,16 @@ impl BuiltinChannel for ILinkChannel {
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
         let bot_id = self.bot_id.clone();
 
-        // Mark bot as active
-        if let Some(state) = WEIXIN_STATE.bots.get(&bot_id) {
-            state.active.store(true, Ordering::Relaxed);
-        } else {
+        // Mark bot as active (find by bot_id since we may not know user_id yet)
+        let found = WEIXIN_STATE.bots.iter().any(|entry| {
+            if entry.value().bot_id == bot_id {
+                entry.value().active.store(true, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        });
+        if !found {
             info!(bot_id = %bot_id, "ILinkChannel starting in waiting mode (no token yet)");
         }
 
@@ -75,9 +81,8 @@ impl BuiltinChannel for ILinkChannel {
 
     fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
         let state = WEIXIN_STATE
-            .bots
-            .get(bot_id)
-            .ok_or_else(|| format!("Unknown bot: {bot_id}"))?;
+            .get_session_for_send(bot_id, user_id)
+            .ok_or_else(|| format!("No session for bot {bot_id}, user {user_id}"))?;
 
         if state.is_expired() {
             return Err(format!(
@@ -135,8 +140,12 @@ impl BuiltinChannel for ILinkChannel {
     fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
 
-        if let Some(state) = WEIXIN_STATE.bots.get(&self.bot_id) {
-            state.active.store(false, Ordering::Relaxed);
+        // Find session by bot_id and mark inactive
+        for entry in WEIXIN_STATE.bots.iter() {
+            if entry.value().bot_id == self.bot_id {
+                entry.value().active.store(false, Ordering::Relaxed);
+                break;
+            }
         }
 
         if let Some(handle) = self.thread_handle.take() {
@@ -151,46 +160,47 @@ impl BuiltinChannel for ILinkChannel {
 }
 
 /// Main polling loop (runs in a dedicated thread with its own runtime).
-fn run_poll_loop(bot_id: &str, sender: mpsc::Sender<PluginMessage>, shutdown: &AtomicBool) {
+/// `session_key` is the user_id used as the DashMap key in WEIXIN_STATE.bots.
+fn run_poll_loop(session_key: &str, sender: mpsc::Sender<PluginMessage>, shutdown: &AtomicBool) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
         Err(e) => {
-            error!(bot_id = bot_id, "Failed to create tokio runtime: {e}");
+            error!(session_key = session_key, "Failed to create tokio runtime: {e}");
             return;
         }
     };
 
     rt.block_on(async move {
-        poll_loop_inner(bot_id, sender, shutdown).await;
+        poll_loop_inner(session_key, sender, shutdown).await;
     });
 }
 
 async fn poll_loop_inner(
-    bot_id: &str,
+    session_key: &str,
     sender: mpsc::Sender<PluginMessage>,
     shutdown: &AtomicBool,
 ) {
-    info!(bot_id = bot_id, "Poll loop started");
+    info!(session_key = session_key, "Poll loop started");
 
     loop {
         if shutdown.load(Ordering::Relaxed) {
             info!(
-                bot_id = bot_id,
+                session_key = session_key,
                 "Shutdown signal received, exiting poll loop"
             );
             return;
         }
 
-        let (bot_token, baseurl, http) = {
-            let state = match WEIXIN_STATE.bots.get(bot_id) {
+        let (bot_token, baseurl, http, bot_id) = {
+            let state = match WEIXIN_STATE.bots.get(session_key) {
                 Some(s) => s,
                 None => {
                     for _ in 0..10 {
                         if shutdown.load(Ordering::Relaxed) {
-                            info!(bot_id = bot_id, "Shutdown during wait, exiting");
+                            info!(session_key = session_key, "Shutdown during wait, exiting");
                             return;
                         }
                         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -203,7 +213,7 @@ async fn poll_loop_inner(
                 for _ in 0..10 {
                     if shutdown.load(Ordering::Relaxed) {
                         info!(
-                            bot_id = bot_id,
+                            session_key = session_key,
                             "Shutdown during inactive wait, exiting"
                         );
                         return;
@@ -217,12 +227,13 @@ async fn poll_loop_inner(
                 state.bot_token.clone(),
                 state.baseurl.clone(),
                 state.http.clone(),
+                state.bot_id.clone(),
             )
         };
 
         let cursor = WEIXIN_STATE
             .bots
-            .get(bot_id)
+            .get(session_key)
             .map(|s| s.cursor.lock().unwrap().clone())
             .unwrap_or_default();
 
@@ -231,12 +242,9 @@ async fn poll_loop_inner(
                 if resp.errcode == Some(SESSION_EXPIRED_ERRCODE)
                     || resp.ret == Some(SESSION_EXPIRED_ERRCODE)
                 {
-                    warn!(bot_id = bot_id, "Session expired, stopping poll");
-                    if let Some(state) = WEIXIN_STATE.bots.get(bot_id) {
+                    warn!(session_key = session_key, "Session expired, stopping poll");
+                    if let Some(state) = WEIXIN_STATE.bots.get(session_key) {
                         state.active.store(false, Ordering::Relaxed);
-                        // Only update in-memory; don't write expires_at=0 back to disk
-                        // which would cause the file watcher to reload an expired token
-                        // and trigger a restart loop.
                         state.expires_at.store(0, Ordering::Relaxed);
                     }
                     continue;
@@ -245,7 +253,7 @@ async fn poll_loop_inner(
                 if let Some(ret) = resp.ret {
                     if ret != 0 {
                         warn!(
-                            bot_id = bot_id,
+                            session_key = session_key,
                             ret, "getUpdates returned non-zero ret"
                         );
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -255,7 +263,7 @@ async fn poll_loop_inner(
 
                 if let Some(new_cursor) = &resp.get_updates_buf {
                     if !new_cursor.is_empty() {
-                        if let Some(state) = WEIXIN_STATE.bots.get(bot_id) {
+                        if let Some(state) = WEIXIN_STATE.bots.get(session_key) {
                             *state.cursor.lock().unwrap() = new_cursor.clone();
                         }
                     }
@@ -263,7 +271,7 @@ async fn poll_loop_inner(
 
                 if let Some(msgs) = resp.msgs {
                     // Renew session expiry on every successful getUpdates
-                    if let Some(state) = WEIXIN_STATE.bots.get(bot_id) {
+                    if let Some(state) = WEIXIN_STATE.bots.get(session_key) {
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
@@ -273,15 +281,14 @@ async fn poll_loop_inner(
                             std::sync::atomic::Ordering::Relaxed,
                         );
                         state.active.store(true, std::sync::atomic::Ordering::Relaxed);
-                        // Persist updated expiry to disk
                         WEIXIN_STATE.save_session(&state);
                     }
                     for msg in msgs {
-                        process_inbound_message(bot_id, &msg, &sender);
+                        process_inbound_message(&bot_id, session_key, &msg, &sender);
                     }
                 } else {
                     // No messages but successful poll — still renew to keep session alive
-                    if let Some(state) = WEIXIN_STATE.bots.get(bot_id) {
+                    if let Some(state) = WEIXIN_STATE.bots.get(session_key) {
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
@@ -294,7 +301,7 @@ async fn poll_loop_inner(
                 }
             }
             Err(e) => {
-                error!(bot_id = bot_id, "getUpdates error: {e}");
+                error!(session_key = session_key, "getUpdates error: {e}");
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         }
@@ -303,6 +310,7 @@ async fn poll_loop_inner(
 
 fn process_inbound_message(
     bot_id: &str,
+    session_key: &str,
     msg: &ILnkMessage,
     sender: &mpsc::Sender<PluginMessage>,
 ) {
@@ -333,7 +341,7 @@ fn process_inbound_message(
         .unwrap_or_default();
 
     if let Some(ctx_token) = &msg.context_token {
-        if let Some(state) = WEIXIN_STATE.bots.get(bot_id) {
+        if let Some(state) = WEIXIN_STATE.bots.get(session_key) {
             state.store_context_token(&from_user_id, ctx_token);
         }
     }
@@ -422,9 +430,8 @@ impl BuiltinChannel for SessionWatcher {
 
     fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
         let state = WEIXIN_STATE
-            .bots
-            .get(bot_id)
-            .ok_or_else(|| format!("Unknown bot: {bot_id}"))?;
+            .get_session_for_send(bot_id, user_id)
+            .ok_or_else(|| format!("No session for bot {bot_id}, user {user_id}"))?;
 
         if state.is_expired() {
             return Err(format!("Token expired for bot {bot_id}"));
@@ -509,12 +516,12 @@ fn watcher_loop(sender: mpsc::Sender<PluginMessage>, shutdown: Arc<AtomicBool>) 
             WEIXIN_STATE.load_new_from_dir();
 
             for entry in WEIXIN_STATE.bots.iter() {
-                let name = entry.key().clone();
+                let user_id = entry.key().clone();
                 let state = entry.value();
-                if spawned.contains(&name) {
+                if spawned.contains(&user_id) {
                     // Poll thread exited (e.g. session expired) but token is now valid again
                     if !state.active.load(Ordering::Relaxed) && !state.is_expired() {
-                        spawned.remove(&name);
+                        spawned.remove(&user_id);
                     } else {
                         continue;
                     }
@@ -523,23 +530,23 @@ fn watcher_loop(sender: mpsc::Sender<PluginMessage>, shutdown: Arc<AtomicBool>) 
                     continue;
                 }
                 if state.active.load(Ordering::Relaxed) {
-                    spawned.insert(name);
+                    spawned.insert(user_id);
                     continue;
                 }
                 state.active.store(true, Ordering::Relaxed);
-                spawned.insert(name.clone());
+                spawned.insert(user_id.clone());
                 let s = sender.clone();
                 let sh = shutdown.clone();
-                let thread_name = name.clone();
-                let poll_name = name.clone();
-                info!(bot_id = %name, "SessionWatcher spawning poll thread for new bot");
+                let thread_name = user_id.clone();
+                let poll_key = user_id.clone();
+                info!(user_id = %user_id, "SessionWatcher spawning poll thread for new bot");
                 if let Err(e) = std::thread::Builder::new()
                     .name(format!("weixin-dyn-{thread_name}"))
                     .spawn(move || {
-                        run_poll_loop(&poll_name, s, &sh);
+                        run_poll_loop(&poll_key, s, &sh);
                     })
                 {
-                    error!(bot_id = %name, "Failed to spawn poll thread: {e}");
+                    error!(user_id = %user_id, "Failed to spawn poll thread: {e}");
                 }
             }
 

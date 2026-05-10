@@ -532,6 +532,12 @@ pub async fn weixin_save_token(
         if let Some(ref pm_arc) = state.plugin_manager {
             let pm = pm_arc.lock().await;
             pm.add_channel_binding("weixin", &bot_name, &bind_agent);
+            // WeChat uses user_id as route key
+            if let Some(ref uid) = ilink_user_id {
+                if !uid.is_empty() {
+                    pm.set_sender_route(uid, &bind_agent);
+                }
+            }
             tracing::info!(
                 bot = %bot_name,
                 agent = %bind_agent,
@@ -1151,6 +1157,11 @@ pub async fn weixin_bind_bot(
                 if let Some(ref pm_arc) = state.plugin_manager {
                     let pm = pm_arc.lock().await;
                     pm.add_channel_binding("weixin", &name, &agent_uuid);
+                    // WeChat uses user_id as route key
+                    let uid = tf.get("user_id").and_then(|v| v.as_str()).unwrap_or("");
+                    if !uid.is_empty() {
+                        pm.set_sender_route(uid, &agent_uuid);
+                    }
                 }
 
                 return (

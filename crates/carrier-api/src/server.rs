@@ -290,6 +290,14 @@ pub async fn run_daemon(
                                     ) {
                                         if uuid::Uuid::parse_str(agent).is_ok() {
                                             pm.add_channel_binding("weixin", bot_id, agent);
+                                            // WeChat uses user_id as route key
+                                            if let Some(uid) =
+                                                tf.get("user_id").and_then(|v| v.as_str())
+                                            {
+                                                if !uid.is_empty() {
+                                                    pm.set_sender_route(uid, agent);
+                                                }
+                                            }
                                             info!(
                                                 bot = %bot_id,
                                                 agent = %agent,

@@ -33,7 +33,7 @@ pub struct PluginBridgeManager {
     owned_bots: Arc<Mutex<HashSet<String>>>,
     /// Sender-based routing (sender_id → agent_id). Takes priority over channel_bindings.
     sender_router: Option<Arc<SenderRouter>>,
-    /// sender_id of users currently in the "naming" flow (waiting for agent name).
+    /// route_key of users currently in the "naming" flow (waiting for agent name).
     pending_naming: DashMap<String, String>,
 }
 
@@ -101,6 +101,20 @@ impl PluginBridgeManager {
     }
 
     // -----------------------------------------------------------------------
+    // Route key — platform-dependent routing key
+    // -----------------------------------------------------------------------
+
+    /// Return the routing key for a message:
+    /// - WeChat iLink: sender_id (one user = one assistant)
+    /// - WeCom/Feishu/DingTalk: bot_id (one bot = one assistant)
+    fn route_key(&self, msg: &PluginMessage) -> String {
+        match msg.channel_type.as_str() {
+            "weixin" => msg.sender_id.clone(),
+            _ => msg.bot_id.clone(),
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Inbound message handling
     // -----------------------------------------------------------------------
 
@@ -113,6 +127,8 @@ impl PluginBridgeManager {
             None => self.describe_non_text_content(&msg),
         };
 
+        let rk = self.route_key(&msg);
+
         // Cache sender → (channel_type, bot_id) for outbound routing
         if !msg.sender_id.is_empty() && !msg.bot_id.is_empty() {
             self.sender_channels.insert(
@@ -121,36 +137,36 @@ impl PluginBridgeManager {
             );
         }
 
-        // 1. Check if sender is in naming flow
-        if let Some((_, agent_id)) = self.pending_naming.remove(&msg.sender_id) {
+        // 1. Check if route is in naming flow
+        if let Some((_, agent_id)) = self.pending_naming.remove(&rk) {
             let name = text.trim().to_string();
             if !name.is_empty() {
                 if let Some(ref router) = self.sender_router {
-                    router.set_alias(&msg.sender_id, &name, &agent_id);
+                    router.set_alias(&rk, &name, &agent_id);
                 }
                 let confirm = format!("好的，我现在叫{name}。以后叫我{name}我就出来啦！");
                 self.send_response(&msg, &confirm);
             } else {
                 // Empty name, keep in pending
-                self.pending_naming.insert(msg.sender_id.clone(), agent_id);
+                self.pending_naming.insert(rk.clone(), agent_id);
                 self.send_response(&msg, "名字不能为空哦，请再告诉我你想叫我什么？");
             }
             return;
         }
 
         // 2. Try name-based routing (message starts with an alias)
-        if let Some((agent_id, remaining)) = self.try_route_by_name(&text, &msg) {
+        if let Some((agent_id, remaining)) = self.try_route_by_name(&text, &rk) {
             info!(
                 channel = %msg.channel_type,
                 bot = %msg.bot_id,
                 agent = %agent_id,
-                sender = %msg.sender_id,
+                route_key = %rk,
                 "Routing by name to agent"
             );
 
-            // Update sender's default route to this agent
+            // Update default route to this agent
             if let Some(ref router) = self.sender_router {
-                router.set_route(&msg.sender_id, &agent_id);
+                router.set_route(&rk, &agent_id);
             }
 
             let msg_text = if remaining.is_empty() { "你好".to_string() } else { remaining };
@@ -173,18 +189,18 @@ impl PluginBridgeManager {
 
         // 3. /list command
         if text.trim().eq_ignore_ascii_case("/list") {
-            let response = self.format_agent_list(&msg.sender_id);
+            let response = self.format_agent_list(&rk);
             self.send_response(&msg, &response);
             return;
         }
 
-        // 4. Default routing via sender_id
+        // 4. Default routing via route_key
         let agent_id = self.resolve_agent(&msg);
         if agent_id.is_empty() {
             warn!(
                 channel = %msg.channel_type,
                 bot = %msg.bot_id,
-                sender = %msg.sender_id,
+                route_key = %rk,
                 "No agent resolved, dropping message"
             );
             return;
@@ -192,8 +208,8 @@ impl PluginBridgeManager {
 
         // 5. Check if this agent needs a name
         if let Some(ref router) = self.sender_router {
-            if router.needs_naming(&msg.sender_id) {
-                self.pending_naming.insert(msg.sender_id.clone(), agent_id.clone());
+            if router.needs_naming(&rk) {
+                self.pending_naming.insert(rk.clone(), agent_id.clone());
                 self.send_response(&msg, "请给我取个名字吧！以后叫这个名字我就会出来。");
                 return;
             }
@@ -203,7 +219,7 @@ impl PluginBridgeManager {
             channel = %msg.channel_type,
             bot = %msg.bot_id,
             agent = %agent_id,
-            sender = %msg.sender_id,
+            route_key = %rk,
             "Routing plugin message to agent"
         );
 
@@ -235,15 +251,15 @@ impl PluginBridgeManager {
     // Name-based routing
     // -----------------------------------------------------------------------
 
-    /// Try to route by matching the start of the text against sender aliases.
+    /// Try to route by matching the start of the text against aliases for the route_key.
     /// Returns (agent_id, remaining_text) if matched, None otherwise.
-    fn try_route_by_name(&self, text: &str, msg: &PluginMessage) -> Option<(String, String)> {
+    fn try_route_by_name(&self, text: &str, route_key: &str) -> Option<(String, String)> {
         let router = self.sender_router.as_ref()?;
-        if msg.sender_id.is_empty() {
+        if route_key.is_empty() {
             return None;
         }
 
-        let aliases = router.list_aliases(&msg.sender_id);
+        let aliases = router.list_aliases(route_key);
         if aliases.is_empty() {
             return None;
         }
@@ -274,7 +290,7 @@ impl PluginBridgeManager {
                     .trim_start_matches(['，', ',', ' ', '！', '!', '？', '?'])
                     .to_string();
                 info!(
-                    sender = %msg.sender_id,
+                    route_key = %route_key,
                     agent = %agent_id,
                     "Name-based route matched"
                 );
@@ -284,14 +300,14 @@ impl PluginBridgeManager {
         }
     }
 
-    /// Format the agent list for a sender, showing aliases and available agents.
-    fn format_agent_list(&self, sender_id: &str) -> String {
+    /// Format the agent list for a route_key, showing aliases and available agents.
+    fn format_agent_list(&self, route_key: &str) -> String {
         let agents = self.kernel.list_agents();
         let mut lines = Vec::new();
 
         if let Some(ref router) = self.sender_router {
-            let aliases = router.list_aliases(sender_id);
-            let current_agent = router.get_route(sender_id);
+            let aliases = router.list_aliases(route_key);
+            let current_agent = router.get_route(route_key);
 
             if !aliases.is_empty() {
                 lines.push("你的助手：".to_string());
@@ -340,11 +356,12 @@ impl PluginBridgeManager {
         lines.join("\n")
     }
 
-    /// Resolve which agent handles a message via sender_id routing.
+    /// Resolve which agent handles a message via route_key routing.
     fn resolve_agent(&self, msg: &PluginMessage) -> String {
         if let Some(ref router) = self.sender_router {
-            if !msg.sender_id.is_empty() {
-                if let Some(agent_id) = router.resolve(&msg.sender_id) {
+            let rk = self.route_key(msg);
+            if !rk.is_empty() {
+                if let Some(agent_id) = router.resolve(&rk) {
                     return agent_id;
                 }
             }

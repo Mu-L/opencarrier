@@ -1817,6 +1817,10 @@ pub async fn bind_bot(
                             if channel_type == "wecom" || channel_type == "weixin" {
                                 pm.add_channel_binding(channel_type, &bot_id, &agent_uuid);
                             }
+                            // Set sender route: WeCom/Feishu/DingTalk use bot_id as route key
+                            if channel_type != "weixin" {
+                                pm.set_sender_route(&bot_uuid, &agent_uuid);
+                            }
                             tracing::info!(
                                 platform = %platform,
                                 bot = %bot_id,
@@ -1861,7 +1865,7 @@ pub async fn bind_bot(
                         Ok(v) => v,
                         Err(_) => continue,
                     };
-                    let user_id = tf.get("user_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let user_id = tf.get("user_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
                     if user_id != bot_uuid {
                         continue;
                     }
@@ -1876,6 +1880,10 @@ pub async fn bind_bot(
                         if let Some(ref pm) = state.plugin_manager {
                             let pm = pm.lock().await;
                             pm.add_channel_binding("weixin", bot_id, &agent_uuid);
+                            // WeChat uses user_id (sender_id) as route key
+                            if !user_id.is_empty() {
+                                pm.set_sender_route(&user_id, &agent_uuid);
+                            }
                             tracing::info!(
                                 platform = "weixin",
                                 bot = %bot_id,
@@ -2201,6 +2209,10 @@ async fn add_dynamic_binding(
             pm.add_channel_binding(channel_type, bot_uuid, agent_uuid);
             if channel_type == "wecom" || channel_type == "weixin" {
                 pm.add_channel_binding(channel_type, bot_id, agent_uuid);
+            }
+            // Set sender route: WeCom/Feishu/DingTalk use bot_id as route key
+            if channel_type != "weixin" {
+                pm.set_sender_route(bot_uuid, agent_uuid);
             }
             // Dynamically start channel for the new bot (no restart needed)
             if platform == "wecom" {

@@ -118,7 +118,7 @@ impl BotSession {
 
 /// Global state manager for all iLink bots.
 pub struct WeixinState {
-    /// Per-bot state keyed by bot_id.
+    /// Per-bot state keyed by user_id (stable unique identifier for WeChat).
     pub bots: DashMap<String, BotSession>,
     /// Directory for persisting token files.
     pub token_dir: PathBuf,
@@ -232,15 +232,25 @@ impl WeixinState {
                         Ok(content) => {
                             match serde_json::from_str::<BotTokenFile>(&content) {
                                 Ok(tf) => {
+                                    let user_id = match &tf.user_id {
+                                        Some(uid) if !uid.is_empty() => uid.clone(),
+                                        _ => {
+                                            info!(
+                                                bot_id = %tf.bot_id,
+                                                "Skipping iLink token without user_id"
+                                            );
+                                            continue;
+                                        }
+                                    };
                                     if now >= tf.expires_at {
                                         info!(
-                                            bot_id = %tf.bot_id,
+                                            user_id = %user_id,
                                             "Skipping expired iLink token"
                                         );
                                         continue;
                                     }
                                     info!(
-                                        bot_id = %tf.bot_id,
+                                        user_id = %user_id,
                                         expires_in = tf.expires_at - now,
                                         "Loaded iLink token"
                                     );
@@ -249,16 +259,16 @@ impl WeixinState {
                                         bot_token: tf.bot_token,
                                         baseurl: tf.baseurl,
                                         ilink_bot_id: tf.ilink_bot_id,
-                                        user_id: tf.user_id,
+                                        user_id: Some(user_id.clone()),
                                         expires_at: AtomicI64::new(tf.expires_at),
                                         http: Client::new(),
                                         context_tokens: Mutex::new(HashMap::new()),
                                         typing_tickets: Mutex::new(HashMap::new()),
                                         cursor: Mutex::new(String::new()),
-                                        active: AtomicBool::new(false), // Will be set to true when channel starts
+                                        active: AtomicBool::new(false),
                                         bind_agent: tf.bind_agent,
                                     };
-                                    self.bots.insert(tf.bot_id, state);
+                                    self.bots.insert(user_id, state);
                                 }
                                 Err(e) => {
                                     warn!(path = %path.display(), "Failed to parse token file: {e}");
@@ -310,17 +320,18 @@ impl WeixinState {
         // Persist to disk
         self.save_session(&state);
 
-        // Insert/update in-memory
-        if let Some(mut existing) = self.bots.get_mut(bot_id) {
-            // Preserve cursor and context_tokens from existing session if possible
+        // Insert/update in-memory, keyed by user_id
+        let key = user_id.unwrap_or(bot_id);
+        if let Some(mut existing) = self.bots.get_mut(key) {
+            // Preserve cursor from existing session if possible
             let old_cursor = existing.cursor.lock().unwrap().clone();
             *state.cursor.lock().unwrap() = old_cursor;
             *existing = state;
         } else {
-            self.bots.insert(bot_id.to_string(), state);
+            self.bots.insert(key.to_string(), state);
         }
 
-        info!(bot_id = bot_id, "Registered iLink bot from QR scan");
+        info!(user_id = ?user_id, bot_id = bot_id, "Registered iLink bot from QR scan");
     }
 
     /// Save a bot session's state to disk.
@@ -341,7 +352,9 @@ impl WeixinState {
             bind_agent: state.bind_agent.clone(),
         };
 
-        let path = dir.join(format!("{}.json", state.bot_id));
+        // Use user_id as filename (stable unique key for WeChat)
+        let filename_key = state.user_id.as_deref().unwrap_or(&state.bot_id);
+        let path = dir.join(format!("{}.json", filename_key));
         match serde_json::to_string_pretty(&tf) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
@@ -354,16 +367,38 @@ impl WeixinState {
         }
     }
 
-    /// Get a bot session by bot_id.
+    /// Get a bot session by user_id.
     pub fn get_session(
         &self,
-        bot_id: &str,
+        user_id: &str,
     ) -> Option<dashmap::mapref::one::Ref<'_, String, BotSession>> {
-        self.bots.get(bot_id)
+        self.bots.get(user_id)
     }
 
-    /// List all active (non-expired) bot IDs.
-    pub fn active_bot_ids(&self) -> Vec<String> {
+    /// Find a bot session that matches the given bot_id and has a context_token
+    /// for the given user_id. Used by send() to find the right session.
+    pub fn get_session_for_send(
+        &self,
+        bot_id: &str,
+        user_id: &str,
+    ) -> Option<dashmap::mapref::one::Ref<'_, String, BotSession>> {
+        // First try direct lookup by user_id (most common path)
+        if let Some(state) = self.bots.get(user_id) {
+            if state.bot_id == bot_id || bot_id.is_empty() || bot_id == "default" {
+                return Some(state);
+            }
+        }
+        // Fallback: find the key for a session with matching bot_id, then get() it
+        let found_key = self
+            .bots
+            .iter()
+            .find(|entry| entry.value().bot_id == bot_id)
+            .map(|entry| entry.key().clone())?;
+        self.bots.get(&found_key)
+    }
+
+    /// List all active (non-expired) user IDs.
+    pub fn active_user_ids(&self) -> Vec<String> {
         self.bots
             .iter()
             .filter(|e| !e.value().is_expired())
@@ -400,41 +435,44 @@ impl WeixinState {
                 Ok(t) => t,
                 Err(_) => continue,
             };
+            let user_id = match &tf.user_id {
+                Some(uid) if !uid.is_empty() => uid.clone(),
+                _ => continue,
+            };
             // Refresh existing bot only if a new bot_token was written (re-scan).
-            // Do NOT refresh just because in-memory is expired — the iLink server
-            // may have invalidated the session while the local file still looks valid.
-            if let Some(mut existing) = self.bots.get_mut(&tf.bot_id) {
+            if let Some(mut existing) = self.bots.get_mut(&user_id) {
                 if existing.bot_token != tf.bot_token {
-                    info!(bot_id = %tf.bot_id, "Refreshing iLink bot from updated token file (new bot_token)");
-                    existing.bot_token = tf.bot_token;
+                    info!(user_id = %user_id, "Refreshing iLink bot from updated token file (new bot_token)");
+                    existing.bot_token = tf.bot_token.clone();
                     existing.baseurl = tf.baseurl;
                     existing.ilink_bot_id = tf.ilink_bot_id;
                     existing.user_id = tf.user_id;
                     existing.expires_at.store(tf.expires_at, Ordering::Relaxed);
                     existing.active.store(true, Ordering::Relaxed);
-                    existing.bind_agent = tf.bind_agent;
+                    existing.bind_agent = tf.bind_agent.clone();
+                    self.save_session(&existing);
                 }
                 continue;
             }
             if now >= tf.expires_at {
                 continue;
             }
-            info!(bot_id = %tf.bot_id, "Dynamic watcher loaded new iLink bot");
+            info!(user_id = %user_id, "Dynamic watcher loaded new iLink bot");
             let state = BotSession {
                 bot_id: tf.bot_id.clone(),
                 bot_token: tf.bot_token,
                 baseurl: tf.baseurl,
                 ilink_bot_id: tf.ilink_bot_id,
-                user_id: tf.user_id,
+                user_id: Some(user_id.clone()),
                 expires_at: AtomicI64::new(tf.expires_at),
                 http: Client::new(),
                 context_tokens: Mutex::new(HashMap::new()),
                 typing_tickets: Mutex::new(HashMap::new()),
                 cursor: Mutex::new(String::new()),
-                active: AtomicBool::new(false), // Will be set true when poll thread starts
+                active: AtomicBool::new(false),
                 bind_agent: tf.bind_agent,
             };
-            self.bots.insert(tf.bot_id, state);
+            self.bots.insert(user_id, state);
         }
     }
 

@@ -69,9 +69,8 @@ impl ToolProvider for WeixinSendMessageTool {
             .ok_or_else(|| PluginError::tool("missing text"))?;
 
         let state = WEIXIN_STATE
-            .bots
-            .get(bot_id)
-            .ok_or_else(|| PluginError::tool(format!("Unknown bot: {bot_id}")))?;
+            .get_session_for_send(bot_id, user_id)
+            .ok_or_else(|| PluginError::tool(format!("No session for bot {bot_id}, user {user_id}")))?;
 
         if state.is_expired() {
             return Err(PluginError::tool("Token expired, please re-scan QR code"));
