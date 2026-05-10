@@ -442,7 +442,6 @@ dependencies = [
  "carrier-types",
  "chrono",
  "flate2",
- "getrandom 0.3.4",
  "reqwest",
  "serde",
  "serde_json",

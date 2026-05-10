@@ -1,6 +1,6 @@
-//! First-run setup: device-based auto-registration with Hub.
+//! First-run setup: auto-registration with Hub.
 //!
-//! No user interaction needed. Generates random device_id + credentials,
+//! No user interaction needed. Generates random credentials,
 //! registers with Hub, obtains API key, writes config, enables auto-login.
 //! User can change username/password later in the dashboard UI.
 
@@ -38,7 +38,7 @@ fn random_password(len: usize) -> String {
         .collect()
 }
 
-/// Run the first-run setup flow. Zero interaction — device is identity.
+/// Run the first-run setup flow. Zero interaction — random identity.
 /// Returns (username, password) if config was written.
 pub fn run_first_time_setup(carrier_dir: &Path, hub_url: &str) -> Result<(String, String), String> {
     println!();
@@ -47,16 +47,11 @@ pub fn run_first_time_setup(carrier_dir: &Path, hub_url: &str) -> Result<(String
         ">>".bright_cyan().bold(),
         "Setting up Carrier".bold()
     );
-    println!("  {}", "Registering device with Hub...".dimmed());
+    println!("  {}", "Registering with Hub...".dimmed());
     println!();
 
-    // Generate device_id → saved to ~/.carrier/device_id
-    let device_id = carrier_clone::hub::get_or_create_device_id(carrier_dir)
-        .unwrap_or_else(|_| random_string(32));
-
-    // Auto-generate credentials based on device_id
-    let device_short = &device_id[..8.min(device_id.len())];
-    let username = format!("dev_{}", device_short);
+    // Auto-generate random credentials
+    let username = format!("dev_{}", random_string(8));
     let password = random_password(16);
     let email = format!("{}@device.opencarrier", username);
 
@@ -64,7 +59,7 @@ pub fn run_first_time_setup(carrier_dir: &Path, hub_url: &str) -> Result<(String
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let api_key: String = rt.block_on(async {
-        register_and_get_key(hub_url, &username, &email, &password, &device_id).await
+        register_and_get_key(hub_url, &username, &email, &password).await
     })?;
 
     // Save API key to .env
@@ -166,7 +161,6 @@ async fn register_and_get_key(
     username: &str,
     email: &str,
     password: &str,
-    device_id: &str,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
     let base = hub_url.trim_end_matches('/');
@@ -191,18 +185,17 @@ async fn register_and_get_key(
                 "  {} Device already registered, logging in...",
                 "-".bright_yellow()
             );
-            return login_and_get_key(hub_url, username, password, device_id).await;
+            return login_and_get_key(hub_url, username, password).await;
         }
         return Err(format!("Registration failed ({}): {}", status, body));
     }
 
     let auth: AuthResponse = resp.json().await.map_err(|e| format!("Parse error: {e}"))?;
 
-    // Create API key (bound to this device)
+    // Create API key
     let key_resp = client
         .post(format!("{}/api/keys", base))
         .bearer_auth(&auth.token)
-        .header("X-Device-ID", device_id)
         .json(&serde_json::json!({ "name": "carrier" }))
         .send()
         .await
@@ -224,7 +217,6 @@ async fn login_and_get_key(
     hub_url: &str,
     username: &str,
     password: &str,
-    device_id: &str,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
     let base = hub_url.trim_end_matches('/');
@@ -267,11 +259,10 @@ async fn login_and_get_key(
         }
     }
 
-    // Create new API key (bound to this device)
+    // Create new API key
     let key_resp = client
         .post(format!("{}/api/keys", base))
         .bearer_auth(&auth.token)
-        .header("X-Device-ID", device_id)
         .json(&serde_json::json!({ "name": "carrier" }))
         .send()
         .await

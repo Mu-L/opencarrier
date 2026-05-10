@@ -151,7 +151,6 @@ impl CarrierKernel {
     fn fetch_brain_from_hub_sync(
         hub: &carrier_types::config::HubConfig,
         brain_path: &std::path::Path,
-        carrier_dir: &std::path::Path,
     ) -> Result<carrier_types::brain::BrainConfig, String> {
         let api_key = std::env::var(&hub.api_key_env)
             .map_err(|_| format!("Environment variable {} not set", hub.api_key_env))?;
@@ -159,15 +158,11 @@ impl CarrierKernel {
         carrier_clone::hub::validate_hub_url(&hub.url)
             .map_err(|e| format!("Invalid hub URL: {e}"))?;
 
-        let device_id = carrier_clone::hub::get_or_create_device_id(carrier_dir)
-            .unwrap_or_else(|_| "unknown".to_string());
-
         let url = format!("{}/api/brain/config", hub.url.trim_end_matches('/'));
 
         let resp = reqwest::blocking::Client::new()
             .get(&url)
             .bearer_auth(&api_key)
-            .header("X-Device-ID", &device_id)
             .send()
             .map_err(|e| format!("HTTP request failed: {e}"))?;
 
@@ -469,7 +464,7 @@ impl CarrierKernel {
         } else {
             // No local brain.json — try fetching from Hub.
             info!("Brain config not found locally; attempting to fetch from Hub...");
-            match Self::fetch_brain_from_hub_sync(&config.hub, &brain_path, &config.home_dir) {
+            match Self::fetch_brain_from_hub_sync(&config.hub, &brain_path) {
                 Ok(brain_config) => {
                     let brain = Brain::new(brain_config)
                         .map_err(|e| KernelError::BootFailed(format!("Brain init failed: {e}")))?;

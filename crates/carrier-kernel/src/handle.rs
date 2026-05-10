@@ -738,12 +738,8 @@ impl KernelHandle for CarrierKernel {
         let api_key = carrier_clone::hub::read_api_key(&self.config.hub.api_key_env)
             .map_err(|e| format!("Hub API Key 未配置: {e}"))?;
 
-        let home_dir = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        let device_id = carrier_clone::hub::get_or_create_device_id(&home_dir)
-            .unwrap_or_else(|_| "unknown".to_string());
-
         let result = carrier_clone::hub::publish(
-            &hub_url, &api_key, agx_bytes, &device_id, None, None,
+            &hub_url, &api_key, agx_bytes, None, None,
         )
         .await
         .map_err(|e| format!("Hub publish failed: {e}"))?;

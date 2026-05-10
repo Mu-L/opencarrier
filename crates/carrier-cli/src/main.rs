@@ -3758,14 +3758,6 @@ async fn cmd_hub(cmd: HubCommands) {
             }
         }
         HubCommands::Install { name, version } => {
-            let home = cli_carrier_home();
-            let device_id = match carrier_clone::hub::get_or_create_device_id(&home) {
-                Ok(id) => id,
-                Err(e) => {
-                    eprintln!("生成 Device ID 失败: {e}");
-                    std::process::exit(1);
-                }
-            };
             let workspace_dir = config.effective_workspaces_dir().join(&name);
             if workspace_dir.exists() {
                 eprintln!("分身 '{}' 已存在: {}", name, workspace_dir.display());
@@ -3777,7 +3769,6 @@ async fn cmd_hub(cmd: HubCommands) {
                 &name,
                 version.as_deref(),
                 &workspace_dir,
-                &device_id,
             )
             .await
             {

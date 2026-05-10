@@ -152,7 +152,6 @@ pub async fn install(
     name: &str,
     version: Option<&str>,
     workspace_dir: &Path,
-    _device_id: &str,
 ) -> Result<String> {
     validate_hub_url(hub_url)?;
     let base = hub_url.trim_end_matches('/');
@@ -204,32 +203,6 @@ pub async fn install(
     Ok(clone_name)
 }
 
-/// Generate or load a persistent device ID.
-/// Stored in ~/.opencarrier/device_id as a simple hex string.
-pub fn get_or_create_device_id(carrier_dir: &Path) -> Result<String> {
-    let path = carrier_dir.join("device_id");
-    if path.exists() {
-        let id = std::fs::read_to_string(&path)?.trim().to_string();
-        if !id.is_empty() {
-            return Ok(id);
-        }
-    }
-    // Generate new: 32 hex chars
-    let id = {
-        use std::fmt::Write;
-        let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes)
-            .map_err(|e| anyhow::anyhow!("Failed to generate random device ID: {e}"))?;
-        let mut hex = String::with_capacity(32);
-        for b in &bytes {
-            write!(&mut hex, "{:02x}", b).unwrap();
-        }
-        hex
-    };
-    std::fs::write(&path, &id)?;
-    Ok(id)
-}
-
 /// Read API key from the configured env var. Falls back to reading ~/.opencarrier/.env directly.
 pub fn read_api_key(env_var: &str) -> Result<String> {
     // Try env var first (set by dotenv::load_dotenv or std::env::set_var)
@@ -259,25 +232,21 @@ pub fn read_api_key(env_var: &str) -> Result<String> {
     )
 }
 
-/// Resolve device_id from ~/.opencarrier/device_id, or generate a new one.
-pub fn resolve_device_id() -> String {
-    let carrier_dir = carrier_types::config::home_dir();
-    get_or_create_device_id(&carrier_dir).unwrap_or_else(|_| "unknown".to_string())
+/// Build an authenticated reqwest request builder with Bearer token.
+fn hub_request(method: reqwest::Method, url: &str, api_key: &str) -> reqwest::RequestBuilder {
+    reqwest::Client::new()
+        .request(method, url)
+        .bearer_auth(api_key)
 }
 
-/// Build an authenticated reqwest request builder with both Bearer token and X-Device-ID.
-fn hub_get(url: &str, api_key: &str) -> reqwest::RequestBuilder {
-    reqwest::Client::new()
-        .get(url)
-        .bearer_auth(api_key)
-        .header("X-Device-ID", resolve_device_id())
+/// Authenticated GET.
+pub fn hub_get(url: &str, api_key: &str) -> reqwest::RequestBuilder {
+    hub_request(reqwest::Method::GET, url, api_key)
 }
 
-fn hub_post(url: &str, api_key: &str) -> reqwest::RequestBuilder {
-    reqwest::Client::new()
-        .post(url)
-        .bearer_auth(api_key)
-        .header("X-Device-ID", resolve_device_id())
+/// Authenticated POST.
+pub fn hub_post(url: &str, api_key: &str) -> reqwest::RequestBuilder {
+    hub_request(reqwest::Method::POST, url, api_key)
 }
 
 /// Publish (upload) a clone .agx to Hub.
@@ -286,7 +255,6 @@ pub async fn publish(
     hub_url: &str,
     api_key: &str,
     agx_bytes: &[u8],
-    _device_id: &str,
     category: Option<&str>,
     visibility: Option<&str>,
 ) -> Result<String> {

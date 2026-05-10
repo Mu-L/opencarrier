@@ -22,8 +22,13 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<Strin
         return None;
     }
 
-    let device_id = carrier_clone::hub::get_or_create_device_id(&state.kernel.config.home_dir)
-        .unwrap_or_else(|_| "unknown".to_string());
+    let api_key = match carrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env) {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::warn!(error = %e, "Hub API key not available for auto-install");
+            return None;
+        }
+    };
 
     let download_url = format!(
         "{}/api/templates/{}/download",
@@ -33,20 +38,11 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<Strin
 
     tracing::info!(template = %name, "Auto-installing Hub template for QR binding");
 
-    let mut req = reqwest::Client::new()
-        .get(&download_url)
-        // X-Device-ID causes 401 on Hub download, skip it
-        .timeout(std::time::Duration::from_secs(30));
-
-    // Read Hub API key from .env file directly
-    let api_key_env = &state.kernel.config.hub.api_key_env;
-    let key_result = carrier_clone::hub::read_api_key(api_key_env);
-    tracing::info!(env_var = %api_key_env, has_key = key_result.is_ok(), key_prefix = key_result.as_deref().unwrap_or("").get(..8.min(key_result.as_deref().map_or(0,|k|k.len()))).unwrap_or(""), "Hub API key lookup for auto-install");
-    if let Ok(key) = key_result {
-        req = req.bearer_auth(&key);
-    }
-
-    let resp = match req.send().await {
+    let resp = match carrier_clone::hub::hub_get(&download_url, &api_key)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "Hub download request failed");

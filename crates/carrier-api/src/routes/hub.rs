@@ -81,10 +81,7 @@ pub async fn install_hub_template(
         );
     }
     let hub_api_key = match carrier_clone::hub::read_api_key(&state.kernel.config.hub.api_key_env) {
-        Ok(k) => {
-            tracing::info!(key_env = %state.kernel.config.hub.api_key_env, key_prefix = &k[..8.min(k.len())], "Hub API key loaded");
-            k
-        }
+        Ok(k) => k,
         Err(e) => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -95,9 +92,6 @@ pub async fn install_hub_template(
         }
     };
 
-    let device_id = carrier_clone::hub::get_or_create_device_id(&state.kernel.config.home_dir)
-        .unwrap_or_else(|_| "unknown".to_string());
-
     let base = hub_url.trim_end_matches('/');
     let download_url = format!(
         "{}/api/templates/{}/download",
@@ -107,10 +101,8 @@ pub async fn install_hub_template(
 
     tracing::info!(template = %name, "Downloading from Hub for install");
 
-    let resp = match reqwest::Client::new()
-        .get(&download_url)
-        .bearer_auth(&hub_api_key)
-        .header("X-Device-ID", &device_id)
+    let resp = match carrier_clone::hub::hub_get(&download_url, &hub_api_key)
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
     {
