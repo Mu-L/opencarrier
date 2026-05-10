@@ -234,10 +234,10 @@ async fn poll_loop_inner(
                     warn!(tenant = tenant_name, "Session expired, stopping poll");
                     if let Some(state) = WEIXIN_STATE.tenants.get(tenant_name) {
                         state.active.store(false, Ordering::Relaxed);
-                        // Mark token as expired locally so TenantWatcher stops retrying
+                        // Only update in-memory; don't write expires_at=0 back to disk
+                        // which would cause the file watcher to reload an expired token
+                        // and trigger a restart loop.
                         state.expires_at.store(0, Ordering::Relaxed);
-                        // Also update token file on disk
-                        WEIXIN_STATE.save_tenant(&state);
                     }
                     continue;
                 }

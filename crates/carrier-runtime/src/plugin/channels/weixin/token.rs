@@ -328,7 +328,7 @@ impl WeixinState {
             };
             // Refresh existing tenant if token file was updated (re-scan)
             if let Some(mut existing) = self.tenants.get_mut(&tf.name) {
-                if existing.bot_token != tf.bot_token || existing.is_expired() {
+                if tf.expires_at > 0 && (existing.bot_token != tf.bot_token || existing.is_expired()) {
                     info!(tenant = %tf.name, "Refreshing iLink tenant from updated token file");
                     existing.bot_token = tf.bot_token;
                     existing.baseurl = tf.baseurl;
