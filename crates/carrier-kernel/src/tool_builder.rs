@@ -99,13 +99,11 @@ impl CarrierKernel {
                     .cloned()
                     .collect()
             };
-            for t in mcp_candidates {
-                // If agent declares specific tools, only include matching MCP tools
-                if !tools_unrestricted && !declared_tools.iter().any(|d| d == &t.name) {
-                    continue;
-                }
-                all_tools.push(t);
-            }
+            // MCP tools are already filtered by mcp_servers allowlist above.
+            // Since mcp_servers is an explicit opt-in (like a plugin), all tools
+            // from declared servers are included automatically — no need to also
+            // list them in capabilities.tools.
+            all_tools.extend(mcp_candidates);
         }
 
         // Step 3.5: Add plugin tools (from dlopen-loaded shared libraries).
