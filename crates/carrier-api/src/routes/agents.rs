@@ -264,6 +264,34 @@ pub async fn restart_agent(
     // Cancel any running task
     let was_running = state.kernel.stop_agent_run(agent_id).unwrap_or(false);
 
+    // Re-read agent.toml from workspace to pick up tool/capability changes
+    let mut manifest_reloaded = false;
+    if let Some(ref entry) = state.kernel.registry.get(agent_id) {
+        if let Some(ref ws) = entry.manifest.workspace {
+            let toml_path = ws.join("agent.toml");
+            if toml_path.exists() {
+                if let Ok(toml_str) = std::fs::read_to_string(&toml_path) {
+                    if let Ok(new_manifest) = toml::from_str::<carrier_types::agent::AgentManifest>(&toml_str) {
+                        let mut new_manifest = new_manifest;
+                        new_manifest.workspace = Some(ws.clone());
+                        if new_manifest.exec_policy.is_none() {
+                            new_manifest.exec_policy = Some(state.kernel.config.exec_policy.clone());
+                        }
+                        if state.kernel.registry.update_manifest(agent_id, new_manifest.clone()).is_ok() {
+                            let caps = carrier_kernel::capabilities::manifest_to_capabilities(&new_manifest);
+                            state.kernel.coordination.capabilities.grant(agent_id, caps);
+                            if let Some(updated_entry) = state.kernel.registry.get(agent_id) {
+                                let _ = state.kernel.memory.save_agent(&updated_entry);
+                            }
+                            manifest_reloaded = true;
+                            tracing::info!(agent = %agent_name, "Reloaded manifest from agent.toml on API restart");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Reset state to Running (also updates last_active)
     let _ = state
         .kernel
@@ -274,6 +302,7 @@ pub async fn restart_agent(
         agent = %agent_name,
         previous_state = %previous_state,
         task_cancelled = was_running,
+        manifest_reloaded = manifest_reloaded,
         "Agent restarted via API"
     );
 
@@ -285,6 +314,7 @@ pub async fn restart_agent(
             "agent_id": id,
             "previous_state": previous_state,
             "task_cancelled": was_running,
+            "manifest_reloaded": manifest_reloaded,
         })),
     )
 }

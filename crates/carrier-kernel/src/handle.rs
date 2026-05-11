@@ -139,6 +139,65 @@ impl KernelHandle for CarrierKernel {
             .map_err(|_| "Invalid agent ID".to_string())?;
         self.stop_agent_run(id)
             .map_err(|e| format!("Stop failed: {e}"))?;
+
+        // Re-read agent.toml from workspace to pick up tool/capability changes
+        if let Some(entry) = self.registry.get(id) {
+            if let Some(ref ws) = entry.manifest.workspace {
+                let toml_path = ws.join("agent.toml");
+                if toml_path.exists() {
+                    match std::fs::read_to_string(&toml_path) {
+                        Ok(toml_str) => {
+                            match toml::from_str::<carrier_types::agent::AgentManifest>(&toml_str) {
+                                Ok(new_manifest) => {
+                                    let name = entry.name.clone();
+                                    let mut new_manifest = new_manifest;
+                                    // Preserve workspace path (not in agent.toml)
+                                    new_manifest.workspace = Some(ws.clone());
+                                    // Preserve exec_policy inheritance
+                                    if new_manifest.exec_policy.is_none() {
+                                        new_manifest.exec_policy =
+                                            Some(self.config.exec_policy.clone());
+                                    }
+                                    // Update in-memory registry
+                                    self.registry
+                                        .update_manifest(id, new_manifest.clone())
+                                        .map_err(|e| format!("Update manifest failed: {e}"))?;
+                                    // Re-grant capabilities
+                                    let caps = manifest_to_capabilities(&new_manifest);
+                                    self.coordination.capabilities.grant(id, caps);
+                                    // Persist updated manifest to SQLite
+                                    if let Some(updated_entry) = self.registry.get(id) {
+                                        if let Err(e) = self.memory.save_agent(&updated_entry) {
+                                            tracing::warn!(
+                                                agent = %name,
+                                                "Failed to persist reloaded manifest: {e}"
+                                            );
+                                        }
+                                    }
+                                    tracing::info!(
+                                        agent = %name,
+                                        "Reloaded manifest from agent.toml on restart"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        agent = %entry.name,
+                                        "Failed to parse agent.toml on restart: {e}"
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                agent = %entry.name,
+                                "Failed to read agent.toml on restart: {e}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         self.registry
             .set_state(id, carrier_types::agent::AgentState::Running)
             .map_err(|e| format!("State reset failed: {e}"))?;

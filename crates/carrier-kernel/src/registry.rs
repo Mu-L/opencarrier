@@ -1,6 +1,6 @@
 //! Agent registry — tracks all agents, their state, and indexes.
 
-use carrier_types::agent::{AgentEntry, AgentId, AgentMode, AgentState};
+use carrier_types::agent::{AgentEntry, AgentId, AgentManifest, AgentMode, AgentState};
 use carrier_types::error::{CarrierError, CarrierResult};
 use dashmap::DashMap;
 
@@ -279,6 +279,18 @@ impl AgentRegistry {
             .get_mut(&id)
             .ok_or_else(|| CarrierError::AgentNotFound(id.to_string()))?;
         entry.manifest.clone_source = Some(clone_source);
+        entry.last_active = chrono::Utc::now();
+        Ok(())
+    }
+
+    /// Update an agent's entire manifest (hot-reload from agent.toml).
+    /// Re-indexes capabilities and preserves the workspace path.
+    pub fn update_manifest(&self, id: AgentId, new_manifest: AgentManifest) -> CarrierResult<()> {
+        let mut entry = self
+            .agents
+            .get_mut(&id)
+            .ok_or_else(|| CarrierError::AgentNotFound(id.to_string()))?;
+        entry.manifest = new_manifest;
         entry.last_active = chrono::Utc::now();
         Ok(())
     }

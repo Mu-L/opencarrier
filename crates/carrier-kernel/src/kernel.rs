@@ -598,7 +598,28 @@ impl CarrierKernel {
                     let mut entry = entry;
 
                     let ws = kernel.config.effective_workspaces_dir().join(&name);
-                    entry.manifest.workspace = Some(ws);
+                    entry.manifest.workspace = Some(ws.clone());
+
+                    // Hot-reload agent.toml if it exists — picks up tool/capability changes
+                    // made to the workspace without needing an explicit restart.
+                    let toml_path = ws.join("agent.toml");
+                    if toml_path.exists() {
+                        if let Ok(toml_str) = std::fs::read_to_string(&toml_path) {
+                            if let Ok(disk_manifest) = toml::from_str::<AgentManifest>(&toml_str) {
+                                let mut disk_manifest = disk_manifest;
+                                disk_manifest.workspace = Some(ws.clone());
+                                if disk_manifest.exec_policy.is_none() {
+                                    disk_manifest.exec_policy =
+                                        Some(kernel.config.exec_policy.clone());
+                                }
+                                if disk_manifest.model.modality.is_empty() {
+                                    disk_manifest.model.modality = "chat".to_string();
+                                }
+                                entry.manifest = disk_manifest;
+                                tracing::info!(agent = %name, "Hot-reloaded manifest from agent.toml on boot");
+                            }
+                        }
+                    }
 
                     // Re-grant capabilities
                     let caps = manifest_to_capabilities(&entry.manifest);
