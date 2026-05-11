@@ -789,6 +789,7 @@ fn tool_memory_store(
     let uid = sender_id.unwrap_or("");
     let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
     let value = input.get("value").ok_or("Missing 'value' parameter")?;
+    tracing::info!(agent_id = %aid, owner_id = %oid, user_id = %uid, key = %key, "memory_store");
     kh.memory_store(aid, oid, uid, key, value.clone())?;
     Ok(format!("Stored value under key '{key}'."))
 }
@@ -805,6 +806,7 @@ fn tool_memory_recall(
     let oid = owner_id.unwrap_or("");
     let uid = sender_id.unwrap_or("");
     let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
+    tracing::info!(agent_id = %aid, owner_id = %oid, user_id = %uid, key = %key, "memory_recall");
     match kh.memory_recall(aid, oid, uid, key)? {
         Some(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())),
         None => Ok(format!("No value found for key '{key}'.")),
