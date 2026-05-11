@@ -52,6 +52,15 @@ define_params!(UploadMediaParams {
     data_base64: String,
 });
 
+define_params!(UploadMediaFromUrlParams {
+    #[schemars(description = "Media type: image, voice, video, thumb")]
+    media_type: String,
+    #[schemars(description = "Filename (e.g. cover.jpg)")]
+    filename: String,
+    #[schemars(description = "URL of the media to download and upload")]
+    url: String,
+});
+
 define_params!(CreateDraftParams {
     #[schemars(description = "Article title")]
     title: String,
@@ -151,6 +160,33 @@ impl WeChatOaServer {
         let data = match base64::engine::general_purpose::STANDARD.decode(&params.data_base64) {
             Ok(d) => d,
             Err(e) => return format!("{{\"error\": \"invalid base64: {}\"}}", e),
+        };
+        match self
+            .client
+            .upload_media(
+                &params.app_id,
+                &params.app_secret,
+                &params.media_type,
+                &params.filename,
+                &data,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(
+        description = "Download media from a URL and upload to a WeChat OA account's permanent material library. Returns media_id and url. Use this when you have an image URL (e.g., from image_generate) and need to upload it as a cover image."
+    )]
+    async fn upload_media_from_url(
+        &self,
+        Parameters(params): Parameters<UploadMediaFromUrlParams>,
+    ) -> String {
+        let data = match self.client.fetch_bytes(&params.url).await {
+            Ok(d) => d,
+            Err(e) => return format!("{{\"error\": \"failed to download: {}\"}}", e),
         };
         match self
             .client

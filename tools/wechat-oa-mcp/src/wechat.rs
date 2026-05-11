@@ -123,6 +123,16 @@ impl WeChatClient {
         Ok(json)
     }
 
+    /// Download bytes from a URL.
+    pub async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        let resp = self.http.get(url).send().await?;
+        if !resp.status().is_success() {
+            bail!("HTTP {} fetching {}", resp.status(), url);
+        }
+        let bytes = resp.bytes().await?;
+        Ok(bytes.to_vec())
+    }
+
     /// Upload binary media via multipart/form-data.
     pub async fn upload_media(
         &self,
