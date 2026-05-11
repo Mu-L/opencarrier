@@ -271,7 +271,9 @@ pub async fn run_daemon(
             }
 
             // Register WeChat bindings from token files (weixin uses token files,
-            // not bot.toml, so the plugin manager never discovers them at startup)
+            // not bot.toml, so the plugin manager never discovers them at startup).
+            // Only set route for senders that don't already have one — never overwrite
+            // a user's explicit switch with the token file's bind_agent default.
             {
                 let token_dir = kernel.config.home_dir.join("weixin-sessions");
                 if token_dir.exists() {
@@ -289,19 +291,20 @@ pub async fn run_daemon(
                                         tf.get("bind_agent").and_then(|v| v.as_str()),
                                     ) {
                                         if uuid::Uuid::parse_str(agent).is_ok() {
-                                            // WeChat uses user_id as route key
                                             if let Some(uid) =
                                                 tf.get("user_id").and_then(|v| v.as_str())
                                             {
-                                                if !uid.is_empty() {
+                                                if !uid.is_empty()
+                                                    && pm.get_sender_route(uid).is_none()
+                                                {
                                                     pm.set_sender_route(uid, agent);
+                                                    info!(
+                                                        bot = %bot_id,
+                                                        agent = %agent,
+                                                        "Registered WeChat binding from token file (no existing route)"
+                                                    );
                                                 }
                                             }
-                                            info!(
-                                                bot = %bot_id,
-                                                agent = %agent,
-                                                "Registered WeChat binding from token file"
-                                            );
                                         }
                                     }
                                 }

@@ -203,6 +203,9 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     /// Try to route by matching the start of the text against aliases for the route_key.
+    /// Supports two formats:
+    ///   `@名字` or `@名字 你好` — @ prefix triggers agent switch
+    ///   `名字 你好` — name at start of text (legacy format)
     /// Returns (agent_id, remaining_text) if matched, None otherwise.
     fn try_route_by_name(&self, text: &str, route_key: &str) -> Option<(String, String)> {
         let router = self.sender_router.as_ref()?;
@@ -215,7 +218,9 @@ impl PluginBridgeManager {
             return None;
         }
 
-        let text_lower = text.to_lowercase();
+        // Strip leading @ if present, then match against aliases
+        let text_stripped = text.strip_prefix('@').unwrap_or(text);
+        let text_lower = text_stripped.to_lowercase();
 
         // Find longest matching alias at the start of text
         let mut best_name: Option<&str> = None;
@@ -237,7 +242,7 @@ impl PluginBridgeManager {
         match (best_name, best_agent_id) {
             (Some(_), Some(agent_id)) => {
                 // Strip the name and separator from the text
-                let remaining = text[best_len..]
+                let remaining = text_stripped[best_len..]
                     .trim_start_matches(['，', ',', ' ', '！', '!', '？', '?'])
                     .to_string();
                 info!(

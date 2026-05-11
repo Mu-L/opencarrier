@@ -149,7 +149,10 @@ impl PluginManager {
                             // WeChat routes are registered from token files
                         } else {
                             // WeCom/Feishu/DingTalk use bot_uuid as route key
-                            self.set_sender_route(bot_uuid, agent_uuid);
+                            // Only set if no existing route (don't overwrite user switches)
+                            if self.get_sender_route(bot_uuid).is_none() {
+                                self.set_sender_route(bot_uuid, agent_uuid);
+                            }
                         }
                         info!(
                             channel = %ch,
