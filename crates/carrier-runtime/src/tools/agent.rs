@@ -681,6 +681,7 @@ async fn tool_agent_send(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = input["agent_id"]
@@ -704,7 +705,7 @@ async fn tool_agent_send(
 
     crate::tool_runner::AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.send_to_agent(agent_id, message, None, None, caller_agent_id)
+            kh.send_to_agent(agent_id, message, sender_id, None, caller_agent_id)
                 .await
         })
         .await
@@ -1812,7 +1813,7 @@ impl ToolModule for AgentTools {
             "clone_publish" => Some(tool_clone_publish(input, kernel, caller_agent_id).await),
 
             // Inter-agent tools (require kernel handle)
-            "agent_send" => Some(tool_agent_send(input, kernel, caller_agent_id).await),
+            "agent_send" => Some(tool_agent_send(input, kernel, caller_agent_id, sender_id).await),
             "agent_spawn" => Some(tool_agent_spawn(input, kernel, caller_agent_id).await),
             "agent_list" => Some(tool_agent_list(kernel, caller_agent_id)),
             "agent_kill" => Some(tool_agent_kill(input, kernel, caller_agent_id)),
