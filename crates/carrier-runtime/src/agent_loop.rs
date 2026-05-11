@@ -926,10 +926,28 @@ async fn run_agent_loop_impl(
                     .filter(|b| matches!(b, ContentBlock::ToolResult { is_error: true, .. }))
                     .count();
                 if error_count > 0 {
+                    // Collect failed tool names to detect repeated failures
+                    let failed_tools: Vec<&str> = tool_result_blocks
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::ToolResult { is_error: true, tool_name, .. } => {
+                                Some(tool_name.as_str())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    info!(
+                        agent = %manifest.name,
+                        iteration,
+                        error_count,
+                        failed_tools = ?failed_tools,
+                        "Tool errors in agent loop iteration"
+                    );
                     tool_result_blocks.push(ContentBlock::Text {
                         text: format!(
                             "[System: {} tool(s) returned errors. Report the error honestly \
                              to the user. Do NOT fabricate results or pretend the tool succeeded. \
+                             Do NOT retry the same failed tool call. \
                              If a search or fetch failed, tell the user it failed and suggest \
                              alternatives instead of making up data.]",
                             error_count

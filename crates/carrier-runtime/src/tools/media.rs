@@ -617,7 +617,14 @@ async fn tool_image_generate(
     let response = brain
         .complete("image", request)
         .await
-        .map_err(|e| format!("Image generation brain call failed: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "Image generation failed: {e}. \
+                 Do NOT retry image_generate with the same prompt. \
+                 Tell the user the image generation service is currently unavailable \
+                 and suggest trying again later."
+            )
+        })?;
 
     let images = match response.media {
         Some(carrier_types::media::MediaOutput::Images { items }) => items,

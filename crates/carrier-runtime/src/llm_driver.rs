@@ -254,12 +254,12 @@ pub trait Brain: Send + Sync {
         let endpoints = self.endpoints_for(modality);
         if endpoints.is_empty() {
             return Err(CarrierError::LlmDriver(format!(
-                "No endpoints configured for modality '{modality}'"
+                "No endpoints available for modality '{modality}' (driver creation failed or circuit-broken)"
             )));
         }
 
         let mut last_error: Option<String> = None;
-        for ep in &endpoints {
+        for (i, ep) in endpoints.iter().enumerate() {
             let Some(driver) = self.driver_for_endpoint(&ep.id) else {
                 continue;
             };
@@ -285,11 +285,13 @@ pub trait Brain: Send + Sync {
                         latency_ms: latency,
                         error: Some(err_str.clone()),
                     });
+                    let remaining = endpoints.len() - i - 1;
                     tracing::warn!(
                         endpoint = %ep.id,
                         modality = %modality,
                         error = %e,
-                        "Brain endpoint failed, trying next fallback"
+                        remaining_fallbacks = remaining,
+                        "Brain endpoint failed"
                     );
                     last_error = Some(err_str);
                 }
