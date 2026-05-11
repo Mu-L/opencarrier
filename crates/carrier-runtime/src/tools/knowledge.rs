@@ -610,6 +610,7 @@ async fn tool_session_summarize(
     kh.memory_store(
         agent_id,
         sid,
+        sid,
         &key,
         serde_json::Value::String(summary.to_string()),
     )

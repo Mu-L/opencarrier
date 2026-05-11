@@ -205,6 +205,7 @@ pub async fn mcp_http(
             },
             process_manager: Some(&*state.kernel.coordination.process_manager),
             sender_id: None,
+            owner_id: None,
             home_dir: None,
             agent_name: None,
         };

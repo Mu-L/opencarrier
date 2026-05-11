@@ -37,7 +37,7 @@ impl CarrierKernel {
             .get()
             .and_then(|w| w.upgrade())
             .map(|arc| arc as Arc<dyn KernelHandle>);
-        self.send_message_with_handle(agent_id, message, handle, None, None)
+        self.send_message_with_handle(agent_id, message, handle, None, None, None)
             .await
     }
 
@@ -51,6 +51,7 @@ impl CarrierKernel {
         kernel_handle: Option<Arc<dyn KernelHandle>>,
         sender_id: Option<String>,
         sender_name: Option<String>,
+        owner_id: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
         self.send_message_with_handle_and_blocks(
             agent_id,
@@ -59,6 +60,7 @@ impl CarrierKernel {
             None,
             sender_id,
             sender_name,
+            owner_id,
         )
         .await
     }
@@ -80,6 +82,7 @@ impl CarrierKernel {
         content_blocks: Option<Vec<carrier_types::message::ContentBlock>>,
         sender_id: Option<String>,
         sender_name: Option<String>,
+        owner_id: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
         // Acquire per-agent lock to serialize concurrent messages for the same agent.
         // This prevents session corruption when multiple messages arrive in quick
@@ -119,6 +122,7 @@ impl CarrierKernel {
                 content_blocks,
                 sender_id,
                 sender_name,
+                owner_id,
             )
             .await
         };
@@ -178,6 +182,7 @@ impl CarrierKernel {
         kernel_handle: Option<Arc<dyn KernelHandle>>,
         sender_id: Option<String>,
         sender_name: Option<String>,
+        owner_id: Option<String>,
     ) -> KernelResult<(
         tokio::sync::mpsc::Receiver<StreamEvent>,
         tokio::task::JoinHandle<KernelResult<AgentLoopResult>>,
@@ -414,6 +419,7 @@ impl CarrierKernel {
                 None,              // content_blocks (streaming path uses text only for now)
                 brain_ref.clone(), // Brain for modality-based routing
                 sender_id.as_deref(),
+                owner_id.as_deref(),
             )
             .await;
 
@@ -673,6 +679,7 @@ impl CarrierKernel {
         content_blocks: Option<Vec<carrier_types::message::ContentBlock>>,
         sender_id: Option<String>,
         sender_name: Option<String>,
+        owner_id: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
         // Clone Brain Arc early so the RwLockReadGuard is dropped before any .await.
         let brain_ref: Option<Arc<dyn carrier_runtime::llm_driver::Brain>> =
@@ -817,6 +824,7 @@ impl CarrierKernel {
             content_blocks,
             brain_ref, // Brain for modality-based routing
             sender_id.as_deref(),
+            owner_id.as_deref(),
         )
         .await
         .map_err(KernelError::Carrier)?;

@@ -33,6 +33,7 @@ pub struct ToolContext<'a> {
     pub docker_config: Option<&'a DockerSandboxConfig>,
     pub process_manager: Option<&'a ProcessManager>,
     pub sender_id: Option<&'a str>,
+    pub owner_id: Option<&'a str>,
     pub home_dir: Option<&'a Path>,
     pub agent_name: Option<&'a str>,
 }

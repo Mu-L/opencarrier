@@ -502,6 +502,7 @@ async fn handle_text_message(
                 Some(kernel_handle),
                 ws_sender_id,
                 ws_sender_name,
+                None,
             ) {
                 Ok((mut rx, handle)) => {
                     // Forward stream events to WebSocket with debouncing.

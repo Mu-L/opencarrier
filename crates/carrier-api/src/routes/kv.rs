@@ -21,7 +21,7 @@ pub async fn get_agent_kv(
         Err(resp) => return resp,
     };
 
-    match state.kernel.memory.list_kv(agent_id, "") {
+    match state.kernel.memory.list_kv(agent_id, "", "") {
         Ok(pairs) => {
             let kv: Vec<serde_json::Value> = pairs
                 .into_iter()
@@ -48,7 +48,7 @@ pub async fn get_agent_kv_key(
         Err(resp) => return resp,
     };
 
-    match state.kernel.memory.structured_get(agent_id, "", &key) {
+    match state.kernel.memory.structured_get(agent_id, "", "", &key) {
         Ok(Some(val)) => (
             StatusCode::OK,
             Json(serde_json::json!({"key": key, "value": val})),
@@ -82,7 +82,7 @@ pub async fn set_agent_kv_key(
     match state
         .kernel
         .memory
-        .structured_set(agent_id, "", &key, value)
+        .structured_set(agent_id, "", "", &key, value)
     {
         Ok(()) => (
             StatusCode::OK,
@@ -107,7 +107,7 @@ pub async fn delete_agent_kv_key(
         Err(resp) => return resp,
     };
 
-    match state.kernel.memory.structured_delete(agent_id, "", &key) {
+    match state.kernel.memory.structured_delete(agent_id, "", "", &key) {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "deleted", "key": key})),

@@ -222,6 +222,7 @@ impl CarrierKernel {
         let _ = self.memory.structured_set(
             agent_id,
             "",
+            "",
             &key,
             serde_json::Value::String(summary.clone()),
         );

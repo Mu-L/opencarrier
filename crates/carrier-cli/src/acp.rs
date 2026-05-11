@@ -420,6 +420,7 @@ fn acp_session_prompt(
                 kernel_handle,
                 None,
                 None,
+                None,
             ) {
                 Ok(r) => r,
                 Err(e) => return Err(format!("Failed to start streaming: {e}")),

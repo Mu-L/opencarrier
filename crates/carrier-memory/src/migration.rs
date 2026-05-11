@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 13;
+const SCHEMA_VERSION: u32 = 14;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -61,6 +61,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 13 {
         migrate_v13(conn)?;
+    }
+
+    if current_version < 14 {
+        migrate_v14(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -522,6 +526,61 @@ fn migrate_v13(conn: &Connection) -> Result<(), rusqlite::Error> {
         "
         INSERT OR IGNORE INTO migrations (version, applied_at, description)
         VALUES (13, datetime('now'), 'Per-user memory: add sender_id to kv_store/kv_history');
+        ",
+    )?;
+    Ok(())
+}
+
+/// Version 14: Owner/user data model — split `sender_id` into `owner_id` + `user_id`.
+///
+/// The composite primary key becomes (agent_id, owner_id, user_id, key).
+/// Existing rows get `owner_id = user_id = sender_id` (owner is the same as user).
+fn migrate_v14(conn: &Connection) -> Result<(), rusqlite::Error> {
+    // Recreate kv_store with owner_id + user_id
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS kv_store_v14 (
+            agent_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL DEFAULT '',
+            user_id  TEXT NOT NULL DEFAULT '',
+            key      TEXT NOT NULL,
+            value    BLOB NOT NULL,
+            version  INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (agent_id, owner_id, user_id, key)
+        );
+        INSERT OR IGNORE INTO kv_store_v14 (agent_id, owner_id, user_id, key, value, version, updated_at)
+            SELECT agent_id, COALESCE(sender_id, ''), COALESCE(sender_id, ''), key, value, version, updated_at FROM kv_store;
+        DROP TABLE kv_store;
+        ALTER TABLE kv_store_v14 RENAME TO kv_store;
+        ",
+    )?;
+
+    // Recreate kv_history with owner_id + user_id
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS kv_history_v14 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL DEFAULT '',
+            user_id  TEXT NOT NULL DEFAULT '',
+            key TEXT NOT NULL,
+            value BLOB NOT NULL,
+            version INTEGER NOT NULL,
+            archived_at TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO kv_history_v14 (agent_id, owner_id, user_id, key, value, version, archived_at)
+            SELECT agent_id, COALESCE(sender_id, ''), COALESCE(sender_id, ''), key, value, version, archived_at FROM kv_history;
+        DROP TABLE kv_history;
+        ALTER TABLE kv_history_v14 RENAME TO kv_history;
+        CREATE INDEX IF NOT EXISTS idx_kv_history_agent_key ON kv_history(agent_id, key);
+        ",
+    )?;
+
+    conn.execute_batch(
+        "
+        INSERT OR IGNORE INTO migrations (version, applied_at, description)
+        VALUES (14, datetime('now'), 'Owner/user model: split sender_id into owner_id + user_id in kv_store/kv_history');
         ",
     )?;
     Ok(())

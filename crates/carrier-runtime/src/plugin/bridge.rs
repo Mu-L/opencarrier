@@ -127,6 +127,7 @@ impl PluginBridgeManager {
                     Some(&msg.sender_id),
                     Some(&msg.sender_name),
                     None,
+                    Some(&rk),
                 )
                 .await
             {
@@ -180,6 +181,7 @@ impl PluginBridgeManager {
                 Some(&msg.sender_id),
                 Some(&msg.sender_name),
                 None,
+                Some(&rk),
             )
             .await
         {

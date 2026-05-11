@@ -67,6 +67,7 @@ impl KernelHandle for CarrierKernel {
         sender_id: Option<&str>,
         sender_name: Option<&str>,
         _caller_agent_id: Option<&str>,
+        owner_id: Option<&str>,
     ) -> Result<String, String> {
         let (id, _target_entry): (AgentId, carrier_types::agent::AgentEntry) = match agent_id.parse() {
             Ok(id) => {
@@ -99,6 +100,7 @@ impl KernelHandle for CarrierKernel {
                 handle,
                 sender_id.map(|s| s.to_string()),
                 sender_name.map(|s| s.to_string()),
+                owner_id.map(|s| s.to_string()),
             )
             .await
             .map_err(|e| format!("Send failed: {e}"))?;
@@ -207,7 +209,8 @@ impl KernelHandle for CarrierKernel {
     fn memory_store(
         &self,
         agent_id: &str,
-        sender_id: &str,
+        owner_id: &str,
+        user_id: &str,
         key: &str,
         value: serde_json::Value,
     ) -> Result<(), String> {
@@ -215,34 +218,36 @@ impl KernelHandle for CarrierKernel {
             .parse()
             .map_err(|_| "Invalid agent ID".to_string())?;
         self.memory
-            .structured_set(aid, sender_id, key, value)
+            .structured_set(aid, owner_id, user_id, key, value)
             .map_err(|e| format!("Memory store failed: {e}"))
     }
 
     fn memory_recall(
         &self,
         agent_id: &str,
-        sender_id: &str,
+        owner_id: &str,
+        user_id: &str,
         key: &str,
     ) -> Result<Option<serde_json::Value>, String> {
         let aid: AgentId = agent_id
             .parse()
             .map_err(|_| "Invalid agent ID".to_string())?;
         self.memory
-            .structured_get(aid, sender_id, key)
+            .structured_get(aid, owner_id, user_id, key)
             .map_err(|e| format!("Memory recall failed: {e}"))
     }
 
     fn memory_list(
         &self,
         agent_id: &str,
-        sender_id: &str,
+        owner_id: &str,
+        user_id: &str,
     ) -> Result<Vec<(String, serde_json::Value)>, String> {
         let aid: AgentId = agent_id
             .parse()
             .map_err(|_| "Invalid agent ID".to_string())?;
         self.memory
-            .list_kv(aid, sender_id)
+            .list_kv(aid, owner_id, user_id)
             .map_err(|e| format!("Memory list failed: {e}"))
     }
 

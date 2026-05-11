@@ -76,6 +76,7 @@ pub async fn execute_tool(
         docker_config: _,
         process_manager: _,
         sender_id,
+        owner_id: _,
         home_dir: _,
         agent_name: _,
     } = *ctx;
@@ -296,6 +297,7 @@ mod tests {
             docker_config: None,
             process_manager: None,
             sender_id: None,
+            owner_id: None,
             home_dir: None,
             agent_name: None,
         }

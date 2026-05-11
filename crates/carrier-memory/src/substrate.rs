@@ -121,40 +121,44 @@ impl MemorySubstrate {
     pub fn structured_get(
         &self,
         agent_id: AgentId,
-        sender_id: &str,
+        owner_id: &str,
+        user_id: &str,
         key: &str,
     ) -> CarrierResult<Option<serde_json::Value>> {
-        self.structured.get(agent_id, sender_id, key)
+        self.structured.get(agent_id, owner_id, user_id, key)
     }
 
     /// List all KV pairs for an agent (per-user).
     pub fn list_kv(
         &self,
         agent_id: AgentId,
-        sender_id: &str,
+        owner_id: &str,
+        user_id: &str,
     ) -> CarrierResult<Vec<(String, serde_json::Value)>> {
-        self.structured.list_kv(agent_id, sender_id)
+        self.structured.list_kv(agent_id, owner_id, user_id)
     }
 
     /// Delete a KV entry for an agent (per-user).
     pub fn structured_delete(
         &self,
         agent_id: AgentId,
-        sender_id: &str,
+        owner_id: &str,
+        user_id: &str,
         key: &str,
     ) -> CarrierResult<()> {
-        self.structured.delete(agent_id, sender_id, key)
+        self.structured.delete(agent_id, owner_id, user_id, key)
     }
 
     /// Synchronous set in the structured store (for kernel handle use).
     pub fn structured_set(
         &self,
         agent_id: AgentId,
-        sender_id: &str,
+        owner_id: &str,
+        user_id: &str,
         key: &str,
         value: serde_json::Value,
     ) -> CarrierResult<()> {
-        self.structured.set(agent_id, sender_id, key, value)
+        self.structured.set(agent_id, owner_id, user_id, key, value)
     }
 
     /// Get a session by ID.
@@ -499,13 +503,15 @@ impl Memory for MemorySubstrate {
     async fn get(
         &self,
         agent_id: AgentId,
-        sender_id: &str,
+        owner_id: &str,
+        user_id: &str,
         key: &str,
     ) -> CarrierResult<Option<serde_json::Value>> {
         let store = self.structured.clone();
-        let sender_id = sender_id.to_string();
+        let owner_id = owner_id.to_string();
+        let user_id = user_id.to_string();
         let key = key.to_string();
-        tokio::task::spawn_blocking(move || store.get(agent_id, &sender_id, &key))
+        tokio::task::spawn_blocking(move || store.get(agent_id, &owner_id, &user_id, &key))
             .await
             .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
@@ -513,23 +519,26 @@ impl Memory for MemorySubstrate {
     async fn set(
         &self,
         agent_id: AgentId,
-        sender_id: &str,
+        owner_id: &str,
+        user_id: &str,
         key: &str,
         value: serde_json::Value,
     ) -> CarrierResult<()> {
         let store = self.structured.clone();
-        let sender_id = sender_id.to_string();
+        let owner_id = owner_id.to_string();
+        let user_id = user_id.to_string();
         let key = key.to_string();
-        tokio::task::spawn_blocking(move || store.set(agent_id, &sender_id, &key, value))
+        tokio::task::spawn_blocking(move || store.set(agent_id, &owner_id, &user_id, &key, value))
             .await
             .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
 
-    async fn delete(&self, agent_id: AgentId, sender_id: &str, key: &str) -> CarrierResult<()> {
+    async fn delete(&self, agent_id: AgentId, owner_id: &str, user_id: &str, key: &str) -> CarrierResult<()> {
         let store = self.structured.clone();
-        let sender_id = sender_id.to_string();
+        let owner_id = owner_id.to_string();
+        let user_id = user_id.to_string();
         let key = key.to_string();
-        tokio::task::spawn_blocking(move || store.delete(agent_id, &sender_id, &key))
+        tokio::task::spawn_blocking(move || store.delete(agent_id, &owner_id, &user_id, &key))
             .await
             .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
@@ -624,10 +633,10 @@ mod tests {
         let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
         let agent_id = AgentId::new();
         substrate
-            .set(agent_id, "user1", "key", serde_json::json!("value"))
+            .set(agent_id, "user1", "user1", "key", serde_json::json!("value"))
             .await
             .unwrap();
-        let val = substrate.get(agent_id, "user1", "key").await.unwrap();
+        let val = substrate.get(agent_id, "user1", "user1", "key").await.unwrap();
         assert_eq!(val, Some(serde_json::json!("value")));
     }
 

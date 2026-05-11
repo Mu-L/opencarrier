@@ -139,6 +139,7 @@ pub async fn send_message(
             Some(kernel_handle),
             req.sender_id,
             req.sender_name,
+            None,
         )
         .await
     {
@@ -224,6 +225,7 @@ pub async fn send_message_stream(
         Some(kernel_handle),
         req.sender_id,
         req.sender_name,
+        None,
     ) {
         Ok(pair) => pair,
         Err(e) => {

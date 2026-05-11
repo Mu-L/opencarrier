@@ -681,6 +681,7 @@ async fn tool_agent_send(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    owner_id: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
@@ -705,7 +706,7 @@ async fn tool_agent_send(
 
     crate::tool_runner::AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.send_to_agent(agent_id, message, sender_id, None, caller_agent_id)
+            kh.send_to_agent(agent_id, message, sender_id, None, caller_agent_id, owner_id)
                 .await
         })
         .await
@@ -779,14 +780,16 @@ fn tool_memory_store(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    owner_id: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let aid = caller_agent_id.ok_or("No agent context for memory_store")?;
-    let sid = sender_id.unwrap_or("");
+    let oid = owner_id.unwrap_or("");
+    let uid = sender_id.unwrap_or("");
     let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
     let value = input.get("value").ok_or("Missing 'value' parameter")?;
-    kh.memory_store(aid, sid, key, value.clone())?;
+    kh.memory_store(aid, oid, uid, key, value.clone())?;
     Ok(format!("Stored value under key '{key}'."))
 }
 
@@ -794,13 +797,15 @@ fn tool_memory_recall(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    owner_id: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let aid = caller_agent_id.ok_or("No agent context for memory_recall")?;
-    let sid = sender_id.unwrap_or("");
+    let oid = owner_id.unwrap_or("");
+    let uid = sender_id.unwrap_or("");
     let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
-    match kh.memory_recall(aid, sid, key)? {
+    match kh.memory_recall(aid, oid, uid, key)? {
         Some(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())),
         None => Ok(format!("No value found for key '{key}'.")),
     }
@@ -810,13 +815,15 @@ fn tool_memory_list(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    owner_id: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
     let _ = input; // no parameters needed
     let kh = require_kernel(kernel)?;
     let aid = caller_agent_id.ok_or("No agent context for memory_list")?;
-    let sid = sender_id.unwrap_or("");
-    let pairs = kh.memory_list(aid, sid)?;
+    let oid = owner_id.unwrap_or("");
+    let uid = sender_id.unwrap_or("");
+    let pairs = kh.memory_list(aid, oid, uid)?;
     if pairs.is_empty() {
         return Ok("No keys stored.".to_string());
     }
@@ -1113,13 +1120,13 @@ async fn tool_schedule_create(
     });
 
     // Load existing schedules from agent's memory
-    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, "", SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
 
     schedules.push(entry);
-    kh.memory_store(aid, "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    kh.memory_store(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
 
     Ok(format!(
         "Schedule created:\n  ID: {schedule_id}\n  Description: {description}\n  Cron: {cron_expr}\n  Original: {schedule_str}"
@@ -1133,7 +1140,7 @@ async fn tool_schedule_list(
     let kh = require_kernel(kernel)?;
     let aid = caller_agent_id.ok_or("No agent context for schedule_list")?;
 
-    let schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, "", SCHEDULES_KEY)? {
+    let schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -1168,7 +1175,7 @@ async fn tool_schedule_delete(
     let aid = caller_agent_id.ok_or("No agent context for schedule_delete")?;
     let id = input["id"].as_str().ok_or("Missing 'id' parameter")?;
 
-    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, "", SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -1180,7 +1187,7 @@ async fn tool_schedule_delete(
         return Err(format!("Schedule '{id}' not found."));
     }
 
-    kh.memory_store(aid, "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    kh.memory_store(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
     Ok(format!("Schedule '{id}' deleted."))
 }
 
@@ -1778,6 +1785,7 @@ impl ToolModule for AgentTools {
         let caller_agent_id = ctx.caller_agent_id;
         let _workspace_root = ctx.workspace_root;
         let sender_id = ctx.sender_id;
+        let owner_id = ctx.owner_id;
 
         match name {
             // Cross-workspace training tools (for trainer agents)
@@ -1813,21 +1821,22 @@ impl ToolModule for AgentTools {
             "clone_publish" => Some(tool_clone_publish(input, kernel, caller_agent_id).await),
 
             // Inter-agent tools (require kernel handle)
-            "agent_send" => Some(tool_agent_send(input, kernel, caller_agent_id, sender_id).await),
+            "agent_send" => Some(tool_agent_send(input, kernel, caller_agent_id, owner_id, sender_id).await),
             "agent_spawn" => Some(tool_agent_spawn(input, kernel, caller_agent_id).await),
             "agent_list" => Some(tool_agent_list(kernel, caller_agent_id)),
             "agent_kill" => Some(tool_agent_kill(input, kernel, caller_agent_id)),
             "agent_restart" => Some(tool_agent_restart(input, kernel, caller_agent_id)),
 
-            // Memory tools (scoped to caller's agent + sender namespace)
-            "memory_store" => Some(tool_memory_store(input, kernel, caller_agent_id, sender_id)),
+            // Memory tools (scoped to caller's agent + owner/user namespace)
+            "memory_store" => Some(tool_memory_store(input, kernel, caller_agent_id, owner_id, sender_id)),
             "memory_recall" => Some(tool_memory_recall(
                 input,
                 kernel,
                 caller_agent_id,
+                owner_id,
                 sender_id,
             )),
-            "memory_list" => Some(tool_memory_list(input, kernel, caller_agent_id, sender_id)),
+            "memory_list" => Some(tool_memory_list(input, kernel, caller_agent_id, owner_id, sender_id)),
 
             // Collaboration tools
             "agent_find" => Some(tool_agent_find(input, kernel, caller_agent_id)),

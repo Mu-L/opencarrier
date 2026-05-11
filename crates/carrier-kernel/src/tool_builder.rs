@@ -315,7 +315,7 @@ impl CarrierKernel {
         let sid = sender_id.as_deref().unwrap_or("");
         let user_name = self
             .memory
-            .structured_get(*agent_id, sid, "user_name")
+            .structured_get(*agent_id, sid, sid, "user_name")
             .ok()
             .flatten()
             .and_then(|v| v.as_str().map(String::from))

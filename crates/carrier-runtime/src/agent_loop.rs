@@ -129,12 +129,13 @@ pub async fn run_agent_loop(
     user_content_blocks: Option<Vec<ContentBlock>>,
     brain: Option<Arc<dyn Brain>>,
     sender_id: Option<&str>,
+    owner_id: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     run_agent_loop_impl(
         manifest, user_message, session, memory, driver, available_tools,
         kernel, None, mcp_connections, web_ctx, browser_ctx, workspace_root,
         on_phase, docker_config, hooks, context_window_tokens, process_manager,
-        user_content_blocks, brain, sender_id,
+        user_content_blocks, brain, sender_id, owner_id,
     )
     .await
 }
@@ -352,6 +353,7 @@ async fn run_agent_loop_impl(
     user_content_blocks: Option<Vec<ContentBlock>>,
     brain: Option<Arc<dyn Brain>>,
     sender_id: Option<&str>,
+    owner_id: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
 
@@ -835,6 +837,7 @@ async fn run_agent_loop_impl(
                         docker_config,
                         process_manager,
                         sender_id,
+                        owner_id,
                         home_dir: home_dir_buf.as_deref(),
                         agent_name: Some(&manifest.name),
                     };
@@ -1063,12 +1066,13 @@ pub async fn run_agent_loop_streaming(
     user_content_blocks: Option<Vec<ContentBlock>>,
     brain: Option<Arc<dyn Brain>>,
     sender_id: Option<&str>,
+    owner_id: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     run_agent_loop_impl(
         manifest, user_message, session, memory, driver, available_tools,
         kernel, Some(stream_tx), mcp_connections, web_ctx, browser_ctx, workspace_root,
         on_phase, docker_config, hooks, context_window_tokens, process_manager,
-        user_content_blocks, brain, sender_id,
+        user_content_blocks, brain, sender_id, owner_id,
     )
     .await
 }
@@ -2103,6 +2107,7 @@ mod tests {
             None, // user_content_blocks
             None, // brain
             None, // sender_id
+            None, // owner_id
         )
         .await
         .expect("Loop should complete without error");
@@ -2154,6 +2159,7 @@ mod tests {
             None, // user_content_blocks
             None, // brain
             None, // sender_id
+            None, // owner_id
         )
         .await
         .expect("Loop should complete without error");
@@ -2207,6 +2213,7 @@ mod tests {
             None, // user_content_blocks
             None, // brain
             None, // sender_id
+            None, // owner_id
         )
         .await
         .expect("Loop should complete without error");
@@ -2258,6 +2265,7 @@ mod tests {
             None, // user_content_blocks
             None, // brain
             None, // sender_id
+            None, // owner_id
         )
         .await
         .expect("Loop should complete without error");
@@ -2302,6 +2310,7 @@ mod tests {
             None, // user_content_blocks
             None, // brain
             None, // sender_id
+            None, // owner_id
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -2427,6 +2436,7 @@ mod tests {
             None, // user_content_blocks
             None, // brain
             None, // sender_id
+            None, // owner_id
         )
         .await
         .expect("Loop should recover via retry");
@@ -2472,6 +2482,7 @@ mod tests {
             None, // user_content_blocks
             None, // brain
             None, // sender_id
+            None, // owner_id
         )
         .await
         .expect("Loop should complete with fallback");
@@ -2525,6 +2536,7 @@ mod tests {
             None, // user_content_blocks
             None, // brain
             None, // sender_id
+            None, // owner_id
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -3413,6 +3425,7 @@ mod tests {
             None, // user_content_blocks
             None, // brain
             None, // sender_id
+            None, // owner_id
         )
         .await
         .expect("Agent loop should complete");
@@ -3478,6 +3491,7 @@ mod tests {
             None, // user_content_blocks
             None, // brain
             None, // sender_id
+            None, // owner_id
         )
         .await
         .expect("Normal loop should complete");
@@ -3539,6 +3553,7 @@ mod tests {
             None, // user_content_blocks
             None, // brain
             None, // sender_id
+            None, // owner_id
         )
         .await
         .expect("Streaming loop should complete");

@@ -37,6 +37,8 @@ pub trait KernelHandle: Send + Sync {
     /// Send a message to another agent and get the response.
     /// `sender_id` and `sender_name` identify the originating user (e.g. WeChat user).
     /// `caller_agent_id` is the agent invoking this tool, used for tenant isolation.
+    /// `owner_id` is the route owner (the person who created the bot). When None,
+    /// defaults to sender_id for backward compatibility.
     async fn send_to_agent(
         &self,
         agent_id: &str,
@@ -44,6 +46,7 @@ pub trait KernelHandle: Send + Sync {
         sender_id: Option<&str>,
         sender_name: Option<&str>,
         caller_agent_id: Option<&str>,
+        owner_id: Option<&str>,
     ) -> Result<String, String>;
 
     /// List all running agents visible to the caller.
@@ -55,28 +58,31 @@ pub trait KernelHandle: Send + Sync {
     /// Restart an agent by ID (reset state, re-read manifest from workspace).
     fn restart_agent(&self, agent_id: &str) -> Result<(), String>;
 
-    /// Store a key-value pair in the agent's per-user memory namespace.
+    /// Store a key-value pair in the agent's per-owner per-user memory namespace.
     fn memory_store(
         &self,
         agent_id: &str,
-        sender_id: &str,
+        owner_id: &str,
+        user_id: &str,
         key: &str,
         value: serde_json::Value,
     ) -> Result<(), String>;
 
-    /// Recall a value from the agent's per-user memory namespace.
+    /// Recall a value from the agent's per-owner per-user memory namespace.
     fn memory_recall(
         &self,
         agent_id: &str,
-        sender_id: &str,
+        owner_id: &str,
+        user_id: &str,
         key: &str,
     ) -> Result<Option<serde_json::Value>, String>;
 
-    /// List all keys in the agent's per-user memory namespace.
+    /// List all keys in the agent's per-owner per-user memory namespace.
     fn memory_list(
         &self,
         agent_id: &str,
-        sender_id: &str,
+        owner_id: &str,
+        user_id: &str,
     ) -> Result<Vec<(String, serde_json::Value)>, String>;
 
     /// Find agents by query (matches on name substring, tag, or tool name; case-insensitive).
