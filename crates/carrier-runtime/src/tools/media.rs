@@ -59,15 +59,13 @@ impl ToolModule for MediaTools {
             // --- Image generation tool ---
             ToolDefinition {
                 name: "image_generate".to_string(),
-                description: "Generate images from a text prompt using DALL-E 3, DALL-E 2, or GPT-Image-1. Requires OPENAI_API_KEY. Generated images are saved to the user's output directory.".to_string(),
+                description: "Generate images from a text prompt. Uses the configured image modality (Wan2.7, DALL-E, etc.). Generated images are saved to the user's output directory.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "prompt": { "type": "string", "description": "Text description of the image to generate (max 4000 chars)" },
-                        "model": { "type": "string", "description": "Model to use: 'dall-e-3' (default), 'dall-e-2', or 'gpt-image-1'" },
-                        "size": { "type": "string", "description": "Image size: '1024x1024' (default), '1024x1792', '1792x1024', '256x256', '512x512'" },
-                        "quality": { "type": "string", "description": "Quality: 'hd' (default for dall-e-3) or 'standard'" },
-                        "count": { "type": "integer", "description": "Number of images to generate (1-4, default: 1). DALL-E 3 only supports 1." }
+                        "prompt": { "type": "string", "description": "Text description of the image to generate" },
+                        "size": { "type": "string", "description": "Image size: '1024x1024' (default), '1024x1792', '1792x1024'" },
+                        "count": { "type": "integer", "description": "Number of images to generate (1-4, default: 1)" }
                     },
                     "required": ["prompt"]
                 }),
