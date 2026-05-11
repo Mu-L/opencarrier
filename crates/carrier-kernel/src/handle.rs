@@ -434,6 +434,10 @@ impl KernelHandle for CarrierKernel {
         KernelHandle::spawn_agent(self, manifest_toml, parent_id).await
     }
 
+    fn home_dir(&self) -> Option<std::path::PathBuf> {
+        Some(self.config.home_dir.clone())
+    }
+
     fn resolve_agent_workspace(&self, agent_name: &str) -> Option<String> {
         self.registry
             .find_by_name(agent_name)
@@ -586,10 +590,11 @@ impl KernelHandle for CarrierKernel {
                 exported_at: String::new(),
                 knowledge_version: 0,
                 plugins: vec![],
+                mcp_servers: vec![],
             });
 
         let mut knowledge = HashMap::new();
-        let knowledge_dir = workspace.join("data").join("knowledge");
+        let knowledge_dir = workspace.join("knowledge");
         if knowledge_dir.exists() {
             collect_files_recursive(&knowledge_dir, &knowledge_dir, &mut knowledge);
         }

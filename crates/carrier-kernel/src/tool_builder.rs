@@ -401,10 +401,7 @@ impl CarrierKernel {
             sender_id: sender_id.clone(),
             sender_name,
             user_profile_summary: sender_id.as_ref().and_then(|sid| {
-                manifest
-                    .workspace
-                    .as_ref()
-                    .and_then(|w| read_user_profile_summary(w, sid))
+                read_user_profile_summary(&self.config.home_dir, sid, &manifest.name)
             }),
             clone_system_prompt_md: manifest
                 .workspace
@@ -425,7 +422,7 @@ impl CarrierKernel {
             knowledge_content: manifest
                 .workspace
                 .as_ref()
-                .and_then(|w| read_knowledge_content(w)),
+                .and_then(|w| read_knowledge_content(w, sender_id.as_deref(), Some(&self.config.home_dir))),
             clone_agents_md: manifest
                 .workspace
                 .as_ref()

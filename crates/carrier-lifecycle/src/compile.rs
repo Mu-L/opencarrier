@@ -46,7 +46,7 @@ pub struct CompileResult {
 
 /// Find knowledge files that lack description or tags in their frontmatter.
 pub fn find_files_needing_metadata(workspace: &Path) -> Result<Vec<FileNeedingMetadata>> {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     if !knowledge_dir.exists() {
         return Ok(vec![]);
     }
@@ -169,7 +169,7 @@ pub fn find_changed_files(
     workspace: &Path,
     manifest: &std::collections::HashMap<String, ManifestEntry>,
 ) -> (Vec<String>, Vec<String>) {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     let mut changed = Vec::new();
     let mut current_files = Vec::new();
 
@@ -236,7 +236,7 @@ where
                     continue;
                 }
 
-                let file_path = workspace.join("data/knowledge").join(&file.filename);
+                let file_path = workspace.join("knowledge").join(&file.filename);
                 let hash_before = content_hash(&file_path);
 
                 let (system, user) = build_metadata_prompt(&file.body);
@@ -298,7 +298,7 @@ where
         Ok(report) => {
             // Merge overlapping files
             for (file_a, file_b, _similarity) in &report.should_merge_candidates {
-                let knowledge_dir = workspace.join("data/knowledge");
+                let knowledge_dir = workspace.join("knowledge");
                 let path_a = knowledge_dir.join(file_a);
                 let path_b = knowledge_dir.join(file_b);
 
@@ -345,7 +345,7 @@ where
             let max_total_bytes = (config.knowledge_capacity_mb as u64) * 1024 * 1024;
             if let Ok(candidates) = find_compress_candidates(workspace, max_total_bytes) {
                 for (filename, _) in candidates {
-                    let knowledge_dir = workspace.join("data/knowledge");
+                    let knowledge_dir = workspace.join("knowledge");
                     let path = knowledge_dir.join(&filename);
                     let hash_before = content_hash(&path);
                     if let Ok(content) = fs::read_to_string(&path) {
@@ -414,7 +414,7 @@ mod tests {
 
     fn setup_workspace(tmp: &TempDir) -> PathBuf {
         let ws = tmp.path().to_path_buf();
-        fs::create_dir_all(ws.join("data/knowledge")).unwrap();
+        fs::create_dir_all(ws.join("knowledge")).unwrap();
         fs::create_dir_all(ws.join("history")).unwrap();
         ws
     }
@@ -450,20 +450,20 @@ mod tests {
 
         // File without metadata
         fs::write(
-            ws.join("data/knowledge/no-meta.md"),
+            ws.join("knowledge/no-meta.md"),
             "---\nname: test\n---\n\nSome content",
         )
         .unwrap();
 
         // File with metadata
         fs::write(
-            ws.join("data/knowledge/with-meta.md"),
+            ws.join("knowledge/with-meta.md"),
             "---\ndescription: test\ntags: [\"a\"]\n---\n\nContent",
         )
         .unwrap();
 
         // Empty body file
-        fs::write(ws.join("data/knowledge/empty.md"), "---\n---\n\n").unwrap();
+        fs::write(ws.join("knowledge/empty.md"), "---\n---\n\n").unwrap();
 
         let files = find_files_needing_metadata(&ws).unwrap();
         assert_eq!(files.len(), 1);
@@ -481,7 +481,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ws = setup_workspace(&tmp);
 
-        let file_path = ws.join("data/knowledge/test.md");
+        let file_path = ws.join("knowledge/test.md");
         fs::write(&file_path, "original content").unwrap();
 
         let hash1 = content_hash(&file_path);
@@ -546,10 +546,10 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         // Create two files
-        fs::write(ws.join("data/knowledge/a.md"), "content A").unwrap();
-        fs::write(ws.join("data/knowledge/b.md"), "content B").unwrap();
+        fs::write(ws.join("knowledge/a.md"), "content A").unwrap();
+        fs::write(ws.join("knowledge/b.md"), "content B").unwrap();
 
-        let path_a = ws.join("data/knowledge/a.md");
+        let path_a = ws.join("knowledge/a.md");
         let hash_a = content_hash(&path_a).unwrap();
 
         // Manifest only has a.md
@@ -574,7 +574,7 @@ mod tests {
         assert_eq!(current.len(), 2);
 
         // Modify a.md
-        fs::write(ws.join("data/knowledge/a.md"), "modified A").unwrap();
+        fs::write(ws.join("knowledge/a.md"), "modified A").unwrap();
         let (changed2, _) = find_changed_files(&ws, &manifest);
         assert!(
             changed2.contains(&"a.md".to_string()),
@@ -588,7 +588,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ws = setup_workspace(&tmp);
 
-        fs::write(ws.join("data/knowledge/a.md"), "content A").unwrap();
+        fs::write(ws.join("knowledge/a.md"), "content A").unwrap();
 
         let mut manifest = std::collections::HashMap::new();
         manifest.insert(
@@ -625,7 +625,7 @@ mod tests {
 
         // Create a file needing metadata
         fs::write(
-            ws.join("data/knowledge/test.md"),
+            ws.join("knowledge/test.md"),
             "---\nname: test\n---\n\nThis is a test knowledge file about refunds.",
         )
         .unwrap();
@@ -645,7 +645,7 @@ mod tests {
         assert!(result.errors.is_empty());
 
         // Verify metadata was written
-        let content = fs::read_to_string(ws.join("data/knowledge/test.md")).unwrap();
+        let content = fs::read_to_string(ws.join("knowledge/test.md")).unwrap();
         assert!(content.contains("description: 退款政策"));
         assert!(content.contains("tags: [\"退款\", \"售后\"]"));
     }

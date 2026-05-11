@@ -30,7 +30,7 @@ impl ToolModule for KnowledgeTools {
             },
             ToolDefinition {
                 name: "knowledge_read".to_string(),
-                description: "Read a specific knowledge file from the agent's knowledge base. Only files in data/knowledge/ are accessible.".to_string(),
+                description: "Read a specific knowledge file from the agent's knowledge base. Only files in knowledge/ are accessible.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -117,7 +117,7 @@ impl ToolModule for KnowledgeTools {
             },
             ToolDefinition {
                 name: "knowledge_index".to_string(),
-                description: "Rebuild the knowledge index file (MEMORY.md) by scanning all knowledge files in data/knowledge/. Use after manually adding or removing knowledge files.".to_string(),
+                description: "Rebuild the knowledge index file (MEMORY.md) by scanning all knowledge files in knowledge/. Use after manually adding or removing knowledge files.".to_string(),
                 input_schema: serde_json::json!({"type": "object", "properties": {}}),
             },
             ToolDefinition {
@@ -201,15 +201,15 @@ impl ToolModule for KnowledgeTools {
 }
 
 // ---------------------------------------------------------------------------
-// Knowledge tools (safe access to data/knowledge/)
+// Knowledge tools (safe access to knowledge/)
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn tool_knowledge_list(workspace_root: Option<&Path>) -> Result<String, String> {
     let root = workspace_root.ok_or("knowledge_list requires a workspace root")?;
-    let knowledge_dir = root.join("data/knowledge");
+    let knowledge_dir = root.join("knowledge");
 
     if !knowledge_dir.exists() {
-        return Ok("No knowledge files found (data/knowledge/ does not exist).".to_string());
+        return Ok("No knowledge files found (knowledge/ does not exist).".to_string());
     }
 
     let mut entries = tokio::fs::read_dir(&knowledge_dir)
@@ -266,7 +266,7 @@ pub(crate) async fn tool_knowledge_read(
         return Err("Only .md knowledge files can be read".to_string());
     }
 
-    let path = root.join("data/knowledge").join(filename);
+    let path = root.join("knowledge").join(filename);
 
     if !path.exists() {
         return Err(format!("Knowledge file not found: {}", filename));
@@ -353,7 +353,7 @@ pub(crate) async fn knowledge_add_core(
     source_label: &str,
 ) -> Result<String, String> {
     let filename = carrier_lifecycle::evolution::sanitize_filename(title);
-    let knowledge_dir = root.join("data/knowledge");
+    let knowledge_dir = root.join("knowledge");
     tokio::fs::create_dir_all(&knowledge_dir)
         .await
         .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
@@ -384,7 +384,7 @@ pub(crate) async fn knowledge_import_core(
 ) -> Result<(Vec<String>, carrier_lifecycle::parsers::ParseQuality), String> {
     let result = carrier_lifecycle::parsers::parse_import_data(data, data_type)
         .map_err(|e| format!("Parse failed: {e}"))?;
-    let knowledge_dir = root.join("data/knowledge");
+    let knowledge_dir = root.join("knowledge");
     tokio::fs::create_dir_all(&knowledge_dir)
         .await
         .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
@@ -430,13 +430,14 @@ async fn tool_knowledge_extract(
     let candidate = carrier_lifecycle::evolution::KnowledgeCandidate {
         title: title.to_string(),
         content: content.to_string(),
+        scope: "shared".to_string(),
     };
     let analysis = carrier_lifecycle::evolution::EvolutionAnalysis {
         knowledge: vec![candidate],
         gaps: vec![],
         trivial: false,
     };
-    let saved = carrier_lifecycle::evolution::apply_evolution(root, &analysis);
+    let saved = carrier_lifecycle::evolution::apply_evolution(root, &analysis, None, None);
     match saved.len() {
         0 => Ok("No knowledge extracted (nothing new to save).".to_string()),
         n => Ok(format!(
@@ -625,7 +626,7 @@ async fn tool_knowledge_remove(
     let query = input["filename"]
         .as_str()
         .ok_or("Missing 'filename' parameter")?;
-    let knowledge_dir = root.join("data/knowledge");
+    let knowledge_dir = root.join("knowledge");
     let target = find_knowledge_file(&knowledge_dir, query)?;
     let before = tokio::fs::read_to_string(&target).await.ok();
     tokio::fs::remove_file(&target)

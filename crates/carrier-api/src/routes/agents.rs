@@ -513,7 +513,7 @@ pub async fn write_agent_knowledge(
         );
     }
 
-    let knowledge_dir = workspace.join("data").join("knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     let file_path: PathBuf = knowledge_dir.join(&safe_name);
 
     // Security: ensure resolved path is still under knowledge dir

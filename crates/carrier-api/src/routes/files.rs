@@ -351,12 +351,15 @@ pub async fn upload_file(
     // Generate file ID
     let file_id = uuid::Uuid::new_v4().to_string();
 
-    // Determine save location: prefer workspace users/{sender_id}/input/
+    // Determine save location: prefer senders/{sender_id}/{agent_name}/input/
     // Fall back to temp dir if no workspace or no sender_id
     let (file_path, upload_dir) = if let Some(ref sid) = sender_id {
         if let Some(entry) = state.kernel.registry.get(agent_id) {
-            if let Some(ref ws) = entry.manifest.workspace {
-                let user_input_dir = ws.join("users").join(sid).join("input");
+            if let Some(ref _ws) = entry.manifest.workspace {
+                let agent_name = &entry.manifest.name;
+                let user_input_dir = carrier_types::config::sender_data_dir(
+                    &state.kernel.config.home_dir, sid, agent_name,
+                ).join("input");
                 if let Err(e) = std::fs::create_dir_all(&user_input_dir) {
                     tracing::warn!("Failed to create user input dir: {e}");
                 } else {
@@ -583,10 +586,10 @@ pub async fn list_output_files(
         }
     };
 
-    let output_dir = workspace
-        .join("users")
-        .join(&params.sender_id)
-        .join("output");
+    let agent_name = &entry.manifest.name;
+    let output_dir = carrier_types::config::sender_data_dir(
+        &state.kernel.config.home_dir, &params.sender_id, agent_name,
+    ).join("output");
 
     if !output_dir.exists() {
         return (StatusCode::OK, Json(serde_json::json!({"files": []})));
@@ -660,7 +663,7 @@ pub async fn serve_output_file(
     };
 
     // Public download endpoint — skip tenant check. Path-based auth via sender_id
-    // is sufficient: files are scoped to workspace/users/{sender_id}/output/.
+    // is sufficient: files are scoped to senders/{sender_id}/{agent_name}/output/.
     let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
         Ok(pair) => pair,
         Err((status, _)) => {
@@ -678,11 +681,11 @@ pub async fn serve_output_file(
         None => return err(StatusCode::NOT_FOUND, "Agent has no workspace"),
     };
 
-    // Build the safe base: workspace/users/{sender_id}/output/
-    let safe_base = workspace
-        .join("users")
-        .join(&params.sender_id)
-        .join("output");
+    // Build the safe base: senders/{sender_id}/{agent_name}/output/
+    let agent_name = &entry.manifest.name;
+    let safe_base = carrier_types::config::sender_data_dir(
+        &state.kernel.config.home_dir, &params.sender_id, agent_name,
+    ).join("output");
 
     // Reject any ".." in file_path
     if file_path.contains("..") {

@@ -88,7 +88,7 @@ impl CarrierKernel {
     /// replacing template files while preserving user data.
     ///
     /// Files replaced: agent.toml, SOUL.md, system_prompt.md, profile.md,
-    ///                 skills/, agents/, EVOLUTION.md, data/knowledge/
+    ///                 skills/, agents/, EVOLUTION.md, knowledge/
     /// Files preserved: memory/, sessions/, logs/, users/, data/ (except knowledge/)
     pub async fn clone_upgrade(&self, name: &str) -> Result<String, String> {
         use carrier_clone::{convert_to_manifest, load_agx};
@@ -266,8 +266,8 @@ impl CarrierKernel {
                 .map_err(|e| format!("Failed to write agent: {e}"))?;
         }
 
-        // Replace data/knowledge/ files
-        let knowledge_dir = workspace.join("data").join("knowledge");
+        // Replace knowledge/ files
+        let knowledge_dir = workspace.join("knowledge");
         std::fs::create_dir_all(&knowledge_dir)
             .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
         for (kname, content) in &clone_data.knowledge {

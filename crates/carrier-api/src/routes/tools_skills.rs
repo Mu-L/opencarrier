@@ -205,6 +205,8 @@ pub async fn mcp_http(
             },
             process_manager: Some(&*state.kernel.coordination.process_manager),
             sender_id: None,
+            home_dir: None,
+            agent_name: None,
         };
         let result = carrier_runtime::tool_runner::execute_tool(
             "mcp-http", tool_name, &arguments, &tool_ctx,

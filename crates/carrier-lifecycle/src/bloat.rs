@@ -57,7 +57,7 @@ pub struct BloatReport {
 /// This is pure file-system logic — reads files, checks modification times,
 /// computes tag overlap. The kernel decides what to do with the report.
 pub fn check_bloat(workspace: &Path, config: &EvolutionConfig) -> Result<BloatReport> {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     if !knowledge_dir.exists() {
         return Ok(BloatReport {
             should_merge_candidates: vec![],
@@ -184,7 +184,7 @@ pub fn check_bloat(workspace: &Path, config: &EvolutionConfig) -> Result<BloatRe
 ///
 /// Returns the number of files marked.
 pub fn mark_stale_files(workspace: &Path, stale_files: &[String]) -> usize {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     let mut marked = 0;
 
     for filename in stale_files {
@@ -205,7 +205,7 @@ pub fn mark_stale_files(workspace: &Path, stale_files: &[String]) -> usize {
 ///
 /// Returns the number of files deleted.
 pub fn delete_expired_files(workspace: &Path, deletable_files: &[String]) -> usize {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     let mut deleted = 0;
 
     for filename in deletable_files {
@@ -270,7 +270,7 @@ pub fn count_tag_overlap(tags_a: &[String], tags_b: &[String]) -> f64 {
 
 /// Scan knowledge directory and return metadata for all files.
 pub fn scan_knowledge(workspace: &Path) -> Result<Vec<KnowledgeMeta>> {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     if !knowledge_dir.exists() {
         return Ok(vec![]);
     }
@@ -351,7 +351,7 @@ pub fn apply_merge(
     filename_b: &str,
     merged_body: &str,
 ) -> Result<()> {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     let path_a = knowledge_dir.join(filename_a);
     let path_b = knowledge_dir.join(filename_b);
 
@@ -433,7 +433,7 @@ pub fn apply_metadata(
     description: &str,
     tags: &[String],
 ) -> Result<()> {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     let path = knowledge_dir.join(filename);
     let content = fs::read_to_string(&path)?;
     let updated = update_frontmatter_fields(&content, description, tags);
@@ -455,7 +455,7 @@ pub fn build_compress_prompt(body: &str) -> (String, String) {
 
 /// Apply compression result to a knowledge file.
 pub fn apply_compress(workspace: &Path, filename: &str, compressed_body: &str) -> Result<()> {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     let path = knowledge_dir.join(filename);
     let original = fs::read_to_string(&path)?;
     let (tags, status) = parse_frontmatter_tags_status(&original);
@@ -483,7 +483,7 @@ pub fn apply_compress(workspace: &Path, filename: &str, compressed_body: &str) -
 
 /// Find the largest files that could benefit from compression.
 pub fn find_compress_candidates(workspace: &Path, target_bytes: u64) -> Result<Vec<(String, u64)>> {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     if !knowledge_dir.exists() {
         return Ok(vec![]);
     }
@@ -720,8 +720,8 @@ mod tests {
 
     #[expect(dead_code)]
     fn write_knowledge_file(dir: &Path, name: &str, content: &str) {
-        fs::create_dir_all(dir.join("data/knowledge")).unwrap();
-        fs::write(dir.join("data/knowledge").join(name), content).unwrap();
+        fs::create_dir_all(dir.join("knowledge")).unwrap();
+        fs::write(dir.join("knowledge").join(name), content).unwrap();
     }
 
     #[test]
@@ -736,7 +736,7 @@ mod tests {
     #[test]
     fn test_check_bloat_detects_expired() {
         let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().join("data/knowledge");
+        let dir = tmp.path().join("knowledge");
         fs::create_dir_all(&dir).unwrap();
 
         // File already marked expired
@@ -828,7 +828,7 @@ mod tests {
     #[test]
     fn test_mark_stale_files() {
         let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().join("data/knowledge");
+        let dir = tmp.path().join("knowledge");
         fs::create_dir_all(&dir).unwrap();
 
         let content = "---\nname: test\n---\n\nBody";
@@ -848,7 +848,7 @@ mod tests {
     #[test]
     fn test_delete_expired_files() {
         let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().join("data/knowledge");
+        let dir = tmp.path().join("knowledge");
         fs::create_dir_all(&dir).unwrap();
         // Create history dir for version recording
         fs::create_dir_all(tmp.path().join("history")).unwrap();
@@ -951,7 +951,7 @@ mod tests {
     #[test]
     fn test_scan_knowledge() {
         let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().join("data/knowledge");
+        let dir = tmp.path().join("knowledge");
         fs::create_dir_all(&dir).unwrap();
 
         fs::write(

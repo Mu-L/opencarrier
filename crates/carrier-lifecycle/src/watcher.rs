@@ -1,4 +1,4 @@
-//! Workspace file watcher — monitors `data/knowledge/` for changes and triggers compile.
+//! Workspace file watcher — monitors `knowledge/` for changes and triggers compile.
 //!
 //! Uses the `notify` crate for cross-platform filesystem event watching.
 //! Debounces rapid changes to avoid triggering compile on every write flush.
@@ -45,7 +45,7 @@ impl WatcherHandle {
 /// Callback invoked after a compile run triggered by the watcher.
 pub type CompileCallback = dyn Fn(&CompileResult) + Send + Sync;
 
-/// Spawn a file watcher that monitors `data/knowledge/` and triggers compile on changes.
+/// Spawn a file watcher that monitors `knowledge/` and triggers compile on changes.
 ///
 /// Returns a `WatcherHandle` that stops the watcher when dropped.
 pub fn spawn_watcher(
@@ -54,7 +54,7 @@ pub fn spawn_watcher(
     llm_call: Arc<LlmCallback>,
     on_compile: Option<Arc<CompileCallback>>,
 ) -> Result<WatcherHandle, String> {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
 
     if !knowledge_dir.exists() {
         std::fs::create_dir_all(&knowledge_dir)

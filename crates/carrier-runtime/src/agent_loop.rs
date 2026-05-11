@@ -815,6 +815,7 @@ async fn run_agent_loop_impl(
                     // Resolve effective exec policy (per-agent override or global)
                     let effective_exec_policy = manifest.exec_policy.as_ref();
 
+                    let home_dir_buf = kernel.as_ref().and_then(|k| k.home_dir());
                     let tool_ctx = ToolContext {
                         kernel: kernel.as_ref(),
                         allowed_tools: Some(&allowed_tool_names),
@@ -834,6 +835,8 @@ async fn run_agent_loop_impl(
                         docker_config,
                         process_manager,
                         sender_id,
+                        home_dir: home_dir_buf.as_deref(),
+                        agent_name: Some(&manifest.name),
                     };
 
                     // Timeout-wrapped execution

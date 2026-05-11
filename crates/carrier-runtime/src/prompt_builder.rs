@@ -73,7 +73,7 @@ pub struct PromptContext {
     /// Clone's full skill prompts — workspace skill body + allowed_tools.
     /// Injected alongside the catalog so the LLM knows HOW to execute each skill.
     pub clone_skills_prompts: Option<String>,
-    /// Clone's knowledge content — compiled truth from data/knowledge/*.md files.
+    /// Clone's knowledge content — compiled truth from knowledge/*.md files.
     /// Unlike memory_md (which is just the index), this contains actual knowledge.
     pub knowledge_content: Option<String>,
     /// Clone's sub-agents — workspace/agents/*.md parsed at prompt build time.
@@ -142,7 +142,7 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             }
         }
 
-        // data/knowledge/*.md → 知识内容（compiled truth，不含 timeline）
+        // knowledge/*.md → 知识内容（compiled truth，不含 timeline）
         if let Some(ref knowledge) = ctx.knowledge_content {
             if !knowledge.trim().is_empty() {
                 sections.push(format!(
@@ -1085,7 +1085,7 @@ mod tests {
             soul_md: Some("你是专业客服，语气亲切。".to_string()),
             clone_system_prompt_md: Some("处理客户问题，按步骤操作。".to_string()),
             clone_skills_catalog: Some("1. **handle-refund** — 用户要求退货时激活\n2. **handle-complaint** — 用户投诉时激活".to_string()),
-            memory_md: Some("## 退货政策\n- [refund-policy](data/knowledge/refund.md)".to_string()),
+            memory_md: Some("## 退货政策\n- [refund-policy](knowledge/refund.md)".to_string()),
             granted_tools: vec!["web_fetch".to_string(), "memory_store".to_string()],
             ..Default::default()
         };

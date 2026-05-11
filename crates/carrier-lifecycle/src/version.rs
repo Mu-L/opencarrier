@@ -17,7 +17,7 @@ pub struct VersionEntry {
     pub timestamp: String,
     /// Action type: create / update / delete / verify / rollback
     pub action: String,
-    /// Filename (relative to data/knowledge/)
+    /// Filename (relative to knowledge/)
     pub file: String,
     /// Content before change (None = new file)
     pub before: Option<String>,
@@ -116,7 +116,7 @@ pub fn list_unverified(workspace: &Path) -> Result<Vec<VersionEntry>> {
 ///
 /// After rollback, MEMORY.md index is rebuilt.
 pub fn rollback_file(workspace: &Path, filename: &str) -> Result<()> {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     let file_path = knowledge_dir.join(filename);
 
     let current = if file_path.exists() {
@@ -210,7 +210,7 @@ pub fn verify_version(workspace: &Path, filename: &str) -> Result<()> {
     }
 
     // Upgrade confidence in the knowledge file to EXTRACTED
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     let file_path = knowledge_dir.join(filename);
     if file_path.exists() {
         if let Ok(file_content) = fs::read_to_string(&file_path) {
@@ -341,7 +341,7 @@ mod tests {
     fn test_rollback_restore_previous() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path();
-        let knowledge_dir = workspace.join("data/knowledge");
+        let knowledge_dir = workspace.join("knowledge");
         fs::create_dir_all(&knowledge_dir).unwrap();
 
         // Create → update
@@ -385,7 +385,7 @@ mod tests {
     fn test_rollback_delete_new_file() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path();
-        let knowledge_dir = workspace.join("data/knowledge");
+        let knowledge_dir = workspace.join("knowledge");
         fs::create_dir_all(&knowledge_dir).unwrap();
 
         // Create only (no previous version)
@@ -414,7 +414,7 @@ mod tests {
     fn test_rollback_restore_deleted_file() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path();
-        let knowledge_dir = workspace.join("data/knowledge");
+        let knowledge_dir = workspace.join("knowledge");
         fs::create_dir_all(&knowledge_dir).unwrap();
 
         // Create then delete

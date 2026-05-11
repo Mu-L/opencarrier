@@ -57,6 +57,13 @@ pub struct KnowledgeCandidate {
     pub title: String,
     /// Full knowledge content.
     pub content: String,
+    /// Scope: "shared" (any user benefits) or "private" (user-specific).
+    #[serde(default = "default_scope")]
+    pub scope: String,
+}
+
+fn default_scope() -> String {
+    "shared".to_string()
 }
 
 /// Result of analyzing a conversation turn.
@@ -99,7 +106,7 @@ pub fn build_analysis_prompt() -> String {
 {
   "has_new_knowledge": true/false,
   "knowledge": [
-    {"title": "简短标题（英文或拼音，用作文件名）", "content": "知识内容（保留原文关键信息）"}
+    {"title": "简短标题（英文或拼音，用作文件名）", "content": "知识内容（保留原文关键信息）", "scope": "shared或private"}
   ],
   "gaps": ["发现的知识缺口（分身应该知道但不知道的东西）"]
 }
@@ -111,7 +118,12 @@ pub fn build_analysis_prompt() -> String {
 4. 不要提取：问候语、闲聊、已存在于索引中的内容
 5. 知识内容要完整准确，保留关键细节
 6. 如果没有新知识，返回 {"has_new_knowledge": false, "knowledge": [], "gaps": []}
-7. 只返回 JSON，不要其他文字"#
+7. 只返回 JSON，不要其他文字
+
+scope 判断规则：
+- shared：通用知识，任何用户都受益（技术规范、行业知识、工具用法、业务规则）
+- private：用户个人数据（偏好、经历、需求、私密信息、用户特定上下文）
+- 拿不准时标 private"#
         .to_string()
 }
 
@@ -162,15 +174,35 @@ pub fn parse_analysis_response(text: &str) -> Result<EvolutionAnalysis> {
 
 /// Apply evolution results: write knowledge files, update MEMORY.md, record versions.
 ///
+/// When `sender_id` and `home_dir` are provided, knowledge with scope="private"
+/// is written to the sender's private directory instead of the shared workspace.
+///
 /// Returns paths of newly created knowledge files.
-pub fn apply_evolution(workspace: &Path, analysis: &EvolutionAnalysis) -> Vec<PathBuf> {
+pub fn apply_evolution(
+    workspace: &Path,
+    analysis: &EvolutionAnalysis,
+    sender_id: Option<&str>,
+    home_dir: Option<&Path>,
+) -> Vec<PathBuf> {
     let mut saved = Vec::new();
 
     // Write new knowledge files
     for candidate in &analysis.knowledge {
-        match write_knowledge(workspace, candidate) {
+        let is_private = candidate.scope == "private";
+        let target_workspace = if is_private {
+            if let (Some(sid), Some(hd)) = (sender_id, home_dir) {
+                Some(carrier_types::config::sender_data_dir(hd, sid, &extract_agent_name(workspace)))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let target = target_workspace.as_deref().unwrap_or(workspace);
+        match write_knowledge(target, candidate) {
             Ok(path) => {
-                info!(file = ?path, "Evolution: knowledge updated");
+                info!(file = ?path, scope = %candidate.scope, "Evolution: knowledge updated");
                 saved.push(path);
             }
             Err(e) => {
@@ -179,7 +211,7 @@ pub fn apply_evolution(workspace: &Path, analysis: &EvolutionAnalysis) -> Vec<Pa
         }
     }
 
-    // Mark knowledge gaps in MEMORY.md
+    // Mark knowledge gaps in workspace MEMORY.md
     if !analysis.gaps.is_empty() {
         if let Err(e) = append_gaps_to_index(workspace, &analysis.gaps) {
             tracing::warn!(error = %e, "Evolution: failed to append gaps");
@@ -194,6 +226,15 @@ pub fn apply_evolution(workspace: &Path, analysis: &EvolutionAnalysis) -> Vec<Pa
         if let Err(e) = update_memory_index(workspace) {
             tracing::warn!(error = %e, "Evolution: failed to update memory index");
         }
+        // Also update private MEMORY.md if we wrote private knowledge
+        if analysis.knowledge.iter().any(|k| k.scope == "private") {
+            if let (Some(sid), Some(hd)) = (sender_id, home_dir) {
+                let sender_dir = carrier_types::config::sender_data_dir(hd, sid, &extract_agent_name(workspace));
+                if let Err(e) = update_private_memory_index(&sender_dir) {
+                    tracing::warn!(error = %e, "Evolution: failed to update private memory index");
+                }
+            }
+        }
     }
 
     saved
@@ -203,7 +244,7 @@ pub fn apply_evolution(workspace: &Path, analysis: &EvolutionAnalysis) -> Vec<Pa
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Write a knowledge candidate as a markdown file in data/knowledge/.
+/// Write a knowledge candidate as a markdown file in knowledge/.
 ///
 /// Uses dual-layer format:
 /// ```md
@@ -221,7 +262,7 @@ pub fn apply_evolution(workspace: &Path, analysis: &EvolutionAnalysis) -> Vec<Pa
 /// Evolution appends to the timeline (below the second `---`).
 /// Compile rewrites the compiled truth (above the second `---`).
 fn write_knowledge(workspace: &Path, candidate: &KnowledgeCandidate) -> Result<PathBuf> {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     fs::create_dir_all(&knowledge_dir)?;
 
     let safe_title = sanitize_filename(&candidate.title);
@@ -286,7 +327,7 @@ fn write_knowledge(workspace: &Path, candidate: &KnowledgeCandidate) -> Result<P
     Ok(path)
 }
 
-/// Rebuild MEMORY.md by scanning data/knowledge/ directory.
+/// Rebuild MEMORY.md by scanning knowledge/ directory.
 pub fn update_memory_index(workspace: &Path) -> Result<()> {
     let index_path = workspace.join("MEMORY.md");
 
@@ -297,7 +338,7 @@ pub fn update_memory_index(workspace: &Path) -> Result<()> {
         String::new(),
     ];
 
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     if knowledge_dir.exists() {
         lines.push("## 知识".to_string());
         lines.push(String::new());
@@ -331,7 +372,7 @@ pub fn update_memory_index(workspace: &Path) -> Result<()> {
                 "AMBIGUOUS" => format!("[AMBIGUOUS] {}", title),
                 _ => title, // EXTRACTED or unknown — no tag needed
             };
-            lines.push(format!("- [{}](data/knowledge/{}.md)", label, name));
+            lines.push(format!("- [{}](knowledge/{}.md)", label, name));
         }
     }
 
@@ -367,6 +408,60 @@ fn append_gaps_to_index(workspace: &Path, gaps: &[String]) -> Result<()> {
         fs::write(index_path, content)?;
     }
 
+    Ok(())
+}
+
+/// Extract agent name from workspace path (last directory component).
+fn extract_agent_name(workspace: &Path) -> String {
+    workspace
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Rebuild MEMORY.md for a sender's private knowledge directory.
+pub fn update_private_memory_index(sender_dir: &Path) -> Result<()> {
+    let index_path = sender_dir.join("MEMORY.md");
+
+    let mut lines = vec![
+        "# 私人知识索引".to_string(),
+        String::new(),
+        "> 此文件由系统自动维护，不要手动编辑。".to_string(),
+        String::new(),
+    ];
+
+    let knowledge_dir = sender_dir.join("knowledge");
+    if knowledge_dir.exists() {
+        lines.push("## 私人知识".to_string());
+        lines.push(String::new());
+
+        let entries = fs::read_dir(&knowledge_dir)?;
+        let mut files: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|ext| ext == "md").unwrap_or(false))
+            .collect();
+
+        files.sort_by_key(|e| e.file_name());
+
+        for entry in files {
+            let path = entry.path();
+            let name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            let title = if let Ok(file_content) = fs::read_to_string(&path) {
+                extract_frontmatter_name(&file_content).unwrap_or_else(|| name.clone())
+            } else {
+                name.clone()
+            };
+
+            lines.push(format!("- [{}](knowledge/{}.md)", title, name));
+        }
+    }
+
+    let content = lines.join("\n");
+    fs::write(&index_path, content)?;
     Ok(())
 }
 
@@ -566,22 +661,23 @@ mod tests {
     fn test_apply_evolution_writes_files() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path();
-        fs::create_dir_all(workspace.join("data/knowledge")).unwrap();
+        fs::create_dir_all(workspace.join("knowledge")).unwrap();
 
         let analysis = EvolutionAnalysis {
             knowledge: vec![KnowledgeCandidate {
                 title: "refund-policy".to_string(),
                 content: "7天内可退款".to_string(),
+                scope: "shared".to_string(),
             }],
             gaps: vec!["退货流程".to_string()],
             trivial: false,
         };
 
-        let saved = apply_evolution(workspace, &analysis);
+        let saved = apply_evolution(workspace, &analysis, None, None);
         assert_eq!(saved.len(), 1);
 
         // Knowledge file created with dual-layer format
-        let path = workspace.join("data/knowledge/refund-policy.md");
+        let path = workspace.join("knowledge/refund-policy.md");
         assert!(path.exists());
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("7天内可退款"));
@@ -606,32 +702,34 @@ mod tests {
     fn test_apply_evolution_appends_to_existing() {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path();
-        fs::create_dir_all(workspace.join("data/knowledge")).unwrap();
+        fs::create_dir_all(workspace.join("knowledge")).unwrap();
 
         let candidate = KnowledgeCandidate {
             title: "test-knowledge".to_string(),
             content: "original".to_string(),
+            scope: "shared".to_string(),
         };
 
         // First write — creates file
         write_knowledge(workspace, &candidate).unwrap();
-        assert!(workspace.join("data/knowledge/test-knowledge.md").exists());
+        assert!(workspace.join("knowledge/test-knowledge.md").exists());
 
         // Second write — appends instead of skipping
         let analysis = EvolutionAnalysis {
             knowledge: vec![KnowledgeCandidate {
                 title: "test-knowledge".to_string(),
                 content: "updated info".to_string(),
+                scope: "shared".to_string(),
             }],
             gaps: vec![],
             trivial: false,
         };
-        let saved = apply_evolution(workspace, &analysis);
+        let saved = apply_evolution(workspace, &analysis, None, None);
         assert_eq!(saved.len(), 1, "should append, not skip");
 
         // File should have dual-layer format: compiled truth preserved + timeline appended
         let content =
-            fs::read_to_string(workspace.join("data/knowledge/test-knowledge.md")).unwrap();
+            fs::read_to_string(workspace.join("knowledge/test-knowledge.md")).unwrap();
         let (compiled, timeline) = split_dual_layer(&content);
         assert!(
             compiled.contains("original"),

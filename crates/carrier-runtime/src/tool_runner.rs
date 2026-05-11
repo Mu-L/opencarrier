@@ -76,6 +76,8 @@ pub async fn execute_tool(
         docker_config: _,
         process_manager: _,
         sender_id,
+        home_dir: _,
+        agent_name: _,
     } = *ctx;
 
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
@@ -294,6 +296,8 @@ mod tests {
             docker_config: None,
             process_manager: None,
             sender_id: None,
+            home_dir: None,
+            agent_name: None,
         }
     }
 

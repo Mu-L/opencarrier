@@ -182,6 +182,7 @@ impl CarrierKernel {
         manifest: &carrier_types::agent::AgentManifest,
         user_msg: &str,
         response: &str,
+        sender_id: Option<&str>,
     ) {
         // Check config + clone mode
         if !self.config.clone_lifecycle.evolution_enabled {
@@ -196,7 +197,7 @@ impl CarrierKernel {
         }
         // Check per-clone evolution config (EVOLUTION.md)
         let evo_config = carrier_lifecycle::evolution_config::read_evolution_config(workspace);
-        let knowledge_count = std::fs::read_dir(workspace.join("data/knowledge"))
+        let knowledge_count = std::fs::read_dir(workspace.join("knowledge"))
             .map(|d| d.count())
             .unwrap_or(0);
         if !carrier_lifecycle::evolution_config::should_evolve(&evo_config, knowledge_count) {
@@ -211,6 +212,8 @@ impl CarrierKernel {
         let user_msg = user_msg.to_string();
         let response = response.to_string();
         let clone_name = manifest.name.clone();
+        let sender_id_owned = sender_id.map(|s| s.to_string());
+        let home_dir = self.config.home_dir.clone();
         let feedback_to_hub = evo_config.feedback_to_hub;
         let hub_url = self.config.hub.url.clone();
         let hub_api_key =
@@ -260,6 +263,8 @@ impl CarrierKernel {
                         Ok(analysis) => {
                             let saved = carrier_lifecycle::evolution::apply_evolution(
                                 &workspace, &analysis,
+                                sender_id_owned.as_deref(),
+                                Some(&home_dir),
                             );
                             if !saved.is_empty() {
                                 tracing::info!(

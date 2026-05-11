@@ -69,7 +69,7 @@ pub struct EvalReport {
 
 /// Compute deterministic quality metrics for a clone workspace.
 pub fn compute_deterministic_metrics(workspace: &Path) -> QualityMetrics {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     let skills_dir = workspace.join("skills");
 
     // Knowledge files
@@ -301,7 +301,7 @@ pub fn parse_judge_response(text: &str) -> (f32, String) {
 
 /// Read all knowledge content for evaluation (compiled truth only).
 pub fn read_knowledge_for_eval(workspace: &Path) -> String {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     if !knowledge_dir.exists() {
         return String::new();
     }
@@ -360,7 +360,7 @@ mod tests {
 
     fn setup_workspace(tmp: &TempDir) -> &Path {
         let ws = tmp.path();
-        fs::create_dir_all(ws.join("data/knowledge")).unwrap();
+        fs::create_dir_all(ws.join("knowledge")).unwrap();
         fs::create_dir_all(ws.join("skills")).unwrap();
         ws
     }
@@ -387,12 +387,12 @@ mod tests {
         fs::write(ws.join("MEMORY.md"), "# Index").unwrap();
 
         fs::write(
-            ws.join("data/knowledge/policy.md"),
+            ws.join("knowledge/policy.md"),
             "---\nname: policy\ndescription: refund policy\n---\n\nRefund within 7 days.",
         )
         .unwrap();
         fs::write(
-            ws.join("data/knowledge/faq.md"),
+            ws.join("knowledge/faq.md"),
             "---\nname: faq\ndescription: common questions\n---\n\nFAQ content here.",
         )
         .unwrap();
@@ -457,7 +457,7 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         fs::write(
-            ws.join("data/knowledge/test.md"),
+            ws.join("knowledge/test.md"),
             "---\nname: test\n---\n\nContent here.",
         )
         .unwrap();

@@ -194,6 +194,11 @@ pub trait KernelHandle: Send + Sync {
         Err("Clone publish not available".to_string())
     }
 
+    /// Get the home directory path (~/.opencarrier/).
+    fn home_dir(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     /// Spawn an agent with capability inheritance enforcement.
     /// `parent_caps` are the parent's granted capabilities. The kernel MUST verify
     /// that every capability in the child manifest is covered by `parent_caps`.

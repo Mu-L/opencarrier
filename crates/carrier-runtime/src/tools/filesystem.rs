@@ -77,11 +77,11 @@ impl super::ToolModule for FilesystemTools {
         ctx: &ToolContext<'_>,
     ) -> Option<Result<String, String>> {
         match name {
-            "file_read" => Some(tool_file_read(input, ctx.workspace_root, ctx.sender_id).await),
-            "file_write" => Some(tool_file_write(input, ctx.workspace_root, ctx.sender_id).await),
-            "file_list" => Some(tool_file_list(input, ctx.workspace_root, ctx.sender_id).await),
+            "file_read" => Some(tool_file_read(input, ctx.workspace_root, ctx.sender_id, ctx.agent_name).await),
+            "file_write" => Some(tool_file_write(input, ctx.workspace_root, ctx.sender_id, ctx.agent_name).await),
+            "file_list" => Some(tool_file_list(input, ctx.workspace_root, ctx.sender_id, ctx.agent_name).await),
             "file_convert" => {
-                Some(tool_file_convert(input, ctx.workspace_root, ctx.sender_id).await)
+                Some(tool_file_convert(input, ctx.workspace_root, ctx.sender_id, ctx.agent_name).await)
             }
             _ => None,
         }
@@ -96,9 +96,10 @@ async fn tool_file_read(
     input: &Value,
     workspace_root: Option<&Path>,
     sender_id: Option<&str>,
+    agent_name: Option<&str>,
 ) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = super::resolve_file_path_for_read(raw_path, workspace_root, sender_id)?;
+    let resolved = super::resolve_file_path_for_read(raw_path, workspace_root, sender_id, agent_name)?;
     tokio::fs::read_to_string(&resolved)
         .await
         .map_err(|e| format!("Failed to read file: {e}"))
@@ -108,10 +109,11 @@ async fn tool_file_write(
     input: &Value,
     workspace_root: Option<&Path>,
     sender_id: Option<&str>,
+    agent_name: Option<&str>,
 ) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
     let resolved = if let Some(root) = workspace_root {
-        crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, sender_id)?
+        crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, sender_id, agent_name)?
     } else {
         let _ = super::validate_path(raw_path)?;
         PathBuf::from(raw_path)
@@ -138,9 +140,10 @@ async fn tool_file_list(
     input: &Value,
     workspace_root: Option<&Path>,
     sender_id: Option<&str>,
+    agent_name: Option<&str>,
 ) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = super::resolve_file_path_for_read(raw_path, workspace_root, sender_id)?;
+    let resolved = super::resolve_file_path_for_read(raw_path, workspace_root, sender_id, agent_name)?;
     let mut entries = tokio::fs::read_dir(&resolved)
         .await
         .map_err(|e| format!("Failed to list directory: {e}"))?;
@@ -166,6 +169,7 @@ async fn tool_file_convert(
     input: &Value,
     workspace_root: Option<&Path>,
     sender_id: Option<&str>,
+    agent_name: Option<&str>,
 ) -> Result<String, String> {
     let raw_input_path = input["input_path"]
         .as_str()
@@ -190,7 +194,7 @@ async fn tool_file_convert(
 
     let output_path = if let Some(op) = raw_output_path {
         if let Some(root) = workspace_root {
-            crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, sender_id)?
+            crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, sender_id, agent_name)?
         } else {
             let _ = super::validate_path(op)?;
             PathBuf::from(op)
@@ -202,7 +206,7 @@ async fn tool_file_convert(
             .unwrap_or("converted");
         let sender = sender_id.unwrap_or("unknown");
         let output_dir = if let Some(root) = workspace_root {
-            root.join("users").join(sender).join("output")
+            root.join("senders").join(sender).join(agent_name.unwrap_or("unknown")).join("output")
         } else {
             PathBuf::from("output")
         };

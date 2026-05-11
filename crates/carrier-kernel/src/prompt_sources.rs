@@ -34,7 +34,7 @@ pub fn read_identity_file(workspace: &Path, filename: &str) -> Option<String> {
 
 /// Read user profile for multi-tenancy context injection.
 /// Returns a short summary string suitable for the system prompt.
-pub fn read_user_profile_summary(workspace: &Path, sender_id: &str) -> Option<String> {
+pub fn read_user_profile_summary(home_dir: &Path, sender_id: &str, agent_name: &str) -> Option<String> {
     // SECURITY: sanitize sender_id to prevent path traversal
     if sender_id.contains('/')
         || sender_id.contains('\\')
@@ -43,7 +43,7 @@ pub fn read_user_profile_summary(workspace: &Path, sender_id: &str) -> Option<St
     {
         return None;
     }
-    let profile_path = workspace.join("users").join(sender_id).join("profile.json");
+    let profile_path = carrier_types::config::sender_data_dir(home_dir, sender_id, agent_name).join("profile.json");
     if !profile_path.exists() {
         return None;
     }
@@ -88,7 +88,7 @@ pub fn read_user_profile_summary(workspace: &Path, sender_id: &str) -> Option<St
 }
 
 /// Update user profile after a conversation (touch last_seen, increment count).
-pub fn touch_user_profile(workspace: &Path, sender_id: &str) {
+pub fn touch_user_profile(home_dir: &Path, sender_id: &str, agent_name: &str) {
     // SECURITY: sanitize sender_id to prevent path traversal
     if sender_id.contains('/')
         || sender_id.contains('\\')
@@ -97,7 +97,7 @@ pub fn touch_user_profile(workspace: &Path, sender_id: &str) {
     {
         return;
     }
-    let profile_path = workspace.join("users").join(sender_id).join("profile.json");
+    let profile_path = carrier_types::config::sender_data_dir(home_dir, sender_id, agent_name).join("profile.json");
     let mut profile: serde_json::Value = if profile_path.exists() {
         std::fs::read_to_string(&profile_path)
             .ok()
@@ -178,48 +178,42 @@ pub fn read_skills_catalog(workspace: &Path) -> Option<String> {
     Some(catalog)
 }
 
-/// Read all knowledge files from workspace/data/knowledge/ directory.
+/// Read all knowledge files from workspace/knowledge/ directory and (if provided)
+/// from the sender's private knowledge directory.
 ///
 /// Returns a concatenated string of all knowledge file contents (compiled truth
-/// section only, not timeline). Capped at ~6KB to avoid context overflow.
-pub fn read_knowledge_content(workspace: &Path) -> Option<String> {
+/// section only, not timeline). Private knowledge overrides shared knowledge
+/// with the same filename. Capped at ~6KB to avoid context overflow.
+pub fn read_knowledge_content(
+    workspace: &Path,
+    sender_id: Option<&str>,
+    home_dir: Option<&Path>,
+) -> Option<String> {
     const MAX_KNOWLEDGE_TOTAL_BYTES: usize = 6144; // 6KB cap
-    let knowledge_dir = workspace.join("data/knowledge");
-    if !knowledge_dir.is_dir() {
-        return None;
-    }
+    let knowledge_dir = workspace.join("knowledge");
 
+    // Collect shared knowledge
     let mut entries: Vec<(String, String)> = Vec::new();
     let mut total_bytes = 0;
 
-    if let Ok(dir_iter) = std::fs::read_dir(&knowledge_dir) {
-        let mut files: Vec<_> = dir_iter
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-            .collect();
-        files.sort_by_key(|e| e.file_name());
+    if knowledge_dir.is_dir() {
+        if let Some(shared) = read_knowledge_dir(&knowledge_dir, &mut total_bytes, MAX_KNOWLEDGE_TOTAL_BYTES) {
+            entries.extend(shared);
+        }
+    }
 
-        for entry in files {
-            let path = entry.path();
-            let name = path.file_stem()?.to_string_lossy().to_string();
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                // Extract compiled truth only (skip timeline for context injection)
-                let compiled = if content.contains("\n---\n") {
-                    // Dual-layer format: take content before the second --- separator
-                    let (truth, _timeline) =
-                        carrier_lifecycle::evolution::split_dual_layer(&content);
-                    truth
-                } else {
-                    content.clone()
-                };
-                let trimmed = compiled.trim();
-                if !trimmed.is_empty() {
-                    total_bytes += trimmed.len();
-                    if total_bytes > MAX_KNOWLEDGE_TOTAL_BYTES {
-                        break; // Stop adding files once we hit the cap
-                    }
-                    entries.push((name, trimmed.to_string()));
-                }
+    // Collect private knowledge (overrides shared with same filename)
+    if let (Some(sid), Some(hd)) = (sender_id, home_dir) {
+        let agent_name = workspace.file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let private_dir = carrier_types::config::sender_data_dir(hd, sid, &agent_name).join("knowledge");
+        if private_dir.is_dir() {
+            if let Some(private) = read_knowledge_dir(&private_dir, &mut total_bytes, MAX_KNOWLEDGE_TOTAL_BYTES) {
+                // Private overrides shared: remove shared entries with same name
+                let private_names: std::collections::HashSet<String> = private.iter().map(|(n, _)| n.clone()).collect();
+                entries.retain(|(n, _)| !private_names.contains(n));
+                entries.extend(private);
             }
         }
     }
@@ -235,6 +229,40 @@ pub fn read_knowledge_content(workspace: &Path) -> Option<String> {
         .join("\n\n");
 
     Some(result)
+}
+
+/// Read knowledge files from a single directory, returning (name, compiled_content) pairs.
+fn read_knowledge_dir(knowledge_dir: &Path, total_bytes: &mut usize, max_bytes: usize) -> Option<Vec<(String, String)>> {
+    let dir_iter = std::fs::read_dir(knowledge_dir).ok()?;
+    let mut files: Vec<_> = dir_iter
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    files.sort_by_key(|e| e.file_name());
+
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for entry in files {
+        let path = entry.path();
+        let name = path.file_stem()?.to_string_lossy().to_string();
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let compiled = if content.contains("\n---\n") {
+                let (truth, _timeline) = carrier_lifecycle::evolution::split_dual_layer(&content);
+                truth
+            } else {
+                content.clone()
+            };
+            let trimmed = compiled.trim();
+            if !trimmed.is_empty() {
+                *total_bytes += trimmed.len();
+                if *total_bytes > max_bytes {
+                    break;
+                }
+                entries.push((name, trimmed.to_string()));
+            }
+        }
+    }
+
+    if entries.is_empty() { None } else { Some(entries) }
 }
 
 /// Read all style samples from workspace/style/ directory.

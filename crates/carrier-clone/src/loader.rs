@@ -33,6 +33,9 @@ pub struct TemplateManifest {
     /// Required plugins for this clone.
     #[serde(default)]
     pub plugins: Vec<String>,
+    /// Required MCP servers for this clone.
+    #[serde(default)]
+    pub mcp_servers: Vec<String>,
 }
 
 /// A parsed skill from the .agx archive.

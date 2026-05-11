@@ -430,11 +430,11 @@ impl CarrierKernel {
             match result {
                 Ok(result) => {
                     // Evolution hook — post-conversation auto-learning for clones
-                    kernel_clone.maybe_run_evolution(&manifest, &message_owned, &result.response);
+                    kernel_clone.maybe_run_evolution(&manifest, &message_owned, &result.response, sender_id.as_deref());
 
                     // Multi-tenancy: update user profile
-                    if let (Some(ref sid), Some(ref ws)) = (&sender_id, &manifest.workspace) {
-                        touch_user_profile(ws, sid);
+                    if let Some(ref sid) = &sender_id {
+                        touch_user_profile(&kernel_clone.config.home_dir, sid, &manifest.name);
                     }
 
                     // Append new messages to canonical session for cross-channel memory
@@ -448,11 +448,13 @@ impl CarrierKernel {
                             &session,
                             &workspace.join("sessions"),
                             sender_id.as_deref(),
+                            Some(&kernel_clone.config.home_dir),
+                            Some(&manifest.name),
                         ) {
                             warn!("Failed to write JSONL session mirror (streaming): {e}");
                         }
                         // Append daily memory log (best-effort)
-                        append_daily_memory_log(workspace, &result.response, sender_id.as_deref());
+                        append_daily_memory_log(&kernel_clone.config.home_dir, &manifest.name, &result.response, sender_id.as_deref());
                     }
 
                     kernel_clone
@@ -768,8 +770,8 @@ impl CarrierKernel {
 
         // Snapshot output directory before the agent loop to detect new files
         let output_dir_before = sender_id.as_ref().and_then(|sid| {
-            manifest.workspace.as_ref().map(|ws| {
-                let dir = ws.join("users").join(sid).join("output");
+            manifest.workspace.as_ref().map(|_ws| {
+                let dir = carrier_types::config::sender_data_dir(&self.config.home_dir, sid, &manifest.name).join("output");
                 let existing = std::fs::read_dir(&dir)
                     .ok()
                     .map(|rd| {
@@ -848,11 +850,11 @@ impl CarrierKernel {
         }
 
         // Evolution hook — post-conversation auto-learning for clones
-        self.maybe_run_evolution(&manifest, message, &result.response);
+        self.maybe_run_evolution(&manifest, message, &result.response, sender_id.as_deref());
 
         // Multi-tenancy: update user profile (touch last_seen, increment conversation_count)
-        if let (Some(ref sid), Some(ref ws)) = (&sender_id, &manifest.workspace) {
-            touch_user_profile(ws, sid);
+        if let Some(ref sid) = sender_id {
+            touch_user_profile(&self.config.home_dir, sid, &manifest.name);
         }
 
         // Append new messages to canonical session for cross-channel memory
@@ -866,11 +868,13 @@ impl CarrierKernel {
                 &session,
                 &workspace.join("sessions"),
                 sender_id.as_deref(),
+                Some(&self.config.home_dir),
+                Some(&manifest.name),
             ) {
                 warn!("Failed to write JSONL session mirror: {e}");
             }
             // Append daily memory log (best-effort)
-            append_daily_memory_log(workspace, &result.response, sender_id.as_deref());
+            append_daily_memory_log(&self.config.home_dir, &manifest.name, &result.response, sender_id.as_deref());
         }
 
         // Record usage and check budget thresholds

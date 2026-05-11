@@ -1119,6 +1119,15 @@ pub fn home_dir() -> PathBuf {
         .join(".opencarrier")
 }
 
+/// Resolve the per-user per-agent data directory under `senders/`.
+///
+/// Returns `~/.opencarrier/senders/{sender_id}/{agent_name}/`.
+/// This is where user-private data lives: knowledge/, input/, output/,
+/// profile.json, sessions/.
+pub fn sender_data_dir(home_dir: &std::path::Path, sender_id: &str, agent_name: &str) -> PathBuf {
+    home_dir.join("senders").join(sender_id).join(agent_name)
+}
+
 /// Default LLM model configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

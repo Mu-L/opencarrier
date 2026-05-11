@@ -85,7 +85,7 @@ const MAX_FILE_SIZE: u64 = 50 * 1024;
 
 /// Run health check on all knowledge files.
 pub fn check_health(workspace: &Path) -> HealthReport {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     let mut report = HealthReport::default();
 
     if !knowledge_dir.exists() {
@@ -293,11 +293,11 @@ pub fn check_health(workspace: &Path) -> HealthReport {
     let memory_path = workspace.join("MEMORY.md");
     if let Ok(memory_content) = fs::read_to_string(&memory_path) {
         for line in memory_content.lines() {
-            if let Some(ref_start) = line.find("](data/knowledge/") {
-                // Extract reference like: [Title](data/knowledge/file.md)
+            if let Some(ref_start) = line.find("](knowledge/") {
+                // Extract reference like: [Title](knowledge/file.md)
                 if let Some(ref_end) = line[ref_start..].find(')') {
                     let reference = &line[ref_start + 2..ref_start + ref_end];
-                    let ref_filename = reference.trim_start_matches("data/knowledge/");
+                    let ref_filename = reference.trim_start_matches("knowledge/");
                     let full_path = knowledge_dir.join(ref_filename);
                     if !full_path.exists() {
                         report.issues.push(HealthIssue {
@@ -322,7 +322,7 @@ pub fn check_health(workspace: &Path) -> HealthReport {
 ///
 /// Returns the number of issues fixed.
 pub fn auto_fix(workspace: &Path, report: &HealthReport) -> usize {
-    let knowledge_dir = workspace.join("data/knowledge");
+    let knowledge_dir = workspace.join("knowledge");
     let mut fixed = 0;
 
     for issue in &report.issues {
@@ -387,7 +387,7 @@ mod tests {
 
     fn setup_workspace(tmp: &TempDir) -> std::path::PathBuf {
         let ws = tmp.path().to_path_buf();
-        fs::create_dir_all(ws.join("data/knowledge")).unwrap();
+        fs::create_dir_all(ws.join("knowledge")).unwrap();
         fs::create_dir_all(ws.join("history")).unwrap();
         ws
     }
@@ -407,7 +407,7 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         fs::write(
-            ws.join("data/knowledge/good.md"),
+            ws.join("knowledge/good.md"),
             "---\nname: Test\nsource: manual\ndescription: A test file\ntags: [\"test\"]\n---\n\nSome content here\n\n---\n\n- 2025-01-01: created",
         ).unwrap();
 
@@ -423,7 +423,7 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         fs::write(
-            ws.join("data/knowledge/empty.md"),
+            ws.join("knowledge/empty.md"),
             "---\nname: empty\n---\n\n",
         )
         .unwrap();
@@ -438,7 +438,7 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         fs::write(
-            ws.join("data/knowledge/no-fm.md"),
+            ws.join("knowledge/no-fm.md"),
             "Just content without frontmatter",
         )
         .unwrap();
@@ -456,7 +456,7 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         fs::write(
-            ws.join("data/knowledge/bad.md"),
+            ws.join("knowledge/bad.md"),
             "---\nname: test\n\nNo closing marker",
         )
         .unwrap();
@@ -474,7 +474,7 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         fs::write(
-            ws.join("data/knowledge/expired.md"),
+            ws.join("knowledge/expired.md"),
             "---\nname: old\nstatus: expired\n---\n\nOld content",
         )
         .unwrap();
@@ -492,7 +492,7 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         fs::write(
-            ws.join("data/knowledge/noname.md"),
+            ws.join("knowledge/noname.md"),
             "---\nsource: evolution\n---\n\nContent",
         )
         .unwrap();
@@ -511,7 +511,7 @@ mod tests {
 
         // Good file
         fs::write(
-            ws.join("data/knowledge/good.md"),
+            ws.join("knowledge/good.md"),
             "---\nname: Good\n---\n\nContent",
         )
         .unwrap();
@@ -519,7 +519,7 @@ mod tests {
         // MEMORY.md references non-existent file
         fs::write(
             ws.join("MEMORY.md"),
-            "# 知识索引\n\n## 知识\n\n- [Good](data/knowledge/good.md)\n- [Missing](data/knowledge/missing.md)\n",
+            "# 知识索引\n\n## 知识\n\n- [Good](knowledge/good.md)\n- [Missing](knowledge/missing.md)\n",
         ).unwrap();
 
         let report = check_health(&ws);
@@ -535,7 +535,7 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         fs::write(
-            ws.join("data/knowledge/empty.md"),
+            ws.join("knowledge/empty.md"),
             "---\nname: empty\n---\n\n",
         )
         .unwrap();
@@ -543,7 +543,7 @@ mod tests {
         let report = check_health(&ws);
         let fixed = auto_fix(&ws, &report);
         assert_eq!(fixed, 1);
-        assert!(!ws.join("data/knowledge/empty.md").exists());
+        assert!(!ws.join("knowledge/empty.md").exists());
     }
 
     #[test]
@@ -552,7 +552,7 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         fs::write(
-            ws.join("data/knowledge/old.md"),
+            ws.join("knowledge/old.md"),
             "---\nname: old\nstatus: expired\n---\n\nOld content",
         )
         .unwrap();
@@ -560,7 +560,7 @@ mod tests {
         let report = check_health(&ws);
         let fixed = auto_fix(&ws, &report);
         assert_eq!(fixed, 1);
-        assert!(!ws.join("data/knowledge/old.md").exists());
+        assert!(!ws.join("knowledge/old.md").exists());
     }
 
     #[test]
@@ -570,7 +570,7 @@ mod tests {
 
         // File without the second --- separator
         fs::write(
-            ws.join("data/knowledge/no-sep.md"),
+            ws.join("knowledge/no-sep.md"),
             "---\nname: test\n---\n\nSome content without dual-layer separator",
         )
         .unwrap();
@@ -592,7 +592,7 @@ mod tests {
 
         // File with the second --- separator
         fs::write(
-            ws.join("data/knowledge/with-sep.md"),
+            ws.join("knowledge/with-sep.md"),
             "---\nname: test\nsource: manual\n---\n\nSome content\n\n---\n\n- 2025-01-01: created",
         )
         .unwrap();
@@ -613,7 +613,7 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         fs::write(
-            ws.join("data/knowledge/no-source.md"),
+            ws.join("knowledge/no-source.md"),
             "---\nname: test\n---\n\nContent\n\n---\n",
         )
         .unwrap();
@@ -634,7 +634,7 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         fs::write(
-            ws.join("data/knowledge/no-desc.md"),
+            ws.join("knowledge/no-desc.md"),
             "---\nname: test\nsource: manual\n---\n\nContent\n\n---\n",
         )
         .unwrap();
@@ -655,7 +655,7 @@ mod tests {
         let ws = setup_workspace(&tmp);
 
         fs::write(
-            ws.join("data/knowledge/complete.md"),
+            ws.join("knowledge/complete.md"),
             "---\nname: test\nsource: manual\ndescription: A test\ntags: [\"test\"]\n---\n\nContent\n\n---\n\n- 2025-01-01: created",
         ).unwrap();
 

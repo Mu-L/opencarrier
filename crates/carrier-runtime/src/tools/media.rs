@@ -201,12 +201,12 @@ impl ToolModule for MediaTools {
 
             // Image generation
             "image_generate" => {
-                Some(tool_image_generate(input, ctx.brain, ctx.workspace_root, ctx.sender_id).await)
+                Some(tool_image_generate(input, ctx.brain, ctx.home_dir, ctx.agent_name, ctx.sender_id).await)
             }
 
             // TTS/STT
             "text_to_speech" => {
-                Some(tool_text_to_speech(input, ctx.brain, ctx.workspace_root, ctx.sender_id).await)
+                Some(tool_text_to_speech(input, ctx.brain, ctx.home_dir, ctx.agent_name, ctx.sender_id).await)
             }
             "speech_to_text" => {
                 Some(tool_speech_to_text(input, ctx.brain, ctx.workspace_root).await)
@@ -242,7 +242,7 @@ impl ToolModule for MediaTools {
 
             // Canvas / A2UI
             "canvas_present" => {
-                Some(tool_canvas_present(input, ctx.workspace_root, ctx.sender_id).await)
+                Some(tool_canvas_present(input, ctx.workspace_root, ctx.home_dir, ctx.agent_name, ctx.sender_id).await)
             }
 
             _ => None,
@@ -574,7 +574,8 @@ async fn tool_media_transcribe(
 async fn tool_image_generate(
     input: &serde_json::Value,
     brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
-    workspace_root: Option<&Path>,
+    home_dir: Option<&Path>,
+    agent_name: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
     let brain = brain.ok_or("Brain not available. Ensure image modality is configured.")?;
@@ -630,10 +631,10 @@ async fn tool_image_generate(
         return Err("Image generation returned empty image list".into());
     }
 
-    // Save images to workspace if available
-    let saved_paths = if let Some(workspace) = workspace_root {
+    // Save images to sender output directory if available
+    let saved_paths = if let (Some(hd), Some(an)) = (home_dir, agent_name) {
         let sid = sender_id.ok_or("Cannot save images: no sender context")?;
-        let output_dir = workspace.join("users").join(sid).join("output");
+        let output_dir = carrier_types::config::sender_data_dir(hd, sid, an).join("output");
         tokio::fs::create_dir_all(&output_dir)
             .await
             .map_err(|e| format!("Failed to create output dir: {e}"))?;
@@ -704,7 +705,8 @@ async fn tool_image_generate(
 async fn tool_text_to_speech(
     input: &serde_json::Value,
     brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
-    workspace_root: Option<&Path>,
+    home_dir: Option<&Path>,
+    agent_name: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
     let brain = brain.ok_or("Brain not available. Ensure tts modality is configured.")?;
@@ -749,10 +751,10 @@ async fn tool_text_to_speech(
         _ => return Err("TTS returned non-audio media".into()),
     };
 
-    // Save audio to per-user output directory
-    let saved_path = if let Some(workspace) = workspace_root {
+    // Save audio to per-sender output directory
+    let saved_path = if let (Some(hd), Some(an)) = (home_dir, agent_name) {
         let sid = sender_id.ok_or("Cannot save audio: no sender context")?;
-        let output_dir = workspace.join("users").join(sid).join("output");
+        let output_dir = carrier_types::config::sender_data_dir(hd, sid, an).join("output");
         tokio::fs::create_dir_all(&output_dir)
             .await
             .map_err(|e| format!("Failed to create output dir: {e}"))?;
@@ -1089,6 +1091,8 @@ fn sanitize_canvas_html(html: &str, max_bytes: usize) -> Result<String, String> 
 async fn tool_canvas_present(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
+    home_dir: Option<&Path>,
+    agent_name: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
     let html = input["html"].as_str().ok_or("Missing 'html' parameter")?;
@@ -1103,10 +1107,10 @@ async fn tool_canvas_present(
     // Generate canvas ID
     let canvas_id = uuid::Uuid::new_v4().to_string();
 
-    // Save to per-user output directory
-    let output_dir = if let Some(root) = workspace_root {
+    // Save to per-sender output directory
+    let output_dir = if let (Some(_root), Some(hd), Some(an)) = (workspace_root, home_dir, agent_name) {
         let sid = sender_id.ok_or("Cannot save canvas: no sender context")?;
-        root.join("users").join(sid).join("output")
+        carrier_types::config::sender_data_dir(hd, sid, an).join("output")
     } else {
         return Err("Cannot save canvas: no workspace".into());
     };

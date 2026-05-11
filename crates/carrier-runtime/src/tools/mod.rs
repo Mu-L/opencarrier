@@ -144,9 +144,10 @@ pub fn resolve_file_path_for_read(
     raw_path: &str,
     workspace_root: Option<&Path>,
     sender_id: Option<&str>,
+    agent_name: Option<&str>,
 ) -> Result<PathBuf, String> {
     if let Some(root) = workspace_root {
-        crate::workspace_sandbox::resolve_sandbox_path_for_read(raw_path, root, sender_id)
+        crate::workspace_sandbox::resolve_sandbox_path_for_read(raw_path, root, sender_id, agent_name)
     } else {
         let _ = validate_path(raw_path)?;
         Ok(PathBuf::from(raw_path))

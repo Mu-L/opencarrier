@@ -11,14 +11,11 @@ use std::path::Path;
 /// Create workspace directory structure for an agent.
 pub fn ensure_workspace(workspace: &Path) -> KernelResult<()> {
     for subdir in &[
-        "data",
-        "data/knowledge",
+        "knowledge",
         "sessions",
         "skills",
         "logs",
-        "memory",
         "history",
-        "users",
     ] {
         std::fs::create_dir_all(workspace.join(subdir)).map_err(|e| {
             KernelError::Carrier(carrier_types::error::CarrierError::Internal(format!(
@@ -176,21 +173,20 @@ pub fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
 
 /// Append an assistant response summary to the daily memory log (best-effort, append-only).
 /// Caps daily log at 1MB to prevent unbounded growth.
-/// When sender_id is present, writes to per-user memory directory.
-pub fn append_daily_memory_log(workspace: &Path, response: &str, sender_id: Option<&str>) {
+/// When sender_id is present, writes to per-sender memory directory.
+pub fn append_daily_memory_log(home_dir: &Path, agent_name: &str, response: &str, sender_id: Option<&str>) {
     let trimmed = response.trim();
     if trimmed.is_empty() {
         return;
     }
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let log_path = if let Some(sid) = sender_id {
-        workspace
-            .join("users")
-            .join(sid)
+        carrier_types::config::sender_data_dir(home_dir, sid, agent_name)
             .join("memory")
             .join(format!("{today}.md"))
     } else {
-        workspace.join("memory").join(format!("{today}.md"))
+        // No sender context — write to workspace logs
+        home_dir.join("logs").join(format!("{today}.md"))
     };
     // Security: cap total daily log to 1MB
     if let Ok(metadata) = std::fs::metadata(&log_path) {

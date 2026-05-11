@@ -15,7 +15,7 @@ use crate::loader::CloneData;
 /// Mapping:
 /// - SOUL.md → workspace/SOUL.md (read by prompt_builder at runtime)
 /// - system_prompt.md → workspace/system_prompt.md (read by prompt_builder at runtime)
-/// - knowledge/ → workspace/data/knowledge/ (loaded on demand)
+/// - knowledge/ → workspace/knowledge/ (loaded on demand)
 /// - skills/ → workspace/skills/ (activated on demand)
 /// - manifest.model.system_prompt → empty (built dynamically from workspace files)
 /// - skills → manifest.skills (names) + capabilities.tools (union of allowed_tools)
@@ -144,6 +144,11 @@ pub fn convert_to_manifest(data: &CloneData, hub_template_id: Option<String>) ->
         clone_source: Some(clone_source),
         knowledge_files,
         plugins: data.plugins.clone(),
+        mcp_servers: data
+            .manifest
+            .as_ref()
+            .map(|m| m.mcp_servers.clone())
+            .unwrap_or_default(),
         generate_identity_files: false, // .agx already has its own identity files
         ..Default::default()
     }
@@ -153,8 +158,7 @@ pub fn convert_to_manifest(data: &CloneData, hub_template_id: Option<String>) ->
 ///
 /// Creates:
 /// - agent.toml (the converted manifest)
-/// - data/knowledge/*.md
-/// - memory/index.md
+/// - knowledge/*.md
 /// - skills/<name>/SKILL.md + scripts/*.toml
 /// - agents/*.md
 /// - EVOLUTION.md
@@ -166,25 +170,13 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
     std::fs::create_dir_all(workspace)
         .with_context(|| format!("Failed to create workspace: {}", workspace.display()))?;
 
-    let data_dir = workspace.join("data");
-    let memory_dir = workspace.join("memory");
+    let knowledge_dir = workspace.join("knowledge");
     let skills_dir = workspace.join("skills");
     let agents_dir = workspace.join("agents");
     let style_dir = workspace.join("style");
-    let sessions_dir = workspace.join("sessions");
     let logs_dir = workspace.join("logs");
-    let users_dir = workspace.join("users");
 
-    for dir in &[
-        &data_dir,
-        &memory_dir,
-        &skills_dir,
-        &agents_dir,
-        &style_dir,
-        &sessions_dir,
-        &logs_dir,
-        &users_dir,
-    ] {
+    for dir in &[&knowledge_dir, &skills_dir, &agents_dir, &style_dir, &logs_dir] {
         std::fs::create_dir_all(dir)?;
     }
 
@@ -195,16 +187,14 @@ pub fn install_clone_to_workspace(data: &CloneData, workspace: &Path) -> Result<
     info!("Wrote agent.toml to {}", workspace.display());
 
     // Write knowledge files
-    let knowledge_dir = data_dir.join("knowledge");
-    std::fs::create_dir_all(&knowledge_dir)?;
     for (name, content) in &data.knowledge {
         std::fs::write(knowledge_dir.join(name), content)?;
         debug!("Wrote knowledge file: {}", name);
     }
 
-    // Write memory index
+    // Write MEMORY.md at workspace root
     if !data.memory_index.is_empty() {
-        std::fs::write(memory_dir.join("index.md"), &data.memory_index)?;
+        std::fs::write(workspace.join("MEMORY.md"), &data.memory_index)?;
     }
 
     // Write skills
