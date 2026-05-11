@@ -14,6 +14,7 @@ pub mod fallback;
 pub mod gemini;
 pub mod kling;
 pub mod openai;
+pub mod openai_images;
 pub mod qwen_code;
 
 use crate::llm_driver::{DriverConfig, LlmDriver, LlmError};
@@ -141,6 +142,18 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
             }
             Ok(Arc::new(kling::KlingDriver::new(
                 access_key, secret_key, base_url,
+            )))
+        }
+        ApiFormat::OpenAIImages => {
+            let api_key = config.api_key.clone().ok_or_else(|| {
+                LlmError::MissingApiKey("API key required for OpenAI Images format".to_string())
+            })?;
+            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
+                status: 0,
+                message: "base_url required for OpenAI Images format".to_string(),
+            })?;
+            Ok(Arc::new(openai_images::OpenAIImagesDriver::new(
+                api_key, base_url,
             )))
         }
     }

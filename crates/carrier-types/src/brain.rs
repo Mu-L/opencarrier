@@ -95,6 +95,8 @@ pub enum ApiFormat {
     #[serde(rename = "dashscope_video")]
     DashScopeVideo,
     Kling,
+    #[serde(rename = "openai_images")]
+    OpenAIImages,
 }
 
 /// Authentication header type for HTTP API drivers.
@@ -121,6 +123,7 @@ impl std::fmt::Display for ApiFormat {
             ApiFormat::DashScopeImage => write!(f, "dashscope_image"),
             ApiFormat::DashScopeVideo => write!(f, "dashscope_video"),
             ApiFormat::Kling => write!(f, "kling"),
+            ApiFormat::OpenAIImages => write!(f, "openai_images"),
         }
     }
 }
