@@ -15,29 +15,6 @@ use crate::kernel::CarrierKernel;
 
 // ── Export helper ──────────────────────────────────────────
 
-/// Recursively collect .md files under `dir`, storing relative paths from `base`.
-fn collect_files_recursive(
-    dir: &std::path::Path,
-    base: &std::path::Path,
-    result: &mut std::collections::HashMap<String, String>,
-) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                collect_files_recursive(&path, base, result);
-            } else if path.extension().map(|e| e == "md").unwrap_or(false) {
-                if let Ok(relative) = path.strip_prefix(base) {
-                    if let Some(rel_str) = relative.to_str() {
-                        let content = std::fs::read_to_string(&path).unwrap_or_default();
-                        result.insert(rel_str.to_string(), content);
-                    }
-                }
-            }
-        }
-    }
-}
-
 // ── KernelHandle trait implementation ─────────────────────
 
 #[async_trait]
@@ -522,8 +499,12 @@ impl KernelHandle for CarrierKernel {
         }
     }
 
-    async fn clone_install(&self, name: &str, agx_data: &[u8]) -> Result<(String, String), String> {
-        use carrier_clone::{convert_to_manifest, install_clone_to_workspace, load_agx};
+}
+
+// Non-trait methods on CarrierKernel (called directly, not via KernelHandle)
+impl CarrierKernel {
+    pub async fn clone_install(&self, name: &str, agx_data: &[u8]) -> Result<(String, String), String> {
+        use carrier_clone::{build_manifest_from_workspace, extract_agx};
 
         if name.is_empty()
             || name.len() > 64
@@ -544,257 +525,78 @@ impl KernelHandle for CarrierKernel {
             return Err("Path traversal denied".to_string());
         }
 
-        let tmp_dir = std::env::temp_dir().join(format!("carrier-clone-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
-        let tmp_path = tmp_dir.join("clone.agx");
-        std::fs::write(&tmp_path, agx_data)
-            .map_err(|e| format!("Failed to write temp file: {e}"))?;
-
-        let clone_data = load_agx(&tmp_path).map_err(|e| {
-            let _ = std::fs::remove_dir_all(&tmp_dir);
-            format!("Failed to parse .agx: {e}")
-        })?;
-        let _ = std::fs::remove_dir_all(&tmp_dir);
-
         let clone_name = name.to_string();
 
         if self.registry.find_by_name(&clone_name).is_some() {
             return Err(format!("Agent '{}' already exists", clone_name));
         }
 
-        if let Err(e) = std::fs::create_dir_all(&workspace_dir) {
+        if workspace_dir.exists() {
             return Err(format!(
-                "Workspace for '{}' already exists or cannot be created: {e}",
+                "Workspace for '{}' already exists",
                 clone_name
             ));
         }
 
-        install_clone_to_workspace(&clone_data, &workspace_dir).map_err(|e| {
+        // v3: extract .agx directly to workspace
+        let security_warnings = extract_agx(agx_data, &workspace_dir).map_err(|e| {
             let _ = std::fs::remove_dir_all(&workspace_dir);
-            format!("Failed to install clone: {e}")
+            format!("Failed to extract .agx: {e}")
         })?;
 
-        let mut manifest = convert_to_manifest(&clone_data, Some(name.to_string()));
-        manifest.name = clone_name.clone();
-        manifest.workspace = Some(workspace_dir);
+        // Build manifest from extracted workspace
+        let mut manifest = build_manifest_from_workspace(&workspace_dir, &clone_name, Some(clone_name.clone()))
+            .map_err(|e| {
+                let _ = std::fs::remove_dir_all(&workspace_dir);
+                format!("Failed to build manifest: {e}")
+            })?;
+        manifest.workspace = Some(workspace_dir.clone());
 
+        // Write agent.toml to workspace
+        let toml_str = toml::to_string_pretty(&manifest)
+            .map_err(|e| format!("Failed to serialize agent.toml: {e}"))?;
+        std::fs::write(workspace_dir.join("agent.toml"), toml_str)
+            .map_err(|e| format!("Failed to write agent.toml: {e}"))?;
+
+        // Spawn the agent
         let agent_name = manifest.name.clone();
         let id = self
             .spawn_agent(manifest)
             .map_err(|e| format!("Spawn failed: {e}"))?;
 
-        if !clone_data.plugins.is_empty() {
-            self.resolve_plugin_dependencies(&clone_data.plugins).await;
+        // Resolve plugin dependencies
+        let plugins = std::fs::read_to_string(workspace_dir.join("template.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<carrier_clone::TemplateManifest>(&s).ok())
+            .map(|t| t.plugins)
+            .unwrap_or_default();
+
+        if !plugins.is_empty() {
+            self.resolve_plugin_dependencies(&plugins).await;
         }
 
         tracing::info!(
             name = %agent_name,
             id = %id,
-            warnings = clone_data.security_warnings.len(),
-            plugins = ?clone_data.plugins,
-            "Clone installed via clone_install tool"
+            warnings = security_warnings.len(),
+            plugins = ?plugins,
+            "Clone installed (v3 extract flow)"
         );
 
         Ok((id.to_string(), agent_name))
     }
 
+
     fn clone_export(&self, name: &str) -> Result<Vec<u8>, String> {
-        use carrier_clone::{pack_agx, AgentData, CloneData, SkillData, SkillScriptData};
-        use std::collections::HashMap;
+        use carrier_clone::pack_workspace_as_agx;
 
         let workspace_str = self
             .resolve_agent_workspace(name)
             .ok_or_else(|| format!("Agent '{}' not found or has no workspace", name))?;
         let workspace = std::path::Path::new(&workspace_str);
 
-        let read_file = |path: &std::path::Path| -> String {
-            std::fs::read_to_string(path).unwrap_or_default()
-        };
-
-        let soul = read_file(&workspace.join("SOUL.md"));
-        let system_prompt = read_file(&workspace.join("system_prompt.md"));
-        let memory_index = read_file(&workspace.join("MEMORY.md"));
-        let evolution = read_file(&workspace.join("EVOLUTION.md"));
-        let profile = read_file(&workspace.join("profile.md"));
-
-        let description = if let Some(rest) = profile.strip_prefix("---") {
-            if let Some(end) = rest.find("---") {
-                let fm = &profile[3..3 + end];
-                fm.lines()
-                    .find_map(|line| {
-                        let trimmed = line.trim();
-                        trimmed
-                            .strip_prefix("description:")
-                            .map(|v| v.trim().trim_matches('"').to_string())
-                    })
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-
-        let manifest = workspace
-            .join("template.json")
-            .exists()
-            .then(|| {
-                std::fs::read_to_string(workspace.join("template.json"))
-                    .ok()
-                    .and_then(|s| serde_json::from_str::<carrier_clone::TemplateManifest>(&s).ok())
-            })
-            .flatten()
-            .unwrap_or_else(|| carrier_clone::TemplateManifest {
-                version: "1".to_string(),
-                name: name.to_string(),
-                display_name: String::new(),
-                description: description.clone(),
-                author: String::new(),
-                tags: vec![],
-                exported_at: String::new(),
-                knowledge_version: 0,
-                plugins: vec![],
-                mcp_servers: vec![],
-            });
-
-        let mut knowledge = HashMap::new();
-        let knowledge_dir = workspace.join("knowledge");
-        if knowledge_dir.exists() {
-            collect_files_recursive(&knowledge_dir, &knowledge_dir, &mut knowledge);
-        }
-
-        let mut skills = Vec::new();
-        let skills_dir = workspace.join("skills");
-        if skills_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&skills_dir) {
-                for entry in entries.flatten() {
-                    let skill_path = entry.path();
-                    if skill_path.is_dir() {
-                        let skill_md_path = skill_path.join("SKILL.md");
-                        if skill_md_path.exists() {
-                            let content = read_file(&skill_md_path);
-                            let (fm, body) = carrier_clone::parse_frontmatter(&content);
-                            let skill_name = fm.get("name").cloned().unwrap_or_else(|| {
-                                skill_path
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("unknown")
-                                    .to_string()
-                            });
-                            let when_to_use = fm.get("when_to_use").cloned().unwrap_or_default();
-                            let allowed_tools = fm
-                                .get("allowed_tools")
-                                .map(|s| carrier_clone::parse_string_array(s))
-                                .unwrap_or_default();
-
-                            let mut scripts = Vec::new();
-                            let scripts_dir = skill_path.join("scripts");
-                            if scripts_dir.exists() {
-                                if let Ok(script_entries) = std::fs::read_dir(&scripts_dir) {
-                                    for se in script_entries.flatten() {
-                                        let sp = se.path();
-                                        if sp.extension().map(|e| e == "toml").unwrap_or(false) {
-                                            let toml_content = read_file(&sp);
-                                            let script_name = sp
-                                                .file_stem()
-                                                .and_then(|n| n.to_str())
-                                                .unwrap_or("unknown")
-                                                .to_string();
-                                            let desc = carrier_clone::parse_toml_description(
-                                                &toml_content,
-                                            );
-                                            scripts.push(SkillScriptData {
-                                                name: script_name,
-                                                description: desc,
-                                                toml_content,
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-
-                            skills.push(SkillData {
-                                name: skill_name,
-                                when_to_use,
-                                allowed_tools,
-                                prompt: body.trim().to_string(),
-                                scripts,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut agents = Vec::new();
-        let agents_dir = workspace.join("agents");
-        if agents_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&agents_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map(|e| e == "md").unwrap_or(false) {
-                        let content = read_file(&path);
-                        let (fm, body) = carrier_clone::parse_frontmatter(&content);
-                        let agent_name = fm.get("name").cloned().unwrap_or_else(|| {
-                            path.file_stem()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("unknown")
-                                .to_string()
-                        });
-                        agents.push(AgentData {
-                            name: agent_name,
-                            description: fm.get("description").cloned().unwrap_or_default(),
-                            tools: fm
-                                .get("tools")
-                                .map(|s| carrier_clone::parse_string_array(s))
-                                .unwrap_or_default(),
-                            model: fm
-                                .get("model")
-                                .cloned()
-                                .unwrap_or_else(|| "sonnet".to_string()),
-                            color: fm.get("color").cloned(),
-                            prompt: body.trim().to_string(),
-                        });
-                    }
-                }
-            }
-        }
-
-        let mut style = HashMap::new();
-        let style_dir = workspace.join("style");
-        if style_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&style_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().map(|e| e == "md").unwrap_or(false) {
-                        if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
-                            style.insert(fname.to_string(), read_file(&path));
-                        }
-                    }
-                }
-            }
-        }
-
-        let clone_data = CloneData {
-            manifest: Some(manifest),
-            name: name.to_string(),
-            description,
-            soul,
-            system_prompt,
-            memory_index,
-            knowledge,
-            skills,
-            profile,
-            security_warnings: Vec::new(),
-            agents,
-            evolution,
-            style,
-            plugins: vec![],
-        };
-
-        pack_agx(&clone_data).map_err(|e| format!("Failed to pack .agx: {e}"))
+        pack_workspace_as_agx(workspace).map_err(|e| format!("Failed to pack .agx: {e}"))
     }
-
     async fn clone_publish(&self, name: &str, agx_bytes: &[u8]) -> Result<String, String> {
         let hub_url = self.config.hub.url.clone();
         let api_key = carrier_clone::hub::read_api_key(&self.config.hub.api_key_env)

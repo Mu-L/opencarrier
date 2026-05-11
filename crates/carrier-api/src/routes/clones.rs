@@ -32,7 +32,7 @@ pub async fn install_clone(
     State(state): State<Arc<AppState>>,
     Json(req): Json<InstallCloneRequest>,
 ) -> impl IntoResponse {
-    use carrier_clone::{convert_to_manifest, install_clone_to_workspace, load_agx};
+    use carrier_clone::{build_manifest_from_workspace, extract_agx};
 
     // Decode base64 data
     let raw_data = match req.decode_data() {
@@ -56,84 +56,103 @@ pub async fn install_clone(
         );
     }
 
-    // Write uploaded bytes to temp file
+    // Extract .agx to a temp dir first to get the clone name
     let tmp_dir = std::env::temp_dir().join(format!("carrier-clone-{}", uuid::Uuid::new_v4()));
-    if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to create temp dir: {e}")})),
-        );
-    }
-    let tmp_path = tmp_dir.join("clone.agx");
-    if let Err(e) = std::fs::write(&tmp_path, &raw_data) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write temp file: {e}")})),
-        );
-    }
-
-    // Load and parse .agx
-    let clone_data = match load_agx(&tmp_path) {
-        Ok(d) => d,
+    let warnings = match extract_agx(&raw_data, &tmp_dir) {
+        Ok(w) => w,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&tmp_dir);
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("Failed to parse .agx: {e}")})),
+                Json(serde_json::json!({"error": format!("Failed to extract .agx: {e}")})),
             );
         }
     };
 
-    // Clean up temp file
-    let _ = std::fs::remove_dir_all(&tmp_dir);
+    // Read clone name from profile.md or template.json
+    let clone_name = std::fs::read_to_string(tmp_dir.join("profile.md"))
+        .ok()
+        .and_then(|content| {
+            if let Some(rest) = content.strip_prefix("---") {
+                if let Some(end) = rest.find("---") {
+                    for line in content[3..3 + end].lines() {
+                        if let Some(val) = line.trim().strip_prefix("name:") {
+                            return Some(val.trim().trim_matches('"').to_string());
+                        }
+                    }
+                }
+            }
+            None
+        })
+        .or_else(|| {
+            std::fs::read_to_string(tmp_dir.join("template.json"))
+                .ok()
+                .and_then(|s| serde_json::from_str::<carrier_clone::TemplateManifest>(&s).ok())
+                .map(|t| t.name)
+        })
+        .unwrap_or_else(|| "unknown-clone".to_string());
 
     // Check for name collision
-    if state
-        .kernel
-        .registry
-        .find_by_name(&clone_data.name)
-        .is_some()
-    {
+    if state.kernel.registry.find_by_name(&clone_name).is_some() {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
         return (
             StatusCode::CONFLICT,
             Json(
-                serde_json::json!({"error": format!("Agent '{}' already exists", clone_data.name)}),
+                serde_json::json!({"error": format!("Agent '{}' already exists", clone_name)}),
             ),
         );
     }
 
-    // Create workspace directory
+    // Move extracted files to workspace
     let workspace_dir = state
         .kernel
         .config
         .data_dir
         .join("agents")
-        .join(&clone_data.name);
+        .join(&clone_name);
+
     if workspace_dir.exists() {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
         return (
             StatusCode::CONFLICT,
             Json(
-                serde_json::json!({"error": format!("Workspace for '{}' already exists", clone_data.name)}),
+                serde_json::json!({"error": format!("Workspace for '{}' already exists", clone_name)}),
             ),
         );
     }
 
-    // Install clone files to workspace
-    if let Err(e) = install_clone_to_workspace(&clone_data, &workspace_dir) {
-        let _ = std::fs::remove_dir_all(&workspace_dir);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to install clone: {e}")})),
-        );
+    if let Err(e) = std::fs::rename(&tmp_dir, &workspace_dir) {
+        // Fallback: copy if rename fails (cross-device)
+        if let Err(e2) = copy_dir_recursive(&tmp_dir, &workspace_dir) {
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to move clone to workspace: {e} / {e2}")})),
+            );
+        }
+        let _ = std::fs::remove_dir_all(&tmp_dir);
     }
 
-    // Convert to AgentManifest
-    let mut manifest = convert_to_manifest(&clone_data, None);
+    // Build manifest from extracted workspace
+    let mut manifest = match build_manifest_from_workspace(&workspace_dir, &clone_name, None) {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&workspace_dir);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": format!("Failed to build manifest: {e}")})),
+            );
+        }
+    };
     manifest.workspace = Some(workspace_dir.clone());
+
+    // Write agent.toml
+    if let Ok(toml_str) = toml::to_string_pretty(&manifest) {
+        let _ = std::fs::write(workspace_dir.join("agent.toml"), toml_str);
+    }
 
     // Spawn agent
     let name = manifest.name.clone();
-    let warnings = clone_data.security_warnings.clone();
 
     match state.kernel.spawn_agent(manifest) {
         Ok(id) => {
@@ -771,4 +790,20 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/clones/{name}/stop", routing::post(stop_clone))
         .route("/api/clones/{name}/upgrade", routing::post(upgrade_clone))
         .route("/api/clones/{name}/verify", routing::post(clone_verify))
+}
+
+/// Recursively copy a directory from src to dst.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
 }

@@ -30,9 +30,6 @@ fn sanitize_path_component(name: &str) -> Result<&str, String> {
 fn validate_clone_name(name: &str) -> Result<&str, String> {
     crate::tools::validate_clone_name(name)
 }
-fn validate_clone_file_path(path: &str) -> Result<&str, String> {
-    crate::tools::validate_clone_file_path(path)
-}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -450,186 +447,6 @@ async fn tool_user_profile(
 // ---------------------------------------------------------------------------
 // Clone management tools
 // ---------------------------------------------------------------------------
-
-async fn tool_clone_install(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
-    _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kernel = kernel.ok_or("clone_install requires kernel access")?;
-    let name_raw = input["name"].as_str().ok_or("Missing 'name' parameter")?;
-    let name = validate_clone_name(name_raw)?.to_string();
-
-    let files = input
-        .get("files")
-        .and_then(|v| v.as_object())
-        .ok_or("Missing 'files' parameter (must be a JSON object of path→content)")?;
-
-    if files.is_empty() {
-        return Err(
-            "No files provided. At minimum, SOUL.md and system_prompt.md are required.".to_string(),
-        );
-    }
-
-    // SECURITY: Reject oversized file maps (max 20MB total content)
-    const MAX_FILES_TOTAL: usize = 20 * 1024 * 1024;
-    let total_size: usize = files
-        .values()
-        .map(|v| v.as_str().map(|s| s.len()).unwrap_or(0))
-        .sum();
-    if total_size > MAX_FILES_TOTAL {
-        return Err(format!(
-            "Clone files too large: {} bytes total (max 20MB)",
-            total_size
-        ));
-    }
-
-    // Build CloneData from the file map
-    use carrier_clone::{pack_agx, AgentData, CloneData, SkillData};
-    use std::collections::HashMap;
-
-    let soul = files
-        .get("SOUL.md")
-        .map(|v| v.as_str().unwrap_or(""))
-        .unwrap_or("")
-        .to_string();
-    let system_prompt = files
-        .get("system_prompt.md")
-        .map(|v| v.as_str().unwrap_or(""))
-        .unwrap_or("")
-        .to_string();
-    let memory_index = files
-        .get("MEMORY.md")
-        .map(|v| v.as_str().unwrap_or(""))
-        .unwrap_or("")
-        .to_string();
-    let profile = files
-        .get("profile.md")
-        .map(|v| v.as_str().unwrap_or(""))
-        .unwrap_or("")
-        .to_string();
-    let evolution = files
-        .get("EVOLUTION.md")
-        .map(|v| v.as_str().unwrap_or(""))
-        .unwrap_or("")
-        .to_string();
-
-    if soul.is_empty() {
-        return Err("SOUL.md is required in files".to_string());
-    }
-    if system_prompt.is_empty() {
-        return Err("system_prompt.md is required in files".to_string());
-    }
-
-    // Validate all file paths for traversal
-    for path in files.keys() {
-        validate_clone_file_path(path)?;
-    }
-
-    // Parse knowledge files
-    let mut knowledge = HashMap::new();
-    for (path, val) in files {
-        if path.starts_with("knowledge/") && path.ends_with(".md") {
-            let filename = path.strip_prefix("knowledge/").unwrap_or(path);
-            knowledge.insert(filename.to_string(), val.as_str().unwrap_or("").to_string());
-        }
-    }
-
-    // Parse skills (simple: skills/<name>.md files with frontmatter)
-    let mut skills = Vec::new();
-    for (path, val) in files {
-        if path.starts_with("skills/") && path.ends_with(".md") {
-            let content = val.as_str().unwrap_or("");
-            let (fm, body) = carrier_clone::parse_frontmatter(content);
-            let skill_name = fm.get("name").cloned().unwrap_or_else(|| {
-                path.strip_prefix("skills/")
-                    .unwrap_or(path)
-                    .strip_suffix(".md")
-                    .unwrap_or("unknown")
-                    .to_string()
-            });
-            skills.push(SkillData {
-                name: skill_name,
-                when_to_use: fm.get("when_to_use").cloned().unwrap_or_default(),
-                allowed_tools: fm
-                    .get("allowed_tools")
-                    .map(|s| carrier_clone::parse_string_array(s))
-                    .unwrap_or_default(),
-                prompt: body.trim().to_string(),
-                scripts: Vec::new(),
-            });
-        }
-    }
-
-    // Parse agents
-    let mut agents = Vec::new();
-    for (path, val) in files {
-        if path.starts_with("agents/") && path.ends_with(".md") {
-            let content = val.as_str().unwrap_or("");
-            let (fm, body) = carrier_clone::parse_frontmatter(content);
-            agents.push(AgentData {
-                name: fm.get("name").cloned().unwrap_or_else(|| {
-                    path.strip_prefix("agents/")
-                        .unwrap_or(path)
-                        .strip_suffix(".md")
-                        .unwrap_or("unknown")
-                        .to_string()
-                }),
-                description: fm.get("description").cloned().unwrap_or_default(),
-                tools: fm
-                    .get("tools")
-                    .map(|s| carrier_clone::parse_string_array(s))
-                    .unwrap_or_default(),
-                model: fm
-                    .get("model")
-                    .cloned()
-                    .unwrap_or_else(|| "sonnet".to_string()),
-                color: fm.get("color").cloned(),
-                prompt: body.trim().to_string(),
-            });
-        }
-    }
-
-    // Parse style
-    let mut style = HashMap::new();
-    for (path, val) in files {
-        if path.starts_with("style/") && path.ends_with(".md") {
-            let filename = path.strip_prefix("style/").unwrap_or(path);
-            style.insert(filename.to_string(), val.as_str().unwrap_or("").to_string());
-        }
-    }
-
-    let clone_data = CloneData {
-        manifest: None,
-        name: name.clone(),
-        description: String::new(),
-        soul,
-        system_prompt,
-        memory_index,
-        knowledge,
-        skills,
-        profile,
-        security_warnings: Vec::new(),
-        agents,
-        evolution,
-        style,
-        plugins: Vec::new(),
-    };
-
-    // Pack into .agx bytes
-    let agx_bytes = pack_agx(&clone_data).map_err(|e| format!("Failed to pack .agx: {e}"))?;
-
-    // Install via kernel
-    let (agent_id, agent_name) = kernel.clone_install(&name, &agx_bytes).await?;
-
-    Ok(format!(
-        "Clone '{}' installed successfully. Agent ID: {}. {} knowledge files, {} skills, {} agents.",
-        agent_name, agent_id,
-        clone_data.knowledge.len(),
-        clone_data.skills.len(),
-        clone_data.agents.len(),
-    ))
-}
 
 async fn tool_clone_export(
     input: &serde_json::Value,
@@ -1735,23 +1552,7 @@ impl ToolModule for AgentTools {
                     "required": ["message"]
                 }),
             },
-            // --- Clone management tools (system-level install/export) ---
-            ToolDefinition {
-                name: "clone_install".to_string(),
-                description: "Install a new clone from file contents. The system handles packaging into .agx format and spawning. No shell access needed.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "Clone name (lowercase, hyphens, e.g. 'customer-support')"},
-                        "files": {
-                            "type": "object",
-                            "description": "File contents keyed by path. Required: SOUL.md, system_prompt.md. Optional: profile.md, MEMORY.md, EVOLUTION.md, knowledge/*.md, skills/*.md, agents/*.md, style/*.md",
-                            "additionalProperties": {"type": "string"}
-                        }
-                    },
-                    "required": ["name", "files"]
-                }),
-            },
+            // --- Clone management tools (system-level export/publish) ---
             ToolDefinition {
                 name: "clone_export".to_string(),
                 description: "Export an installed clone as a downloadable .agx archive. Returns the file size and a download path.".to_string(),
@@ -1818,7 +1619,6 @@ impl ToolModule for AgentTools {
             "user_profile" => Some(tool_user_profile(input, ctx.home_dir, ctx.agent_name, sender_id).await),
 
             // Clone management tools
-            "clone_install" => Some(tool_clone_install(input, kernel, caller_agent_id).await),
             "clone_export" => Some(tool_clone_export(input, kernel, caller_agent_id).await),
             "clone_publish" => Some(tool_clone_publish(input, kernel, caller_agent_id).await),
 

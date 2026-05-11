@@ -156,7 +156,6 @@ pub async fn mcp_http(
             "train_knowledge_lint",
             "train_knowledge_heal",
             "train_evaluate",
-            "clone_install",
             "clone_export",
             "clone_publish",
             "memory_store",

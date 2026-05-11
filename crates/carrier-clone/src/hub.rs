@@ -361,19 +361,17 @@ pub async fn install_template(
     let bytes = resp.bytes().await.context("读取响应失败")?;
     tracing::info!("已下载 {} 字节", bytes.len());
 
-    let tmp_dir = std::env::temp_dir().join(format!("carrier-hub-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&tmp_dir)?;
-    let tmp_file = tmp_dir.join(format!("{}.agx", name));
-    std::fs::write(&tmp_file, &bytes)?;
+    // v3: extract .agx directly to workspace
+    crate::extract_agx(&bytes, workspace_dir)?;
 
-    let clone_data = crate::load_agx(&tmp_file)?;
-    let _ = std::fs::remove_dir_all(&tmp_dir);
+    // Build manifest from extracted workspace and write agent.toml
+    let manifest = crate::build_manifest_from_workspace(workspace_dir, name, None)?;
+    let toml_str = toml::to_string_pretty(&manifest)
+        .context("Failed to serialize agent.toml")?;
+    std::fs::write(workspace_dir.join("agent.toml"), toml_str)?;
 
-    let clone_name = clone_data.name.clone();
-    crate::install_clone_to_workspace(&clone_data, workspace_dir)?;
-
-    tracing::info!("分身 '{}' 安装完成", clone_name);
-    Ok(clone_name)
+    tracing::info!("分身 '{}' 安装完成", name);
+    Ok(name.to_string())
 }
 
 /// Download template .agx bytes from Hub (without installing).

@@ -5,7 +5,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use carrier_runtime::kernel_handle::KernelHandle;
 use std::sync::Arc;
 
 /// GET /api/hub/templates — List templates from the connected Hub.

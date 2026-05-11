@@ -84,14 +84,15 @@ impl CarrierKernel {
         }
     }
 
-    /// Upgrade a clone agent from hub by downloading latest .agx and selectively
-    /// replacing template files while preserving user data.
+    /// Upgrade a clone agent from hub by downloading latest .agx, extracting to
+    /// a staging directory, then selectively replacing template files while
+    /// preserving user data (memory/, sessions/, logs/, users/, data/).
     ///
-    /// Files replaced: agent.toml, SOUL.md, system_prompt.md, profile.md,
-    ///                 skills/, agents/, EVOLUTION.md, knowledge/
-    /// Files preserved: memory/, sessions/, logs/, users/, data/ (except knowledge/)
+    /// Files replaced: SOUL.md, system_prompt.md, profile.md, EVOLUTION.md,
+    ///                 template.json, skills/, agents/, knowledge/, style/, MEMORY.md
+    /// Files preserved: memory/, sessions/, history/, logs/, users/, data/
     pub async fn clone_upgrade(&self, name: &str) -> Result<String, String> {
-        use carrier_clone::{convert_to_manifest, load_agx};
+        use carrier_clone::{build_manifest_from_workspace, extract_agx};
 
         // 1. Find the agent and validate it's a hub clone
         let entry = self
@@ -142,143 +143,59 @@ impl CarrierKernel {
             .await
             .map_err(|e| format!("Failed to read response: {e}"))?;
 
-        // 3. Parse the .agx
-        let tmp_dir =
+        // 3. Extract to staging directory
+        let staging_dir =
             std::env::temp_dir().join(format!("carrier-upgrade-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("Failed to create temp dir: {e}"))?;
-        let tmp_path = tmp_dir.join("upgrade.agx");
-        std::fs::write(&tmp_path, &bytes).map_err(|e| format!("Failed to write temp file: {e}"))?;
-
-        let clone_data = load_agx(&tmp_path).map_err(|e| {
-            let _ = std::fs::remove_dir_all(&tmp_dir);
-            format!("Failed to parse .agx: {e}")
+        extract_agx(&bytes, &staging_dir).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            format!("Failed to extract .agx: {e}")
         })?;
-        let _ = std::fs::remove_dir_all(&tmp_dir);
 
-        // 4. Get the remote version from clone_data manifest
-        let remote_version: String = clone_data
-            .manifest
-            .as_ref()
-            .map(|m| m.version.clone())
+        // 4. Get remote version from staging template.json
+        let remote_version: String = std::fs::read_to_string(staging_dir.join("template.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<carrier_clone::TemplateManifest>(&s).ok())
+            .map(|t| t.version)
             .unwrap_or_default();
 
-        // 5. Selectively replace template files
-
-        // Write SOUL.md
-        if !clone_data.soul.is_empty() {
-            std::fs::write(workspace.join("SOUL.md"), &clone_data.soul)
-                .map_err(|e| format!("Failed to write SOUL.md: {e}"))?;
-        }
-
-        // Write system_prompt.md
-        if !clone_data.system_prompt.is_empty() {
-            std::fs::write(
-                workspace.join("system_prompt.md"),
-                &clone_data.system_prompt,
-            )
-            .map_err(|e| format!("Failed to write system_prompt.md: {e}"))?;
-        }
-
-        // Write profile.md
-        if !clone_data.profile.is_empty() {
-            std::fs::write(workspace.join("profile.md"), &clone_data.profile)
-                .map_err(|e| format!("Failed to write profile.md: {e}"))?;
-        }
-
-        // Write EVOLUTION.md
-        if !clone_data.evolution.is_empty() {
-            std::fs::write(workspace.join("EVOLUTION.md"), &clone_data.evolution)
-                .map_err(|e| format!("Failed to write EVOLUTION.md: {e}"))?;
-        }
-
-        // Replace skills/ directory
-        let skills_dir = workspace.join("skills");
-        if skills_dir.exists() {
-            let _ = std::fs::remove_dir_all(&skills_dir);
-        }
-        std::fs::create_dir_all(&skills_dir)
-            .map_err(|e| format!("Failed to create skills dir: {e}"))?;
-        for skill in &clone_data.skills {
-            let skill_dir = skills_dir.join(&skill.name);
-            std::fs::create_dir_all(&skill_dir)
-                .map_err(|e| format!("Failed to create skill dir: {e}"))?;
-
-            let tools_str = if skill.allowed_tools.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "\nallowed_tools: {}",
-                    carrier_clone::format_string_array(&skill.allowed_tools)
-                )
-            };
-            let skill_md = format!(
-                "---\nname: {}\nwhen_to_use: {}{}\n---\n\n{}",
-                skill.name, skill.when_to_use, tools_str, skill.prompt
-            );
-            std::fs::write(skill_dir.join("SKILL.md"), skill_md)
-                .map_err(|e| format!("Failed to write skill: {e}"))?;
-
-            if !skill.scripts.is_empty() {
-                let scripts_dir = skill_dir.join("scripts");
-                std::fs::create_dir_all(&scripts_dir)
-                    .map_err(|e| format!("Failed to create scripts dir: {e}"))?;
-                for script in &skill.scripts {
-                    std::fs::write(
-                        scripts_dir.join(format!("{}.toml", script.name)),
-                        &script.toml_content,
-                    )
-                    .map_err(|e| format!("Failed to write script: {e}"))?;
-                }
+        // 5. Selectively replace template files (preserve user data)
+        let template_files = [
+            "SOUL.md",
+            "system_prompt.md",
+            "profile.md",
+            "EVOLUTION.md",
+            "MEMORY.md",
+            "template.json",
+        ];
+        for filename in &template_files {
+            let src = staging_dir.join(filename);
+            if src.exists() {
+                std::fs::copy(&src, workspace.join(filename))
+                    .map_err(|e| format!("Failed to copy {}: {e}", filename))?;
             }
         }
 
-        // Replace agents/ directory
-        let agents_dir = workspace.join("agents");
-        if agents_dir.exists() {
-            let _ = std::fs::remove_dir_all(&agents_dir);
-        }
-        std::fs::create_dir_all(&agents_dir)
-            .map_err(|e| format!("Failed to create agents dir: {e}"))?;
-        for agent in &clone_data.agents {
-            let color_line = agent
-                .color
-                .as_ref()
-                .map(|c| format!("color: {}", c))
-                .unwrap_or_default();
-            let tools_line = if agent.tools.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "\ntools: {}",
-                    carrier_clone::format_string_array(&agent.tools)
-                )
-            };
-            let model_line = if agent.model.is_empty() {
-                String::new()
-            } else {
-                format!("\nmodel: {}", agent.model)
-            };
-            let agent_md = format!(
-                "---\nname: {}\ndescription: {}{}{}\n{}\n---\n\n{}",
-                agent.name, agent.description, tools_line, model_line, color_line, agent.prompt,
-            );
-            std::fs::write(agents_dir.join(format!("{}.md", agent.name)), agent_md)
-                .map_err(|e| format!("Failed to write agent: {e}"))?;
+        // Replace template directories (remove old, copy new)
+        let template_dirs = ["skills", "agents", "knowledge", "style"];
+        for dir_name in &template_dirs {
+            let workspace_subdir = workspace.join(dir_name);
+            let staging_subdir = staging_dir.join(dir_name);
+            if workspace_subdir.exists() {
+                let _ = std::fs::remove_dir_all(&workspace_subdir);
+            }
+            if staging_subdir.exists() {
+                copy_dir_recursive(&staging_subdir, &workspace_subdir)
+                    .map_err(|e| format!("Failed to copy {} dir: {e}", dir_name))?;
+            }
         }
 
-        // Replace knowledge/ files
-        let knowledge_dir = workspace.join("knowledge");
-        std::fs::create_dir_all(&knowledge_dir)
-            .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
-        for (kname, content) in &clone_data.knowledge {
-            std::fs::write(knowledge_dir.join(kname), content)
-                .map_err(|e| format!("Failed to write knowledge: {e}"))?;
-        }
+        // Clean up staging
+        let _ = std::fs::remove_dir_all(&staging_dir);
 
-        // 6. Write new agent.toml preserving clone_source with updated version
-        let mut new_manifest = convert_to_manifest(&clone_data, Some(hub_template_id.clone()));
-        new_manifest.name = name.to_string();
-        new_manifest.workspace = Some(workspace.to_path_buf());
+        // 6. Build new manifest from workspace and write agent.toml
+        let mut new_manifest =
+            build_manifest_from_workspace(workspace, name, Some(hub_template_id.clone()))
+                .map_err(|e| format!("Failed to build manifest: {e}"))?;
 
         // Preserve the original clone_source but update agx_version
         if let Some(ref mut orig_cs) = new_manifest.clone_source {
@@ -308,7 +225,7 @@ impl CarrierKernel {
         info!(
             agent = %name,
             new_version = %if remote_version.is_empty() { "bumped" } else { &remote_version },
-            "Clone upgraded from hub"
+            "Clone upgraded from hub (v3 extract flow)"
         );
 
         Ok(if remote_version.is_empty() {
@@ -317,4 +234,20 @@ impl CarrierKernel {
             remote_version
         })
     }
+}
+
+/// Recursively copy a directory from src to dst.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
 }

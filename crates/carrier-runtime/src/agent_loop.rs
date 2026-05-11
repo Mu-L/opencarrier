@@ -967,7 +967,7 @@ async fn run_agent_loop_impl(
                 let tools_may_have_changed = response.tool_calls.iter().any(|tc| {
                     matches!(
                         tc.name.as_str(),
-                        "train_write" | "clone_install" | "file_write"
+                        "train_write" | "file_write"
                     )
                 });
                 if tools_may_have_changed {
