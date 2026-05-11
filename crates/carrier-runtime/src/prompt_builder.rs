@@ -78,6 +78,8 @@ pub struct PromptContext {
     pub knowledge_content: Option<String>,
     /// Clone's sub-agents — workspace/agents/*.md parsed at prompt build time.
     pub clone_agents_md: Option<String>,
+    /// EVOLUTION.md body text (rules only, frontmatter stripped).
+    pub evolution_rules_md: Option<String>,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -168,6 +170,16 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
                 sections.push(format!(
                     "## 子代理\n你可以将任务委派给以下子代理。每个子代理有独立的指令和工具。\n\n{}",
                     cap_str(agents, 2000)
+                ));
+            }
+        }
+
+        // EVOLUTION.md → 自我进化规则（frontmatter 之后的规则段落）
+        if let Some(ref rules) = ctx.evolution_rules_md {
+            if !rules.trim().is_empty() {
+                sections.push(format!(
+                    "## 自我进化规则\n{}\n\n严格遵守以上进化规则。",
+                    cap_str(rules, 2000)
                 ));
             }
         }

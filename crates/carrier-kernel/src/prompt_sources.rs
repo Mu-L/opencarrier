@@ -265,6 +265,48 @@ fn read_knowledge_dir(knowledge_dir: &Path, total_bytes: &mut usize, max_bytes: 
     if entries.is_empty() { None } else { Some(entries) }
 }
 
+/// Read EVOLUTION.md rules (body text after YAML frontmatter).
+/// The frontmatter is consumed by `EvolutionConfig` for system configuration;
+/// only the rules text after the second `---` is injected into the prompt.
+/// Capped at 32KB.
+pub fn read_evolution_rules(workspace: &Path) -> Option<String> {
+    const MAX_EVOLUTION_FILE_BYTES: usize = 32_768; // 32KB cap
+    let path = workspace.join("EVOLUTION.md");
+    // Security: ensure path stays inside workspace
+    match path.canonicalize() {
+        Ok(canonical) => {
+            if let Ok(ws_canonical) = workspace.canonicalize() {
+                if !canonical.starts_with(&ws_canonical) {
+                    return None; // path traversal attempt
+                }
+            }
+        }
+        Err(_) => return None, // file doesn't exist
+    }
+    let content = std::fs::read_to_string(&path).ok()?;
+    if content.trim().is_empty() {
+        return None;
+    }
+    // Strip YAML frontmatter (same pattern as read_agents_directory)
+    let body = if let Some(rest) = content.trim().strip_prefix("---") {
+        if let Some(end) = rest.find("---") {
+            content.trim()[3 + end + 3..].trim()
+        } else {
+            content.trim()
+        }
+    } else {
+        content.trim()
+    };
+    if body.is_empty() {
+        return None;
+    }
+    if body.len() > MAX_EVOLUTION_FILE_BYTES {
+        Some(carrier_types::truncate_str(body, MAX_EVOLUTION_FILE_BYTES).to_string())
+    } else {
+        Some(body.to_string())
+    }
+}
+
 /// Read all style samples from workspace/style/ directory.
 /// Returns a concatenated summary of style files.
 pub fn read_style_samples(workspace: &Path) -> Option<String> {

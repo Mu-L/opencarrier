@@ -6,8 +6,9 @@
 
 use crate::kernel::CarrierKernel;
 use crate::prompt_sources::{
-    read_agents_directory, read_identity_file, read_knowledge_content, read_skills_catalog,
-    read_style_samples, read_user_profile_summary, read_workspace_skills_prompts,
+    read_agents_directory, read_evolution_rules, read_identity_file, read_knowledge_content,
+    read_skills_catalog, read_style_samples, read_user_profile_summary,
+    read_workspace_skills_prompts,
 };
 use carrier_types::agent::*;
 use carrier_types::capability::Capability;
@@ -427,6 +428,10 @@ impl CarrierKernel {
                 .workspace
                 .as_ref()
                 .and_then(|w| read_agents_directory(w)),
+            evolution_rules_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_evolution_rules(w)),
         };
         manifest.model.system_prompt =
             carrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
