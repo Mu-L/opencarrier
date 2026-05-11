@@ -97,6 +97,8 @@ pub enum ApiFormat {
     Kling,
     #[serde(rename = "openai_images")]
     OpenAIImages,
+    #[serde(rename = "minimax_image")]
+    MiniMaxImage,
 }
 
 /// Authentication header type for HTTP API drivers.
@@ -124,6 +126,7 @@ impl std::fmt::Display for ApiFormat {
             ApiFormat::DashScopeVideo => write!(f, "dashscope_video"),
             ApiFormat::Kling => write!(f, "kling"),
             ApiFormat::OpenAIImages => write!(f, "openai_images"),
+            ApiFormat::MiniMaxImage => write!(f, "minimax_image"),
         }
     }
 }

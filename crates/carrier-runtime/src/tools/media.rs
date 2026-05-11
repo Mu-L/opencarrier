@@ -59,13 +59,15 @@ impl ToolModule for MediaTools {
             // --- Image generation tool ---
             ToolDefinition {
                 name: "image_generate".to_string(),
-                description: "Generate images from a text prompt. Uses the configured image modality (Wan2.7, DALL-E, etc.). Generated images are saved to the user's output directory.".to_string(),
+                description: "Generate images from a text prompt. Uses the configured image modality (MiniMax image-01, Wan2.7, DALL-E, etc.). Generated images are saved to the user's output directory.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "prompt": { "type": "string", "description": "Text description of the image to generate" },
                         "size": { "type": "string", "description": "Image size: '1024x1024' (default), '1024x1792', '1792x1024'" },
-                        "count": { "type": "integer", "description": "Number of images to generate (1-4, default: 1)" }
+                        "count": { "type": "integer", "description": "Number of images to generate (1-4, default: 1)" },
+                        "aspect_ratio": { "type": "string", "description": "Image aspect ratio (MiniMax only): '1:1', '16:9', '4:3', '3:2', '2:3', '3:4', '9:16', '21:9'" },
+                        "prompt_optimizer": { "type": "boolean", "description": "Whether to auto-optimize the prompt (MiniMax only, default: false)" }
                     },
                     "required": ["prompt"]
                 }),
@@ -591,6 +593,12 @@ async fn tool_image_generate(
     extra.insert("size".to_string(), serde_json::json!(size));
     extra.insert("quality".to_string(), serde_json::json!(quality));
     extra.insert("n".to_string(), serde_json::json!(count));
+    if let Some(ar) = input["aspect_ratio"].as_str() {
+        extra.insert("aspect_ratio".to_string(), serde_json::json!(ar));
+    }
+    if let Some(po) = input["prompt_optimizer"].as_bool() {
+        extra.insert("prompt_optimizer".to_string(), serde_json::json!(po));
+    }
 
     let request = crate::llm_driver::CompletionRequest {
         model: String::new(),
@@ -648,11 +656,25 @@ async fn tool_image_generate(
             };
             let path = output_dir.join(&filename);
 
-            let decoded = {
+            let decoded = if !image.data_base64.is_empty() {
                 use base64::Engine;
                 base64::engine::general_purpose::STANDARD
                     .decode(&image.data_base64)
                     .map_err(|e| format!("Failed to decode base64 image: {e}"))?
+            } else if let Some(ref url) = image.url {
+                // Download from URL (e.g. MiniMax returns temporary URLs)
+                let resp = reqwest::Client::new()
+                    .get(url)
+                    .timeout(std::time::Duration::from_secs(60))
+                    .send()
+                    .await
+                    .map_err(|e| format!("Failed to download image from URL: {e}"))?;
+                resp.bytes()
+                    .await
+                    .map_err(|e| format!("Failed to read image response: {e}"))?
+                    .to_vec()
+            } else {
+                return Err("Image has neither base64 data nor URL".into());
             };
 
             tokio::fs::write(&path, &decoded)
@@ -670,18 +692,24 @@ async fn tool_image_generate(
     // GET /api/uploads/{file_id}. Each image gets a UUID filename.
     let mut image_urls: Vec<String> = Vec::new();
     {
-        use base64::Engine;
         let upload_dir = std::env::temp_dir().join("carrier_uploads");
         let _ = std::fs::create_dir_all(&upload_dir);
         for image in &images {
             let file_id = uuid::Uuid::new_v4().to_string();
-            if let Ok(decoded) =
-                base64::engine::general_purpose::STANDARD.decode(&image.data_base64)
-            {
+            let decoded = if !image.data_base64.is_empty() {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD.decode(&image.data_base64).ok()
+            } else {
+                None
+            };
+            // For URL-only images, they can be accessed directly — skip local upload
+            if let Some(decoded) = decoded {
                 let path = upload_dir.join(&file_id);
                 if std::fs::write(&path, &decoded).is_ok() {
                     image_urls.push(format!("/api/uploads/{file_id}"));
                 }
+            } else if let Some(ref url) = image.url {
+                image_urls.push(url.clone());
             }
         }
     }
