@@ -330,6 +330,16 @@ impl PluginLoader {
                 None => continue,
             };
 
+            // Skip built-in plugins — they are loaded separately by load_builtin_plugins()
+            let config_path = path.join("plugin.toml");
+            if let Ok(content) = std::fs::read_to_string(&config_path) {
+                if let Ok(config) = toml::from_str::<PluginConfig>(&content) {
+                    if config.meta.builtin {
+                        continue;
+                    }
+                }
+            }
+
             info!(plugin = %plugin_name, "Loading plugin");
 
             match Self::load_plugin(&path, &message_tx) {
