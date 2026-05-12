@@ -66,6 +66,49 @@ impl SignedManifest {
         }
     }
 
+    /// Verifies the manifest signature against a specific public key.
+    ///
+    /// This is the same verification logic as `verify`, but accepts an
+    /// explicit `VerifyingKey` instead of using the embedded one.
+    pub fn verify_with_key(&self, key: &VerifyingKey) -> Result<(), String> {
+        // Re-compute the hash and compare.
+        let recomputed = hash_manifest(&self.manifest);
+        if recomputed != self.content_hash {
+            return Err(format!(
+                "content hash mismatch: expected {} but manifest hashes to {}",
+                self.content_hash, recomputed
+            ));
+        }
+
+        // Reconstruct the signature.
+        let sig_bytes: [u8; 64] = self
+            .signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| "invalid signature length (expected 64 bytes)".to_string())?;
+        let signature = Signature::from_bytes(&sig_bytes);
+
+        // Verify against the provided key.
+        key.verify(self.content_hash.as_bytes(), &signature)
+            .map_err(|e| format!("signature verification failed: {}", e))
+    }
+
+    /// Verify the manifest signature against a set of trusted public keys.
+    /// Returns Ok(()) if any trusted key validates the signature.
+    pub fn verify_with_trust_store(
+        &self,
+        trusted_keys: &[ed25519_dalek::VerifyingKey],
+    ) -> Result<(), String> {
+        let mut last_err = "No trusted keys provided".to_string();
+        for key in trusted_keys {
+            match self.verify_with_key(key) {
+                Ok(()) => return Ok(()),
+                Err(e) => last_err = e,
+            }
+        }
+        Err(format!("Signature not verified by any trusted key: {last_err}"))
+    }
+
     /// Verifies the integrity and authenticity of this signed manifest.
     ///
     /// Checks:

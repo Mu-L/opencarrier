@@ -6,7 +6,13 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-const BEARER_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
+/// Returns the Twitter/X bearer token. Reads from TWITTER_BEARER_TOKEN env var,
+/// falling back to the public guest token if not set.
+fn bearer_token() -> String {
+    std::env::var("TWITTER_BEARER_TOKEN").unwrap_or_else(|_| {
+        "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA".to_string()
+    })
+}
 const API_BASE: &str = "https://x.com";
 
 static QUERY_ID_CACHE: Mutex<Option<HashMap<String, (String, Instant)>>> = Mutex::new(None);
@@ -103,7 +109,7 @@ pub async fn twitter_graphql(
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
-        format!("Bearer {BEARER_TOKEN}").parse().unwrap(),
+        format!("Bearer {}", bearer_token()).parse().unwrap(),
     );
     headers.insert("X-Csrf-Token", csrf_token.parse().unwrap());
     headers.insert("X-Twitter-Auth-Type", "OAuth2Session".parse().unwrap());

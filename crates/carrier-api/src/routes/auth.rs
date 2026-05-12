@@ -7,7 +7,17 @@ use axum::extract::State as AxumState;
 use axum::http::{Request, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
+use std::collections::HashMap;
+use std::sync::LazyLock;
+use std::sync::Mutex;
 use std::sync::Arc;
+use std::time::Instant;
+
+static LOGIN_FAILURES: LazyLock<Mutex<HashMap<String, (u32, Instant)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+const MAX_LOGIN_FAILURES: u32 = 5;
+const LOGIN_BAN_SECS: u64 = 900; // 15 minutes
 
 /// GET /api/auth/check — Return auth mode and current session status.
 pub async fn auth_check(
@@ -56,8 +66,31 @@ pub async fn auth_check(
 /// POST /api/auth/login — Authenticate with username/password, return session token.
 pub async fn auth_login(
     AxumState(state): AxumState<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
+    request: Request<Body>,
+) -> axum::response::Response {
+    // Extract body from request
+    let (parts, body) = request.into_parts();
+    let bytes = match axum::body::to_bytes(body, 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Failed to read request body"})),
+            )
+                .into_response()
+        }
+    };
+    let body: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid JSON body"})),
+            )
+                .into_response()
+        }
+    };
+
     let username = body["username"].as_str().unwrap_or("").trim();
     let password = body["password"].as_str().unwrap_or("").trim();
 
@@ -65,7 +98,8 @@ pub async fn auth_login(
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Username and password required"})),
-        );
+        )
+            .into_response();
     }
 
     let auth_config = &state.kernel.config.auth;
@@ -73,21 +107,77 @@ pub async fn auth_login(
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Session auth not enabled"})),
-        );
+        )
+            .into_response();
+    }
+
+    // Rate limiting check
+    let client_ip = parts
+        .headers
+        .get("x-real-ip")
+        .or_else(|| parts.headers.get("x-forwarded-for"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .split(',')
+        .next()
+        .unwrap_or("unknown")
+        .trim()
+        .to_string();
+
+    {
+        let mut failures = LOGIN_FAILURES.lock().unwrap();
+        if let Some((count, first_fail)) = failures.get(&client_ip) {
+            if *count >= MAX_LOGIN_FAILURES && first_fail.elapsed().as_secs() < LOGIN_BAN_SECS {
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({"error": "Too many login attempts. Try again later."})),
+                )
+                    .into_response();
+            }
+            if first_fail.elapsed().as_secs() >= LOGIN_BAN_SECS {
+                failures.remove(&client_ip);
+            }
+        }
     }
 
     if username != auth_config.username {
+        // On credential failure, record the attempt
+        {
+            let mut failures = LOGIN_FAILURES.lock().unwrap();
+            let entry = failures.entry(client_ip.clone()).or_insert((0, Instant::now()));
+            entry.0 += 1;
+            if entry.1.elapsed().as_secs() >= LOGIN_BAN_SECS {
+                *entry = (1, Instant::now());
+            }
+        }
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "Invalid credentials"})),
-        );
+        )
+            .into_response();
     }
 
     if !session_auth::verify_password(password, &auth_config.password_hash) {
+        // On credential failure, record the attempt
+        {
+            let mut failures = LOGIN_FAILURES.lock().unwrap();
+            let entry = failures.entry(client_ip.clone()).or_insert((0, Instant::now()));
+            entry.0 += 1;
+            if entry.1.elapsed().as_secs() >= LOGIN_BAN_SECS {
+                *entry = (1, Instant::now());
+            }
+        }
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "Invalid credentials"})),
-        );
+        )
+            .into_response();
+    }
+
+    // Clear rate limit on successful login
+    {
+        let mut failures = LOGIN_FAILURES.lock().unwrap();
+        failures.remove(&client_ip);
     }
 
     // Use API key as the HMAC secret for session tokens
@@ -100,15 +190,27 @@ pub async fn auth_login(
         auth_config.session_ttl_hours,
     );
 
-    (
+    let mut response = (
         StatusCode::OK,
         Json(serde_json::json!({
             "status": "ok",
             "username": username,
             "role": "admin",
-            "token": token,
+            "token": token.clone(),
         })),
     )
+        .into_response();
+
+    // Set session cookie
+    let cookie_value = format!(
+        "opencarrier_session={}; HttpOnly; SameSite=Strict; Secure; Path=/",
+        token
+    );
+    response
+        .headers_mut()
+        .insert(axum::http::header::SET_COOKIE, cookie_value.parse().unwrap());
+
+    response
 }
 
 /// POST /api/auth/change-credentials — Change username and/or password.
@@ -117,8 +219,53 @@ pub async fn auth_login(
 /// and updates the in-memory config. Returns a new session token.
 pub async fn change_credentials(
     AxumState(state): AxumState<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
+    request: Request<Body>,
+) -> axum::response::Response {
+    // Extract body from request
+    let (parts, body) = request.into_parts();
+    let bytes = match axum::body::to_bytes(body, 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Failed to read request body"})),
+            )
+                .into_response()
+        }
+    };
+    let body: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid JSON body"})),
+            )
+                .into_response()
+        }
+    };
+
+    // Verify session identity matches (if session cookie present)
+    if let Some(cookie_str) = parts.headers.get("cookie").and_then(|v| v.to_str().ok()) {
+        let session_token = cookie_str
+            .split(';')
+            .find_map(|part| part.trim().strip_prefix("opencarrier_session="));
+        if let Some(token) = session_token {
+            if let Some(info) =
+                session_auth::verify_session_token(token, &state.kernel.config.api_key)
+            {
+                // Session user must match the account being modified
+                let auth_config = &state.kernel.config.auth;
+                if info.username != auth_config.username {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({"error": "Session identity mismatch"})),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
+
     let current_password = body["current_password"].as_str().unwrap_or("").trim();
     let new_username = body["new_username"]
         .as_str()
@@ -135,14 +282,16 @@ pub async fn change_credentials(
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Current password required"})),
-        );
+        )
+            .into_response();
     }
 
     if new_username.is_empty() && new_password.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Provide new username or new password"})),
-        );
+        )
+            .into_response();
     }
 
     // Verify current password
@@ -151,7 +300,8 @@ pub async fn change_credentials(
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "Current password incorrect"})),
-        );
+        )
+            .into_response();
     }
 
     // Build updated values
@@ -162,11 +312,12 @@ pub async fn change_credentials(
     };
     let updated_hash = if new_password.is_empty() {
         auth_config.password_hash.clone()
-    } else if new_password.len() < 6 {
+    } else if new_password.len() < 8 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Password must be at least 6 characters"})),
-        );
+            Json(serde_json::json!({"error": "Password must be at least 8 characters"})),
+        )
+            .into_response();
     } else {
         session_auth::hash_password(&new_password)
     };
@@ -181,13 +332,15 @@ pub async fn change_credentials(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": format!("Cannot read config: {e}")})),
                 )
+                    .into_response()
             }
         }
     } else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "config.toml not found"})),
-        );
+        )
+            .into_response();
     };
 
     // Update [auth] section
@@ -213,6 +366,7 @@ pub async fn change_credentials(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("Serialize failed: {e}")})),
             )
+                .into_response()
         }
     };
 
@@ -220,7 +374,8 @@ pub async fn change_credentials(
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Write failed: {e}")})),
-        );
+        )
+            .into_response();
     }
 
     // Reload config from disk to update in-memory state
@@ -243,14 +398,26 @@ pub async fn change_credentials(
         "ok",
     );
 
-    (
+    let mut response = (
         StatusCode::OK,
         Json(serde_json::json!({
             "status": "ok",
             "username": updated_username,
-            "token": token,
+            "token": token.clone(),
         })),
     )
+        .into_response();
+
+    // Set session cookie
+    let cookie_value = format!(
+        "opencarrier_session={}; HttpOnly; SameSite=Strict; Secure; Path=/",
+        token
+    );
+    response
+        .headers_mut()
+        .insert(axum::http::header::SET_COOKIE, cookie_value.parse().unwrap());
+
+    response
 }
 
 /// Build a router with auth routes.

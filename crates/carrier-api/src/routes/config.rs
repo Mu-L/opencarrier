@@ -173,7 +173,7 @@ pub async fn config_set(
     };
 
     // Block sensitive keys that should not be changed via API
-    const BLOCKED_KEYS: &[&str] = &["api_key", "auth", "exec_policy", "docker"];
+    const BLOCKED_KEYS: &[&str] = &["api_key", "auth", "exec_policy", "docker", "vault", "hub", "provider_api_keys", "brain", "oauth"];
     let lower = path.to_lowercase();
     for blocked in BLOCKED_KEYS {
         if lower.starts_with(blocked) || lower.contains(&format!(".{blocked}")) {

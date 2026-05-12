@@ -178,9 +178,23 @@ impl WasmSandbox {
         store.set_epoch_deadline(1);
         let engine_clone = engine.clone();
         let timeout = config.timeout_secs.unwrap_or(30);
-        let _watchdog = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(timeout));
-            engine_clone.increment_epoch();
+        let effective_timeout = timeout.min(3600);
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done_clone = Arc::clone(&done);
+        let watchdog = std::thread::spawn(move || {
+            let mut waited = 0u64;
+            loop {
+                if done_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                    return; // execution finished, no timeout
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                waited += 1;
+                if waited >= effective_timeout {
+                    // timeout expired
+                    engine_clone.increment_epoch();
+                    return;
+                }
+            }
         });
 
         // Build linker with host function imports
@@ -231,6 +245,9 @@ impl WasmSandbox {
         let packed = match execute_fn.call(&mut store, (input_ptr, input_bytes.len() as i32)) {
             Ok(v) => v,
             Err(e) => {
+                // Signal the watchdog that execution is done (even on error)
+                done.store(true, std::sync::atomic::Ordering::Relaxed);
+                let _ = watchdog.join();
                 // Check for fuel exhaustion via trap code
                 if let Some(Trap::OutOfFuel) = e.downcast_ref::<Trap>() {
                     return Err(SandboxError::FuelExhausted);
@@ -239,12 +256,16 @@ impl WasmSandbox {
                 if let Some(Trap::Interrupt) = e.downcast_ref::<Trap>() {
                     return Err(SandboxError::Execution(format!(
                         "WASM execution timed out after {}s (epoch interrupt)",
-                        timeout
+                        effective_timeout
                     )));
                 }
                 return Err(SandboxError::Execution(e.to_string()));
             }
         };
+
+        // Signal the watchdog that execution completed successfully
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = watchdog.join();
 
         // Unpack result: high 32 bits = ptr, low 32 bits = len
         let result_ptr = (packed >> 32) as usize;

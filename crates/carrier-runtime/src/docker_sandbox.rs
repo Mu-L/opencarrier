@@ -181,11 +181,28 @@ pub async fn exec_in_sandbox(
     validate_command(command)?;
 
     let mut cmd = tokio::process::Command::new("docker");
-    cmd.arg("exec")
-        .arg(&container.container_id)
-        .arg("sh")
-        .arg("-c")
-        .arg(command);
+    cmd.arg("exec").arg(&container.container_id);
+
+    // Prefer passing the command as separate argv entries via shlex::split().
+    // This avoids wrapping in `sh -c`, which would re-introduce a shell layer
+    // and expand any metacharacters that slipped past validation.
+    // Fall back to `sh -c` only if shlex cannot parse the string (unlikely
+    // after validation, but handles edge cases like unbalanced quotes).
+    match shlex::split(command) {
+        Some(args) if !args.is_empty() => {
+            for arg in &args {
+                cmd.arg(arg);
+            }
+        }
+        _ => {
+            // SAFETY: shlex::split failed — fall back to sh -c so the command
+            // still executes. This path is rarely hit because validate_command
+            // rejects most problematic inputs. The sh -c wrapper is needed here
+            // because docker exec would otherwise treat the entire string as a
+            // single binary name.
+            cmd.arg("sh").arg("-c").arg(command);
+        }
+    }
 
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());

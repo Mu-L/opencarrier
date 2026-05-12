@@ -98,6 +98,14 @@ pub enum CarrierError {
     /// Invalid user input.
     #[error("Invalid input: {0}")]
     InvalidInput(String),
+
+    /// The requested MCP server was not found.
+    #[error("MCP server not found: {0}")]
+    McpNotFound(String),
+
+    /// A session ownership check failed.
+    #[error("Session ownership error: {0}")]
+    SessionOwnership(String),
 }
 
 /// Alias for Result with CarrierError.

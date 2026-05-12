@@ -486,7 +486,7 @@ impl CarrierKernel {
                 tokio::spawn(async move {
                     let discovered = carrier_runtime::a2a::discover_external_agents(&agents).await;
                     if let Ok(mut store) = kernel.a2a.a2a_external_agents.lock() {
-                        *store = discovered;
+                        *store = discovered.into_iter().map(|(url, card)| (url, card, std::time::Instant::now())).collect();
                     }
                 });
             }

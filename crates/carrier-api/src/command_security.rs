@@ -13,8 +13,6 @@ static ALLOWED_INSTALLERS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
         "apt-get", "apt", "yum", "dnf", "pacman", "zypper", "snap", "flatpak", // macOS
         "brew", "port", // Windows
         "winget", "choco", "scoop", "pip", "pip3", "pipx", "npm", "yarn", "pnpm", "cargo", "go",
-        // Generic
-        "curl", "wget",
     ]
 });
 

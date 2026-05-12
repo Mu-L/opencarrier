@@ -3,6 +3,8 @@
 //! Detects when the LLM repeats text that was already sent (e.g., repeating
 //! tool output verbatim). Uses exact + normalized matching with a sliding window.
 
+use std::collections::VecDeque;
+
 /// Minimum text length to consider for deduplication.
 const MIN_DEDUP_LENGTH: usize = 10;
 
@@ -12,17 +14,17 @@ const DEDUP_WINDOW: usize = 50;
 /// Streaming duplicate detector.
 pub struct StreamDedup {
     /// Recent chunks (exact text).
-    recent_chunks: Vec<String>,
+    recent_chunks: VecDeque<String>,
     /// Recent chunks (normalized: lowercased, whitespace-collapsed).
-    recent_normalized: Vec<String>,
+    recent_normalized: VecDeque<String>,
 }
 
 impl StreamDedup {
     /// Create a new dedup detector.
     pub fn new() -> Self {
         Self {
-            recent_chunks: Vec::with_capacity(DEDUP_WINDOW),
-            recent_normalized: Vec::with_capacity(DEDUP_WINDOW),
+            recent_chunks: VecDeque::with_capacity(DEDUP_WINDOW),
+            recent_normalized: VecDeque::with_capacity(DEDUP_WINDOW),
         }
     }
 
@@ -53,12 +55,12 @@ impl StreamDedup {
 
         // Evict oldest if at capacity
         if self.recent_chunks.len() >= DEDUP_WINDOW {
-            self.recent_chunks.remove(0);
-            self.recent_normalized.remove(0);
+            self.recent_chunks.pop_front();
+            self.recent_normalized.pop_front();
         }
 
-        self.recent_chunks.push(text.to_string());
-        self.recent_normalized.push(normalize(text));
+        self.recent_chunks.push_back(text.to_string());
+        self.recent_normalized.push_back(normalize(text));
     }
 
     /// Clear the dedup window.

@@ -60,8 +60,18 @@ pub async fn build_router(
         }
         CorsLayer::new()
             .allow_origin(origins)
-            .allow_methods(tower_http::cors::Any)
-            .allow_headers(tower_http::cors::Any)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::DELETE,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::HeaderName::from_static("x-api-key"),
+            ])
     } else {
         let mut origins: Vec<axum::http::HeaderValue> = vec![
             format!("http://{listen_addr}").parse().unwrap(),
@@ -80,8 +90,18 @@ pub async fn build_router(
         }
         CorsLayer::new()
             .allow_origin(origins)
-            .allow_methods(tower_http::cors::Any)
-            .allow_headers(tower_http::cors::Any)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::PUT,
+                axum::http::Method::DELETE,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers([
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::HeaderName::from_static("x-api-key"),
+            ])
     };
 
     let api_key = state.kernel.config.api_key.trim().to_string();
@@ -182,6 +202,12 @@ pub async fn run_daemon(
     daemon_info_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = listen_addr.parse()?;
+
+    // SECURITY: Refuse to start without API key on non-loopback addresses
+    if kernel.config.api_key.trim().is_empty() && !addr.ip().is_loopback() {
+        return Err("API key must be set when listening on non-loopback address. \
+                     Set api_key in config.toml or bind to 127.0.0.1".into());
+    }
 
     let kernel = Arc::new(kernel);
     kernel.set_self_handle();

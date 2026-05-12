@@ -19,8 +19,11 @@ use std::sync::Arc;
 /// Request body for updating agent visual identity.
 #[derive(serde::Deserialize)]
 pub struct UpdateIdentityRequest {
+    #[serde(default)]
     pub emoji: Option<String>,
+    #[serde(default)]
     pub avatar_url: Option<String>,
+    #[serde(default)]
     pub color: Option<String>,
     #[serde(default)]
     pub archetype: Option<String>,
@@ -28,6 +31,42 @@ pub struct UpdateIdentityRequest {
     pub vibe: Option<String>,
     #[serde(default)]
     pub greeting_style: Option<String>,
+}
+
+impl UpdateIdentityRequest {
+    fn validate(&self) -> Result<(), &'static str> {
+        if let Some(ref v) = self.emoji {
+            if v.len() > 4 {
+                return Err("emoji too long (max 4 characters)");
+            }
+        }
+        if let Some(ref v) = self.avatar_url {
+            if v.len() > 2048 {
+                return Err("avatar_url too long (max 2048 characters)");
+            }
+        }
+        if let Some(ref v) = self.color {
+            if v.len() > 32 {
+                return Err("color too long (max 32 characters)");
+            }
+        }
+        if let Some(ref v) = self.archetype {
+            if v.len() > 64 {
+                return Err("archetype too long (max 64 characters)");
+            }
+        }
+        if let Some(ref v) = self.vibe {
+            if v.len() > 256 {
+                return Err("vibe too long (max 256 characters)");
+            }
+        }
+        if let Some(ref v) = self.greeting_style {
+            if v.len() > 1024 {
+                return Err("greeting_style too long (max 1024 characters)");
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Request body for patching agent config (name, description, prompt, identity, modality).
@@ -281,7 +320,9 @@ pub async fn restart_agent(
                             let caps = carrier_kernel::capabilities::manifest_to_capabilities(&new_manifest);
                             state.kernel.coordination.capabilities.grant(agent_id, caps);
                             if let Some(updated_entry) = state.kernel.registry.get(agent_id) {
-                                let _ = state.kernel.memory.save_agent(&updated_entry);
+                                if let Err(e) = state.kernel.memory.save_agent(&updated_entry) {
+                                    tracing::warn!("failed to persist agent: {e}");
+                                }
                             }
                             manifest_reloaded = true;
                             tracing::info!(agent = %agent_name, "Reloaded manifest from agent.toml on API restart");
@@ -456,7 +497,9 @@ pub async fn patch_agent(
 
     // Persist updated entry to SQLite
     if let Some(entry) = state.kernel.registry.get(agent_id) {
-        let _ = state.kernel.memory.save_agent(&entry);
+        if let Err(e) = state.kernel.memory.save_agent(&entry) {
+            tracing::warn!("failed to persist agent: {e}");
+        }
         (
             StatusCode::OK,
             Json(
@@ -607,7 +650,9 @@ pub async fn suspend_agent(
         );
     }
     if let Some(updated) = state.kernel.registry.get(agent_id) {
-        let _ = state.kernel.memory.save_agent(&updated);
+        if let Err(e) = state.kernel.memory.save_agent(&updated) {
+            tracing::warn!("failed to persist agent: {e}");
+        }
     }
     // Cancel any active run
     let _ = state.kernel.stop_agent_run(agent_id);
@@ -647,7 +692,9 @@ pub async fn resume_agent(
         );
     }
     if let Some(updated) = state.kernel.registry.get(agent_id) {
-        let _ = state.kernel.memory.save_agent(&updated);
+        if let Err(e) = state.kernel.memory.save_agent(&updated) {
+            tracing::warn!("failed to persist agent: {e}");
+        }
     }
     (
         StatusCode::OK,
@@ -711,6 +758,13 @@ pub async fn update_agent_identity(
         Err(resp) => return resp,
     };
 
+    if let Err(e) = req.validate() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        );
+    }
+
     // Validate color format if provided
     if let Some(ref color) = req.color {
         if !color.is_empty() && !color.starts_with('#') {
@@ -748,7 +802,9 @@ pub async fn update_agent_identity(
         Ok(()) => {
             // Persist identity to SQLite
             if let Some(entry) = state.kernel.registry.get(agent_id) {
-                let _ = state.kernel.memory.save_agent(&entry);
+                if let Err(e) = state.kernel.memory.save_agent(&entry) {
+                    tracing::warn!("failed to persist agent: {e}");
+                }
             }
             (
                 StatusCode::OK,
@@ -1104,7 +1160,9 @@ pub async fn verify_clone_access(
     let provided = body["password"].as_str().unwrap_or("");
     let expected = stored_password.unwrap_or_default();
 
-    if provided == expected {
+    let match_result = provided.len() == expected.len()
+        && subtle::ConstantTimeEq::ct_eq(provided.as_bytes(), expected.as_bytes()).into();
+    if match_result {
         (StatusCode::OK, Json(serde_json::json!({"ok": true})))
     } else {
         (

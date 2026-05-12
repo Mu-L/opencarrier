@@ -19,6 +19,9 @@ pub fn decrypt_aes_cbc(key: &[u8], encrypted_base64: &str) -> Result<Vec<u8>, St
         .map_err(|e| format!("base64 decode error: {e}"))?;
 
     type Aes256CbcDecrypt = cbc::Decryptor<aes::Aes256>;
+    // SAFETY: WeCom protocol mandates IV = key[0..16] for AES-256-CBC mode.
+    // This is a protocol requirement and cannot be changed without breaking
+    // compatibility with the WeCom API.
     let iv = &key[..16];
     let cipher = Aes256CbcDecrypt::new(key.into(), iv.into());
 
@@ -62,7 +65,10 @@ pub fn is_valid_wecom_signature(
 
     let mut hasher = Sha1::new();
     hasher.update(parts.concat().as_bytes());
-    hex::encode(hasher.finalize()) == msg_signature
+    use subtle::ConstantTimeEq;
+    let computed = hex::encode(hasher.finalize());
+    computed.len() == msg_signature.len()
+        && computed.as_bytes().ct_eq(msg_signature.as_bytes()).into()
 }
 
 // ---------------------------------------------------------------------------

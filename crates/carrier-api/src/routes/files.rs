@@ -378,6 +378,7 @@ pub async fn upload_file(
                             file_id.clone(),
                             UploadMeta {
                                 content_type: content_type.clone(),
+                                created_at: std::time::Instant::now(),
                             },
                         );
 
@@ -455,6 +456,7 @@ pub async fn upload_file(
         file_id.clone(),
         UploadMeta {
             content_type: content_type.clone(),
+            created_at: std::time::Instant::now(),
         },
     );
 

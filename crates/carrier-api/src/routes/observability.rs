@@ -68,6 +68,12 @@ pub async fn health_detail(State(state): State<Arc<AppState>>) -> impl IntoRespo
 // Prometheus metrics endpoint
 // ---------------------------------------------------------------------------
 
+fn escape_prometheus_label(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
 /// GET /api/metrics — Prometheus text-format metrics.
 ///
 /// Returns counters and gauges for monitoring Carrier in production:
@@ -105,9 +111,9 @@ pub async fn prometheus_metrics(State(state): State<Arc<AppState>>) -> axum::res
     out.push_str("# HELP carrier_tool_calls_total Total tool calls (rolling hourly window).\n");
     out.push_str("# TYPE carrier_tool_calls_total gauge\n");
     for agent in &agents {
-        let name = &agent.name;
+        let name = escape_prometheus_label(&agent.name);
         let modality = &agent.manifest.model.modality;
-        let model = &agent.manifest.model.modality;
+        let model = escape_prometheus_label(&agent.manifest.name);
         if let Some((tokens, tools)) = state.kernel.runtime.scheduler.get_usage(agent.id) {
             out.push_str(&format!(
                 "carrier_tokens_total{{agent=\"{name}\",modality=\"{modality}\",model=\"{model}\"}} {tokens}\n"

@@ -71,7 +71,9 @@ pub async fn delete_cron_job(
             let job_id = carrier_types::scheduler::CronJobId(uuid);
             match state.kernel.cron_scheduler.remove_job(job_id) {
                 Ok(_) => {
-                    let _ = state.kernel.cron_scheduler.persist();
+                    if let Err(e) = state.kernel.cron_scheduler.persist() {
+                        tracing::warn!("failed to persist cron state: {e}");
+                    }
                     (
                         StatusCode::OK,
                         Json(serde_json::json!({"status": "deleted"})),
@@ -101,7 +103,9 @@ pub async fn toggle_cron_job(
             let job_id = carrier_types::scheduler::CronJobId(uuid);
             match state.kernel.cron_scheduler.set_enabled(job_id, enabled) {
                 Ok(()) => {
-                    let _ = state.kernel.cron_scheduler.persist();
+                    if let Err(e) = state.kernel.cron_scheduler.persist() {
+                        tracing::warn!("failed to persist cron state: {e}");
+                    }
                     (
                         StatusCode::OK,
                         Json(serde_json::json!({"id": id, "enabled": enabled})),

@@ -2,25 +2,76 @@
 //!
 //! No external crate needed — hand-rolled for simplicity.
 //! Format: `KEY=VALUE` lines, `#` comments, optional quotes.
+//!
+//! # Environment variable safety
+//!
+//! `std::env::set_var` is deprecated in Rust 2024 edition for multi-threaded
+//! contexts because it can cause data races. This module provides an in-process
+//! override map (`ENV_OVERRIDES`) so that env mutations from async code are
+//! safe. Use [`get_env`] to read values (checks overrides first, then
+//! `std::env::var`). Use [`set_env_override`] to set values from async contexts.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
+use std::sync::Mutex;
+
+/// In-process environment overrides for safe mutation from async contexts.
+///
+/// `std::env::set_var` is deprecated for multi-threaded code (Rust 2024).
+/// This map allows async code to set env overrides that [`get_env`] will
+/// return in preference to the process environment, without data races.
+static ENV_OVERRIDES: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Get an environment variable, checking the in-process override map first.
+///
+/// This is the safe replacement for `std::env::var` in async/multi-threaded
+/// contexts. It checks `ENV_OVERRIDES` first, then falls back to the process
+/// environment.
+pub fn get_env(key: &str) -> Option<String> {
+    let overrides = ENV_OVERRIDES.lock().unwrap();
+    if let Some(val) = overrides.get(key).cloned() {
+        return Some(val);
+    }
+    drop(overrides);
+    std::env::var(key).ok()
+}
+
+/// Set an environment variable override in the in-process map.
+///
+/// This is the safe replacement for `std::env::set_var` in async contexts.
+/// The override takes priority over the process environment for [`get_env`]
+/// calls, but does not affect code that reads `std::env::var` directly.
+pub fn set_env_override(key: &str, value: &str) {
+    let mut overrides = ENV_OVERRIDES.lock().unwrap();
+    overrides.insert(key.to_string(), value.to_string());
+}
+
+/// Remove an environment variable override from the in-process map.
+///
+/// This is the safe replacement for `std::env::remove_var` in async contexts.
+pub fn remove_env_override(key: &str) {
+    let mut overrides = ENV_OVERRIDES.lock().unwrap();
+    overrides.remove(key);
+}
 
 /// Return the path to `~/.opencarrier/.env`.
 pub fn env_file_path() -> Option<PathBuf> {
     Some(carrier_types::config::home_dir().join(".env"))
 }
 
-/// Load `~/.opencarrier/.env` and `~/.opencarrier/secrets.env` into `std::env`.
+/// Load `~/.opencarrier/.env` and `~/.opencarrier/secrets.env` into the
+/// in-process override map.
 ///
 /// System env vars take priority — existing vars are NOT overridden.
 /// `secrets.env` is loaded second so `.env` values take priority over secrets
 /// (but both yield to system env vars).
 /// Silently does nothing if the files don't exist.
 ///
-/// SAFETY: This is called during kernel boot, before any tokio tasks are spawned.
-/// The set_var calls are safe because there is no concurrent access to the
-/// environment at this point.
+/// Uses the in-process `ENV_OVERRIDES` map instead of `std::env::set_var`
+/// to avoid data races in multi-threaded contexts.
 pub fn load_dotenv() {
     load_env_file(env_file_path());
     // Also load secrets.env (written by dashboard "Set API Key" button)
@@ -51,7 +102,9 @@ fn load_env_file(path: Option<PathBuf>) {
 
         if let Some((key, value)) = parse_env_line(trimmed) {
             if std::env::var(&key).is_err() {
-                std::env::set_var(&key, &value);
+                // Use in-process override map instead of std::env::set_var
+                // to avoid data races in multi-threaded contexts.
+                set_env_override(&key, &value);
             }
         }
     }
@@ -73,10 +126,10 @@ pub fn save_env_key(key: &str, value: &str) -> Result<(), String> {
     entries.insert(key.to_string(), value.to_string());
     write_env_file(&path, &entries)?;
 
-    // NOTE: This is a best-effort set. Setting env vars from a tokio thread
-    // is technically racy with concurrent reads. The .env file is the
-    // authoritative source; a restart will pick up the change cleanly.
-    std::env::set_var(key, value);
+    // Set in the in-process override map so get_env() returns the new value
+    // immediately, without using std::env::set_var which is unsafe in
+    // multi-threaded contexts.
+    set_env_override(key, value);
 
     Ok(())
 }
@@ -94,16 +147,76 @@ pub fn delete_env_key(key: &str) -> Result<(), String> {
         write_env_file(&path, &entries)?;
     }
 
-    // NOTE: Best-effort unset (env mutation is racy from tokio threads).
-    // The .env file is the authoritative source.
-    std::env::remove_var(key);
+    // Remove from the in-process override map so get_env() no longer
+    // returns the deleted value, without using std::env::remove_var
+    // which is unsafe in multi-threaded contexts.
+    remove_env_override(key);
 
     Ok(())
 }
 
 /// Check if a key exists in `~/.opencarrier/.env` or the process environment.
 pub fn has_env_key(key: &str) -> bool {
-    std::env::var(key).is_ok()
+    get_env(key).is_some()
+}
+
+/// Save a secret key to the secrets.env file (for sensitive values like API keys).
+pub fn save_secret_key(key: &str, value: &str, home_dir: &std::path::Path) -> std::io::Result<()> {
+    let secrets_path = home_dir.join("secrets.env");
+    let mut content = if secrets_path.exists() {
+        std::fs::read_to_string(&secrets_path)?
+    } else {
+        String::new()
+    };
+
+    // Replace existing key or append
+    let line_prefix = format!("{key}=");
+    if let Some(pos) = content.lines().position(|line| line.starts_with(&line_prefix)) {
+        let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+        content = lines
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                if i == pos {
+                    format!("{key}={value}")
+                } else {
+                    l.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    } else {
+        if !content.ends_with('\n') && !content.is_empty() {
+            content.push('\n');
+        }
+        content.push_str(&format!("{key}={value}\n"));
+    }
+
+    std::fs::write(&secrets_path, &content)
+}
+
+/// Check that a secrets.env file has restrictive permissions (owner-only).
+/// Returns a warning message if permissions are too permissive.
+#[cfg(unix)]
+pub fn check_file_permissions(path: &std::path::Path) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+    if !path.exists() {
+        return None;
+    }
+    let mode = std::fs::metadata(path)
+        .ok()?
+        .permissions()
+        .mode();
+    if mode & 0o077 != 0 {
+        Some(format!(
+            "File {:?} has overly permissive permissions ({:o}). Run: chmod 600 {:?}",
+            path,
+            mode & 0o777,
+            path
+        ))
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------

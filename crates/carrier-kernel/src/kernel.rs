@@ -38,8 +38,21 @@ pub struct KernelBrain {
 pub struct KernelA2a {
     /// A2A task store for tracking task lifecycle.
     pub a2a_task_store: carrier_runtime::a2a::A2aTaskStore,
-    /// Discovered external A2A agent cards.
-    pub a2a_external_agents: std::sync::Mutex<Vec<(String, carrier_runtime::a2a::AgentCard)>>,
+    /// Discovered external A2A agent cards with discovery timestamp.
+    pub a2a_external_agents: std::sync::Mutex<Vec<(String, carrier_runtime::a2a::AgentCard, std::time::Instant)>>,
+}
+
+impl KernelA2a {
+    /// Remove external agent entries that have been stale for longer than the
+    /// given TTL. This prevents stale / unreachable agents from accumulating
+    /// in the discovery store.
+    pub fn cleanup_stale_agents(&self) {
+        const STALE_TTL_SECS: u64 = 600; // 10 minutes
+        if let Ok(mut agents) = self.a2a_external_agents.lock() {
+            let now = std::time::Instant::now();
+            agents.retain(|(_, _, discovered_at)| now.duration_since(*discovered_at).as_secs() < STALE_TTL_SECS);
+        }
+    }
 }
 
 /// External service integrations (web search, browser, media, TTS, embeddings).

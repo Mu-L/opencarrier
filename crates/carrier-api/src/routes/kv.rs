@@ -7,6 +7,9 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use std::sync::Arc;
+
+const MAX_KV_KEY_LEN: usize = 256;
+const MAX_KV_VALUE_SIZE: usize = 65536; // 64KB
 // ---------------------------------------------------------------------------
 // Memory endpoints
 // ---------------------------------------------------------------------------
@@ -78,6 +81,14 @@ pub async fn set_agent_kv_key(
     };
 
     let value = body.get("value").cloned().unwrap_or(body);
+
+    if key.len() > MAX_KV_KEY_LEN {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Key too long (max 256 characters)"})));
+    }
+    let value_str = value.to_string();
+    if value_str.len() > MAX_KV_VALUE_SIZE {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Value too large (max 64KB)"})));
+    }
 
     match state
         .kernel

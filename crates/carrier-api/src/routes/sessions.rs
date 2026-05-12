@@ -64,6 +64,7 @@ pub async fn get_agent_session(
                                             file_id.clone(),
                                             UploadMeta {
                                                 content_type: media_type.clone(),
+                                                created_at: std::time::Instant::now(),
                                             },
                                         );
                                         msg_images.push(serde_json::json!({

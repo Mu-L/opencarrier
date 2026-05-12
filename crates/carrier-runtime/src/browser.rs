@@ -243,6 +243,28 @@ impl CdpConnection {
 
 impl Drop for CdpConnection {
     fn drop(&mut self) {
+        // 1. Attempt to send a WebSocket close frame for clean shutdown.
+        //    We cannot .await in Drop, so we spawn a best-effort task.
+        //    If the lock is held or the send fails, the connection will still
+        //    be cleaned up when the reader task is aborted below.
+        {
+            let write = self.write.clone();
+            let _ = tokio::spawn(async move {
+                let mut guard = write.lock().await;
+                let _ = guard.send(WsMessage::Close(None)).await;
+            });
+        }
+
+        // 2. Drain pending oneshot channels — respond with an error so
+        //    callers waiting on CDP commands don't hang forever.
+        for entry in self.pending.iter() {
+            let id = entry.key();
+            if let Some((_, sender)) = self.pending.remove(id) {
+                let _ = sender.send(Err("CdpConnection dropped".to_string()));
+            }
+        }
+
+        // 3. Abort the background reader task.
         self._reader_handle.abort();
     }
 }

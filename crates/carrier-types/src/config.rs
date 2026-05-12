@@ -699,6 +699,7 @@ pub struct KernelConfig {
     /// API authentication key. When set, all API endpoints (except /api/health)
     /// require a `Authorization: Bearer <key>` header.
     /// If empty, the API is unauthenticated (local development only).
+    #[serde(skip_serializing)]
     pub api_key: String,
     /// Kernel operating mode (stable, default, dev).
     #[serde(default)]
@@ -790,6 +791,7 @@ pub struct KernelConfig {
     /// variable holding the API key. e.g. `nvidia = "NVIDIA_API_KEY"`.
     /// If not set, the convention `{PROVIDER_UPPER}_API_KEY` is used automatically.
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub provider_api_keys: HashMap<String, String>,
     /// OAuth client ID overrides for PKCE flows.
     #[serde(default)]

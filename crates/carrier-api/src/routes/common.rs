@@ -91,10 +91,17 @@ use std::sync::LazyLock;
 /// Metadata stored alongside uploaded files.
 pub struct UploadMeta {
     pub content_type: String,
+    pub created_at: std::time::Instant,
 }
 
 /// In-memory upload metadata registry.
 pub static UPLOAD_REGISTRY: LazyLock<DashMap<String, UploadMeta>> = LazyLock::new(DashMap::new);
+
+/// Remove uploads older than 30 minutes from the registry.
+pub fn cleanup_expired_uploads() {
+    let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(30 * 60);
+    UPLOAD_REGISTRY.retain(|_, meta| meta.created_at > cutoff);
+}
 
 // ---------------------------------------------------------------------------
 // Workspace identity file whitelist (used by agents and files modules)

@@ -350,10 +350,11 @@ pub async fn wecom_smartbot_generate(
                         });
                     // Store agent_name for auto-bind in poll
                     if let Some(ref name) = agent_name {
+                        cleanup_wecom_pending();
                         WECOM_PENDING_AGENTS
                             .lock()
                             .unwrap()
-                            .insert(scode.to_string(), name.clone());
+                            .insert(scode.to_string(), (name.clone(), std::time::Instant::now()));
                         // Background poll: server proactively checks WeCom result
                         spawn_background_wecom_poll(state, scode.to_string(), name.clone());
                     }
@@ -441,8 +442,9 @@ pub async fn wecom_smartbot_poll(
                                 serde_json::Value::String(secret.to_string()),
                             );
                             // Auto-create bot and bind to agent
+                            cleanup_wecom_pending();
                             let agent_name =
-                                WECOM_PENDING_AGENTS.lock().unwrap().remove(&query.scode);
+                                WECOM_PENDING_AGENTS.lock().unwrap().remove(&query.scode).map(|(v, _)| v);
                             if let Some(agent_name) = agent_name {
                                 let creds = serde_json::json!({
                                     "bot_id": bot_id,
@@ -502,6 +504,7 @@ struct DeviceAuthSession {
 
 static DEVICE_AUTH_SESSIONS: LazyLock<Mutex<HashMap<String, DeviceAuthSession>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+const MAX_DEVICE_AUTH_SESSIONS: usize = 1000;
 
 fn generate_session_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -938,7 +941,14 @@ pub async fn feishu_device_auth_begin(
     };
 
     {
+        cleanup_expired_sessions();
         let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+        if sessions.len() >= MAX_DEVICE_AUTH_SESSIONS {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Too many pending auth sessions"})),
+            );
+        }
         sessions.insert(session_id.clone(), session);
     }
 
@@ -1244,7 +1254,14 @@ pub async fn dingtalk_device_auth_begin(
     };
 
     {
+        cleanup_expired_sessions();
         let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap();
+        if sessions.len() >= MAX_DEVICE_AUTH_SESSIONS {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Too many pending auth sessions"})),
+            );
+        }
         sessions.insert(session_id.clone(), session);
     }
 
@@ -1453,6 +1470,8 @@ fn build_bot_fields(
                     );
                 }
             }
+            let secret_env = format!("FEISHU_BOT_SECRET_{bot_id}").to_uppercase();
+            bot_fields.insert("secret_env".into(), toml::Value::String(secret_env));
             if let Some(v) = body.get("app_secret").and_then(|v| v.as_str()) {
                 if !v.is_empty() {
                     bot_fields.insert("app_secret".into(), toml::Value::String(v.to_string()));
@@ -1470,6 +1489,8 @@ fn build_bot_fields(
                     bot_fields.insert("app_key".into(), toml::Value::String(v.to_string()));
                 }
             }
+            let secret_env = format!("DINGTALK_BOT_SECRET_{bot_id}").to_uppercase();
+            bot_fields.insert("secret_env".into(), toml::Value::String(secret_env));
             if let Some(v) = body.get("app_secret").and_then(|v| v.as_str()) {
                 if !v.is_empty() {
                     bot_fields.insert("app_secret".into(), toml::Value::String(v.to_string()));
@@ -2025,8 +2046,15 @@ pub async fn unbind_bot(
 
 /// Helper to atomically update a bot.toml file.
 // WeCom scode → agent_name mapping for auto-bind
-static WECOM_PENDING_AGENTS: LazyLock<Mutex<HashMap<String, String>>> =
+static WECOM_PENDING_AGENTS: LazyLock<Mutex<HashMap<String, (String, std::time::Instant)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn cleanup_wecom_pending() {
+    const WECOM_TTL_SECS: u64 = 600; // 10 minutes
+    let mut pending = WECOM_PENDING_AGENTS.lock().unwrap();
+    let now = std::time::Instant::now();
+    pending.retain(|_, (_, created_at)| now.duration_since(*created_at).as_secs() < WECOM_TTL_SECS);
+}
 
 /// Auto-create a bot and bind it to the specified agent.
 /// Works for dingtalk, feishu, and wecom platforms.
@@ -2397,6 +2425,13 @@ pub async fn bot_send_message(
             Json(serde_json::json!({ "error": "Plugin manager not available" })),
         );
     };
+
+    if body.text.len() > 4096 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Message text too long (max 4096 characters)" })),
+        );
+    }
 
     // Resolve user_id: use provided value, or fall back to owner_id from bot.toml
     let user_id = if body.user_id.is_empty() {

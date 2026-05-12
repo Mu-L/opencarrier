@@ -613,6 +613,13 @@ pub async fn clone_rollback(
         }
     };
 
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid filename: path separators not allowed"})),
+        );
+    }
+
     let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
@@ -650,6 +657,13 @@ pub async fn clone_verify(
             )
         }
     };
+
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid filename: path separators not allowed"})),
+        );
+    }
 
     let (_entry, workspace) = match get_clone_workspace(&name, &state.kernel.registry) {
         Ok(r) => r,

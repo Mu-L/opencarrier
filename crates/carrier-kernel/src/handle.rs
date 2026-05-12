@@ -429,6 +429,7 @@ impl KernelHandle for CarrierKernel {
     }
 
     fn list_a2a_agents(&self) -> Vec<(String, String)> {
+        self.a2a.cleanup_stale_agents();
         let agents = self
             .a2a
             .a2a_external_agents
@@ -436,11 +437,12 @@ impl KernelHandle for CarrierKernel {
             .unwrap_or_else(|e| e.into_inner());
         agents
             .iter()
-            .map(|(_, card)| (card.name.clone(), card.url.clone()))
+            .map(|(_, card, _)| (card.name.clone(), card.url.clone()))
             .collect()
     }
 
     fn get_a2a_agent_url(&self, name: &str) -> Option<String> {
+        self.a2a.cleanup_stale_agents();
         let agents = self
             .a2a
             .a2a_external_agents
@@ -449,8 +451,8 @@ impl KernelHandle for CarrierKernel {
         let name_lower = name.to_lowercase();
         agents
             .iter()
-            .find(|(_, card)| card.name.to_lowercase() == name_lower)
-            .map(|(_, card)| card.url.clone())
+            .find(|(_, card, _)| card.name.to_lowercase() == name_lower)
+            .map(|(_, card, _)| card.url.clone())
     }
 
     async fn spawn_agent_checked(

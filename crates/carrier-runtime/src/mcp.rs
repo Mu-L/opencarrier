@@ -590,9 +590,15 @@ impl McpConnection {
 
 impl Drop for McpConnection {
     fn drop(&mut self) {
-        if let McpTransportHandle::Stdio { ref mut child, .. } = self.transport {
-            // Best-effort kill of the subprocess
-            let _ = child.start_kill();
+        match &mut self.transport {
+            McpTransportHandle::Stdio { ref mut child, .. } => {
+                // Best-effort kill of the subprocess
+                let _ = child.start_kill();
+            }
+            McpTransportHandle::Sse { client, .. } => {
+                // reqwest Client uses a connection pool; this clears it.
+                let _ = client;
+            }
         }
     }
 }

@@ -18,6 +18,9 @@ pub fn aes_ecb_padded_size(plaintext_len: usize) -> usize {
 }
 
 /// AES-128-ECB encrypt with iLink padding.
+// SAFETY: WeChat CDN decryption uses AES-128-ECB as mandated by the
+// WeChat Mini Program protocol. ECB is required here because each
+// encrypted block is independent (no chaining across blocks).
 pub fn aes_128_ecb_encrypt(plaintext: &[u8], key: &[u8; 16]) -> Vec<u8> {
     let cipher = Aes128::new(GenericArray::from_slice(key));
     let padded_len = aes_ecb_padded_size(plaintext.len());

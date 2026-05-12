@@ -953,7 +953,7 @@ async fn handle_command(
             } else {
                 agents
                     .iter()
-                    .map(|(url, card)| format!("{} — {}", card.name, url))
+                    .map(|(url, card, _)| format!("{} — {}", card.name, url))
                     .collect::<Vec<_>>()
                     .join("\n")
             };

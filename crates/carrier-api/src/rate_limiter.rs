@@ -64,18 +64,35 @@ pub async fn gcra_rate_limit(
     request: Request<Body>,
     next: Next,
 ) -> Response<Body> {
+    // 1. Try ConnectInfo (direct socket address)
     let ip = request
         .extensions()
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0.ip())
-        .unwrap_or(IpAddr::from([127, 0, 0, 1]));
+        .map(|ci| ci.0.ip());
+
+    // 2. Try proxy headers if no direct IP (behind trusted proxy)
+    let key = if let Some(ip) = ip {
+        ip.to_string()
+    } else {
+        extract_client_key_from_headers(request.headers())
+    };
 
     let method = request.method().as_str().to_string();
     let path = request.uri().path().to_string();
     let cost = operation_cost(&method, &path);
 
-    if limiter.check_key_n(&ip, cost).is_err() {
-        tracing::warn!(ip = %ip, cost = cost.get(), path = %path, "GCRA rate limit exceeded");
+    // Use IpAddr when possible; for anonymous keys create a synthetic
+    // rate-limit bucket that doesn't collide with real IPs.
+    let limiter_key: IpAddr = key.parse().unwrap_or_else(|_| {
+        // Non-IP keys (anon-UUID) hash to a unique private range entry
+        // so they don't share a bucket with any other client.
+        use std::net::Ipv4Addr;
+        let hash = hash_to_u32(&key);
+        IpAddr::from(Ipv4Addr::new(198, 51, 100, (hash & 0xFF) as u8))
+    });
+
+    if limiter.check_key_n(&limiter_key, cost).is_err() {
+        tracing::warn!(ip = %limiter_key, cost = cost.get(), path = %path, "GCRA rate limit exceeded");
         return Response::builder()
             .status(StatusCode::TOO_MANY_REQUESTS)
             .header("content-type", "application/json")
@@ -87,6 +104,47 @@ pub async fn gcra_rate_limit(
     }
 
     next.run(request).await
+}
+
+/// Extract a client identifier from request headers.
+///
+/// Priority: X-Forwarded-For > X-Real-IP > anonymous UUID.
+/// Using a random UUID instead of a shared fallback like "127.0.0.1" prevents
+/// all unidentified clients from sharing a single rate-limit bucket.
+fn extract_client_key_from_headers(headers: &axum::http::HeaderMap) -> String {
+    // Try X-Forwarded-For first (standard proxy header)
+    if let Some(xff) = headers.get("x-forwarded-for") {
+        if let Ok(s) = xff.to_str() {
+            if let Some(ip) = s.split(',').next() {
+                let ip = ip.trim();
+                if !ip.is_empty() {
+                    return ip.to_string();
+                }
+            }
+        }
+    }
+    // Try X-Real-IP (nginx standard)
+    if let Some(xri) = headers.get("x-real-ip") {
+        if let Ok(s) = xri.to_str() {
+            let ip = s.trim();
+            if !ip.is_empty() {
+                return ip.to_string();
+            }
+        }
+    }
+    // No IP available — use a random per-connection identifier to avoid
+    // shared rate-limit bucket that would unfairly throttle all unidentified clients.
+    format!("anon-{}", uuid::Uuid::new_v4())
+}
+
+/// Simple FNV-1a-style hash for mapping arbitrary keys to a u8 subnet.
+pub(crate) fn hash_to_u32(s: &str) -> u32 {
+    let mut hash: u32 = 2166136261;
+    for byte in s.bytes() {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(16777619);
+    }
+    hash
 }
 
 #[cfg(test)]
