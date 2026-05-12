@@ -1831,7 +1831,7 @@ pub async fn bind_bot(
 
                     if !channel_type.is_empty() && !bot_id.is_empty() {
                         // Add dynamic bridge bindings
-                        if let Some(ref pm) = state.plugin_manager {
+                        if let Some(ref pm) = state.channel_manager {
                             let pm = pm.lock().await;
                             // Set sender route: WeCom/Feishu/DingTalk use bot_id as route key
                             if channel_type != "weixin" {
@@ -1893,7 +1893,7 @@ pub async fn bind_bot(
                     // Add dynamic bridge binding
                     let bot_id = tf.get("bot_id").and_then(|v| v.as_str()).unwrap_or("");
                     if !bot_id.is_empty() {
-                        if let Some(ref pm) = state.plugin_manager {
+                        if let Some(ref pm) = state.channel_manager {
                             let pm = pm.lock().await;
                             // WeChat uses user_id (sender_id) as route key
                             if !user_id.is_empty() {
@@ -2212,7 +2212,7 @@ async fn add_dynamic_binding(
     };
 
     if !channel_type.is_empty() && !bot_id.is_empty() {
-        if let Some(ref pm) = state.plugin_manager {
+        if let Some(ref pm) = state.channel_manager {
             let pm = pm.lock().await;
             // Set sender route: WeCom/Feishu/DingTalk use bot_id as route key
             if channel_type != "weixin" {
@@ -2419,7 +2419,7 @@ pub async fn bot_send_message(
     Path(bot_uuid): Path<String>,
     Json(body): Json<BotSendBody>,
 ) -> impl IntoResponse {
-    let Some(ref pm) = state.plugin_manager else {
+    let Some(ref pm) = state.channel_manager else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "error": "Plugin manager not available" })),
@@ -2475,7 +2475,7 @@ pub async fn bot_send_message(
     };
 
     let pm = pm.lock().await;
-    match pm.channel_send(&bot_uuid, &user_id, &body.text) {
+    match pm.channel_send_by_bot(&bot_uuid, &user_id, &body.text) {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({ "status": "sent" })),

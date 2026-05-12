@@ -135,7 +135,7 @@ pub async fn list_commands(State(_state): State<Arc<AppState>>) -> impl IntoResp
 
 /// GET /api/plugins — list loaded plugin tool status.
 pub async fn plugins_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let plugin_statuses = if let Some(ref pm) = state.plugin_manager {
+    let plugin_statuses = if let Some(ref pm) = state.channel_manager {
         let pm = pm.lock().await;
         let statuses = pm.status();
         drop(pm);

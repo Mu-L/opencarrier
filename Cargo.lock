@@ -371,6 +371,10 @@ dependencies = [
  "async-trait",
  "axum",
  "base64",
+ "carrier-channel-dingtalk",
+ "carrier-channel-feishu",
+ "carrier-channel-wecom",
+ "carrier-channel-weixin",
  "carrier-clone",
  "carrier-kernel",
  "carrier-lifecycle",
@@ -402,6 +406,104 @@ dependencies = [
  "tracing",
  "urlencoding",
  "uuid",
+]
+
+[[package]]
+name = "carrier-channel-dingtalk"
+version = "0.3.0"
+dependencies = [
+ "carrier-types",
+ "dashmap",
+ "futures",
+ "hex",
+ "hmac",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "toml 0.8.2",
+ "tracing",
+]
+
+[[package]]
+name = "carrier-channel-feishu"
+version = "0.3.0"
+dependencies = [
+ "base64",
+ "carrier-types",
+ "dashmap",
+ "futures",
+ "hmac",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "toml 0.8.2",
+ "tracing",
+ "urlencoding",
+]
+
+[[package]]
+name = "carrier-channel-wecom"
+version = "0.3.0"
+dependencies = [
+ "aes",
+ "axum",
+ "base64",
+ "carrier-types",
+ "cbc",
+ "dashmap",
+ "futures",
+ "hex",
+ "hmac",
+ "rand 0.8.5",
+ "reqwest",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "subtle",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "toml 0.8.2",
+ "tracing",
+ "urlencoding",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "carrier-channel-weixin"
+version = "0.3.0"
+dependencies = [
+ "aes",
+ "base64",
+ "carrier-plugin-sdk",
+ "carrier-types",
+ "cbc",
+ "dashmap",
+ "hex",
+ "hmac",
+ "md-5",
+ "rand 0.8.5",
+ "reqwest",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tokio",
+ "toml 0.8.2",
+ "tracing",
+ "urlencoding",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -547,6 +649,10 @@ dependencies = [
  "axum",
  "base64",
  "bytes",
+ "carrier-channel-dingtalk",
+ "carrier-channel-feishu",
+ "carrier-channel-wecom",
+ "carrier-channel-weixin",
  "carrier-clone",
  "carrier-lifecycle",
  "carrier-memory",
@@ -602,6 +708,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.18",
+ "tokio",
  "toml 0.8.2",
  "uuid",
 ]

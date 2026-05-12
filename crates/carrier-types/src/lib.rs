@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod brain;
+pub mod channel;
 pub mod env;
 pub mod capability;
 pub mod comms;

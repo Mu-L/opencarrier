@@ -7,9 +7,17 @@ use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use super::instance::PluginInstance;
 use super::router::SenderRouter;
 use crate::kernel_handle::KernelHandle;
+
+// ---------------------------------------------------------------------------
+// Channel response sender
+// ---------------------------------------------------------------------------
+
+/// A function that can send a response through a channel.
+/// Used by the bridge to deliver agent replies back to users.
+pub type ChannelSendFn =
+    Arc<dyn Fn(&str, &str, &str, &str) -> Result<(), String> + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // Bridge manager
@@ -20,8 +28,8 @@ use crate::kernel_handle::KernelHandle;
 pub struct PluginBridgeManager {
     /// Kernel handle for sending messages to agents.
     kernel: Arc<dyn KernelHandle>,
-    /// Loaded plugins (for channel_send responses).
-    plugins: Vec<Arc<dyn PluginInstance>>,
+    /// Function to send responses through channels (channel_type, bot_id, user_id, text).
+    channel_send_fn: Option<ChannelSendFn>,
     /// Sender-based routing (route_key → agent_id).
     sender_router: Option<Arc<SenderRouter>>,
     /// route_key of users currently in the "naming" flow (waiting for agent name).
@@ -33,7 +41,7 @@ impl PluginBridgeManager {
     pub fn new(kernel: Arc<dyn KernelHandle>) -> Self {
         Self {
             kernel,
-            plugins: Vec::new(),
+            channel_send_fn: None,
             sender_router: None,
             pending_naming: DashMap::new(),
         }
@@ -44,9 +52,37 @@ impl PluginBridgeManager {
         self.sender_router = Some(router);
     }
 
-    /// Add a loaded plugin to the bridge.
-    pub fn add_plugin(&mut self, plugin: Arc<dyn PluginInstance>) {
-        self.plugins.push(plugin);
+    /// Set the channel send function for delivering responses.
+    pub fn set_channel_send_fn(&mut self, f: ChannelSendFn) {
+        self.channel_send_fn = Some(f);
+    }
+
+    /// Backward-compatible: add a loaded plugin to the bridge.
+    /// Builds a channel_send_fn that routes through the plugin's channels.
+    pub fn add_plugin(&mut self, plugin: Arc<dyn super::instance::PluginInstance>) {
+        let f: ChannelSendFn = Arc::new(move |channel_type, bot_id, user_id, text| {
+            // Try exact match first
+            for channel in plugin.channels() {
+                if channel.channel_type == channel_type && channel.bot_id == bot_id {
+                    return plugin.channel_send(channel, bot_id, user_id, text);
+                }
+            }
+            // Fallback: any channel of the same type
+            for channel in plugin.channels() {
+                if channel.channel_type == channel_type {
+                    return plugin.channel_send(channel, bot_id, user_id, text);
+                }
+            }
+            Err(format!("No plugin channel found for type: {}", channel_type))
+        });
+
+        // If no send fn set yet, use this one. Otherwise, chain them.
+        if self.channel_send_fn.is_none() {
+            self.channel_send_fn = Some(f);
+        } else {
+            // Already have a send fn — keep the first one (or we could chain,
+            // but in practice the ChannelManager sets one fn that covers all channels)
+        }
     }
 
     /// Run the message processing loop (consumes self).
@@ -364,55 +400,21 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     fn send_response(&self, original: &PluginMessage, response: &str) {
-        // Try exact match first (bot_id matches a specific LoadedChannel)
-        for plugin in &self.plugins {
-            for channel in plugin.channels() {
-                if channel.channel_type == original.channel_type
-                    && channel.bot_id == original.bot_id
-                {
-                    if let Err(e) = plugin.channel_send(
-                        channel,
-                        &original.bot_id,
-                        &original.sender_id,
-                        response,
-                    ) {
-                        error!(
-                            channel = %channel.channel_type,
-                            bot = %channel.bot_id,
-                            error = %e,
-                            "Failed to send response through channel"
-                        );
-                    }
-                    return;
-                }
+        if let Some(ref send_fn) = self.channel_send_fn {
+            if let Err(e) = send_fn(&original.channel_type, &original.bot_id, &original.sender_id, response) {
+                error!(
+                    channel = %original.channel_type,
+                    bot = %original.bot_id,
+                    error = %e,
+                    "Failed to send response through channel"
+                );
             }
+        } else {
+            warn!(
+                channel = %original.channel_type,
+                bot = %original.bot_id,
+                "No channel send function set, cannot send response"
+            );
         }
-        // Fallback: any channel of the same type handles dynamic bots.
-        // The channel adapter's send() looks up the bot in its own state.
-        for plugin in &self.plugins {
-            for channel in plugin.channels() {
-                if channel.channel_type == original.channel_type {
-                    if let Err(e) = plugin.channel_send(
-                        channel,
-                        &original.bot_id,
-                        &original.sender_id,
-                        response,
-                    ) {
-                        error!(
-                            channel = %channel.channel_type,
-                            bot = %original.bot_id,
-                            error = %e,
-                            "Failed to send response through fallback channel"
-                        );
-                    }
-                    return;
-                }
-            }
-        }
-        warn!(
-            channel = %original.channel_type,
-            bot = %original.bot_id,
-            "No plugin channel found for response"
-        );
     }
 }

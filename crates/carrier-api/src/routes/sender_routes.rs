@@ -16,7 +16,7 @@ pub struct SetRouteBody {
 
 /// GET /api/sender-routes
 pub async fn list_sender_routes(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let routes = if let Some(ref pm_arc) = state.plugin_manager {
+    let routes = if let Some(ref pm_arc) = state.channel_manager {
         let pm = pm_arc.lock().await;
         pm.list_sender_routes()
     } else {
@@ -39,7 +39,7 @@ pub async fn get_sender_route(
     State(state): State<Arc<AppState>>,
     Path(sender_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(ref pm_arc) = state.plugin_manager {
+    if let Some(ref pm_arc) = state.channel_manager {
         let pm = pm_arc.lock().await;
         match pm.get_sender_route(&sender_id) {
             Some(agent_id) => (
@@ -86,7 +86,7 @@ pub async fn set_sender_route(
         }
     };
 
-    if let Some(ref pm_arc) = state.plugin_manager {
+    if let Some(ref pm_arc) = state.channel_manager {
         let pm = pm_arc.lock().await;
         pm.set_sender_route(&sender_id, &agent_uuid);
         (
@@ -110,7 +110,7 @@ pub async fn delete_sender_route(
     State(state): State<Arc<AppState>>,
     Path(sender_id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(ref pm_arc) = state.plugin_manager {
+    if let Some(ref pm_arc) = state.channel_manager {
         let pm = pm_arc.lock().await;
         match pm.remove_sender_route(&sender_id) {
             Some(agent_id) => (

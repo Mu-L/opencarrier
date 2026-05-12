@@ -12,6 +12,10 @@ carrier-runtime = { path = "../carrier-runtime" }
 carrier-memory = { path = "../carrier-memory" }
 carrier-clone = { path = "../carrier-clone" }
 carrier-lifecycle = { path = "../carrier-lifecycle" }
+carrier-channel-feishu = { path = "../channels/feishu" }
+carrier-channel-wecom = { path = "../channels/wecom" }
+carrier-channel-weixin = { path = "../channels/weixin" }
+carrier-channel-dingtalk = { path = "../channels/dingtalk" }
 dashmap = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

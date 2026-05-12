@@ -22,3 +22,6 @@ pub use builtin_registry::BuiltinPluginRegistry;
 pub use instance::PluginInstance;
 pub use loader::LoadedPlugin;
 pub use manager::PluginManager;
+
+// New ChannelManager (lives at crate root, re-exported here for transition)
+pub use crate::channel_manager::ChannelManager;

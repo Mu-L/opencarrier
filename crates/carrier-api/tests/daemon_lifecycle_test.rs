@@ -127,7 +127,7 @@ async fn test_full_daemon_lifecycle() {
         started_at: Instant::now(),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         provider_probe_cache: carrier_runtime::provider_health::ProbeCache::new(),
-        plugin_manager: None,
+        channel_manager: None,
     });
 
     let app = Router::new()
@@ -266,7 +266,7 @@ async fn test_server_immediate_responsiveness() {
         started_at: Instant::now(),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         provider_probe_cache: carrier_runtime::provider_health::ProbeCache::new(),
-        plugin_manager: None,
+        channel_manager: None,
     });
 
     let app = Router::new()

@@ -8,7 +8,7 @@ use crate::webchat;
 use crate::ws;
 use axum::Router;
 use carrier_kernel::CarrierKernel;
-use carrier_runtime::plugin::PluginManager;
+use carrier_runtime::channel_manager::ChannelManager;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -32,14 +32,14 @@ pub struct DaemonInfo {
 pub async fn build_router(
     kernel: Arc<CarrierKernel>,
     listen_addr: SocketAddr,
-    plugin_manager: Option<PluginManager>,
+    channel_manager: Option<ChannelManager>,
 ) -> (Router<()>, Arc<AppState>) {
     let state = Arc::new(AppState {
         kernel: kernel.clone(),
         started_at: Instant::now(),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         provider_probe_cache: carrier_runtime::provider_health::ProbeCache::new(),
-        plugin_manager: plugin_manager.map(|pm| Arc::new(tokio::sync::Mutex::new(pm))),
+        channel_manager: channel_manager.map(|cm| Arc::new(tokio::sync::Mutex::new(cm))),
     });
 
     let cors = if state.kernel.config.api_key.trim().is_empty() {
@@ -213,123 +213,82 @@ pub async fn run_daemon(
     kernel.set_self_handle();
     kernel.start_background_agents();
 
-    // ── Plugin loading ──────────────────────────────────────────────
-    let plugin_manager = if let Some(ref plugins_dir) = kernel.config.plugins_dir {
-        // Resolve: absolute path as-is, relative path joined to carrier home_dir
-        let resolved = if plugins_dir.is_absolute() {
-            plugins_dir.clone()
-        } else {
-            kernel.config.home_dir.join(plugins_dir)
-        };
-        if resolved.exists() {
-            let kernel_handle: Arc<dyn carrier_runtime::kernel_handle::KernelHandle> =
-                kernel.clone();
-            let mut pm = PluginManager::new(kernel_handle);
-            // Always create sender-based router (auto-assigns first agent for new senders)
-            {
-                let router = std::sync::Arc::new(
-                    carrier_runtime::plugin::router::SenderRouter::new(&kernel.config.home_dir),
-                );
-                pm.set_sender_router(router);
-                info!("Sender-based routing enabled");
-            }
-            let mut registry = carrier_runtime::plugin::BuiltinPluginRegistry::new();
-            // Register built-in WeChat channel adapters and tools
-            registry.register_channel("weixin", || {
-                Box::new(carrier_runtime::plugin::channels::weixin::SessionWatcher::new())
-            });
-            registry.register_tool("weixin", || {
-                Box::new(carrier_runtime::plugin::channels::weixin::WeixinQrLoginTool)
-            });
-            registry.register_tool("weixin", || {
-                Box::new(carrier_runtime::plugin::channels::weixin::WeixinSendMessageTool)
-            });
-            registry.register_tool("weixin", || {
-                Box::new(carrier_runtime::plugin::channels::weixin::WeixinStatusTool)
-            });
+    // ── Channel loading ──────────────────────────────────────────────
+    let channel_manager = {
+        let kernel_handle: Arc<dyn carrier_runtime::kernel_handle::KernelHandle> =
+            kernel.clone();
+        let mut cm = ChannelManager::new(kernel_handle);
 
-            // Register built-in WeCom channel adapters and tools
-            registry.register_channel("wecom", || {
-                Box::new(carrier_runtime::plugin::channels::wecom::WeComAppKfWatcher::new())
-            });
-            registry.register_channel("wecom", || {
-                Box::new(carrier_runtime::plugin::channels::wecom::WeComSmartBotWatcher::new())
-            });
-            registry.register_tool("wecom", || {
-                Box::new(carrier_runtime::plugin::channels::wecom::SendMessageTool)
-            });
-            registry.register_tool("wecom", || {
-                Box::new(carrier_runtime::plugin::channels::wecom::BotGenerateTool)
-            });
-            registry.register_tool("wecom", || {
-                Box::new(carrier_runtime::plugin::channels::wecom::BotPollTool)
-            });
-            registry.register_tool("wecom", || {
-                Box::new(carrier_runtime::plugin::channels::wecom::QrCodeTool)
-            });
-            registry.register_tool("wecom", || {
-                Box::new(carrier_runtime::plugin::channels::wecom::BotRegisterTool)
-            });
-            registry.register_tool("wecom", || {
-                Box::new(carrier_runtime::plugin::channels::wecom::BotBindTool)
-            });
-            carrier_runtime::plugin::channels::wecom::mcp::register_mcp_tools(&mut registry);
+        // Always create sender-based router (auto-assigns first agent for new senders)
+        {
+            let router = std::sync::Arc::new(
+                carrier_runtime::plugin::router::SenderRouter::new(&kernel.config.home_dir),
+            );
+            cm.set_sender_router(router);
+            info!("Sender-based routing enabled");
+        }
 
-            // Register built-in Feishu channel adapter and tools
-            registry.register_channel("feishu", || {
-                Box::new(carrier_runtime::plugin::channels::feishu::FeishuWatcher::new())
-            });
-            carrier_runtime::plugin::channels::feishu::tools::register_feishu_tools(&mut registry);
+        // Register channel adapters from independent crates
+        cm.register("feishu", Box::new(carrier_channel_feishu::FeishuWatcher::new()));
+        cm.register("wecom_app_kf", Box::new(carrier_channel_wecom::WeComAppKfWatcher::new()));
+        cm.register("wecom_smartbot", Box::new(carrier_channel_wecom::WeComSmartBotWatcher::new()));
+        cm.register("weixin", Box::new(carrier_channel_weixin::SessionWatcher::new()));
+        cm.register("dingtalk", Box::new(carrier_channel_dingtalk::DingTalkWatcher::new()));
 
-            // Register built-in DingTalk channel adapter
-            registry.register_channel("dingtalk", || {
-                Box::new(carrier_runtime::plugin::channels::dingtalk::DingTalkWatcher::new())
-            });
+        // Register weixin tools with the tool dispatcher
+        // (tools will be migrated to MCP servers in Phase 4)
+        {
+            let dispatcher = cm.tool_dispatcher();
+            let mut builtin = carrier_runtime::plugin::BuiltinPlugin::new(
+                "weixin".to_string(),
+                "1.0.0".to_string(),
+                std::path::PathBuf::new(),
+            );
+            builtin.register_tool(Box::new(carrier_channel_weixin::WeixinQrLoginTool));
+            builtin.register_tool(Box::new(carrier_channel_weixin::WeixinSendMessageTool));
+            builtin.register_tool(Box::new(carrier_channel_weixin::WeixinStatusTool));
+            dispatcher.register(std::sync::Arc::new(builtin));
+        }
 
-            pm.load_all(&resolved, &registry);
-            pm.start(&resolved).await;
+        cm.start().await;
 
-            // Inject tool dispatcher into kernel
-            {
-                let dispatcher = pm.tool_dispatcher();
-                let mut guard = kernel.plugins.plugin_tool_dispatcher.lock().unwrap();
-                *guard = Some(dispatcher);
-            }
+        // Inject tool dispatcher into kernel
+        {
+            let dispatcher = cm.tool_dispatcher();
+            let mut guard = kernel.plugins.plugin_tool_dispatcher.lock().unwrap();
+            *guard = Some(dispatcher);
+        }
 
-            // Register WeChat bindings from token files (weixin uses token files,
-            // not bot.toml, so the plugin manager never discovers them at startup).
-            // Only set route for senders that don't already have one — never overwrite
-            // a user's explicit switch with the token file's bind_agent default.
-            {
-                let token_dir = kernel.config.home_dir.join("weixin-sessions");
-                if token_dir.exists() {
-                    if let Ok(entries) = std::fs::read_dir(&token_dir) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                                continue;
-                            }
-                            if let Ok(content) = std::fs::read_to_string(&path) {
-                                if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content)
-                                {
-                                    if let (Some(bot_id), Some(agent)) = (
-                                        tf.get("bot_id").and_then(|v| v.as_str()),
-                                        tf.get("bind_agent").and_then(|v| v.as_str()),
-                                    ) {
-                                        if uuid::Uuid::parse_str(agent).is_ok() {
-                                            if let Some(uid) =
-                                                tf.get("user_id").and_then(|v| v.as_str())
+        // Register WeChat bindings from token files
+        {
+            let token_dir = kernel.config.home_dir.join("weixin-sessions");
+            if token_dir.exists() {
+                if let Ok(entries) = std::fs::read_dir(&token_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                            continue;
+                        }
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content)
+                            {
+                                if let (Some(bot_id), Some(agent)) = (
+                                    tf.get("bot_id").and_then(|v| v.as_str()),
+                                    tf.get("bind_agent").and_then(|v| v.as_str()),
+                                ) {
+                                    if uuid::Uuid::parse_str(agent).is_ok() {
+                                        if let Some(uid) =
+                                            tf.get("user_id").and_then(|v| v.as_str())
+                                        {
+                                            if !uid.is_empty()
+                                                && cm.get_sender_route(uid).is_none()
                                             {
-                                                if !uid.is_empty()
-                                                    && pm.get_sender_route(uid).is_none()
-                                                {
-                                                    pm.set_sender_route(uid, agent);
-                                                    info!(
-                                                        bot = %bot_id,
-                                                        agent = %agent,
-                                                        "Registered WeChat binding from token file (no existing route)"
-                                                    );
-                                                }
+                                                cm.set_sender_route(uid, agent);
+                                                info!(
+                                                    bot = %bot_id,
+                                                    agent = %agent,
+                                                    "Registered WeChat binding from token file (no existing route)"
+                                                );
                                             }
                                         }
                                     }
@@ -339,19 +298,11 @@ pub async fn run_daemon(
                     }
                 }
             }
-
-            let tool_count = pm.tool_definitions().len();
-            info!("Plugins loaded: {} tools available", tool_count);
-            Some(pm)
-        } else {
-            info!(
-                "Plugin directory does not exist, skipping: {}",
-                resolved.display()
-            );
-            None
         }
-    } else {
-        None
+
+        let tool_count = cm.tool_definitions().len();
+        info!("Channels loaded: {} tools available", tool_count);
+        Some(cm)
     };
 
     // Config file hot-reload watcher (polls every 30 seconds)
@@ -385,7 +336,7 @@ pub async fn run_daemon(
         });
     }
 
-    let (app, state) = build_router(kernel.clone(), addr, plugin_manager).await;
+    let (app, state) = build_router(kernel.clone(), addr, channel_manager).await;
 
     // Write daemon info file
     if let Some(info_path) = daemon_info_path {

@@ -1,6 +1,7 @@
 //! Shared application state for all route handlers.
 
 use carrier_kernel::CarrierKernel;
+use carrier_runtime::channel_manager::ChannelManager;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -17,7 +18,7 @@ pub struct AppState {
     /// Avoids blocking the `/api/providers` endpoint on TCP timeouts to
     /// unreachable local services. 60-second TTL.
     pub provider_probe_cache: carrier_runtime::provider_health::ProbeCache,
-    /// Plugin manager (optional — only if plugins_dir is configured).
+    /// Channel manager (optional — only if channels are configured).
     #[allow(clippy::type_complexity)]
-    pub plugin_manager: Option<Arc<tokio::sync::Mutex<carrier_runtime::plugin::PluginManager>>>,
+    pub channel_manager: Option<Arc<tokio::sync::Mutex<ChannelManager>>>,
 }

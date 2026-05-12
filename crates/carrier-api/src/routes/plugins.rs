@@ -29,7 +29,7 @@ pub async fn list_plugins(State(state): State<Arc<AppState>>) -> impl IntoRespon
         None => state.kernel.config.home_dir.join("plugins"),
     };
 
-    if let Some(ref pm) = state.plugin_manager {
+    if let Some(ref pm) = state.channel_manager {
         let pm = pm.lock().await;
         let statuses = pm.status();
         for s in &statuses {

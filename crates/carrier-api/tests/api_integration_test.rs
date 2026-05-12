@@ -101,7 +101,7 @@ async fn start_test_server_with_provider(
         started_at: Instant::now(),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         provider_probe_cache: carrier_runtime::provider_health::ProbeCache::new(),
-        plugin_manager: None,
+        channel_manager: None,
     });
 
     let app = Router::new()
@@ -593,7 +593,7 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         started_at: Instant::now(),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         provider_probe_cache: carrier_runtime::provider_health::ProbeCache::new(),
-        plugin_manager: None,
+        channel_manager: None,
     });
 
     let api_key = state.kernel.config.api_key.trim().to_string();

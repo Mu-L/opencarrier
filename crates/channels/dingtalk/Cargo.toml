@@ -1,0 +1,22 @@
+[package]
+name = "carrier-channel-dingtalk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DingTalk channel adapter for OpenCarrier"
+
+[dependencies]
+carrier-types = { path = "../../carrier-types" }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+dashmap = { workspace = true }
+tracing = { workspace = true }
+tokio-tungstenite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+hmac = { workspace = true }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+futures = { workspace = true }

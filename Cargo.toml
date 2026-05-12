@@ -10,6 +10,10 @@ members = [
     "crates/carrier-clone",
     "crates/carrier-lifecycle",
     "crates/carrier-plugin-sdk",
+    "crates/channels/feishu",
+    "crates/channels/wecom",
+    "crates/channels/weixin",
+    "crates/channels/dingtalk",
     "xtask",
     "tools/mcp-common",
     "tools/bilibili-mcp",
@@ -130,6 +134,12 @@ regex-lite = "0.1"
 # XML parsing
 roxmltree = "0.20"
 
+# URL encoding
+urlencoding = "2"
+
+# MD5 hashing
+md-5 = "0.10"
+
 # Socket options (SO_REUSEADDR)
 socket2 = "0.5"
 
@@ -149,6 +159,10 @@ carrier-kernel = { path = "crates/carrier-kernel" }
 carrier-cli = { path = "crates/carrier-cli" }
 carrier-clone = { path = "crates/carrier-clone" }
 carrier-lifecycle = { path = "crates/carrier-lifecycle" }
+carrier-channel-feishu = { path = "crates/channels/feishu" }
+carrier-channel-wecom = { path = "crates/channels/wecom" }
+carrier-channel-weixin = { path = "crates/channels/weixin" }
+carrier-channel-dingtalk = { path = "crates/channels/dingtalk" }
 [profile.release]
 lto = true
 codegen-units = 1

@@ -309,7 +309,7 @@ pub async fn weixin_qrcode_status(
 
                                 // Register dynamic bridge binding
                                 if let Some(ref agent_id) = effective_agent {
-                                    if let Some(ref pm_arc) = state.plugin_manager {
+                                    if let Some(ref pm_arc) = state.channel_manager {
                                         let pm = pm_arc.lock().await;
                                         pm.set_sender_route(uid, agent_id);
                                         tracing::info!(
@@ -377,7 +377,7 @@ pub async fn weixin_qrcode_status(
         // Register dynamic binding if agent was resolved
         if let Some(ref agent_id) = resolved_agent {
             if uuid::Uuid::parse_str(agent_id).is_ok() {
-                if let Some(ref pm_arc) = state.plugin_manager {
+                if let Some(ref pm_arc) = state.channel_manager {
                     let pm = pm_arc.lock().await;
                     // Create sender route for the QR-scanning user
                     if let Some(uid) = ilink_user_id {
@@ -522,7 +522,7 @@ pub async fn weixin_save_token(
 
     // Register dynamic bridge binding if bind_agent is provided
     if !bind_agent.is_empty() && uuid::Uuid::parse_str(&bind_agent).is_ok() {
-        if let Some(ref pm_arc) = state.plugin_manager {
+        if let Some(ref pm_arc) = state.channel_manager {
             let pm = pm_arc.lock().await;
             // WeChat uses user_id as route key
             if let Some(ref uid) = ilink_user_id {
@@ -1146,7 +1146,7 @@ pub async fn weixin_bind_bot(
                 }
 
                 // Register dynamic binding
-                if let Some(ref pm_arc) = state.plugin_manager {
+                if let Some(ref pm_arc) = state.channel_manager {
                     let pm = pm_arc.lock().await;
                     // WeChat uses user_id as route key
                     let uid = tf.get("user_id").and_then(|v| v.as_str()).unwrap_or("");

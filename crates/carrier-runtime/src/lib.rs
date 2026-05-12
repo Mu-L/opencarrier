@@ -13,6 +13,7 @@ pub mod apply_patch;
 pub mod audit;
 pub mod auth_cooldown;
 pub mod browser;
+pub mod channel_manager;
 pub mod command_lane;
 pub mod compactor;
 pub mod context_budget;

@@ -11,6 +11,10 @@ carrier-plugin-sdk = { path = "../carrier-plugin-sdk" }
 carrier-clone = { path = "../carrier-clone" }
 carrier-memory = { path = "../carrier-memory" }
 carrier-lifecycle = { path = "../carrier-lifecycle" }
+carrier-channel-feishu = { path = "../channels/feishu" }
+carrier-channel-wecom = { path = "../channels/wecom" }
+carrier-channel-weixin = { path = "../channels/weixin" }
+carrier-channel-dingtalk = { path = "../channels/dingtalk" }
 tokio = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
