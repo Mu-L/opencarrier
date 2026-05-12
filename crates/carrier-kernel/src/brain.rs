@@ -299,14 +299,14 @@ impl Brain {
 
         // Legacy: api_key_env
         if !config.api_key_env.is_empty() {
-            if let Ok(val) = std::env::var(&config.api_key_env) {
+            if let Some(val) = carrier_types::env::get_env(&config.api_key_env) {
                 env_vars.insert(config.api_key_env.clone(), val);
             }
         }
 
         // New: params (each value is an env var name)
         for env_name in config.params.values() {
-            if let Ok(val) = std::env::var(env_name) {
+            if let Some(val) = carrier_types::env::get_env(env_name) {
                 env_vars.insert(env_name.clone(), val);
             }
         }
@@ -451,7 +451,7 @@ impl Brain {
                 if provider_config.api_key_env.is_empty() {
                     None
                 } else {
-                    std::env::var(&provider_config.api_key_env).ok()
+                    carrier_types::env::get_env(&provider_config.api_key_env)
                 }
             }
         };

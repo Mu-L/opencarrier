@@ -6,56 +6,13 @@
 //! # Environment variable safety
 //!
 //! `std::env::set_var` is deprecated in Rust 2024 edition for multi-threaded
-//! contexts because it can cause data races. This module provides an in-process
-//! override map (`ENV_OVERRIDES`) so that env mutations from async code are
-//! safe. Use [`get_env`] to read values (checks overrides first, then
-//! `std::env::var`). Use [`set_env_override`] to set values from async contexts.
+//! contexts. This module uses the shared in-process override map in
+//! `carrier_types::env` so that env mutations from async code are safe.
+//! All code that reads environment variables should use `carrier_types::env::get_env`
+//! instead of `std::env::var` to see runtime overrides.
 
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::LazyLock;
-use std::sync::Mutex;
-
-/// In-process environment overrides for safe mutation from async contexts.
-///
-/// `std::env::set_var` is deprecated for multi-threaded code (Rust 2024).
-/// This map allows async code to set env overrides that [`get_env`] will
-/// return in preference to the process environment, without data races.
-static ENV_OVERRIDES: LazyLock<Mutex<HashMap<String, String>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Get an environment variable, checking the in-process override map first.
-///
-/// This is the safe replacement for `std::env::var` in async/multi-threaded
-/// contexts. It checks `ENV_OVERRIDES` first, then falls back to the process
-/// environment.
-pub fn get_env(key: &str) -> Option<String> {
-    let overrides = ENV_OVERRIDES.lock().unwrap();
-    if let Some(val) = overrides.get(key).cloned() {
-        return Some(val);
-    }
-    drop(overrides);
-    std::env::var(key).ok()
-}
-
-/// Set an environment variable override in the in-process map.
-///
-/// This is the safe replacement for `std::env::set_var` in async contexts.
-/// The override takes priority over the process environment for [`get_env`]
-/// calls, but does not affect code that reads `std::env::var` directly.
-pub fn set_env_override(key: &str, value: &str) {
-    let mut overrides = ENV_OVERRIDES.lock().unwrap();
-    overrides.insert(key.to_string(), value.to_string());
-}
-
-/// Remove an environment variable override from the in-process map.
-///
-/// This is the safe replacement for `std::env::remove_var` in async contexts.
-pub fn remove_env_override(key: &str) {
-    let mut overrides = ENV_OVERRIDES.lock().unwrap();
-    overrides.remove(key);
-}
 
 /// Return the path to `~/.opencarrier/.env`.
 pub fn env_file_path() -> Option<PathBuf> {
@@ -101,14 +58,8 @@ fn load_env_file(path: Option<PathBuf>) {
         }
 
         if let Some((key, value)) = parse_env_line(trimmed) {
-            if std::env::var(&key).is_err() {
-                // Set in process environment so std::env::var() callers (LLM drivers,
-                // third-party crates) can read the value. This is safe at startup
-                // before async tasks begin. Also track in the override map so
-                // get_env() returns the value consistently.
-                #[allow(deprecated)]
-                std::env::set_var(&key, &value);
-                set_env_override(&key, &value);
+            if carrier_types::env::get_env(&key).is_none() {
+                carrier_types::env::set_env_override(&key, &value);
             }
         }
     }
@@ -130,14 +81,10 @@ pub fn save_env_key(key: &str, value: &str) -> Result<(), String> {
     entries.insert(key.to_string(), value.to_string());
     write_env_file(&path, &entries)?;
 
-    // Set in both the process environment (so std::env::var() callers like LLM
-    // drivers can read it) and the in-process override map (so get_env() is
-    // consistent). std::env::set_var is safe here because save_env_key is
-    // called from the dashboard API which runs on the tokio runtime, but the
-    // actual mutation is brief and low-contention.
-    #[allow(deprecated)]
-    std::env::set_var(key, value);
-    set_env_override(key, value);
+    // Set in the in-process override map so carrier_types::env::get_env()
+    // returns the new value immediately, visible to all code that uses it
+    // (including LLM driver creation via brain.rs).
+    carrier_types::env::set_env_override(key, value);
 
     Ok(())
 }
@@ -155,17 +102,15 @@ pub fn delete_env_key(key: &str) -> Result<(), String> {
         write_env_file(&path, &entries)?;
     }
 
-    // Remove from both the process environment and the in-process override map.
-    #[allow(deprecated)]
-    std::env::remove_var(key);
-    remove_env_override(key);
+    // Remove from the in-process override map.
+    carrier_types::env::remove_env_override(key);
 
     Ok(())
 }
 
 /// Check if a key exists in `~/.opencarrier/.env` or the process environment.
 pub fn has_env_key(key: &str) -> bool {
-    get_env(key).is_some()
+    carrier_types::env::get_env(key).is_some()
 }
 
 /// Save a secret key to the secrets.env file (for sensitive values like API keys).
