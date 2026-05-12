@@ -441,6 +441,8 @@ impl WecomMcpProxy {
             .client
             .http
             .post(&endpoint_url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
             .json(&rpc_request)
             .send()
             .await?;
