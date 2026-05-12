@@ -1,0 +1,18 @@
+[package]
+name = "feishu-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Feishu/Lark MCP Server — 62 tools for messaging, docs, sheets, calendar, and more"
+
+[dependencies]
+mcp-common = { path = "../mcp-common" }
+rmcp = { version = "1.5", features = ["server", "transport-io"] }
+schemars = "1"
+reqwest = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

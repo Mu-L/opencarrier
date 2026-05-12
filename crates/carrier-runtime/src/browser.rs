@@ -249,7 +249,7 @@ impl Drop for CdpConnection {
         //    be cleaned up when the reader task is aborted below.
         {
             let write = self.write.clone();
-            let _ = tokio::spawn(async move {
+            let _handle = tokio::spawn(async move {
                 let mut guard = write.lock().await;
                 let _ = guard.send(WsMessage::Close(None)).await;
             });

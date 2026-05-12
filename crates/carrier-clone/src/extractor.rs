@@ -256,12 +256,12 @@ fn walk_dir(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     Ok(files)
 }
 
-fn walk_dir_recursive(base: &Path, current: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<()> {
+fn walk_dir_recursive(_base: &Path, current: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<()> {
     for entry in std::fs::read_dir(current)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            walk_dir_recursive(base, &path, files)?;
+            walk_dir_recursive(_base, &path, files)?;
         } else if path.is_file() {
             files.push(path);
         }

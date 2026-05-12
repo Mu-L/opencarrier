@@ -21,6 +21,8 @@ members = [
     "tools/reddit-mcp",
     "tools/twitter-mcp",
     "tools/wechat-oa-mcp",
+    "tools/feishu-mcp",
+    "tools/wecom-mcp",
 ]
 
 [workspace.package]

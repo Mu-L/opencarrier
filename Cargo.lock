@@ -1420,6 +1420,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
+name = "feishu-mcp"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "mcp-common",
+ "reqwest",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2278,6 +2294,7 @@ version = "0.1.0"
 dependencies = [
  "regex-lite",
  "reqwest",
+ "schemars",
  "serde",
  "serde_json",
  "tokio",
@@ -4749,6 +4766,26 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "wecom-mcp"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "hex",
+ "mcp-common",
+ "rand 0.8.5",
+ "reqwest",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
  "tokio",
  "tracing",
  "tracing-subscriber",
