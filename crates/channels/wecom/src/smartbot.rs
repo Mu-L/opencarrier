@@ -124,7 +124,7 @@ impl SmartBotChannel {
 
 impl Channel for SmartBotChannel {
     fn channel_type(&self) -> &str {
-        "wecom_smartbot"
+        "wecom"
     }
 
     fn name(&self) -> &str {
@@ -187,16 +187,16 @@ impl Channel for SmartBotChannel {
                 "No response_url available for this user. SmartBot can only reply within callback context.".to_string()
             })?;
 
-        let bot = crate::TOKEN_MANAGER
-            .get_bot(bot_id)
-            .ok_or_else(|| format!("Unknown tenant: {bot_id}"))?;
+        let bot = crate::token::WECOM_STATE
+            .get_session_for_send(bot_id)
+            .ok_or_else(|| format!("Unknown WeCom bot: {bot_id}"))?;
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| format!("Runtime creation failed: {e}"))?;
         rt.block_on(token::send_smartbot_response_async(
-            &bot.http,
+            &bot.entry.http,
             &response_url,
             text,
         ))
@@ -419,7 +419,7 @@ async fn handle_ws_message(
             }
 
             let message = PluginMessage {
-                channel_type: "wecom_smartbot".to_string(),
+                channel_type: "wecom".to_string(),
                 platform_message_id: body.msgid.clone(),
                 sender_id: user_id.clone(),
                 sender_name: user_id.clone(),

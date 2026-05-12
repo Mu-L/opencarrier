@@ -15,18 +15,18 @@ use tracing::info;
 
 /// Channel adapter for a single Feishu tenant (one app_id).
 pub struct FeishuChannel {
-    bot_id: String,
-    bot_uuid: String,
+    bot_name: String,
+    app_id: String,
     token_cache: Arc<BotTokenCache>,
     shutdown: Arc<AtomicBool>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl FeishuChannel {
-    pub fn new(bot_id: String, bot_uuid: String, token_cache: Arc<BotTokenCache>) -> Self {
+    pub fn new(bot_name: String, app_id: String, token_cache: Arc<BotTokenCache>) -> Self {
         Self {
-            bot_id,
-            bot_uuid,
+            bot_name,
+            app_id,
             token_cache,
             shutdown: Arc::new(AtomicBool::new(false)),
             thread_handle: None,
@@ -40,39 +40,38 @@ impl Channel for FeishuChannel {
     }
 
     fn name(&self) -> &str {
-        &self.bot_id
+        &self.bot_name
     }
 
-    #[allow(clippy::misnamed_getters)]
     fn bot_id(&self) -> &str {
-        &self.bot_uuid
+        &self.app_id
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let bot_id = self.bot_id.clone();
-        let bot_uuid = self.bot_uuid.clone();
+        let bot_name = self.bot_name.clone();
+        let app_id = self.app_id.clone();
         let token_cache = self.token_cache.clone();
         let shutdown = self.shutdown.clone();
-        let thread_tenant = bot_id.clone();
+        let log_name = bot_name.clone();
 
         let handle = std::thread::Builder::new()
-            .name(format!("feishu-ws-{bot_id}"))
+            .name(format!("feishu-ws-{app_id}"))
             .spawn(move || {
-                run_ws_loop(&thread_tenant, bot_uuid, token_cache, shutdown, sender);
+                run_ws_loop(&bot_name, app_id, token_cache, shutdown, sender);
             })
             .map_err(|e| format!("Failed to spawn Feishu WS thread: {e}"))?;
 
         self.thread_handle = Some(handle);
-        info!(tenant = %bot_id, "FeishuChannel started");
+        info!(tenant = %log_name, "FeishuChannel started");
         Ok(())
     }
 
     fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
-        // Verify tenant matches (by bot_uuid)
-        if bot_id != self.bot_uuid {
+        // Verify tenant matches (by app_id)
+        if bot_id != self.app_id {
             return Err(format!(
                 "Tenant mismatch: expected {}, got {}",
-                self.bot_uuid, bot_id
+                self.app_id, bot_id
             ));
         }
 
@@ -124,23 +123,23 @@ impl Channel for FeishuChannel {
 
         if let Some(handle) = self.thread_handle.take() {
             match handle.join() {
-                Ok(()) => info!(tenant = %self.bot_id, "WS thread joined cleanly"),
+                Ok(()) => info!(tenant = %self.bot_name, "WS thread joined cleanly"),
                 Err(e) => {
                     if let Some(s) = e.downcast_ref::<&str>() {
-                        tracing::error!(tenant = %self.bot_id, "WS thread panicked: {s}");
+                        tracing::error!(tenant = %self.bot_name, "WS thread panicked: {s}");
                     }
                 }
             }
         }
 
-        info!(tenant = %self.bot_id, "FeishuChannel stopped");
+        info!(tenant = %self.bot_name, "FeishuChannel stopped");
     }
 }
 
 /// Main WebSocket loop (runs in a dedicated thread with its own runtime).
 fn run_ws_loop(
-    bot_id: &str,
-    bot_uuid: String,
+    bot_name: &str,
+    app_id: String,
     token_cache: Arc<BotTokenCache>,
     shutdown: Arc<AtomicBool>,
     sender: mpsc::Sender<PluginMessage>,
@@ -151,12 +150,12 @@ fn run_ws_loop(
     {
         Ok(rt) => rt,
         Err(e) => {
-            tracing::error!(tenant = bot_id, "Failed to create tokio runtime: {e}");
+            tracing::error!(tenant = bot_name, "Failed to create tokio runtime: {e}");
             return;
         }
     };
 
-    let ws_client = FeishuWsClient::new(bot_id.to_string(), bot_uuid, token_cache, shutdown);
+    let ws_client = FeishuWsClient::new(app_id, token_cache, shutdown);
 
     rt.block_on(async move {
         ws_client.run(&sender).await;

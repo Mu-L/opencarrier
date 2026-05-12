@@ -21,8 +21,7 @@ const DEDUP_MAX_ENTRIES: usize = 10_000;
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 pub struct DingTalkWsClient {
-    bot_id: String,
-    bot_uuid: String,
+    bot_id: String,  // app_key (used as route key in PluginMessage)
     token_cache: Arc<AccessTokenCache>,
     shutdown: Arc<AtomicBool>,
     dedup: DashMap<String, Instant>,
@@ -31,13 +30,11 @@ pub struct DingTalkWsClient {
 impl DingTalkWsClient {
     pub fn new(
         bot_id: String,
-        bot_uuid: String,
         token_cache: Arc<AccessTokenCache>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         Self {
             bot_id,
-            bot_uuid,
             token_cache,
             shutdown,
             dedup: DashMap::new(),
@@ -346,7 +343,7 @@ impl DingTalkWsClient {
             platform_message_id: message_id.to_string(),
             sender_id: user_id.clone(),
             sender_name: sender_nick,
-            bot_id: self.bot_uuid.clone(),
+            bot_id: self.bot_id.clone(),
             content: PluginContent::Text(content),
             timestamp_ms: now_ms,
             is_group,

@@ -228,12 +228,14 @@ pub async fn run_daemon(
             info!("Sender-based routing enabled");
         }
 
+        // Migrate old plugins/{platform}/bot/*.toml → {platform}-sessions/*.json
+        crate::migration::migrate_bot_toml_to_sessions(&kernel.config.home_dir);
+
         // Register channel adapters from independent crates
-        cm.register("feishu", Box::new(carrier_channel_feishu::FeishuWatcher::new()));
-        cm.register("wecom_app_kf", Box::new(carrier_channel_wecom::WeComAppKfWatcher::new()));
-        cm.register("wecom_smartbot", Box::new(carrier_channel_wecom::WeComSmartBotWatcher::new()));
+        cm.register("feishu", Box::new(carrier_channel_feishu::SessionWatcher::new()));
+        cm.register("wecom", Box::new(carrier_channel_wecom::SessionWatcher::new()));
         cm.register("weixin", Box::new(carrier_channel_weixin::SessionWatcher::new()));
-        cm.register("dingtalk", Box::new(carrier_channel_dingtalk::DingTalkWatcher::new()));
+        cm.register("dingtalk", Box::new(carrier_channel_dingtalk::SessionWatcher::new()));
 
         // Register weixin tools with the tool dispatcher
         // (tools will be migrated to MCP servers in Phase 4)

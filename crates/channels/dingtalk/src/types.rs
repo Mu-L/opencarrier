@@ -228,3 +228,18 @@ pub struct DingTalkBotConfig {
     pub app_key: String,
     pub app_secret: String,
 }
+
+// ---------------------------------------------------------------------------
+// Session file format
+// ---------------------------------------------------------------------------
+
+/// Session file format (written to `dingtalk-sessions/<app_key>.json`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DingTalkSessionFile {
+    pub name: String,
+    pub app_key: String,
+    pub app_secret: Option<String>,
+    pub secret_env: Option<String>,
+    pub corp_id: Option<String>,
+    pub bind_agent: Option<String>,
+}

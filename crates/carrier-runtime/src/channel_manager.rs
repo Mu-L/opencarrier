@@ -167,27 +167,18 @@ impl ChannelManager {
     }
 
     /// Dynamically start a channel for a newly created bot (no restart needed).
+    ///
+    /// NOTE: With session-file-based discovery, channels auto-discover new bots
+    /// via `load_new_from_dir()`. This method is kept for API compatibility but
+    /// is no longer needed for starting channels — just write a session file.
     pub fn start_dynamic_channel(
         &self,
         platform: &str,
-        bot_name: &str,
-        bot_id: &str,
-        secret: &str,
+        _bot_name: &str,
+        _bot_id: &str,
+        _secret: &str,
     ) {
-        let sender = self.message_tx.clone();
-        match platform {
-            "wecom" => {
-                carrier_channel_wecom::register_and_start_smartbot(
-                    sender,
-                    bot_name.to_string(),
-                    bot_id.to_string(),
-                    secret.to_string(),
-                );
-            }
-            other => {
-                info!(platform = %other, "Dynamic channel start not yet implemented for this platform");
-            }
-        }
+        info!(platform = %platform, "start_dynamic_channel called — session file watcher will auto-discover");
     }
 
     /// Set a sender route (route_key → agent_id).

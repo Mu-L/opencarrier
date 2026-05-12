@@ -113,16 +113,16 @@ impl Channel for WeComChannel {
     }
 
     fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
-        let bot = crate::TOKEN_MANAGER
-            .get_bot(bot_id)
+        let bot = crate::token::WECOM_STATE
+            .get_session_for_send(bot_id)
             .ok_or_else(|| format!("Unknown bot: {bot_id}"))?;
 
-        match &bot.mode {
+        match &bot.entry.mode {
             token::WecomMode::App { .. } => {
-                token::send_app_message(bot.value(), user_id, text)?;
+                token::send_app_message(&bot.entry, user_id, text)?;
             }
             token::WecomMode::Kf { .. } => {
-                token::send_kf_message(bot.value(), user_id, text)?;
+                token::send_kf_message(&bot.entry, user_id, text)?;
             }
             token::WecomMode::SmartBot { .. } => {
                 return Err(

@@ -61,7 +61,7 @@ fn plugin_dir_to_platform(dir_name: &str) -> Option<&str> {
 /// Plugin directory names for each platform.
 fn platform_plugin_dir(platform: &str) -> Option<&str> {
     match platform {
-        "wecom" | "wecom_smartbot" => Some("wecom"),
+        "wecom" => Some("wecom"),
         "feishu" => Some("feishu"),
         "weixin" => Some("weixin"),
         "dingtalk" => Some("dingtalk"),
@@ -446,18 +446,16 @@ pub async fn wecom_smartbot_poll(
                             let agent_name =
                                 WECOM_PENDING_AGENTS.lock().unwrap().remove(&query.scode).map(|(v, _)| v);
                             if let Some(agent_name) = agent_name {
-                                let creds = serde_json::json!({
-                                    "bot_id": bot_id,
-                                    "secret": secret,
-                                });
                                 if let Err(e) =
-                                    auto_create_and_bind_bot(&state, "wecom", &creds, &agent_name)
-                                        .await
+                                    register_bot_from_scan(&state, "wecom", &serde_json::json!({
+                                        "bot_id": bot_id,
+                                        "secret": secret,
+                                    }), &agent_name).await
                                 {
                                     tracing::warn!(
                                         agent = %agent_name,
                                         error = %e,
-                                        "Auto-create/bind WeCom bot failed"
+                                        "Register WeCom bot from scan failed"
                                     );
                                 }
                             }
@@ -594,7 +592,7 @@ fn spawn_background_device_poll(state: Arc<AppState>, session_id: String) {
 
                     // Auto-create and bind
                     if let Err(e) =
-                        auto_create_and_bind_bot(&state, &platform, &creds, &agent_name).await
+                        register_bot_from_scan(&state, &platform, &creds, &agent_name).await
                     {
                         tracing::warn!(
                             session_id = %sid,
@@ -679,7 +677,7 @@ fn spawn_background_wecom_poll(state: Arc<AppState>, scode: String, agent_name: 
                             "secret": secret,
                         });
                         if let Err(e) =
-                            auto_create_and_bind_bot(&state, "wecom", &creds, &agent_name).await
+                            register_bot_from_scan(&state, "wecom", &creds, &agent_name).await
                         {
                             tracing::warn!(
                                 agent = %agent_name,
@@ -1098,8 +1096,8 @@ pub async fn feishu_device_auth_poll(
                 "app_id": id,
                 "app_secret": secret,
             });
-            if let Err(e) = auto_create_and_bind_bot(&state, "feishu", &creds, agent_name).await {
-                tracing::warn!(agent = %agent_name, error = %e, "Auto-create/bind Feishu bot failed");
+            if let Err(e) = register_bot_from_scan(&state, "feishu", &creds, agent_name).await {
+                tracing::warn!(agent = %agent_name, error = %e, "Register Feishu bot from scan failed");
             }
         }
 
@@ -1372,9 +1370,9 @@ pub async fn dingtalk_device_auth_poll(
                     "client_secret": client_secret,
                 });
                 if let Err(e) =
-                    auto_create_and_bind_bot(&state, "dingtalk", &creds, agent_name).await
+                    register_bot_from_scan(&state, "dingtalk", &creds, agent_name).await
                 {
-                    tracing::warn!(agent = %agent_name, error = %e, "Auto-create/bind DingTalk bot failed");
+                    tracing::warn!(agent = %agent_name, error = %e, "Register DingTalk bot from scan failed");
                 }
             }
 
@@ -2056,9 +2054,12 @@ fn cleanup_wecom_pending() {
     pending.retain(|_, (_, created_at)| now.duration_since(*created_at).as_secs() < WECOM_TTL_SECS);
 }
 
-/// Auto-create a bot and bind it to the specified agent.
-/// Works for dingtalk, feishu, and wecom platforms.
-async fn auto_create_and_bind_bot(
+/// Register a bot from a successful scan/auth flow.
+///
+/// Writes a session file to the platform's sessions directory and sets the
+/// sender route. The channel's watcher loop will auto-discover the new
+/// session file and start the connection.
+async fn register_bot_from_scan(
     state: &Arc<AppState>,
     platform: &str,
     credentials: &serde_json::Value,
@@ -2081,174 +2082,128 @@ async fn auto_create_and_bind_bot(
         None => return Err("名称无效".to_string()),
     };
 
-    let plugin_dir_name = match platform_plugin_dir(platform) {
-        Some(d) => d,
-        None => return Err(format!("不支持的平台: {platform}")),
-    };
-
-    let home = &state.kernel.config.home_dir;
-    let plugin_dir = home.join("plugins").join(plugin_dir_name);
-
-    if !plugin_dir.exists() {
-        std::fs::create_dir_all(&plugin_dir).map_err(|e| format!("创建目录失败: {e}"))?;
-    }
-
-    // Build body for build_bot_fields
-    let mut body = serde_json::json!({});
+    // Write session file + set sender route based on platform
     match platform {
-        "dingtalk" => {
-            if let Some(v) = credentials.get("client_id").and_then(|v| v.as_str()) {
-                body["app_key"] = serde_json::Value::String(v.to_string());
+        "wecom" => {
+            let wecom_bot_id = credentials
+                .get("bot_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let secret = credentials
+                .get("secret")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let sf = carrier_channel_wecom::token::WecomSessionFile {
+                name: bot_id.clone(),
+                mode: "smartbot".to_string(),
+                bot_id: Some(wecom_bot_id.clone()),
+                agent_id: None,
+                corp_id: None,
+                open_kfidf: None,
+                secret: Some(secret),
+                secret_env: None,
+                webhook_port: None,
+                encoding_aes_key: None,
+                callback_token: None,
+                mcp_bot_id: None,
+                mcp_bot_secret: None,
+                bind_agent: Some(agent_uuid.clone()),
+            };
+            carrier_channel_wecom::token::WECOM_STATE.save_session(&sf);
+
+            // Set sender route using WeCom bot_id (the platform ID)
+            if let Some(ref pm) = state.channel_manager {
+                let pm = pm.lock().await;
+                pm.set_sender_route(&wecom_bot_id, &agent_uuid);
             }
-            if let Some(v) = credentials.get("client_secret").and_then(|v| v.as_str()) {
-                body["app_secret"] = serde_json::Value::String(v.to_string());
-            }
+
+            tracing::info!(
+                platform = "wecom",
+                bot = %bot_id,
+                wecom_bot_id = %wecom_bot_id,
+                agent = %agent_uuid,
+                "Registered WeCom bot from scan"
+            );
+            Ok(wecom_bot_id)
         }
         "feishu" => {
-            if let Some(v) = credentials.get("app_id").and_then(|v| v.as_str()) {
-                body["app_id"] = serde_json::Value::String(v.to_string());
+            let app_id = credentials
+                .get("app_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let app_secret = credentials
+                .get("app_secret")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let sf = carrier_channel_feishu::types::FeishuSessionFile {
+                name: bot_id.clone(),
+                app_id: app_id.clone(),
+                app_secret: Some(app_secret),
+                secret_env: None,
+                brand: "feishu".to_string(),
+                bind_agent: Some(agent_uuid.clone()),
+            };
+            carrier_channel_feishu::FEISHU_STATE.save_session(&sf);
+
+            // Set sender route using Feishu app_id
+            if let Some(ref pm) = state.channel_manager {
+                let pm = pm.lock().await;
+                pm.set_sender_route(&app_id, &agent_uuid);
             }
-            if let Some(v) = credentials.get("app_secret").and_then(|v| v.as_str()) {
-                body["app_secret"] = serde_json::Value::String(v.to_string());
-            }
-            body["brand"] = serde_json::Value::String("feishu".to_string());
-        }
-        "wecom" => {
-            body["mode"] = serde_json::Value::String("smartbot".to_string());
-            if let Some(v) = credentials.get("bot_id").and_then(|v| v.as_str()) {
-                body["bot_id"] = serde_json::Value::String(v.to_string());
-            }
-            if let Some(v) = credentials.get("secret").and_then(|v| v.as_str()) {
-                body["secret"] = serde_json::Value::String(v.to_string());
-            }
-        }
-        _ => {}
-    }
 
-    // Dedup check: if same platform user id exists, update it
-    let puid = platform_user_id(platform, &body);
-    if let Some(ref uid) = puid {
-        if !uid.is_empty() {
-            for existing in scan_bots(&plugin_dir, plugin_dir_name, platform) {
-                let existing_puid = match platform {
-                    "dingtalk" => existing.get("app_key").and_then(|v| v.as_str()),
-                    "feishu" => existing.get("app_id").and_then(|v| v.as_str()),
-                    "wecom" => existing.get("bot_id").and_then(|v| v.as_str()),
-                    _ => None,
-                };
-                if existing_puid == Some(uid.as_str()) {
-                    let existing_id = existing
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let bot_dir = plugin_dir.join("bot").join(&existing_id);
-                    let bot_toml_path = bot_dir.join("bot.toml");
-                    update_bot_toml(&bot_toml_path, |table| {
-                        let new_fields = build_bot_fields(platform, &body, &bot_id);
-                        for (k, v) in new_fields {
-                            table.insert(k, v);
-                        }
-                        table.insert("name".into(), toml::Value::String(bot_id.to_string()));
-                        table.insert("bind_agent".into(), toml::Value::String(agent_uuid.clone()));
-                    })?;
-                    add_dynamic_binding(
-                        state,
-                        platform,
-                        &bot_id,
-                        &existing_id,
-                        &agent_uuid,
-                        credentials,
-                    )
-                    .await;
-                    return Ok(existing_id);
-                }
-            }
-        }
-    }
-
-    // Create new bot
-    let mut bot_fields = build_bot_fields(platform, &body, &bot_id);
-    bot_fields.insert("name".into(), toml::Value::String(bot_id.clone()));
-    bot_fields.insert("bind_agent".into(), toml::Value::String(agent_uuid.clone()));
-
-    let bot_uuid = uuid::Uuid::new_v4().to_string();
-    let bot_dir = plugin_dir.join("bot").join(&bot_uuid);
-    std::fs::create_dir_all(&bot_dir).map_err(|e| format!("创建目录失败: {e}"))?;
-
-    let bot_toml_path = bot_dir.join("bot.toml");
-    let content = toml::to_string_pretty(&toml::Value::Table(bot_fields))
-        .map_err(|e| format!("序列化失败: {e}"))?;
-    std::fs::write(&bot_toml_path, &content).map_err(|e| format!("写入失败: {e}"))?;
-
-    add_dynamic_binding(
-        state,
-        platform,
-        &bot_id,
-        &bot_uuid,
-        &agent_uuid,
-        credentials,
-    )
-    .await;
-
-    Ok(bot_uuid)
-}
-
-/// Add dynamic bridge binding for a newly created/updated bot.
-async fn add_dynamic_binding(
-    state: &Arc<AppState>,
-    platform: &str,
-    bot_id: &str,
-    bot_uuid: &str,
-    agent_uuid: &str,
-    credentials: &serde_json::Value,
-) {
-    let channel_type = match platform {
-        "weixin" => "weixin",
-        "wecom" => "wecom",
-        "feishu" => "feishu",
-        "dingtalk" => "dingtalk",
-        _ => "",
-    };
-
-    if !channel_type.is_empty() && !bot_id.is_empty() {
-        if let Some(ref pm) = state.channel_manager {
-            let pm = pm.lock().await;
-            // Set sender route: WeCom/Feishu/DingTalk use bot_id as route key
-            // For WeCom SmartBot, the bridge's route_key is msg.bot_id (the
-            // WeCom bot_id like "aibI7TI_..."), NOT our internal UUID.
-            if channel_type != "weixin" {
-                let route_key = match platform {
-                    "wecom" => credentials
-                        .get("bot_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(bot_uuid),
-                    _ => bot_uuid,
-                };
-                pm.set_sender_route(route_key, agent_uuid);
-            }
-            // Dynamically start channel for the new bot (no restart needed)
-            if platform == "wecom" {
-                let wecom_bot_id = credentials
-                    .get("bot_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let secret = credentials
-                    .get("secret")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                if !wecom_bot_id.is_empty() {
-                    pm.start_dynamic_channel("wecom", wecom_bot_id, wecom_bot_id, secret);
-                }
-            }
             tracing::info!(
-                platform = %platform,
+                platform = "feishu",
                 bot = %bot_id,
+                app_id = %app_id,
                 agent = %agent_uuid,
-                bot = %bot_uuid,
-                "Auto-bind: dynamic bridge binding added"
+                "Registered Feishu bot from scan"
             );
+            Ok(app_id)
         }
+        "dingtalk" => {
+            let app_key = credentials
+                .get("client_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let app_secret = credentials
+                .get("client_secret")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let sf = carrier_channel_dingtalk::types::DingTalkSessionFile {
+                name: bot_id.clone(),
+                app_key: app_key.clone(),
+                app_secret: Some(app_secret),
+                secret_env: None,
+                corp_id: None,
+                bind_agent: Some(agent_uuid.clone()),
+            };
+            carrier_channel_dingtalk::DINGTALK_STATE.save_session(&sf);
+
+            // Set sender route using DingTalk app_key
+            if let Some(ref pm) = state.channel_manager {
+                let pm = pm.lock().await;
+                pm.set_sender_route(&app_key, &agent_uuid);
+            }
+
+            tracing::info!(
+                platform = "dingtalk",
+                bot = %bot_id,
+                app_key = %app_key,
+                agent = %agent_uuid,
+                "Registered DingTalk bot from scan"
+            );
+            Ok(app_key)
+        }
+        _ => Err(format!("不支持的平台: {platform}")),
     }
 }
 

@@ -13,18 +13,18 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 pub struct DingTalkChannel {
-    bot_id: String,
-    bot_uuid: String,
+    bot_name: String,
+    app_key: String,
     token_cache: Arc<AccessTokenCache>,
     shutdown: Arc<AtomicBool>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl DingTalkChannel {
-    pub fn new(bot_id: String, bot_uuid: String, token_cache: Arc<AccessTokenCache>) -> Self {
+    pub fn new(bot_name: String, app_key: String, token_cache: Arc<AccessTokenCache>) -> Self {
         Self {
-            bot_id,
-            bot_uuid,
+            bot_name,
+            app_key,
             token_cache,
             shutdown: Arc::new(AtomicBool::new(false)),
             thread_handle: None,
@@ -38,22 +38,22 @@ impl Channel for DingTalkChannel {
     }
 
     fn name(&self) -> &str {
-        &self.bot_id
+        &self.bot_name
     }
 
-    #[allow(clippy::misnamed_getters)]
     fn bot_id(&self) -> &str {
-        &self.bot_uuid
+        &self.app_key
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let bot_id = self.bot_id.clone();
-        let bot_uuid = self.bot_uuid.clone();
+        let bot_name = self.bot_name.clone();
+        let app_key = self.app_key.clone();
         let token_cache = self.token_cache.clone();
         let shutdown = self.shutdown.clone();
+        let log_name = bot_name.clone();
 
         let handle = std::thread::Builder::new()
-            .name(format!("dingtalk-ws-{bot_id}"))
+            .name(format!("dingtalk-ws-{app_key}"))
             .spawn(move || {
                 let rt = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -61,19 +61,19 @@ impl Channel for DingTalkChannel {
                 {
                     Ok(rt) => rt,
                     Err(e) => {
-                        warn!(tenant = %bot_id, "Failed to create tokio runtime: {e}");
+                        warn!(tenant = %bot_name, "Failed to create tokio runtime: {e}");
                         return;
                     }
                 };
 
-                let client =
-                    DingTalkWsClient::new(bot_id.clone(), bot_uuid, token_cache, shutdown);
+                let client = DingTalkWsClient::new(app_key, token_cache, shutdown);
                 rt.block_on(client.run(&sender));
-                info!(tenant = %bot_id, "DingTalk WS client exited");
+                info!(tenant = %bot_name, "DingTalk WS client exited");
             })
             .map_err(|e| format!("Failed to spawn DingTalk channel thread: {e}"))?;
 
         self.thread_handle = Some(handle);
+        info!(tenant = %log_name, "DingTalkChannel started");
         Ok(())
     }
 
@@ -103,7 +103,6 @@ impl Channel for DingTalkChannel {
                 let http = token_cache.http().clone();
                 let robot_code = token_cache.app_key().to_string();
 
-                // Try direct message
                 api::send_direct_message(&http, &token, &robot_code, &user_id, &text).await
             });
 
@@ -118,10 +117,10 @@ impl Channel for DingTalkChannel {
         self.shutdown.store(true, Ordering::Relaxed);
         if let Some(handle) = self.thread_handle.take() {
             match handle.join() {
-                Ok(()) => info!(tenant = %self.bot_id, "DingTalk channel thread joined"),
+                Ok(()) => info!(tenant = %self.bot_name, "DingTalk channel thread joined"),
                 Err(e) => {
                     if let Some(s) = e.downcast_ref::<&str>() {
-                        warn!(tenant = %self.bot_id, "DingTalk channel thread panicked: {s}");
+                        warn!(tenant = %self.bot_name, "DingTalk channel thread panicked: {s}");
                     }
                 }
             }

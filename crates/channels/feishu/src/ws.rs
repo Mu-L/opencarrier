@@ -34,8 +34,7 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(120);
 
 pub struct FeishuWsClient {
-    bot_id: String,
-    bot_uuid: String,
+    bot_id: String,  // app_id (used as route key in PluginMessage)
     token_cache: Arc<BotTokenCache>,
     shutdown: Arc<AtomicBool>,
     dedup: DashMap<String, Instant>,
@@ -44,13 +43,11 @@ pub struct FeishuWsClient {
 impl FeishuWsClient {
     pub fn new(
         bot_id: String,
-        bot_uuid: String,
         token_cache: Arc<BotTokenCache>,
         shutdown: Arc<AtomicBool>,
     ) -> Self {
         Self {
             bot_id,
-            bot_uuid,
             token_cache,
             shutdown,
             dedup: DashMap::new(),
@@ -405,7 +402,7 @@ impl FeishuWsClient {
             platform_message_id: msg_id.to_string(),
             sender_id: sender_id.clone(),
             sender_name,
-            bot_id: self.bot_uuid.clone(),
+            bot_id: self.bot_id.clone(),
             content: PluginContent::Text(text),
             timestamp_ms: create_time_ms,
             is_group,
