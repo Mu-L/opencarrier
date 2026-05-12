@@ -9,7 +9,6 @@ members = [
     "crates/carrier-cli",
     "crates/carrier-clone",
     "crates/carrier-lifecycle",
-    "crates/carrier-plugin-sdk",
     "crates/channels/feishu",
     "crates/channels/wecom",
     "crates/channels/weixin",
@@ -98,7 +97,7 @@ tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip",
 # Home directory resolution
 dirs = "6"
 
-# Dynamic library loading (plugin system)
+# Dynamic library loading (FFI loader)
 libloading = "0.8"
 
 # Directory walking

@@ -484,7 +484,6 @@ version = "0.3.0"
 dependencies = [
  "aes",
  "base64",
- "carrier-plugin-sdk",
  "carrier-types",
  "cbc",
  "dashmap",
@@ -632,18 +631,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "carrier-plugin-sdk"
-version = "0.3.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "carrier-runtime"
 version = "0.3.0"
 dependencies = [
- "aes",
  "anyhow",
  "async-trait",
  "axum",
@@ -656,9 +646,7 @@ dependencies = [
  "carrier-clone",
  "carrier-lifecycle",
  "carrier-memory",
- "carrier-plugin-sdk",
  "carrier-types",
- "cbc",
  "chrono",
  "dashmap",
  "dirs",
@@ -666,18 +654,13 @@ dependencies = [
  "hex",
  "hmac",
  "libloading",
- "md-5",
- "rand 0.8.5",
  "regex-lite",
  "reqwest",
- "roxmltree",
  "rusqlite",
  "serde",
  "serde_json",
- "sha1",
  "sha2",
  "shlex",
- "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -686,7 +669,6 @@ dependencies = [
  "tokio-tungstenite 0.24.0",
  "toml 0.8.2",
  "tracing",
- "urlencoding",
  "uuid",
  "wasmtime",
  "zeroize",
@@ -697,7 +679,6 @@ name = "carrier-types"
 version = "0.3.0"
 dependencies = [
  "async-trait",
- "carrier-plugin-sdk",
  "chrono",
  "dirs",
  "ed25519-dalek",

@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use super::builtin::BuiltinChannel;
-use carrier_plugin_sdk::ToolProvider;
+use carrier_types::tool::ToolProvider;
 
 /// Factory function for a built-in channel adapter.
 pub type ChannelFactory = Box<dyn Fn() -> Box<dyn BuiltinChannel> + Send + Sync>;

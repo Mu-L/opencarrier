@@ -7,7 +7,6 @@ description = "WeChat iLink channel adapter for OpenCarrier"
 
 [dependencies]
 carrier-types = { path = "../../carrier-types" }
-carrier-plugin-sdk = { path = "../../carrier-plugin-sdk" }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 dashmap = { workspace = true }
