@@ -132,7 +132,10 @@ impl PluginBridgeManager {
                 .await
             {
                 Ok(response) => self.send_response(&msg, &response),
-                Err(e) => error!(agent = %agent_id, error = %e, "Failed to send message to agent"),
+                Err(e) => {
+                    error!(agent = %agent_id, error = %e, "Failed to send message to agent");
+                    self.send_response(&msg, "抱歉，处理消息时遇到了问题，请稍后再试。");
+                }
             }
             return;
         }
@@ -194,6 +197,7 @@ impl PluginBridgeManager {
                     error = %e,
                     "Failed to send message to agent"
                 );
+                self.send_response(&msg, "抱歉，处理消息时遇到了问题，请稍后再试。");
             }
         }
     }

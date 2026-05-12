@@ -43,6 +43,12 @@ const BASE_RETRY_DELAY_MS: u64 = 1000;
 /// Raised from 60s to 120s for browser automation and long-running builds.
 const TOOL_TIMEOUT_SECS: u64 = 120;
 
+/// Overall timeout for the entire agent loop (seconds).
+/// Prevents the agent from hanging indefinitely if the LLM API becomes
+/// unresponsive. After this timeout, the loop is aborted and an error
+/// is returned so the caller can notify the user.
+const AGENT_LOOP_TIMEOUT_SECS: u64 = 300;
+
 /// Maximum consecutive MaxTokens continuations before returning partial response.
 /// Raised from 3 to 5 to allow longer-form generation.
 const MAX_CONTINUATIONS: u32 = 5;
@@ -131,13 +137,31 @@ pub async fn run_agent_loop(
     sender_id: Option<&str>,
     owner_id: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
-    run_agent_loop_impl(
-        manifest, user_message, session, memory, driver, available_tools,
-        kernel, None, mcp_connections, web_ctx, browser_ctx, workspace_root,
-        on_phase, docker_config, hooks, context_window_tokens, process_manager,
-        user_content_blocks, brain, sender_id, owner_id,
+    let timeout = std::time::Duration::from_secs(AGENT_LOOP_TIMEOUT_SECS);
+    match tokio::time::timeout(
+        timeout,
+        run_agent_loop_impl(
+            manifest, user_message, session, memory, driver, available_tools,
+            kernel, None, mcp_connections, web_ctx, browser_ctx, workspace_root,
+            on_phase, docker_config, hooks, context_window_tokens, process_manager,
+            user_content_blocks, brain, sender_id, owner_id,
+        ),
     )
     .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            warn!(
+                agent = %manifest.name,
+                timeout_secs = AGENT_LOOP_TIMEOUT_SECS,
+                "Agent loop timed out"
+            );
+            Err(CarrierError::LlmDriver(format!(
+                "Agent loop timed out after {}s — the LLM API did not respond in time. Please try again later.",
+                AGENT_LOOP_TIMEOUT_SECS
+            )))
+        }
+    }
 }
 
 /// Call an LLM driver with automatic retry on rate-limit and overload errors.
@@ -1086,13 +1110,31 @@ pub async fn run_agent_loop_streaming(
     sender_id: Option<&str>,
     owner_id: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
-    run_agent_loop_impl(
-        manifest, user_message, session, memory, driver, available_tools,
-        kernel, Some(stream_tx), mcp_connections, web_ctx, browser_ctx, workspace_root,
-        on_phase, docker_config, hooks, context_window_tokens, process_manager,
-        user_content_blocks, brain, sender_id, owner_id,
+    let timeout = std::time::Duration::from_secs(AGENT_LOOP_TIMEOUT_SECS);
+    match tokio::time::timeout(
+        timeout,
+        run_agent_loop_impl(
+            manifest, user_message, session, memory, driver, available_tools,
+            kernel, Some(stream_tx), mcp_connections, web_ctx, browser_ctx, workspace_root,
+            on_phase, docker_config, hooks, context_window_tokens, process_manager,
+            user_content_blocks, brain, sender_id, owner_id,
+        ),
     )
     .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            warn!(
+                agent = %manifest.name,
+                timeout_secs = AGENT_LOOP_TIMEOUT_SECS,
+                "Streaming agent loop timed out"
+            );
+            Err(CarrierError::LlmDriver(format!(
+                "Agent loop timed out after {}s — the LLM API did not respond in time. Please try again later.",
+                AGENT_LOOP_TIMEOUT_SECS
+            )))
+        }
+    }
 }
 
 /// Recover tool calls that LLMs output as plain text instead of the proper
