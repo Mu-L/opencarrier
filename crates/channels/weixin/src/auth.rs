@@ -5,7 +5,7 @@
 
 use crate::api;
 use crate::token::WEIXIN_STATE;
-use crate::types::*;
+use crate::models::*;
 use reqwest::Client;
 use tracing::{info, warn};
 

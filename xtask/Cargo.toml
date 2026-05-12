@@ -10,7 +10,7 @@ name = "reencode_manifest"
 path = "src/bin/reencode_manifest.rs"
 
 [dependencies]
-carrier-types = { path = "../crates/carrier-types" }
+types = { path = "../crates/types" }
 toml = { workspace = true }
 rmp-serde = { workspace = true }
 rusqlite = { workspace = true }

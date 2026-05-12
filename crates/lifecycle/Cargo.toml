@@ -1,0 +1,21 @@
+[package]
+name = "lifecycle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+types = { workspace = true }
+clone = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+reqwest = { workspace = true }
+notify = { version = "7", features = ["macos_kqueue"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

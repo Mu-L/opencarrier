@@ -26,7 +26,7 @@ fn main() {
     });
 
     // 2. Deserialize into AgentManifest
-    let manifest: carrier_types::agent::AgentManifest = serde::Deserialize::deserialize(toml_value)
+    let manifest: types::agent::AgentManifest = serde::Deserialize::deserialize(toml_value)
         .unwrap_or_else(|e| {
             eprintln!("Failed to deserialize manifest: {e}");
             std::process::exit(1);
@@ -66,7 +66,7 @@ fn main() {
     let verification: Vec<u8> = stmt
         .query_row(rusqlite::params![agent_name], |row| row.get(0))
         .unwrap();
-    let verify_manifest: carrier_types::agent::AgentManifest =
+    let verify_manifest: types::agent::AgentManifest =
         rmp_serde::from_slice(&verification).unwrap();
 
     let tools = &verify_manifest.capabilities.tools;

@@ -8,7 +8,7 @@ use base64::Engine;
 use reqwest::Client;
 use tracing::warn;
 
-use crate::types::CDN_BASE_URL;
+use crate::models::CDN_BASE_URL;
 
 type Aes128 = aes::Aes128;
 

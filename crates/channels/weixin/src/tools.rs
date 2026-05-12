@@ -1,7 +1,7 @@
 //! WeChat iLink plugin tools — built-in, no FFI.
 
-use carrier_types::plugin::PluginToolContext;
-use carrier_types::tool::{PluginToolDef, PluginToolError, ToolProvider};
+use types::plugin::PluginToolContext;
+use types::tool::{PluginToolDef, PluginToolError, ToolProvider};
 use serde_json::Value;
 
 use crate::auth;

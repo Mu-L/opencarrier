@@ -6,8 +6,8 @@ use axum::extract::Query;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
-use carrier_types::channel::Channel;
-use carrier_types::plugin::{PluginContent, PluginMessage};
+use types::channel::Channel;
+use types::plugin::{PluginContent, PluginMessage};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -34,29 +34,23 @@ struct CallbackParams {
 /// A WeCom channel that receives messages via webhook and sends via API.
 pub struct WeComChannel {
     bot_id: String,
-    corp_id: String,
     webhook_port: u16,
     encoding_aes_key: Option<String>,
     callback_token: Option<String>,
-    is_kf: bool,
 }
 
 impl WeComChannel {
     pub fn new(
         bot_id: String,
-        corp_id: String,
         webhook_port: u16,
         encoding_aes_key: Option<String>,
         callback_token: Option<String>,
-        is_kf: bool,
     ) -> Self {
         Self {
             bot_id,
-            corp_id,
             webhook_port,
             encoding_aes_key,
             callback_token,
-            is_kf,
         }
     }
 }
@@ -76,11 +70,9 @@ impl Channel for WeComChannel {
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
         let bot_id = self.bot_id.clone();
-        let corp_id = self.corp_id.clone();
         let encoding_aes_key = self.encoding_aes_key.clone();
         let callback_token = self.callback_token.clone();
         let port = self.webhook_port;
-        let is_kf = self.is_kf;
 
         // Spawn in its own thread with dedicated runtime
         std::thread::spawn(move || {
@@ -91,11 +83,9 @@ impl Channel for WeComChannel {
             rt.block_on(async move {
                 run_webhook_server(
                     bot_id,
-                    corp_id,
                     encoding_aes_key,
                     callback_token,
                     port,
-                    is_kf,
                     sender,
                 )
                 .await;
@@ -105,7 +95,6 @@ impl Channel for WeComChannel {
         info!(
             bot = %self.bot_id,
             port = self.webhook_port,
-            kf = self.is_kf,
             "WeCom channel started"
         );
 
@@ -146,19 +135,15 @@ impl Channel for WeComChannel {
 
 async fn run_webhook_server(
     bot_id: String,
-    corp_id: String,
     encoding_aes_key: Option<String>,
     callback_token: Option<String>,
     port: u16,
-    is_kf: bool,
     tx: mpsc::Sender<PluginMessage>,
 ) {
     let state = WebhookState {
         bot_id,
-        corp_id,
         encoding_aes_key,
         callback_token,
-        is_kf,
         tx,
     };
 
@@ -184,12 +169,8 @@ async fn run_webhook_server(
 #[derive(Clone)]
 struct WebhookState {
     bot_id: String,
-    #[allow(dead_code)]
-    corp_id: String,
     encoding_aes_key: Option<String>,
     callback_token: Option<String>,
-    #[allow(dead_code)]
-    is_kf: bool,
     tx: mpsc::Sender<PluginMessage>,
 }
 

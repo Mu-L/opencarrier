@@ -10,7 +10,7 @@ use std::collections::HashMap;
 // ---------------------------------------------------------------------------
 
 /// Decrypt AES-256-CBC with custom PKCS7 padding used by WeCom.
-pub fn decrypt_aes_cbc(key: &[u8], encrypted_base64: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn decrypt_aes_cbc(key: &[u8], encrypted_base64: &str) -> Result<Vec<u8>, String> {
     use base64::Engine;
     use cbc::cipher::{BlockDecryptMut, KeyIvInit};
 

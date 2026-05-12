@@ -7,7 +7,7 @@ use rand::Rng;
 use reqwest::{header::HeaderMap, Client};
 use std::time::Duration;
 
-use crate::types::*;
+use crate::models::*;
 
 /// Build the required iLink request headers (with optional Bearer token).
 fn ilink_headers(bot_token: Option<&str>) -> HeaderMap {

@@ -4,7 +4,7 @@
 //! Uses POST `/v1.0/oauth2/accessToken`.
 
 use crate::api;
-use crate::types::*;
+use crate::models::*;
 use reqwest::Client;
 use std::sync::Mutex;
 use std::time::Instant;

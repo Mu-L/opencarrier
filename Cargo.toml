@@ -1,14 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/carrier-types",
-    "crates/carrier-memory",
-    "crates/carrier-runtime",
-    "crates/carrier-api",
-    "crates/carrier-kernel",
-    "crates/carrier-cli",
-    "crates/carrier-clone",
-    "crates/carrier-lifecycle",
+    "crates/types",
+    "crates/memory",
+    "crates/runtime",
+    "crates/api",
+    "crates/kernel",
+    "crates/cli",
+    "crates/clone",
+    "crates/lifecycle",
     "crates/channels/feishu",
     "crates/channels/wecom",
     "crates/channels/weixin",
@@ -152,18 +152,18 @@ tokio-test = "0.4"
 tempfile = "3"
 
 # Internal crates
-carrier-types = { path = "crates/carrier-types" }
-carrier-memory = { path = "crates/carrier-memory" }
-carrier-runtime = { path = "crates/carrier-runtime" }
-carrier-api = { path = "crates/carrier-api" }
-carrier-kernel = { path = "crates/carrier-kernel" }
-carrier-cli = { path = "crates/carrier-cli" }
-carrier-clone = { path = "crates/carrier-clone" }
-carrier-lifecycle = { path = "crates/carrier-lifecycle" }
-carrier-channel-feishu = { path = "crates/channels/feishu" }
-carrier-channel-wecom = { path = "crates/channels/wecom" }
-carrier-channel-weixin = { path = "crates/channels/weixin" }
-carrier-channel-dingtalk = { path = "crates/channels/dingtalk" }
+types = { path = "crates/types" }
+memory = { path = "crates/memory" }
+runtime = { path = "crates/runtime" }
+api = { path = "crates/api" }
+kernel = { path = "crates/kernel" }
+cli = { path = "crates/cli" }
+clone = { path = "crates/clone" }
+lifecycle = { path = "crates/lifecycle" }
+channel-feishu = { path = "crates/channels/feishu" }
+channel-wecom = { path = "crates/channels/wecom" }
+channel-weixin = { path = "crates/channels/weixin" }
+channel-dingtalk = { path = "crates/channels/dingtalk" }
 [profile.release]
 lto = true
 codegen-units = 1

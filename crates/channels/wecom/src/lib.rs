@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use carrier_types::channel::Channel;
-use carrier_types::plugin::PluginMessage;
+use types::channel::Channel;
+use types::plugin::PluginMessage;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -149,7 +149,6 @@ fn spawn_new_bots(sender: &mpsc::Sender<PluginMessage>, spawned: &mut HashSet<St
         match &session.entry.mode {
             token::WecomMode::SmartBot { .. } => {
                 let bot_name = session.entry.name.clone();
-                let corp_id = session.entry.corp_id.clone();
                 let bot_id = session.entry.bot_id().unwrap_or("").to_string();
                 let secret = session.entry.bot_secret().unwrap_or("").to_string();
 
@@ -162,7 +161,6 @@ fn spawn_new_bots(sender: &mpsc::Sender<PluginMessage>, spawned: &mut HashSet<St
                     rt.block_on(async {
                         let mut ch = smartbot::SmartBotChannel::new(
                             bot_name.clone(),
-                            corp_id,
                             bot_id,
                             secret,
                         );
@@ -173,9 +171,7 @@ fn spawn_new_bots(sender: &mpsc::Sender<PluginMessage>, spawned: &mut HashSet<St
                 });
             }
             token::WecomMode::App { .. } | token::WecomMode::Kf { .. } => {
-                let is_kf = session.entry.open_kfid().is_some();
                 let bot_id = session.entry.name.clone();
-                let corp_id = session.entry.corp_id.clone();
                 let webhook_port = session.entry.webhook_port;
                 let encoding_aes_key = session.entry.encoding_aes_key.clone();
                 let callback_token = session.entry.callback_token.clone();
@@ -189,11 +185,9 @@ fn spawn_new_bots(sender: &mpsc::Sender<PluginMessage>, spawned: &mut HashSet<St
                     rt.block_on(async {
                         let mut ch = channel::WeComChannel::new(
                             bot_id.clone(),
-                            corp_id,
                             webhook_port,
                             encoding_aes_key,
                             callback_token,
-                            is_kf,
                         );
                         if let Err(e) = ch.start(tx) {
                             warn!(bot = %bot_id, "WeCom channel start error: {e}");

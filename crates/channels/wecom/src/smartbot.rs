@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use carrier_types::channel::Channel;
-use carrier_types::plugin::{PluginContent, PluginMessage};
+use types::channel::Channel;
+use types::plugin::{PluginContent, PluginMessage};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite::Message;
@@ -106,16 +106,14 @@ struct EventDetail {
 /// the user and sends the reply via HTTP POST (markdown format).
 pub struct SmartBotChannel {
     bot_name: String,
-    corp_id: String,
     bot_id: String,
     secret: String,
 }
 
 impl SmartBotChannel {
-    pub fn new(bot_name: String, corp_id: String, bot_id: String, secret: String) -> Self {
+    pub fn new(bot_name: String, bot_id: String, secret: String) -> Self {
         Self {
             bot_name,
-            corp_id,
             bot_id,
             secret,
         }
@@ -139,7 +137,6 @@ impl Channel for SmartBotChannel {
         let bot_name = self.bot_name.clone();
         let secret = self.secret.clone();
         let bot_id = self.bot_id.clone();
-        let corp_id = self.corp_id.clone();
         let response_urls = RESPONSE_URLS
             .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
             .clone();
@@ -147,17 +144,14 @@ impl Channel for SmartBotChannel {
         // Spawn the WebSocket connection loop in its own thread with a dedicated
         // tokio runtime.
         std::thread::spawn(move || {
-            eprintln!("[SmartBot] Thread started, creating runtime...");
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("Failed to create tokio runtime for SmartBot");
-            eprintln!("[SmartBot] Runtime created, starting WS loop...");
             rt.block_on(run_ws_loop(
                 bot_name,
                 secret,
                 bot_id,
-                corp_id,
                 sender,
                 response_urls,
             ));
@@ -215,7 +209,6 @@ async fn run_ws_loop(
     bot_name: String,
     secret: String,
     bot_id: String,
-    corp_id: String,
     sender: tokio::sync::mpsc::Sender<PluginMessage>,
     response_urls: ResponseUrlStore,
 ) {
@@ -224,7 +217,6 @@ async fn run_ws_loop(
             &bot_name,
             &secret,
             &bot_id,
-            &corp_id,
             &sender,
             &response_urls,
         )
@@ -248,15 +240,14 @@ async fn connect_and_handle(
     _bot_name: &str,
     secret: &str,
     bot_id: &str,
-    _corp_id: &str,
     sender: &tokio::sync::mpsc::Sender<PluginMessage>,
     response_urls: &ResponseUrlStore,
 ) -> Result<(), String> {
-    eprintln!("[SmartBot] Connecting to {}...", WS_URL);
+    info!("SmartBot connecting to {}...", WS_URL);
     let (ws_stream, _) = tokio_tungstenite::connect_async(WS_URL)
         .await
         .map_err(|e| format!("WebSocket connect failed: {e}"))?;
-    eprintln!("[SmartBot] Connected!");
+    info!("SmartBot connected!");
     let (mut write, mut read) = ws_stream.split();
 
     // Subscribe
@@ -289,7 +280,7 @@ async fn connect_and_handle(
         .parse()
         .map_err(|e| format!("Parse subscribe response failed: {e}"))?;
 
-    eprintln!("[SmartBot] Subscribe response: {}", sub_resp);
+    info!("SmartBot subscribe response: {}", sub_resp);
     if sub_resp["errcode"].as_i64() != Some(0) {
         return Err(format!(
             "Subscribe failed: {}",

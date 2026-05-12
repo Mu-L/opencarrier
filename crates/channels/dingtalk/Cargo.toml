@@ -1,12 +1,12 @@
 [package]
-name = "carrier-channel-dingtalk"
+name = "channel-dingtalk"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "DingTalk channel adapter for OpenCarrier"
 
 [dependencies]
-carrier-types = { path = "../../carrier-types" }
+types = { path = "../../types" }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 dashmap = { workspace = true }

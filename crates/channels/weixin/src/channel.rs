@@ -2,8 +2,8 @@
 
 use crate::api;
 use crate::token::WEIXIN_STATE;
-use crate::types::*;
-use carrier_types::plugin::{PluginContent, PluginMessage};
+use crate::models::*;
+use types::plugin::{PluginContent, PluginMessage};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use carrier_types::channel::Channel;
+use types::channel::Channel;
 
 /// Main polling loop (runs in a dedicated thread with its own runtime).
 /// `session_key` is the user_id used as the DashMap key in WEIXIN_STATE.bots.

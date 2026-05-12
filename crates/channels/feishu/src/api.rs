@@ -2,7 +2,7 @@
 //!
 //! Stateless async functions for: token acquisition, message send/reply, WS endpoint.
 
-use crate::types::*;
+use crate::models::*;
 use reqwest::{header::HeaderMap, Client};
 use std::time::Duration;
 
@@ -85,43 +85,6 @@ pub async fn send_message(
     resp.json::<SendMessageResponse>()
         .await
         .map_err(|e| format!("Feishu send_message parse error: {e}"))
-}
-
-/// POST `/open-apis/im/v1/messages/{message_id}/reply`
-///
-/// Reply to a specific message.
-pub async fn reply_message(
-    http: &Client,
-    token: &str,
-    base: &str,
-    message_id: &str,
-    msg_type: &str,
-    content: &str,
-) -> Result<SendMessageResponse, String> {
-    let url = format!("{base}/open-apis/im/v1/messages/{message_id}/reply");
-    let body = ReplyMessageRequest {
-        content: content.to_string(),
-        msg_type: msg_type.to_string(),
-    };
-
-    let resp = http
-        .post(&url)
-        .headers(feishu_headers(token))
-        .json(&body)
-        .timeout(Duration::from_secs(15))
-        .send()
-        .await
-        .map_err(|e| format!("Feishu reply_message request failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Feishu reply_message HTTP {status}: {body}"));
-    }
-
-    resp.json::<SendMessageResponse>()
-        .await
-        .map_err(|e| format!("Feishu reply_message parse error: {e}"))
 }
 
 /// POST `/callback/ws/endpoint`

@@ -6,7 +6,7 @@
 pub mod api;
 pub mod channel;
 pub mod token;
-pub mod types;
+pub mod models;
 pub mod ws;
 
 use std::collections::HashSet;
@@ -14,10 +14,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use carrier_types::channel::Channel;
-use carrier_types::plugin::PluginMessage;
+use types::channel::Channel;
+use types::plugin::PluginMessage;
 use dashmap::DashMap;
-use reqwest::Client;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -27,13 +26,13 @@ use tracing::{info, warn};
 
 /// Runtime entry stored in DINGTALK_STATE — config + pre-built token cache.
 pub struct DingTalkBotEntry {
-    pub config: types::DingTalkBotConfig,
+    pub config: models::DingTalkBotConfig,
     pub token_cache: Arc<token::AccessTokenCache>,
     pub active: AtomicBool,
 }
 
 impl DingTalkBotEntry {
-    pub fn new(config: types::DingTalkBotConfig) -> Self {
+    pub fn new(config: models::DingTalkBotConfig) -> Self {
         let token_cache = Arc::new(token::AccessTokenCache::new(
             config.app_key.clone(),
             config.app_secret.clone(),
@@ -56,22 +55,20 @@ impl DingTalkBotEntry {
 pub struct DingTalkState {
     pub bots: DashMap<String, DingTalkBotEntry>, // key: app_key
     pub session_dir: std::path::PathBuf,
-    pub http: Client,
 }
 
 impl DingTalkState {
     fn new() -> Self {
-        let home = carrier_types::config::home_dir();
+        let home = types::config::home_dir();
         let session_dir = home.join("dingtalk-sessions");
         Self {
             bots: DashMap::new(),
             session_dir,
-            http: Client::new(),
         }
     }
 
     /// Resolve the effective app_secret: try env var first, fall back to inline value.
-    fn resolve_secret(sf: &types::DingTalkSessionFile) -> String {
+    fn resolve_secret(sf: &models::DingTalkSessionFile) -> String {
         if let Some(ref env_name) = sf.secret_env {
             if let Ok(s) = std::env::var(env_name) {
                 if !s.is_empty() {
@@ -83,16 +80,15 @@ impl DingTalkState {
     }
 
     /// Build a DingTalkBotEntry from a session file.
-    fn build_entry(sf: &types::DingTalkSessionFile) -> Option<DingTalkBotEntry> {
+    fn build_entry(sf: &models::DingTalkSessionFile) -> Option<DingTalkBotEntry> {
         let app_key = sf.app_key.clone();
         let app_secret = Self::resolve_secret(sf);
         if app_key.is_empty() || app_secret.is_empty() {
             warn!(name = %sf.name, "Skipping DingTalk session: missing app_key or app_secret");
             return None;
         }
-        let cfg = types::DingTalkBotConfig {
+        let cfg = models::DingTalkBotConfig {
             name: sf.name.clone(),
-            bot_uuid: String::new(), // no longer used
             app_key,
             app_secret,
         };
@@ -123,7 +119,7 @@ impl DingTalkState {
                     continue;
                 }
             };
-            let sf = match serde_json::from_str::<types::DingTalkSessionFile>(&content) {
+            let sf = match serde_json::from_str::<models::DingTalkSessionFile>(&content) {
                 Ok(s) => s,
                 Err(e) => {
                     warn!(path = %path.display(), "Failed to parse session file: {e}");
@@ -163,7 +159,7 @@ impl DingTalkState {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            let sf = match serde_json::from_str::<types::DingTalkSessionFile>(&content) {
+            let sf = match serde_json::from_str::<models::DingTalkSessionFile>(&content) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -191,7 +187,7 @@ impl DingTalkState {
     }
 
     /// Save a session file to disk.
-    pub fn save_session(&self, sf: &types::DingTalkSessionFile) {
+    pub fn save_session(&self, sf: &models::DingTalkSessionFile) {
         if let Err(e) = std::fs::create_dir_all(&self.session_dir) {
             warn!(dir = %self.session_dir.display(), "Failed to create session directory: {e}");
             return;

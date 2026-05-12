@@ -4,7 +4,7 @@
 //! Uses POST `/open-apis/auth/v3/tenant_access_token/internal`.
 
 use crate::api;
-use crate::types::*;
+use crate::models::*;
 use reqwest::Client;
 use std::sync::Mutex;
 use std::time::Instant;

@@ -4,11 +4,10 @@
 //! spawns per-bot WebSocket connections, and handles message dispatch.
 
 pub mod api;
-pub mod api_ext;
 pub mod channel;
 pub mod pbbp2;
 pub mod token;
-pub mod types;
+pub mod models;
 pub mod ws;
 
 use std::collections::HashSet;
@@ -16,10 +15,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use carrier_types::channel::Channel;
-use carrier_types::plugin::PluginMessage;
+use types::channel::Channel;
+use types::plugin::PluginMessage;
 use dashmap::DashMap;
-use reqwest::Client;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -29,13 +27,13 @@ use tracing::{info, warn};
 
 /// Runtime entry stored in FEISHU_STATE — config + pre-built token cache.
 pub struct FeishuBotEntry {
-    pub config: types::FeishuBotConfig,
+    pub config: models::FeishuBotConfig,
     pub token_cache: Arc<token::BotTokenCache>,
     pub active: AtomicBool,
 }
 
 impl FeishuBotEntry {
-    pub fn new(config: types::FeishuBotConfig) -> Self {
+    pub fn new(config: models::FeishuBotConfig) -> Self {
         let api_base = config.api_base().to_string();
         let token_cache = Arc::new(token::BotTokenCache::new(
             config.app_id.clone(),
@@ -60,22 +58,20 @@ impl FeishuBotEntry {
 pub struct FeishuState {
     pub bots: DashMap<String, FeishuBotEntry>, // key: app_id
     pub session_dir: std::path::PathBuf,
-    pub http: Client,
 }
 
 impl FeishuState {
     fn new() -> Self {
-        let home = carrier_types::config::home_dir();
+        let home = types::config::home_dir();
         let session_dir = home.join("feishu-sessions");
         Self {
             bots: DashMap::new(),
             session_dir,
-            http: Client::new(),
         }
     }
 
     /// Resolve the effective app_secret: try env var first, fall back to inline value.
-    fn resolve_secret(sf: &types::FeishuSessionFile) -> String {
+    fn resolve_secret(sf: &models::FeishuSessionFile) -> String {
         if let Some(ref env_name) = sf.secret_env {
             if let Ok(s) = std::env::var(env_name) {
                 if !s.is_empty() {
@@ -87,16 +83,15 @@ impl FeishuState {
     }
 
     /// Build a FeishuBotEntry from a session file.
-    fn build_entry(sf: &types::FeishuSessionFile) -> Option<FeishuBotEntry> {
+    fn build_entry(sf: &models::FeishuSessionFile) -> Option<FeishuBotEntry> {
         let app_id = sf.app_id.clone();
         let app_secret = Self::resolve_secret(sf);
         if app_id.is_empty() || app_secret.is_empty() {
             warn!(name = %sf.name, "Skipping Feishu session: missing app_id or app_secret");
             return None;
         }
-        let cfg = types::FeishuBotConfig {
+        let cfg = models::FeishuBotConfig {
             name: sf.name.clone(),
-            bot_uuid: String::new(), // no longer used
             app_id,
             app_secret,
             brand: sf.brand.clone(),
@@ -128,7 +123,7 @@ impl FeishuState {
                     continue;
                 }
             };
-            let sf = match serde_json::from_str::<types::FeishuSessionFile>(&content) {
+            let sf = match serde_json::from_str::<models::FeishuSessionFile>(&content) {
                 Ok(s) => s,
                 Err(e) => {
                     warn!(path = %path.display(), "Failed to parse session file: {e}");
@@ -168,7 +163,7 @@ impl FeishuState {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            let sf = match serde_json::from_str::<types::FeishuSessionFile>(&content) {
+            let sf = match serde_json::from_str::<models::FeishuSessionFile>(&content) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -196,7 +191,7 @@ impl FeishuState {
     }
 
     /// Save a session file to disk.
-    pub fn save_session(&self, sf: &types::FeishuSessionFile) {
+    pub fn save_session(&self, sf: &models::FeishuSessionFile) {
         if let Err(e) = std::fs::create_dir_all(&self.session_dir) {
             warn!(dir = %self.session_dir.display(), "Failed to create session directory: {e}");
             return;

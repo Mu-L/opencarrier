@@ -12,7 +12,7 @@ pub mod channel;
 pub mod crypto;
 pub mod token;
 pub mod tools;
-pub mod types;
+pub mod models;
 
 pub use channel::SessionWatcher;
 pub use tools::{WeixinQrLoginTool, WeixinSendMessageTool, WeixinStatusTool};

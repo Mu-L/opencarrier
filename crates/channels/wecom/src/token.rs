@@ -262,58 +262,6 @@ impl BotEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Token manager
-// ---------------------------------------------------------------------------
-
-/// Multi-bot token manager keyed by bot name.
-pub struct TokenManager {
-    pub bots: DashMap<String, BotEntry>,
-}
-
-impl TokenManager {
-    pub fn new() -> Self {
-        Self {
-            bots: DashMap::new(),
-        }
-    }
-
-    /// Add a bot.
-    pub fn add_bot(&self, entry: BotEntry) {
-        let name = entry.name.clone();
-        self.bots.insert(name, entry);
-    }
-
-    /// Get a bot entry by name.
-    pub fn get_bot(
-        &self,
-        name: &str,
-    ) -> Option<dashmap::mapref::one::Ref<'_, String, BotEntry>> {
-        self.bots.get(name)
-    }
-
-    /// Get all bot IDs.
-    pub fn bot_ids(&self) -> Vec<String> {
-        self.bots.iter().map(|e| e.key().clone()).collect()
-    }
-
-    /// Get access token for a bot.
-    #[allow(dead_code)]
-    pub fn get_access_token(&self, name: &str) -> Result<String, String> {
-        let entry = self
-            .bots
-            .get(name)
-            .ok_or_else(|| format!("Unknown bot: {name}"))?;
-        entry.get_access_token()
-    }
-}
-
-impl Default for TokenManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ---------------------------------------------------------------------------
 // API helpers
 // ---------------------------------------------------------------------------
 
@@ -429,20 +377,6 @@ pub fn send_kf_message(bot: &BotEntry, user_id: &str, content: &str) -> Result<(
 }
 
 /// Send a reply via the SmartBot response_url (HTTP POST with markdown).
-#[allow(dead_code)]
-pub fn send_smartbot_response(
-    http: &Client,
-    response_url: &str,
-    content: &str,
-) -> Result<(), String> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("Runtime error: {e}"))?;
-    rt.block_on(send_smartbot_response_async(http, response_url, content))
-}
-
-/// Async version of send_smartbot_response (for use within plugin's own runtime).
 pub async fn send_smartbot_response_async(
     http: &Client,
     response_url: &str,
@@ -488,7 +422,7 @@ pub struct WecomSessionFile {
     pub agent_id: Option<String>,
     // app/kf shared
     pub corp_id: Option<String>,
-    pub open_kfidf: Option<String>,
+    pub open_kfid: Option<String>,
     pub secret: Option<String>,
     pub secret_env: Option<String>,
     pub webhook_port: Option<u16>,
@@ -516,7 +450,7 @@ pub struct WecomState {
 
 impl WecomState {
     fn new() -> Self {
-        let home = carrier_types::config::home_dir();
+        let home = types::config::home_dir();
         let session_dir = home.join("wecom-sessions");
         Self {
             bots: DashMap::new(),
@@ -555,9 +489,9 @@ impl WecomState {
             }
             "kf" => {
                 let corp_id = sf.corp_id.as_deref().unwrap_or("").to_string();
-                let open_kfid = sf.open_kfidf.as_deref().unwrap_or("").to_string();
+                let open_kfid = sf.open_kfid.as_deref().unwrap_or("").to_string();
                 if corp_id.is_empty() || open_kfid.is_empty() {
-                    warn!(name = %sf.name, "Skipping kf session: missing corp_id or open_kfidf");
+                    warn!(name = %sf.name, "Skipping kf session: missing corp_id or open_kfid");
                     return None;
                 }
                 let webhook_port = sf.webhook_port.unwrap_or(8454);
@@ -721,14 +655,6 @@ impl WecomState {
                 warn!("Failed to serialize session file: {e}");
             }
         }
-    }
-
-    /// Get a bot session by name.
-    pub fn get_session(
-        &self,
-        name: &str,
-    ) -> Option<dashmap::mapref::one::Ref<'_, String, WecomBotSession>> {
-        self.bots.get(name)
     }
 
     /// Find a bot for sending by name. Falls back to scanning by bot_id.

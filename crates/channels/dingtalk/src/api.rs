@@ -2,7 +2,7 @@
 //!
 //! Stateless async functions for: OAuth token, gateway open, message send.
 
-use crate::types::*;
+use crate::models::*;
 use reqwest::{header::HeaderMap, Client};
 use std::time::Duration;
 
@@ -131,41 +131,3 @@ pub async fn send_direct_message(
     Ok(())
 }
 
-/// POST `/v1.0/robot/groupMessages/send`
-///
-/// Send a markdown message to a group.
-pub async fn send_group_message(
-    http: &Client,
-    token: &str,
-    robot_code: &str,
-    conversation_id: &str,
-    text: &str,
-) -> Result<(), String> {
-    let url = format!("{DINGTALK_API_BASE}/v1.0/robot/groupMessages/send");
-    let title = text.lines().next().unwrap_or("Reply").to_string();
-    let title = title.chars().take(20).collect::<String>();
-
-    let body = SendGroupRequest {
-        robot_code: robot_code.to_string(),
-        open_conversation_id: conversation_id.to_string(),
-        msg_key: "sampleMarkdown".to_string(),
-        msg_param: serde_json::json!({ "title": title, "text": text }).to_string(),
-    };
-
-    let resp = http
-        .post(&url)
-        .headers(dingtalk_headers(token))
-        .json(&body)
-        .timeout(Duration::from_secs(15))
-        .send()
-        .await
-        .map_err(|e| format!("DingTalk send_group failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("DingTalk send_group HTTP {status}: {body}"));
-    }
-
-    Ok(())
-}

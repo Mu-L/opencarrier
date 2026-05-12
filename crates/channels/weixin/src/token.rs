@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
-use crate::types::*;
+use crate::models::*;
 
 // ---------------------------------------------------------------------------
 // Per-bot runtime state
@@ -128,7 +128,7 @@ pub struct WeixinState {
 
 impl WeixinState {
     fn new() -> Self {
-        let home = carrier_types::config::home_dir();
+        let home = types::config::home_dir();
         let token_dir = home.join("weixin-sessions");
 
         Self {

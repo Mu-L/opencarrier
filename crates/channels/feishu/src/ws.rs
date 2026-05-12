@@ -12,8 +12,8 @@
 use crate::api;
 use crate::pbbp2::*;
 use crate::token::BotTokenCache;
-use crate::types::*;
-use carrier_types::plugin::{PluginContent, PluginMessage};
+use crate::models::*;
+use types::plugin::{PluginContent, PluginMessage};
 use dashmap::DashMap;
 use futures::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicBool, Ordering};

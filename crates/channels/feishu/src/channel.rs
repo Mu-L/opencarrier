@@ -6,8 +6,8 @@
 
 use crate::token::BotTokenCache;
 use crate::ws::FeishuWsClient;
-use carrier_types::channel::Channel;
-use carrier_types::plugin::PluginMessage;
+use types::channel::Channel;
+use types::plugin::PluginMessage;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;

@@ -1,12 +1,12 @@
 [package]
-name = "carrier-channel-feishu"
+name = "channel-feishu"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Feishu/Lark channel adapter for OpenCarrier"
 
 [dependencies]
-carrier-types = { path = "../../carrier-types" }
+types = { path = "../../types" }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 dashmap = { workspace = true }
