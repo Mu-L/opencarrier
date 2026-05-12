@@ -2215,12 +2215,21 @@ async fn add_dynamic_binding(
         if let Some(ref pm) = state.channel_manager {
             let pm = pm.lock().await;
             // Set sender route: WeCom/Feishu/DingTalk use bot_id as route key
+            // For WeCom SmartBot, the bridge's route_key is msg.bot_id (the
+            // WeCom bot_id like "aibI7TI_..."), NOT our internal UUID.
             if channel_type != "weixin" {
-                pm.set_sender_route(bot_uuid, agent_uuid);
+                let route_key = match platform {
+                    "wecom" => credentials
+                        .get("bot_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(bot_uuid),
+                    _ => bot_uuid,
+                };
+                pm.set_sender_route(route_key, agent_uuid);
             }
             // Dynamically start channel for the new bot (no restart needed)
             if platform == "wecom" {
-                let bot_id = credentials
+                let wecom_bot_id = credentials
                     .get("bot_id")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
@@ -2228,8 +2237,8 @@ async fn add_dynamic_binding(
                     .get("secret")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                if !bot_id.is_empty() {
-                    pm.start_dynamic_channel("wecom", bot_id, bot_id, secret);
+                if !wecom_bot_id.is_empty() {
+                    pm.start_dynamic_channel("wecom", wecom_bot_id, wecom_bot_id, secret);
                 }
             }
             tracing::info!(
