@@ -112,11 +112,20 @@ impl Channel for SessionWatcher {
                     })?;
 
                 let http = session.entry.http.clone();
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| format!("Runtime creation failed: {e}"))?;
-                rt.block_on(token::send_smartbot_response_async(&http, &response_url, text))?;
+                let text = text.to_string();
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build();
+                    let result = match rt {
+                        Ok(rt) => rt.block_on(token::send_smartbot_response_async(&http, &response_url, &text)),
+                        Err(e) => Err(format!("Runtime creation failed: {e}")),
+                    };
+                    let _ = tx.send(result);
+                });
+                rx.recv()
+                    .map_err(|e| format!("SmartBot send thread disconnected: {e}"))??;
             }
         }
 
