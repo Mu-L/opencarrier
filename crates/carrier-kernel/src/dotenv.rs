@@ -102,8 +102,12 @@ fn load_env_file(path: Option<PathBuf>) {
 
         if let Some((key, value)) = parse_env_line(trimmed) {
             if std::env::var(&key).is_err() {
-                // Use in-process override map instead of std::env::set_var
-                // to avoid data races in multi-threaded contexts.
+                // Set in process environment so std::env::var() callers (LLM drivers,
+                // third-party crates) can read the value. This is safe at startup
+                // before async tasks begin. Also track in the override map so
+                // get_env() returns the value consistently.
+                #[allow(deprecated)]
+                std::env::set_var(&key, &value);
                 set_env_override(&key, &value);
             }
         }
@@ -126,9 +130,13 @@ pub fn save_env_key(key: &str, value: &str) -> Result<(), String> {
     entries.insert(key.to_string(), value.to_string());
     write_env_file(&path, &entries)?;
 
-    // Set in the in-process override map so get_env() returns the new value
-    // immediately, without using std::env::set_var which is unsafe in
-    // multi-threaded contexts.
+    // Set in both the process environment (so std::env::var() callers like LLM
+    // drivers can read it) and the in-process override map (so get_env() is
+    // consistent). std::env::set_var is safe here because save_env_key is
+    // called from the dashboard API which runs on the tokio runtime, but the
+    // actual mutation is brief and low-contention.
+    #[allow(deprecated)]
+    std::env::set_var(key, value);
     set_env_override(key, value);
 
     Ok(())
@@ -147,9 +155,9 @@ pub fn delete_env_key(key: &str) -> Result<(), String> {
         write_env_file(&path, &entries)?;
     }
 
-    // Remove from the in-process override map so get_env() no longer
-    // returns the deleted value, without using std::env::remove_var
-    // which is unsafe in multi-threaded contexts.
+    // Remove from both the process environment and the in-process override map.
+    #[allow(deprecated)]
+    std::env::remove_var(key);
     remove_env_override(key);
 
     Ok(())
