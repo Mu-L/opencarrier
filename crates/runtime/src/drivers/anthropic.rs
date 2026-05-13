@@ -27,6 +27,8 @@ impl AnthropicDriver {
             base_url,
             client: reqwest::Client::builder()
                 .user_agent(crate::USER_AGENT)
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
                 .build()
                 .unwrap_or_default(),
         }
