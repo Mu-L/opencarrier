@@ -439,9 +439,14 @@ fn json_to_string(v: &serde_json::Value) -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Log to stderr — stdout is reserved for the MCP protocol.
+    // Log to file for debugging — stdout is reserved for MCP protocol.
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/home/ubuntu/.opencarrier/wechat-oa-mcp.log")
+        .unwrap_or_else(|_| std::fs::File::create("/tmp/wechat-oa-mcp.log").unwrap());
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
+        .with_writer(std::sync::Mutex::new(log_file))
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("WECHAT_OA_MCP_LOG")
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
