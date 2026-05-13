@@ -23,6 +23,7 @@ members = [
     "tools/wechat-oa-mcp",
     "tools/feishu-mcp",
     "tools/wecom-mcp",
+    "tools/browser-mcp",
 ]
 
 [workspace.package]

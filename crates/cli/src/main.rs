@@ -761,6 +761,7 @@ pub(crate) fn daemon_json(
 // ---------------------------------------------------------------------------
 
 /// Launch the opencarrier-desktop Tauri app, connecting to the running daemon.
+#[allow(dead_code)]
 fn launch_desktop_app(_carrier_dir: &std::path::Path) {
     // Look for the desktop binary next to our own executable.
     let desktop_bin = {
@@ -4365,6 +4366,7 @@ fn remove_self_binary(exe_path: &std::path::Path) {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
 
     // --- Doctor command unit tests ---

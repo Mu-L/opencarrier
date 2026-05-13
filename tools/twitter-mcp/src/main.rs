@@ -21,6 +21,7 @@ mod api;
 macro_rules! define_params {
     ($name:ident { $($field:tt)* }) => {
         #[derive(Debug, Deserialize, JsonSchema)]
+        #[allow(dead_code)]
         struct $name {
             #[schemars(description = "Twitter ct0 cookie (CSRF token)")]
             ct0: String,
@@ -380,7 +381,7 @@ fn extract_tweets_from_instructions(instructions: &Value) -> Vec<Value> {
                 .and_then(|i| i.get("tweet_results"))
                 .and_then(|t| t.get("result"));
 
-            if let Some(tweet) = result.and_then(|r| parse_tweet(r)) {
+            if let Some(tweet) = result.and_then(parse_tweet) {
                 let id = tweet
                     .get("id")
                     .and_then(|v| v.as_str())
@@ -405,7 +406,7 @@ fn extract_tweets_from_instructions(instructions: &Value) -> Vec<Value> {
                         .and_then(|i| i.get("tweet_results"))
                         .and_then(|t| t.get("result"));
 
-                    if let Some(tweet) = result.and_then(|r| parse_tweet(r)) {
+                    if let Some(tweet) = result.and_then(parse_tweet) {
                         let id = tweet
                             .get("id")
                             .and_then(|v| v.as_str())

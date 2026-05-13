@@ -55,12 +55,10 @@ impl KernelA2a {
     }
 }
 
-/// External service integrations (web search, browser, media, TTS, embeddings).
+/// External service integrations (web search, media, TTS, embeddings).
 pub struct KernelServices {
     /// Web tools context (multi-provider search + SSRF-protected fetch + caching).
     pub web_ctx: runtime::web_search::WebToolsContext,
-    /// Browser automation manager (Playwright bridge sessions).
-    pub browser_ctx: runtime::browser::BrowserManager,
     /// Media understanding engine (image description, audio transcription).
     pub media_engine: runtime::media_understanding::MediaEngine,
 }
@@ -527,8 +525,6 @@ impl CarrierKernel {
             brain: Some(brain_arc.clone() as Arc<dyn runtime::llm_driver::Brain>),
         };
 
-        let browser_ctx = runtime::browser::BrowserManager::new(config.browser.clone());
-
         // Initialize media understanding engine
         let media_engine =
             runtime::media_understanding::MediaEngine::new(config.media.clone());
@@ -569,7 +565,6 @@ impl CarrierKernel {
             },
             services: KernelServices {
                 web_ctx,
-                browser_ctx,
                 media_engine,
             },
             plugins: KernelPlugins {

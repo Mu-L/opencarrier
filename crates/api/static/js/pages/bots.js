@@ -60,7 +60,7 @@ function botsPage() {
       this.loadError = '';
       try {
         const [botsRes, agentsRes, tenantsRes] = await Promise.all([
-          OpenCarrierAPI.get('/api/bots'),
+          OpenCarrierAPI.get('/api/senders'),
           OpenCarrierAPI.get('/api/agents'),
           OpenCarrierAPI.get('/api/tenants').catch(() => []),
         ]);
@@ -235,7 +235,7 @@ function botsPage() {
       }
 
       try {
-        await OpenCarrierAPI.post('/api/bots', payload);
+        await OpenCarrierAPI.post('/api/senders', payload);
         OpenCarrierToast.success('机器人已创建');
         this.closeCreateModal();
         this.loadData();
@@ -282,7 +282,7 @@ function botsPage() {
       if (this.botForm.brand) payload.brand = this.botForm.brand;
 
       try {
-        await OpenCarrierAPI.put('/api/bots/' + this.editingBot.id, payload);
+        await OpenCarrierAPI.put('/api/senders/' + this.editingBot.id, payload);
         OpenCarrierToast.success('已保存');
         this.closeEditModal();
         this.loadData();
@@ -298,7 +298,7 @@ function botsPage() {
 
     async bindAgent(bot, agentName) {
       try {
-        await OpenCarrierAPI.put('/api/bots/' + bot.id + '/bind', { agent_name: agentName });
+        await OpenCarrierAPI.put('/api/senders/' + bot.id + '/bind', { agent_name: agentName });
         OpenCarrierToast.success('已绑定到 ' + this.agentName(agentName));
         this.loadData();
       } catch (e) {
@@ -308,7 +308,7 @@ function botsPage() {
 
     async unbindAgent(bot) {
       try {
-        await OpenCarrierAPI.del('/api/bots/' + bot.id + '/bind');
+        await OpenCarrierAPI.del('/api/senders/' + bot.id + '/bind');
         OpenCarrierToast.success('已解绑');
         this.loadData();
       } catch (e) {
@@ -323,7 +323,7 @@ function botsPage() {
     async deleteBot(bot) {
       if (!confirm('确定删除机器人 "' + bot.tenant_name + '"？此操作不可撤销。')) return;
       try {
-        await OpenCarrierAPI.del('/api/bots/' + bot.id);
+        await OpenCarrierAPI.del('/api/senders/' + bot.id);
         OpenCarrierToast.success('已删除');
         this.loadData();
       } catch (e) {
@@ -343,7 +343,7 @@ function botsPage() {
       this.smartbotResult = null;
 
       try {
-        const res = await OpenCarrierAPI.post('/api/bots/wecom/smartbot/generate', {});
+        const res = await OpenCarrierAPI.post('/api/senders/wecom/smartbot/generate', {});
         this.smartbotScode = res.scode;
         this.smartbotAuthUrl = res.auth_url;
         this.smartbotPolling = true;
@@ -358,7 +358,7 @@ function botsPage() {
 
     async pollSmartbotResult() {
       try {
-        const res = await OpenCarrierAPI.get('/api/bots/wecom/smartbot/poll?scode=' + this.smartbotScode);
+        const res = await OpenCarrierAPI.get('/api/senders/wecom/smartbot/poll?scode=' + this.smartbotScode);
         if (res.status === 'success') {
           this.smartbotPolling = false;
           this.smartbotStatus = 'success';

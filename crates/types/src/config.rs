@@ -76,10 +76,25 @@ impl Default for WebFetchConfig {
     }
 }
 
+/// Browser backend preference.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserBackend {
+    /// Auto-detect: try obscura first, fall back to chromium.
+    #[default]
+    Auto,
+    /// Force use of Obscura.
+    Obscura,
+    /// Force use of Chromium.
+    Chromium,
+}
+
 /// Browser automation configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BrowserConfig {
+    /// Preferred browser backend. Default: auto (obscura with chromium fallback).
+    pub backend: BrowserBackend,
     /// Run browser in headless mode (no visible window).
     pub headless: bool,
     /// Viewport width in pixels.
@@ -103,6 +118,7 @@ pub struct BrowserConfig {
 impl Default for BrowserConfig {
     fn default() -> Self {
         Self {
+            backend: BrowserBackend::default(),
             headless: true,
             viewport_width: 1280,
             viewport_height: 720,

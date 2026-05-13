@@ -169,29 +169,61 @@ jobs:
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           key: cli-${{ matrix.target }}
-      - name: Build CLI (cross)
+      - name: Build CLI + MCP tools (cross)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: cross build --release --target ${{ matrix.target }} --bin carrier
-      - name: Build CLI
+        run: cross build --release --target ${{ matrix.target }}
+      - name: Build CLI + MCP tools
         if: matrix.target != 'aarch64-unknown-linux-gnu'
-        run: cargo build --release --target ${{ matrix.target }} --bin carrier
-      - name: Ad-hoc codesign CLI binary (macOS)
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Download Obscura binary
+        if: matrix.archive == 'tar.gz'
+        run: |
+          OBSCURA_VERSION="0.1.0"
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu) OBSCURA_ARCH="x86_64-unknown-linux-gnu" ;;
+            aarch64-unknown-linux-gnu) OBSCURA_ARCH="aarch64-unknown-linux-gnu" ;;
+            x86_64-apple-darwin) OBSCURA_ARCH="x86_64-apple-darwin" ;;
+            aarch64-apple-darwin) OBSCURA_ARCH="aarch64-apple-darwin" ;;
+            *) echo "No obscura for ${{ matrix.target }}"; exit 0 ;;
+          esac
+          URL="https://github.com/nickelc/obscura/releases/download/v${OBSCURA_VERSION}/obscura-${OBSCURA_ARCH}.tar.gz"
+          if curl -fsSL --connect-timeout 10 "$URL" -o /tmp/obscura.tar.gz 2>/dev/null; then
+            tar xzf /tmp/obscura.tar.gz -C target/${{ matrix.target }}/release/
+            echo "Obscura downloaded successfully"
+          else
+            echo "Obscura download failed (non-blocking — browser-mcp will fall back to Chromium)"
+          fi
+      - name: Ad-hoc codesign binaries (macOS)
         if: runner.os == 'macOS'
         run: |
-          xattr -cr target/${{ matrix.target }}/release/carrier || true
-          codesign --force --sign - target/${{ matrix.target }}/release/carrier
+          for binary in target/${{ matrix.target }}/release/carrier target/${{ matrix.target }}/release/browser-mcp target/${{ matrix.target }}/release/obscura; do
+            if [ -f "$binary" ]; then
+              xattr -cr "$binary" 2>/dev/null || true
+              codesign --force --sign - "$binary" 2>/dev/null || true
+            fi
+          done
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../carrier-${{ matrix.target }}.tar.gz carrier
+          # Collect all binaries that exist
+          FILES="carrier"
+          for bin in browser-mcp bilibili-mcp zhihu-mcp xiaohongshu-mcp reddit-mcp twitter-mcp wechat-oa-mcp feishu-mcp wecom-mcp obscura; do
+            if [ -f "$bin" ]; then FILES="$FILES $bin"; fi
+          done
+          tar czf ../../../carrier-${{ matrix.target }}.tar.gz $FILES
           cd ../../..
           sha256sum carrier-${{ matrix.target }}.tar.gz > carrier-${{ matrix.target }}.tar.gz.sha256
       - name: Package (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/carrier.exe" -DestinationPath "carrier-${{ matrix.target }}.zip"
+          $binDir = "target/${{ matrix.target }}/release"
+          $files = @("carrier.exe")
+          foreach ($bin in @("browser-mcp.exe","bilibili-mcp.exe","zhihu-mcp.exe","xiaohongshu-mcp.exe","reddit-mcp.exe","twitter-mcp.exe","wechat-oa-mcp.exe","feishu-mcp.exe","wecom-mcp.exe")) {
+            if (Test-Path "$binDir/$bin") { $files += "$binDir/$bin" }
+          }
+          Compress-Archive -Path $files -DestinationPath "carrier-${{ matrix.target }}.zip"
           $hash = (Get-FileHash "carrier-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  carrier-${{ matrix.target }}.zip" | Out-File -Encoding ASCII "carrier-${{ matrix.target }}.zip.sha256"
       - name: Upload to GitHub Release

@@ -27,9 +27,6 @@ fn validate_path(path: &str) -> Result<&str, String> {
 fn sanitize_path_component(name: &str) -> Result<&str, String> {
     crate::tools::sanitize_path_component(name)
 }
-fn validate_clone_name(name: &str) -> Result<&str, String> {
-    crate::tools::validate_clone_name(name)
-}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -442,52 +439,6 @@ async fn tool_user_profile(
             action
         )),
     }
-}
-
-// ---------------------------------------------------------------------------
-// Clone management tools
-// ---------------------------------------------------------------------------
-
-async fn tool_clone_export(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
-    _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kernel = kernel.ok_or("clone_export requires kernel access")?;
-    let name =
-        validate_clone_name(input["name"].as_str().ok_or("Missing 'name' parameter")?)?.to_string();
-
-    let agx_bytes = kernel.clone_export(&name)?;
-
-    Ok(format!(
-        "Clone '{}' exported as .agx archive ({} bytes / {:.1} KB). The archive contains all workspace files: SOUL.md, system_prompt.md, knowledge/, skills/, agents/, style/, EVOLUTION.md.",
-        name,
-        agx_bytes.len(),
-        agx_bytes.len() as f64 / 1024.0,
-    ))
-}
-
-async fn tool_clone_publish(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn crate::kernel_handle::KernelHandle>>,
-    _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kernel = kernel.ok_or("clone_publish requires kernel access")?;
-    let name =
-        validate_clone_name(input["name"].as_str().ok_or("Missing 'name' parameter")?)?.to_string();
-
-    // Export the clone first
-    let agx_bytes = kernel.clone_export(&name)?;
-
-    // Publish to Hub
-    let template_id = kernel.clone_publish(&name, &agx_bytes).await?;
-
-    Ok(format!(
-        "Clone '{}' published to Hub successfully. Template ID: {}. Archive size: {:.1} KB.",
-        name,
-        template_id,
-        agx_bytes.len() as f64 / 1024.0,
-    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1552,29 +1503,6 @@ impl ToolModule for AgentTools {
                     "required": ["message"]
                 }),
             },
-            // --- Clone management tools (system-level export/publish) ---
-            ToolDefinition {
-                name: "clone_export".to_string(),
-                description: "Export an installed clone as a downloadable .agx archive. Returns the file size and a download path.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "Name of the installed clone to export"}
-                    },
-                    "required": ["name"]
-                }),
-            },
-            ToolDefinition {
-                name: "clone_publish".to_string(),
-                description: "Publish (upload) an installed clone to Hub. Requires Hub API key to be configured. Returns the template ID on Hub.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "Name of the installed clone to publish"}
-                    },
-                    "required": ["name"]
-                }),
-            },
         ]
     }
 
@@ -1619,8 +1547,6 @@ impl ToolModule for AgentTools {
             "user_profile" => Some(tool_user_profile(input, ctx.home_dir, ctx.agent_name, sender_id).await),
 
             // Clone management tools
-            "clone_export" => Some(tool_clone_export(input, kernel, caller_agent_id).await),
-            "clone_publish" => Some(tool_clone_publish(input, kernel, caller_agent_id).await),
 
             // Inter-agent tools (require kernel handle)
             "agent_send" => Some(tool_agent_send(input, kernel, caller_agent_id, owner_id, sender_id).await),

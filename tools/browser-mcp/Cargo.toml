@@ -1,0 +1,25 @@
+[package]
+name = "browser-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Browser automation MCP Server — navigate, click, screenshot, and more via Chrome DevTools Protocol"
+
+[dependencies]
+rmcp = { version = "1.5", features = ["server", "transport-io"] }
+schemars = "1"
+reqwest = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+dashmap = "6"
+dirs = { workspace = true }
+futures = "0.3"
+tokio-tungstenite = "0.26"
+base64 = "0.22"
+uuid = { workspace = true }

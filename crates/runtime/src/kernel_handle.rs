@@ -182,18 +182,6 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
-    /// Export an installed clone as .agx bytes.
-    fn clone_export(&self, name: &str) -> Result<Vec<u8>, String> {
-        let _ = name;
-        Err("Clone export not available".to_string())
-    }
-
-    /// Publish a clone to Hub. Returns the Hub template ID.
-    async fn clone_publish(&self, name: &str, agx_bytes: &[u8]) -> Result<String, String> {
-        let _ = (name, agx_bytes);
-        Err("Clone publish not available".to_string())
-    }
-
     /// Get the home directory path (~/.opencarrier/).
     fn home_dir(&self) -> Option<std::path::PathBuf> {
         None
@@ -214,16 +202,4 @@ pub trait KernelHandle: Send + Sync {
         self.spawn_agent(manifest_toml, parent_id).await
     }
 
-    /// Execute a plugin tool (loaded via dlopen).
-    /// Returns Err if no plugin provides the tool or plugin system is not initialized.
-    async fn execute_plugin_tool(
-        &self,
-        tool_name: &str,
-        args: &serde_json::Value,
-        sender_id: &str,
-        agent_id: &str,
-    ) -> Result<String, String> {
-        let _ = (tool_name, args, sender_id, agent_id);
-        Err("Plugin tools not available".to_string())
-    }
 }

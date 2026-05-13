@@ -6,7 +6,6 @@
 //! allowed through to check whether the provider has recovered.
 
 use dashmap::DashMap;
-use serde::Serialize;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
@@ -54,21 +53,6 @@ impl Default for CooldownConfig {
             probe_interval_secs: 30,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Circuit state
-// ---------------------------------------------------------------------------
-
-/// Current state of a provider in the circuit breaker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum CircuitState {
-    /// Provider is healthy, requests flow normally.
-    Closed,
-    /// Provider is in cooldown, requests are rejected.
-    Open,
-    /// Cooldown expired, allowing a single probe request to check recovery.
-    HalfOpen,
 }
 
 // ---------------------------------------------------------------------------
@@ -124,20 +108,6 @@ pub enum CooldownVerdict {
         reason: String,
         retry_after_secs: u64,
     },
-}
-
-// ---------------------------------------------------------------------------
-// Snapshot (for API / dashboard)
-// ---------------------------------------------------------------------------
-
-/// Snapshot of a provider's circuit breaker state (for API responses).
-#[derive(Debug, Clone, Serialize)]
-pub struct ProviderSnapshot {
-    pub provider: String,
-    pub state: CircuitState,
-    pub error_count: u32,
-    pub is_billing: bool,
-    pub cooldown_remaining_secs: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -310,67 +280,6 @@ impl ProviderCooldown {
         }
     }
 
-    /// Get the current circuit state for a provider.
-    pub fn get_state(&self, provider: &str) -> CircuitState {
-        let state = match self.states.get(provider) {
-            Some(s) => s,
-            None => return CircuitState::Closed,
-        };
-
-        let cooldown_start = match state.cooldown_start {
-            Some(start) => start,
-            None => return CircuitState::Closed,
-        };
-
-        let elapsed = cooldown_start.elapsed();
-        if elapsed < state.cooldown_duration {
-            CircuitState::Open
-        } else if state.error_count > 0 {
-            CircuitState::HalfOpen
-        } else {
-            CircuitState::Closed
-        }
-    }
-
-    /// Get a snapshot of all provider states (for API/dashboard).
-    pub fn snapshot(&self) -> Vec<ProviderSnapshot> {
-        self.states
-            .iter()
-            .map(|entry| {
-                let provider = entry.key().clone();
-                let state = entry.value();
-                let circuit_state = match state.cooldown_start {
-                    Some(start) => {
-                        let elapsed = start.elapsed();
-                        if elapsed < state.cooldown_duration {
-                            CircuitState::Open
-                        } else if state.error_count > 0 {
-                            CircuitState::HalfOpen
-                        } else {
-                            CircuitState::Closed
-                        }
-                    }
-                    None => CircuitState::Closed,
-                };
-                let remaining = state.cooldown_start.and_then(|start| {
-                    let elapsed = start.elapsed();
-                    if elapsed < state.cooldown_duration {
-                        Some((state.cooldown_duration - elapsed).as_secs())
-                    } else {
-                        None
-                    }
-                });
-                ProviderSnapshot {
-                    provider,
-                    state: circuit_state,
-                    error_count: state.error_count,
-                    is_billing: state.is_billing,
-                    cooldown_remaining_secs: remaining,
-                }
-            })
-            .collect()
-    }
-
     /// Clear expired cooldowns (call periodically, e.g. every 60s).
     pub fn clear_expired(&self) {
         let mut to_remove = Vec::new();
@@ -506,14 +415,12 @@ mod tests {
     fn test_new_provider_allows() {
         let cb = ProviderCooldown::new(fast_config());
         assert_eq!(cb.check("openai"), CooldownVerdict::Allow);
-        assert_eq!(cb.get_state("openai"), CircuitState::Closed);
     }
 
     #[test]
     fn test_single_failure_opens_circuit() {
         let cb = ProviderCooldown::new(fast_config());
         cb.record_failure("openai", false);
-        assert_eq!(cb.get_state("openai"), CircuitState::Open);
     }
 
     #[test]
@@ -561,10 +468,8 @@ mod tests {
     fn test_success_resets_circuit() {
         let cb = ProviderCooldown::new(fast_config());
         cb.record_failure("openai", false);
-        assert_eq!(cb.get_state("openai"), CircuitState::Open);
 
         cb.record_success("openai");
-        assert_eq!(cb.get_state("openai"), CircuitState::Closed);
         assert_eq!(cb.check("openai"), CooldownVerdict::Allow);
     }
 
@@ -580,7 +485,6 @@ mod tests {
 
         let verdict = cb.check("openai");
         assert_eq!(verdict, CooldownVerdict::AllowProbe);
-        assert_eq!(cb.get_state("openai"), CircuitState::HalfOpen);
     }
 
     #[test]
@@ -611,10 +515,8 @@ mod tests {
     fn test_probe_success_closes_circuit() {
         let cb = ProviderCooldown::new(fast_config());
         cb.record_failure("openai", false);
-        assert_eq!(cb.get_state("openai"), CircuitState::Open);
 
         cb.record_probe_result("openai", true);
-        assert_eq!(cb.get_state("openai"), CircuitState::Closed);
     }
 
     #[test]
@@ -631,7 +533,6 @@ mod tests {
             state_before + 1,
             "error count should increase on probe failure"
         );
-        assert_eq!(cb.get_state("openai"), CircuitState::Open);
     }
 
     #[test]
@@ -658,31 +559,9 @@ mod tests {
         let cb = ProviderCooldown::new(fast_config());
         cb.record_failure("openai", false);
         cb.record_failure("openai", false);
-        assert_eq!(cb.get_state("openai"), CircuitState::Open);
 
         cb.force_reset("openai");
-        assert_eq!(cb.get_state("openai"), CircuitState::Closed);
         assert_eq!(cb.check("openai"), CooldownVerdict::Allow);
-    }
-
-    #[test]
-    fn test_snapshot() {
-        let cb = ProviderCooldown::new(fast_config());
-        cb.record_failure("openai", false);
-        cb.record_failure("anthropic", true);
-
-        let snap = cb.snapshot();
-        assert_eq!(snap.len(), 2);
-
-        let openai_snap = snap.iter().find(|s| s.provider == "openai").unwrap();
-        assert_eq!(openai_snap.state, CircuitState::Open);
-        assert_eq!(openai_snap.error_count, 1);
-        assert!(!openai_snap.is_billing);
-
-        let anthropic_snap = snap.iter().find(|s| s.provider == "anthropic").unwrap();
-        assert_eq!(anthropic_snap.state, CircuitState::Open);
-        assert_eq!(anthropic_snap.error_count, 1);
-        assert!(anthropic_snap.is_billing);
     }
 
     #[test]
@@ -709,13 +588,7 @@ mod tests {
         cb.record_failure("openai", false);
         cb.record_failure("anthropic", true);
 
-        assert_eq!(cb.get_state("openai"), CircuitState::Open);
-        assert_eq!(cb.get_state("anthropic"), CircuitState::Open);
-        assert_eq!(cb.get_state("gemini"), CircuitState::Closed);
-
         // Reset openai, anthropic should be unaffected.
         cb.record_success("openai");
-        assert_eq!(cb.get_state("openai"), CircuitState::Closed);
-        assert_eq!(cb.get_state("anthropic"), CircuitState::Open);
     }
 }

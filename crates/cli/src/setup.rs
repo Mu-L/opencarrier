@@ -82,7 +82,39 @@ session_ttl_hours = 168
 "#
     );
     let config_path = carrier_dir.join("config.toml");
-    std::fs::write(&config_path, &config_content).map_err(|e| e.to_string())?;
+
+    // Detect built-in MCP server binaries
+    let bin_dir = carrier_dir.join("bin");
+    let mut mcp_entries = String::new();
+
+    // browser-mcp
+    let browser_mcp = if bin_dir.join("browser-mcp").exists() {
+        bin_dir.join("browser-mcp").to_str().unwrap_or("browser-mcp").to_string()
+    } else {
+        "browser-mcp".to_string() // rely on PATH
+    };
+    mcp_entries.push_str(&format!(r#"
+
+[[mcp_servers]]
+name = "browser"
+timeout_secs = 60
+
+[mcp_servers.transport]
+type = "stdio"
+command = "{browser_mcp}"
+"#));
+
+    if !mcp_entries.is_empty() {
+        let full_config = format!(
+            "{config_content}\n{mcp_entries}\nwhitelist_tools = [\n  \
+             \"browser_navigate\", \"browser_click\", \"browser_type\",\n  \
+             \"browser_read_page\", \"browser_scroll\", \"browser_wait\",\n  \
+             \"browser_run_js\", \"browser_back\",\n]\n"
+        );
+        std::fs::write(&config_path, &full_config).map_err(|e| e.to_string())?;
+    } else {
+        std::fs::write(&config_path, &config_content).map_err(|e| e.to_string())?;
+    }
     crate::restrict_file_permissions(&config_path);
 
     // Persist to .env so the kernel picks it up on next start.

@@ -8,8 +8,6 @@
 //! - Clear the child's environment and re-add only a safe allow-list.
 //! - Validate executable paths before spawning.
 
-use std::path::Path;
-
 /// Environment variables considered safe to inherit on all platforms.
 pub const SAFE_ENV_VARS: &[&str] = &[
     "PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "TERM",
@@ -61,24 +59,6 @@ pub fn sandbox_command(cmd: &mut tokio::process::Command, allowed_env_vars: &[St
             cmd.env(var, val);
         }
     }
-}
-
-/// Validates that an executable path does not contain directory traversal
-/// components (`..`).
-///
-/// This is a defence-in-depth check to prevent an agent from escaping its
-/// working directory via crafted paths like `../../bin/dangerous`.
-pub fn validate_executable_path(path: &str) -> Result<(), String> {
-    let p = Path::new(path);
-    for component in p.components() {
-        if let std::path::Component::ParentDir = component {
-            return Err(format!(
-                "executable path '{}' contains '..' component which is not allowed",
-                path
-            ));
-        }
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -391,210 +371,9 @@ async fn kill_tree_windows(pid: u32, grace_ms: u64) -> Result<bool, String> {
     }
 }
 
-/// Kill a tokio child process with tree kill.
-///
-/// Extracts the PID from the `Child` handle and performs a tree kill.
-/// This is the preferred way to clean up subprocesses spawned by Carrier.
-pub async fn kill_child_tree(
-    child: &mut tokio::process::Child,
-    grace_ms: u64,
-) -> Result<bool, String> {
-    match child.id() {
-        Some(pid) => kill_process_tree(pid, grace_ms).await,
-        None => Ok(false), // Process already exited.
-    }
-}
-
-/// Wait for a child process with timeout, then kill if necessary.
-///
-/// Returns the exit status if the process exits within the timeout,
-/// or kills the process tree and returns an error.
-pub async fn wait_or_kill(
-    child: &mut tokio::process::Child,
-    timeout: std::time::Duration,
-    grace_ms: u64,
-) -> Result<std::process::ExitStatus, String> {
-    match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(Ok(status)) => Ok(status),
-        Ok(Err(e)) => Err(format!("Wait error: {e}")),
-        Err(_) => {
-            tracing::warn!("Process timed out after {:?}, killing tree", timeout);
-            kill_child_tree(child, grace_ms).await?;
-            Err(format!("Process timed out after {:?}", timeout))
-        }
-    }
-}
-
-/// Wait for a child process with dual timeout: absolute + no-output idle.
-///
-/// - `absolute_timeout`: Maximum total execution time.
-/// - `no_output_timeout`: Kill if no stdout/stderr output for this duration (0 = disabled).
-/// - `grace_ms`: Grace period before force-killing.
-///
-/// Returns the termination reason and output collected.
-pub async fn wait_or_kill_with_idle(
-    child: &mut tokio::process::Child,
-    absolute_timeout: std::time::Duration,
-    no_output_timeout: std::time::Duration,
-    grace_ms: u64,
-) -> Result<(types::config::TerminationReason, String), String> {
-    use tokio::io::AsyncReadExt;
-
-    let idle_enabled = !no_output_timeout.is_zero();
-    let mut output = String::new();
-
-    // Take stdout/stderr handles if available
-    let mut stdout = child.stdout.take();
-    let mut stderr = child.stderr.take();
-
-    let deadline = tokio::time::Instant::now() + absolute_timeout;
-    let mut idle_deadline = if idle_enabled {
-        Some(tokio::time::Instant::now() + no_output_timeout)
-    } else {
-        None
-    };
-
-    let mut stdout_buf = [0u8; 4096];
-    let mut stderr_buf = [0u8; 4096];
-
-    loop {
-        // Check absolute timeout
-        if tokio::time::Instant::now() >= deadline {
-            tracing::warn!("Process hit absolute timeout after {:?}", absolute_timeout);
-            kill_child_tree(child, grace_ms).await?;
-            return Ok((
-                types::config::TerminationReason::AbsoluteTimeout,
-                output,
-            ));
-        }
-
-        // Check idle timeout
-        if let Some(idle_dl) = idle_deadline {
-            if tokio::time::Instant::now() >= idle_dl {
-                tracing::warn!(
-                    "Process produced no output for {:?}, killing",
-                    no_output_timeout
-                );
-                kill_child_tree(child, grace_ms).await?;
-                return Ok((
-                    types::config::TerminationReason::NoOutputTimeout,
-                    output,
-                ));
-            }
-        }
-
-        // Use a short poll interval
-        let poll_duration = std::time::Duration::from_millis(100);
-
-        tokio::select! {
-            // Try to read stdout
-            result = async {
-                if let Some(ref mut out) = stdout {
-                    out.read(&mut stdout_buf).await
-                } else {
-                    // No stdout — just sleep
-                    tokio::time::sleep(poll_duration).await;
-                    Ok(0)
-                }
-            } => {
-                match result {
-                    Ok(0) => {
-                        // EOF on stdout — process may be done
-                        stdout = None;
-                        if stderr.is_none() {
-                            // Both closed, wait for process exit
-                            match tokio::time::timeout(
-                                deadline.saturating_duration_since(tokio::time::Instant::now()),
-                                child.wait(),
-                            ).await {
-                                Ok(Ok(status)) => {
-                                    return Ok((
-                                        types::config::TerminationReason::Exited(status.code().unwrap_or(-1)),
-                                        output,
-                                    ));
-                                }
-                                Ok(Err(e)) => return Err(format!("Wait error: {e}")),
-                                Err(_) => {
-                                    kill_child_tree(child, grace_ms).await?;
-                                    return Ok((types::config::TerminationReason::AbsoluteTimeout, output));
-                                }
-                            }
-                        }
-                    }
-                    Ok(n) => {
-                        let text = String::from_utf8_lossy(&stdout_buf[..n]);
-                        output.push_str(&text);
-                        // Reset idle timer on output
-                        if idle_enabled {
-                            idle_deadline = Some(tokio::time::Instant::now() + no_output_timeout);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::debug!("Stdout read error: {e}");
-                        stdout = None;
-                    }
-                }
-            }
-            // Try to read stderr
-            result = async {
-                if let Some(ref mut err) = stderr {
-                    err.read(&mut stderr_buf).await
-                } else {
-                    tokio::time::sleep(poll_duration).await;
-                    Ok(0)
-                }
-            } => {
-                match result {
-                    Ok(0) => {
-                        stderr = None;
-                    }
-                    Ok(n) => {
-                        let text = String::from_utf8_lossy(&stderr_buf[..n]);
-                        output.push_str(&text);
-                        // Reset idle timer on output
-                        if idle_enabled {
-                            idle_deadline = Some(tokio::time::Instant::now() + no_output_timeout);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::debug!("Stderr read error: {e}");
-                        stderr = None;
-                    }
-                }
-            }
-            // Process exit
-            result = child.wait() => {
-                match result {
-                    Ok(status) => {
-                        return Ok((
-                            types::config::TerminationReason::Exited(status.code().unwrap_or(-1)),
-                            output,
-                        ));
-                    }
-                    Err(e) => return Err(format!("Wait error: {e}")),
-                }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_validate_path() {
-        // Clean paths should be accepted.
-        assert!(validate_executable_path("ls").is_ok());
-        assert!(validate_executable_path("/usr/bin/python3").is_ok());
-        assert!(validate_executable_path("./scripts/build.sh").is_ok());
-        assert!(validate_executable_path("subdir/tool").is_ok());
-
-        // Paths with ".." should be rejected.
-        assert!(validate_executable_path("../bin/evil").is_err());
-        assert!(validate_executable_path("/usr/../etc/passwd").is_err());
-        assert!(validate_executable_path("foo/../../bar").is_err());
-    }
 
     #[test]
     fn test_grace_constants() {
@@ -616,49 +395,6 @@ mod tests {
         let result = kill_process_tree(999_999, 100).await;
         // Result depends on platform, but must not panic.
         let _ = result;
-    }
-
-    #[tokio::test]
-    async fn test_kill_child_tree_exited_process() {
-        use tokio::process::Command;
-
-        // Spawn a process that exits immediately.
-        let mut child = Command::new(if cfg!(windows) { "cmd" } else { "true" })
-            .args(if cfg!(windows) {
-                vec!["/C", "echo done"]
-            } else {
-                vec![]
-            })
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("Failed to spawn");
-
-        // Wait for it to finish.
-        let _ = child.wait().await;
-
-        // Now try to kill — should return Ok(false) since already exited.
-        let result = kill_child_tree(&mut child, 100).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_wait_or_kill_fast_process() {
-        use tokio::process::Command;
-
-        let mut child = Command::new(if cfg!(windows) { "cmd" } else { "true" })
-            .args(if cfg!(windows) {
-                vec!["/C", "echo done"]
-            } else {
-                vec![]
-            })
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("Failed to spawn");
-
-        let result = wait_or_kill(&mut child, std::time::Duration::from_secs(5), 100).await;
-        assert!(result.is_ok());
     }
 
     // ── Exec policy tests ──────────────────────────────────────────────

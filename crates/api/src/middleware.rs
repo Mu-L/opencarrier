@@ -99,12 +99,12 @@ pub async fn auth(
         // Share-page platform auth flows (pre-onboarding)
         || path == "/api/weixin/qrcode"
         || path == "/api/weixin/qrcode-status"
-        || path == "/api/bots/wecom/smartbot/generate"
-        || path == "/api/bots/wecom/smartbot/poll"
-        || path == "/api/bots/feishu/device-auth"
-        || path == "/api/bots/feishu/device-auth/poll"
-        || path == "/api/bots/dingtalk/device-auth"
-        || path == "/api/bots/dingtalk/device-auth/poll"
+        || path == "/api/senders/wecom/smartbot/generate"
+        || path == "/api/senders/wecom/smartbot/poll"
+        || path == "/api/senders/feishu/device-auth"
+        || path == "/api/senders/feishu/device-auth/poll"
+        || path == "/api/senders/dingtalk/device-auth"
+        || path == "/api/senders/dingtalk/device-auth/poll"
         // Clone access control (share page needs these without auth)
         || path.starts_with("/api/clones/") && (path.ends_with("/access") || path.ends_with("/verify-access"))
         // Agent output files — must be public for WeChat direct download links

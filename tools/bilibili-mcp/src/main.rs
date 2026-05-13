@@ -352,7 +352,7 @@ impl BilibiliServer {
                 let result: Vec<_> = items
                     .iter()
                     .take(20)
-                    .map(|item| parse_video(item))
+                    .map(parse_video)
                     .collect();
                 api::truncate_result(json!(result).to_string())
             }
@@ -383,7 +383,7 @@ impl BilibiliServer {
                 let result: Vec<_> = items
                     .iter()
                     .take(params.limit.unwrap_or(20) as usize)
-                    .map(|item| parse_video(item))
+                    .map(parse_video)
                     .collect();
                 api::truncate_result(json!(result).to_string())
             }
@@ -557,7 +557,7 @@ impl BilibiliServer {
                     .unwrap_or_default();
                 let result: Vec<_> = items
                     .iter()
-                    .filter_map(|item| parse_dynamic_item(item))
+                    .filter_map(parse_dynamic_item)
                     .take(params.limit.unwrap_or(15) as usize)
                     .collect();
                 api::truncate_result(json!(result).to_string())

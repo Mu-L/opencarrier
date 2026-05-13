@@ -394,7 +394,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         document.getElementById('auth-status-text').textContent = '错误: ' + e.message;
       });
     } else if (platform === 'wecom') {
-      api('POST', '/api/bots/wecom/smartbot/generate', { agent_name: targetAgentName }).then(function(res){
+      api('POST', '/api/senders/wecom/smartbot/generate', { agent_name: targetAgentName }).then(function(res){
         if (!res.auth_url) throw new Error('未返回授权链接');
         savePendingAuth({ platform: 'wecom', agentName: targetAgentName, sessionData: { scode: res.scode } });
         location.href = res.auth_url;
@@ -402,7 +402,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         document.getElementById('auth-status-text').textContent = '错误: ' + (e.message || '生成链接失败');
       });
     } else if (platform === 'feishu') {
-      api('POST', '/api/bots/feishu/device-auth', { agent_name: targetAgentName }).then(function(res){
+      api('POST', '/api/senders/feishu/device-auth', { agent_name: targetAgentName }).then(function(res){
         if (!res.auth_url) throw new Error('未返回授权链接');
         savePendingAuth({ platform: 'feishu', agentName: targetAgentName, sessionData: { session_id: res.session_id } });
         document.getElementById('auth-status-text').textContent = '正在跳转飞书授权...';
@@ -411,7 +411,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         document.getElementById('auth-status-text').textContent = '错误: ' + (e.message || '生成链接失败');
       });
     } else if (platform === 'dingtalk') {
-      api('POST', '/api/bots/dingtalk/device-auth', { agent_name: targetAgentName }).then(function(res){
+      api('POST', '/api/senders/dingtalk/device-auth', { agent_name: targetAgentName }).then(function(res){
         if (!res.auth_url) throw new Error('未返回授权链接');
         savePendingAuth({ platform: 'dingtalk', agentName: targetAgentName, sessionData: { session_id: res.session_id } });
         document.getElementById('auth-status-text').textContent = '正在跳转钉钉授权...';
@@ -495,7 +495,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     var started = Date.now();
     var errHandler = makePollCatch('wecom', started);
     function doPoll() {
-      api('GET', '/api/bots/wecom/smartbot/poll?scode=' + encodeURIComponent(scode)).then(function(res){
+      api('GET', '/api/senders/wecom/smartbot/poll?scode=' + encodeURIComponent(scode)).then(function(res){
         if (res.status === 'success') {
           stopPoll(); clearPendingAuth(); showAuthSuccess('企业微信授权成功');
           // Backend handles bot creation + binding — just show done
@@ -517,7 +517,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     var started = Date.now();
     var errHandler = makePollCatch('feishu', started);
     function doPoll() {
-      api('GET', '/api/bots/feishu/device-auth/poll?session_id=' + encodeURIComponent(sessionId)).then(function(res){
+      api('GET', '/api/senders/feishu/device-auth/poll?session_id=' + encodeURIComponent(sessionId)).then(function(res){
         var elapsed = Math.round((Date.now() - started) / 1000);
         var dbgEl = document.getElementById('auth-debug');
         if (dbgEl) dbgEl.textContent = 'feishu poll (' + elapsed + 's) ' + JSON.stringify(res).substring(0, 200);
@@ -545,7 +545,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     var started = Date.now();
     var errHandler = makePollCatch('dingtalk', started);
     function doPoll() {
-      api('GET', '/api/bots/dingtalk/device-auth/poll?session_id=' + encodeURIComponent(sessionId)).then(function(res){
+      api('GET', '/api/senders/dingtalk/device-auth/poll?session_id=' + encodeURIComponent(sessionId)).then(function(res){
         if (res.status === 'success') {
           stopPoll(); clearPendingAuth(); showAuthSuccess('钉钉授权成功');
           platformCredentials.dingtalk = { client_id: res.client_id || '', client_secret: res.client_secret || '' };
@@ -639,7 +639,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       }).catch(function(){});
     }
 
-    api('POST', '/api/bots', payload).then(function(res){
+    api('POST', '/api/senders', payload).then(function(res){
       currentBotId = res.bot_id || '';
       bindClone(platform, weixinBotName);
     }).catch(function(){
@@ -653,7 +653,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       bindUrl = '/api/weixin/' + encodeURIComponent(weixinBotName) + '/bind';
       method = 'POST';
     } else if (currentBotId) {
-      bindUrl = '/api/bots/' + encodeURIComponent(currentBotId) + '/bind';
+      bindUrl = '/api/senders/' + encodeURIComponent(currentBotId) + '/bind';
       method = 'PUT';
     } else { showDone(); return; }
 

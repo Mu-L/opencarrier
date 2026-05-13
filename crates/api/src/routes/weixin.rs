@@ -592,7 +592,7 @@ pub async fn weixin_status(State(state): State<Arc<AppState>>) -> impl IntoRespo
 
 /// GET `/api/channels/status` — aggregate status for all channel plugins.
 ///
-/// Reads WeChat token files, WeCom and Feishu plugin.toml bots.
+/// Reads WeChat token files, WeCom and Feishu session files.
 pub async fn channels_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let home = &state.kernel.config.home_dir;
 
@@ -629,132 +629,48 @@ pub async fn channels_status(State(state): State<Arc<AppState>>) -> impl IntoRes
         }
     }
 
-    // ── WeCom & Feishu — scan all plugin dirs for bot.toml ───────
-    let plugins_dir = home.join("plugins");
+    // ── WeCom — scan wecom-sessions/ ────────────────────────────
+    let wecom_dir = home.join("wecom-sessions");
     let mut wecom_bots: Vec<serde_json::Value> = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&wecom_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(sf) = serde_json::from_str::<serde_json::Value>(&content) {
+                    wecom_bots.push(serde_json::json!({
+                        "name": sf.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                        "mode": sf.get("mode").and_then(|v| v.as_str()).unwrap_or("smartbot"),
+                        "bot_id": sf.get("bot_id").and_then(|v| v.as_str()).unwrap_or(""),
+                        "corp_id": sf.get("corp_id").and_then(|v| v.as_str()).unwrap_or(""),
+                        "bind_agent": sf.get("bind_agent").and_then(|v| v.as_str()).unwrap_or(""),
+                    }));
+                }
+            }
+        }
+    }
+
+    // ── Feishu — scan feishu-sessions/ ───────────────────────────
+    let feishu_dir = home.join("feishu-sessions");
     let mut feishu_bots: Vec<serde_json::Value> = Vec::new();
 
-    if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
+    if let Ok(entries) = std::fs::read_dir(&feishu_dir) {
         for entry in entries.flatten() {
-            let plugin_dir = entry.path();
-            if !plugin_dir.is_dir() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            let toml_path = plugin_dir.join("plugin.toml");
-            if !toml_path.exists() {
-                continue;
-            }
-            let Ok(content) = std::fs::read_to_string(&toml_path) else {
-                continue;
-            };
-            let Ok(doc) = content.parse::<toml::Value>() else {
-                continue;
-            };
-
-            // Determine channel category from [[channels]]
-            let has_wecom = doc
-                .get("channels")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter().any(|ch| {
-                        ch.get("channel_type")
-                            .and_then(|v| v.as_str())
-                            .map(|t| t.starts_with("wecom"))
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false);
-
-            let has_feishu = doc
-                .get("channels")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter().any(|ch| {
-                        ch.get("channel_type")
-                            .and_then(|v| v.as_str())
-                            .map(|t| t == "feishu" || t == "lark")
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(false);
-
-            if !has_wecom && !has_feishu {
-                continue;
-            }
-
-            // Scan bot/<uuid>/bot.toml files
-            let bot_root = plugin_dir.join("bot");
-            if let Ok(sub_entries) = std::fs::read_dir(&bot_root) {
-                for sub_entry in sub_entries.flatten() {
-                    let bot_dir = sub_entry.path();
-                    if !bot_dir.is_dir() {
-                        continue;
-                    }
-                    let bot_toml = bot_dir.join("bot.toml");
-                    if !bot_toml.exists() {
-                        continue;
-                    }
-
-                    let Ok(bt) = std::fs::read_to_string(&bot_toml) else {
-                        continue;
-                    };
-                    let Ok(bt_doc) = bt.parse::<toml::Value>() else {
-                        continue;
-                    };
-
-                    let name = bt_doc
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-                    let bind_agent = bt_doc
-                        .get("bind_agent")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let mode = bt_doc
-                        .get("mode")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("smartbot");
-                    let bot_uuid = bot_dir
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("unknown");
-
-                    if has_wecom {
-                        let corp_id = bt_doc.get("corp_id").and_then(|v| v.as_str()).unwrap_or("");
-                        let bot_id = bt_doc.get("bot_id").and_then(|v| v.as_str()).unwrap_or("");
-                        let secret_env = bt_doc
-                            .get("secret_env")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        wecom_bots.push(serde_json::json!({
-                            "name": name,
-                            "bot_uuid": bot_uuid,
-                            "mode": mode,
-                            "corp_id": corp_id,
-                            "bot_id": bot_id,
-                            "secret_env": secret_env,
-                            "bind_agent": bind_agent,
-                        }));
-                    }
-                    if has_feishu {
-                        let app_id = bt_doc.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
-                        let app_secret_env = bt_doc
-                            .get("app_secret_env")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        let brand = bt_doc
-                            .get("brand")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("feishu");
-                        feishu_bots.push(serde_json::json!({
-                            "name": name,
-                            "bot_uuid": bot_uuid,
-                            "app_id": app_id,
-                            "app_secret_env": app_secret_env,
-                            "brand": brand,
-                            "bind_agent": bind_agent,
-                        }));
-                    }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(sf) = serde_json::from_str::<serde_json::Value>(&content) {
+                    feishu_bots.push(serde_json::json!({
+                        "name": sf.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                        "app_id": sf.get("app_id").and_then(|v| v.as_str()).unwrap_or(""),
+                        "brand": sf.get("brand").and_then(|v| v.as_str()).unwrap_or("feishu"),
+                        "bind_agent": sf.get("bind_agent").and_then(|v| v.as_str()).unwrap_or(""),
+                    }));
                 }
             }
         }
@@ -770,239 +686,6 @@ pub async fn channels_status(State(state): State<Arc<AppState>>) -> impl IntoRes
     )
 }
 
-/// POST `/api/channels/wecom/bots` — add a WeCom bot (creates bot.toml).
-///
-/// Body: `{ "name": "...", "mode": "smartbot"|"app"|"kf", "corp_id": "...", "bot_id": "...", "secret": "...", "webhook_port": 8454, "encoding_aes_key": "..." }`
-pub async fn wecom_add_bot(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let name = match body.get("name").and_then(|v| v.as_str()) {
-        Some(n) => match channel_sanitize_name(n) {
-            Some(s) => s,
-            None => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(
-                        serde_json::json!({ "error": "Invalid bot name: use only alphanumeric, hyphen, underscore (max 64 chars)" }),
-                    ),
-                );
-            }
-        },
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "Missing 'name' field" })),
-            );
-        }
-    };
-
-    let mode = body
-        .get("mode")
-        .and_then(|v| v.as_str())
-        .unwrap_or("smartbot");
-    if !["smartbot", "app", "kf"].contains(&mode) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid mode: must be smartbot, app, or kf" })),
-        );
-    }
-
-    let corp_id = match channel_validate_field(
-        body.get("corp_id").and_then(|v| v.as_str()).unwrap_or(""),
-        "corp_id",
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e })),
-            )
-        }
-    };
-    let secret = match channel_validate_field(
-        body.get("secret").and_then(|v| v.as_str()).unwrap_or(""),
-        "secret",
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e })),
-            )
-        }
-    };
-    let bot_id = body
-        .get("bot_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if bot_id.len() > CHANNEL_FIELD_MAX_LEN || bot_id.chars().any(|c| c.is_control() && c != ' ') {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid bot_id" })),
-        );
-    }
-    let webhook_port = body
-        .get("webhook_port")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(8454);
-    if !(1..=65535).contains(&webhook_port) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "webhook_port must be between 1 and 65535" })),
-        );
-    }
-    let encoding_aes_key = body
-        .get("encoding_aes_key")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if encoding_aes_key.len() > CHANNEL_FIELD_MAX_LEN
-        || encoding_aes_key.chars().any(|c| c.is_control() && c != ' ')
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid encoding_aes_key" })),
-        );
-    }
-
-    // Build bot.toml fields
-    let mut cfg = toml::value::Table::new();
-    cfg.insert("name".into(), toml::Value::String(name.to_string()));
-    cfg.insert("mode".into(), toml::Value::String(mode.to_string()));
-    cfg.insert("corp_id".into(), toml::Value::String(corp_id.to_string()));
-    if !bot_id.is_empty() {
-        cfg.insert("bot_id".into(), toml::Value::String(bot_id.to_string()));
-    }
-    cfg.insert("secret".into(), toml::Value::String(secret.to_string()));
-    cfg.insert(
-        "webhook_port".into(),
-        toml::Value::Integer(webhook_port as i64),
-    );
-    if !encoding_aes_key.is_empty() {
-        cfg.insert(
-            "encoding_aes_key".into(),
-            toml::Value::String(encoding_aes_key.to_string()),
-        );
-    }
-
-    let plugin_dir = state
-        .kernel
-        .config
-        .home_dir
-        .join("plugins")
-        .join("carrier-plugin-wecom");
-
-    if let Err(e) = create_bot_toml(&plugin_dir, &name, cfg) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        );
-    }
-
-    tracing::info!(bot = %name, mode, "WeCom bot added via dashboard");
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "ok": true, "name": name })),
-    )
-}
-/// POST `/api/channels/feishu/bots` — add a Feishu bot (creates bot.toml).
-///
-/// Body: `{ "name": "...", "app_id": "...", "app_secret": "...", "brand": "feishu"|"lark" }`
-pub async fn feishu_add_bot(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let name = match body.get("name").and_then(|v| v.as_str()) {
-        Some(n) => match channel_sanitize_name(n) {
-            Some(s) => s,
-            None => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(
-                        serde_json::json!({ "error": "Invalid bot name: use only alphanumeric, hyphen, underscore (max 64 chars)" }),
-                    ),
-                );
-            }
-        },
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "Missing 'name' field" })),
-            );
-        }
-    };
-
-    let app_id = match channel_validate_field(
-        body.get("app_id").and_then(|v| v.as_str()).unwrap_or(""),
-        "app_id",
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e })),
-            )
-        }
-    };
-    let app_secret = match channel_validate_field(
-        body.get("app_secret")
-            .and_then(|v| v.as_str())
-            .unwrap_or(""),
-        "app_secret",
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": e })),
-            )
-        }
-    };
-    let brand = body
-        .get("brand")
-        .and_then(|v| v.as_str())
-        .unwrap_or("feishu");
-
-    if !["feishu", "lark"].contains(&brand) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid brand: must be feishu or lark" })),
-        );
-    }
-
-    let mut cfg = toml::value::Table::new();
-    cfg.insert("name".into(), toml::Value::String(name.to_string()));
-    cfg.insert("app_id".into(), toml::Value::String(app_id.to_string()));
-    cfg.insert(
-        "app_secret".into(),
-        toml::Value::String(app_secret.to_string()),
-    );
-    cfg.insert("brand".into(), toml::Value::String(brand.to_string()));
-
-    let plugin_dir = state
-        .kernel
-        .config
-        .home_dir
-        .join("plugins")
-        .join("carrier-plugin-feishu");
-
-    if let Err(e) = create_bot_toml(&plugin_dir, &name, cfg) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        );
-    }
-
-    tracing::info!(bot = %name, brand, "Feishu bot added via dashboard");
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "ok": true, "name": name })),
-    )
-}
 
 // ---------------------------------------------------------------------------
 // WeChat helpers
@@ -1043,47 +726,6 @@ fn weixin_validate_baseurl(url: &str) -> bool {
         || url.starts_with("https://ilinkai.weixin.qq.com/")
 }
 
-/// Create a new bot.toml file in <plugin_dir>/bot/<uuid>/bot.toml.
-fn create_bot_toml(
-    plugin_dir: &std::path::Path,
-    bot_name: &str,
-    fields: toml::value::Table,
-) -> Result<(), String> {
-    let bot_root = plugin_dir.join("bot");
-
-    // Check duplicate name
-    if let Ok(entries) = std::fs::read_dir(&bot_root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let bot_toml = path.join("bot.toml");
-            if !bot_toml.exists() {
-                continue;
-            }
-            if let Ok(content) = std::fs::read_to_string(&bot_toml) {
-                if let Ok(doc) = content.parse::<toml::Value>() {
-                    if doc.get("name").and_then(|v| v.as_str()) == Some(bot_name) {
-                        return Err(format!("Bot '{bot_name}' already exists"));
-                    }
-                }
-            }
-        }
-    }
-
-    let bot_uuid = uuid::Uuid::new_v4().to_string();
-    let bot_dir = bot_root.join(&bot_uuid);
-    std::fs::create_dir_all(&bot_dir).map_err(|e| format!("Failed to create bot dir: {e}"))?;
-
-    let content = toml::to_string_pretty(&toml::Value::Table(fields))
-        .map_err(|e| format!("Serialize error: {e}"))?;
-
-    atomic_write(&bot_dir.join("bot.toml"), &content).map_err(|e| format!("Write error: {e}"))?;
-
-    tracing::info!(bot = %bot_name, bot_uuid = %bot_uuid, "Created bot.toml");
-    Ok(())
-}
 
 /// POST `/api/weixin/{name}/bind` — bind a WeChat bot to an agent.
 pub async fn weixin_bind_bot(
@@ -1186,12 +828,4 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/weixin/status", routing::get(weixin_status))
         .route("/api/weixin/{name}/bind", routing::post(weixin_bind_bot))
         .route("/api/channels/status", routing::get(channels_status))
-        .route(
-            "/api/channels/wecom/bots",
-            routing::post(wecom_add_bot),
-        )
-        .route(
-            "/api/channels/feishu/bots",
-            routing::post(feishu_add_bot),
-        )
 }

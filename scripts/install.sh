@@ -118,25 +118,20 @@ install() {
 
     # Extract
     tar xzf "$ARCHIVE" -C "$INSTALL_DIR"
-    chmod +x "$INSTALL_DIR/opencarrier"
+    chmod +x "$INSTALL_DIR"/*
 
     # Ad-hoc codesign on macOS (prevents SIGKILL on Apple Silicon)
-    # Must strip extended attributes (com.apple.quarantine) BEFORE signing,
-    # otherwise the signature is computed over the quarantine xattr and macOS
-    # rejects it as "Code Signature Invalid" → SIGKILL.
     if [ "$OS" = "darwin" ]; then
-        if command -v xattr &>/dev/null; then
-            xattr -cr "$INSTALL_DIR/opencarrier" 2>/dev/null || true
-        fi
-        if command -v codesign &>/dev/null; then
-            if ! codesign --force --sign - "$INSTALL_DIR/opencarrier"; then
-                echo ""
-                echo "  Warning: ad-hoc code signing failed."
-                echo "  On Apple Silicon, the binary may be killed (SIGKILL) by Gatekeeper."
-                echo "  Try manually: xattr -cr $INSTALL_DIR/opencarrier && codesign --force --sign - $INSTALL_DIR/opencarrier"
-                echo ""
+        for binary in "$INSTALL_DIR"/*; do
+            if [ -f "$binary" ]; then
+                if command -v xattr &>/dev/null; then
+                    xattr -cr "$binary" 2>/dev/null || true
+                fi
+                if command -v codesign &>/dev/null; then
+                    codesign --force --sign - "$binary" 2>/dev/null || true
+                fi
             fi
-        fi
+        done
     fi
 
     # Add to PATH — detect the user's login shell

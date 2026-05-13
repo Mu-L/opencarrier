@@ -74,6 +74,7 @@ impl CarrierKernel {
     /// Per-agent locking ensures that concurrent messages for the same agent
     /// are serialized (preventing session corruption), while messages for
     /// different agents run in parallel.
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_message_with_handle_and_blocks(
         &self,
         agent_id: AgentId,
@@ -405,7 +406,6 @@ impl CarrierKernel {
                 tx,
                 Some(&kernel_clone.plugins.mcp_connections),
                 Some(&kernel_clone.services.web_ctx),
-                Some(&kernel_clone.services.browser_ctx),
                 manifest.workspace.as_deref(),
                 Some(&phase_cb),
                 if kernel_clone.config.docker.enabled {
@@ -810,7 +810,6 @@ impl CarrierKernel {
             kernel_handle,
             Some(&self.plugins.mcp_connections),
             Some(&self.services.web_ctx),
-            Some(&self.services.browser_ctx),
             manifest.workspace.as_deref(),
             None, // on_phase callback
             if self.config.docker.enabled {

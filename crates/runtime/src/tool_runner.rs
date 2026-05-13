@@ -63,19 +63,18 @@ pub async fn execute_tool(
 ) -> ToolResult {
     // Unpack context into local bindings matching the old parameter names.
     let ToolContext {
-        kernel,
+        kernel: _,
         allowed_tools,
-        caller_agent_id,
+        caller_agent_id: _,
         mcp_connections,
         web_ctx,
-        browser_ctx: _,
         allowed_env_vars: _,
         workspace_root: _,
         brain: _,
         exec_policy: _,
         docker_config: _,
         process_manager: _,
-        sender_id,
+        sender_id: _,
         owner_id: _,
         home_dir: _,
         agent_name: _,
@@ -153,7 +152,7 @@ pub async fn execute_tool(
             None => Err("Web search not available".to_string()),
         },
 
-        // Browser automation tools are now handled by the browser_tool module
+        // Browser automation tools are now handled by browser-mcp (standalone MCP server)
         other => {
             // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
             if mcp::is_mcp_tool(other) {
@@ -205,17 +204,6 @@ pub async fn execute_tool(
                     }
                 } else {
                     Err(format!("MCP not available for tool: {other}"))
-                }
-            }
-            // Fallback 2: Skill registry tool providers
-            else if let Some(kh) = kernel {
-                // Fallback 3: Plugin tools (dlopen-loaded shared libraries)
-                let s_id = sender_id.unwrap_or("");
-                let a_id = caller_agent_id.unwrap_or("");
-                match kh.execute_plugin_tool(other, input, s_id, a_id).await {
-                    Ok(result) => Ok(result),
-                    Err(e) if e.starts_with("Unknown tool:") => Err(e),
-                    Err(e) => Err(format!("Plugin tool execution failed: {e}")),
                 }
             } else {
                 Err(format!("Unknown tool: {other}"))
@@ -289,7 +277,6 @@ mod tests {
             caller_agent_id: None,
             mcp_connections: None,
             web_ctx: None,
-            browser_ctx: None,
             allowed_env_vars: None,
             workspace_root: None,
             brain: None,
@@ -348,17 +335,7 @@ mod tests {
         assert!(names.contains(&"image_analyze"));
         assert!(names.contains(&"location_get"));
         assert!(names.contains(&"system_time"));
-        // 6 browser tools
-        assert!(names.contains(&"browser_navigate"));
-        assert!(names.contains(&"browser_click"));
-        assert!(names.contains(&"browser_type"));
-        assert!(names.contains(&"browser_screenshot"));
-        assert!(names.contains(&"browser_read_page"));
-        assert!(names.contains(&"browser_close"));
-        assert!(names.contains(&"browser_scroll"));
-        assert!(names.contains(&"browser_wait"));
-        assert!(names.contains(&"browser_run_js"));
-        assert!(names.contains(&"browser_back"));
+        // Browser tools are now provided by browser-mcp (standalone MCP server)
         // 3 media/image generation tools
         assert!(names.contains(&"media_describe"));
         assert!(names.contains(&"media_transcribe"));

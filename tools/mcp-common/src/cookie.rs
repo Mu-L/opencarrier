@@ -26,6 +26,7 @@ pub fn make_cookie<T: CookieHolder>(params: &T) -> String {
 macro_rules! define_params {
     ($name:ident { $($field:tt)* }) => {
         #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+        #[allow(dead_code)]
         struct $name {
             #[schemars(description = "Cookie string")]
             cookie: String,

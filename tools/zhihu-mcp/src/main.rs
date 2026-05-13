@@ -4,7 +4,7 @@
 //! multiple Zhihu accounts simultaneously.
 
 use anyhow::Result;
-use mcp_common::cookie::{make_cookie, CookieHolder};
+use mcp_common::cookie::make_cookie;
 use mcp_common::{define_params, impl_cookie, json::json_to_string};
 use reqwest::Method;
 use rmcp::handler::server::wrapper::Parameters;

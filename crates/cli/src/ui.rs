@@ -78,6 +78,7 @@ pub fn hint(msg: &str) {
 }
 
 /// Numbered "Next steps:" list.
+#[allow(dead_code)]
 pub fn next_steps(steps: &[&str]) {
     println!("  {}:", "Next steps".bold());
     for (i, step) in steps.iter().enumerate() {
