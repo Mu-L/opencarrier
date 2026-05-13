@@ -238,14 +238,20 @@ impl WeChatOaServer {
         }
 
         if let Some(images) = params.image_info {
+            tracing::warn!("[create_draft] image_info raw type={}, value={}", images, serde_json::to_string(&images).unwrap_or_default());
             let parsed = coerce_json_value(images);
+            tracing::warn!("[create_draft] image_info after coerce type={}, value={}", parsed, serde_json::to_string(&parsed).unwrap_or_default());
             article["image_info"] = serde_json::json!({ "image_list": parsed });
         }
 
         if let Some(crops) = params.cover_info {
+            tracing::warn!("[create_draft] cover_info raw type={}, value={}", crops, serde_json::to_string(&crops).unwrap_or_default());
             let parsed = coerce_json_value(crops);
+            tracing::warn!("[create_draft] cover_info after coerce type={}, value={}", parsed, serde_json::to_string(&parsed).unwrap_or_default());
             article["cover_info"] = serde_json::json!({ "crop_percent_list": parsed });
         }
+
+        tracing::warn!("[create_draft] final body={}", serde_json::to_string(&article).unwrap_or_default());
 
         let body = serde_json::json!({ "articles": [article] });
         match self
