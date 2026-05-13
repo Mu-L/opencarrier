@@ -2,7 +2,7 @@
 <h3 align="center">扫码即用 — 你的 AI 分身，在微信/飞书/钉钉里等你</h3>
 
 <p align="center">
-  开源 Agent 操作系统 | 200+ 个预训练分身 | 微信、企微、飞书、钉钉全平台支持<br/>
+  开源 Agent 操作系统 | 微信、企微、飞书、钉钉全平台支持<br/>
   <strong>不装 App、不配环境、不跑命令行。扫个码，机器人就是你的 AI 助理。</strong>
 </p>
 
@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
   <img src="https://img.shields.io/badge/version-0.3.0-blueviolet?style=flat-square" alt="v0.3.0" />
-  <img src="https://img.shields.io/badge/clones-200+-brightgreen?style=flat-square" alt="200+ Clones" />
+  <img src="https://img.shields.io/badge/tests-1389-brightgreen?style=flat-square" alt="1389 Tests" />
 </p>
 
 ---
@@ -34,13 +34,181 @@
 
 ---
 
-## 200+ 个分身，还在增长
+## Installation
 
-分身（Clone）是 OpenCarrier 的核心——每个分身是独立训练的 AI 角色，有自己的知识、人格和技能。
+### 一键安装（推荐）
 
-从 **AI 写作官**、**前端设计师**、**拖延症终结者** 到 **美食探险家**、**情绪日记助手**……200+ 个分身覆盖创作、效率、生活、学习的方方面面。
+```bash
+curl -sSf https://carrier.sh | sh
+```
 
-分身市场：[hub.aginx.net](https://hub.aginx.net)
+### 手动下载
+
+从 [GitHub Releases](https://github.com/yinnho/opencarrier/releases) 下载对应平台的二进制。
+
+### 从源码编译
+
+```bash
+git clone https://github.com/yinnho/opencarrier.git
+cd opencarrier
+cargo build --release -p cli
+cp target/release/opencarrier /usr/local/bin/
+```
+
+---
+
+## Quick Start
+
+```bash
+# 1. 初始化（生成配置和登录凭据）
+opencarrier init
+
+# 2. 启动守护进程
+opencarrier start
+
+# 3. 打开 Dashboard
+open http://localhost:4200
+```
+
+配置文件位于 `~/.opencarrier/config.toml`，数据目录为 `~/.opencarrier/`。
+
+---
+
+## What is OpenCarrier?
+
+OpenCarrier 是一个用 Rust 构建的 **开源 Agent 操作系统**。核心概念是**分身（Clone）**——每个分身是一个独立的 AI 角色，拥有人格、知识、技能和工作空间。
+
+**v0.3.0** 的核心突破：你在微信、飞书、钉钉里扫个码，机器人就是你的 AI 助理。聊天就是交互界面。
+
+---
+
+## 目录结构
+
+```
+~/.opencarrier/
+├── config.toml              # 主配置
+├── brain.json               # LLM 路由配置（热重载）
+├── workspaces/              # 分身工作空间
+│   └── <agent-name>/
+│       ├── SOUL.md          # 人格
+│       ├── system_prompt.md # 行为指令
+│       ├── MEMORY.md        # 知识索引
+│       ├── knowledge/       # 知识库
+│       └── agent.toml       # 运行参数
+├── senders/                 # 渠道发送者
+│   └── <sender_id>/
+│       ├── session.json     # 平台凭证 + 路由
+│       └── config.json      # sender → agent 绑定
+└── sessions/                # 对话历史
+```
+
+### sender_id 映射
+
+每个渠道用不同的平台标识作为 `sender_id`（即 `senders/` 下的目录名）：
+
+| 渠道 | sender_id 来源 | session.json 中的 sender_key |
+|------|---------------|------------------------------|
+| 企微 SmartBot | bot_id | `bot_id` |
+| 飞书 | app_id | `app_id` |
+| 钉钉 | app_key | `app_key` |
+| 微信 | openid | `openid` |
+
+---
+
+## 架构
+
+```
+┌──────────────────────────────────────────┐
+│  分身 (Clone) — WHO: 身份 + 工作空间     │
+├──────────────────────────────────────────┤
+│  大脑 (Brain) — THINK: LLM 智能路由      │
+├──────────────────────────────────────────┤
+│  工具 (Tool) — DO: 内置 + MCP 工具       │
+├──────────────────────────────────────────┤
+│  渠道 (Channel) — CONNECT: 全平台接入     │
+├──────────────────────────────────────────┤
+│  记忆 (Memory) — REMEMBER: 生命周期管理   │
+└──────────────────────────────────────────┘
+```
+
+### 大脑层 (Brain) — LLM 智能路由
+
+三层路由：Provider → Endpoint → Modality，支持熔断器、热重载、20+ Provider（Anthropic, OpenAI, Gemini, DeepSeek, Ollama 等）。
+
+### 渠道层 (Channel) — 全平台接入
+
+内置四个渠道适配器，启动时自动发现并连接：
+
+| 渠道 | 连接方式 | crate |
+|------|---------|-------|
+| 企微 SmartBot | WebSocket 长连接 | `channel-wecom` |
+| 企微 App/Kf | HTTP Webhook | `channel-wecom` |
+| 飞书 | WebSocket 长连接 | `channel-feishu` |
+| 钉钉 | WebSocket 长连接 | `channel-dingtalk` |
+| 微信 | iLink HTTP 长轮询 | `channel-weixin` |
+
+新 bot 扫码注册后立即启动连接（事件驱动），无需重启或等待轮询。
+
+### 工具层 (Tool)
+
+内置 11 个工具集（filesystem, knowledge, shell, web, media 等），加上 MCP 扩展（企微、飞书、微信公众号、浏览器等）。
+
+### 记忆层 (Memory)
+
+SQLite 记忆层，支持 KV / 语义 / 知识图谱存储，自动压缩和过期清理。
+
+---
+
+## Crate 结构
+
+```
+opencarrier (14 crates, 242 source files, 1389 tests)
+├── crates/
+│   ├── types/          共享类型 + Channel trait + 配置工具
+│   ├── memory/         SQLite 记忆层
+│   ├── runtime/        Agent loop + LLM drivers + tools + MCP + bridge
+│   ├── kernel/         内核: 子系统协调, RBAC, 调度
+│   ├── api/            REST/WS API + Dashboard + 渠道注册
+│   ├── cli/            CLI (init/start/agent/chat/config)
+│   ├── lifecycle/      分身生命周期: 进化, 编译, 健康
+│   ├── clone/          分身管理: Hub 下载, workspace 安装
+│   └── channels/
+│       ├── wecom/      企微渠道 (SmartBot WS + App/Kf Webhook)
+│       ├── feishu/     飞书渠道 (WebSocket)
+│       ├── dingtalk/   钉钉渠道 (WebSocket)
+│       └── weixin/     微信渠道 (iLink 长轮询)
+└── tools/
+    ├── mcp-common/           MCP 公共库
+    ├── wecom-mcp/            企微工具 (45 tools)
+    ├── feishu-mcp/           飞书工具 (73 tools)
+    ├── wechat-oa-mcp/        公众号工具
+    ├── browser-mcp/          浏览器工具
+    ├── bilibili-mcp/         B站工具
+    ├── xiaohongshu-mcp/      小红书工具
+    ├── zhihu-mcp/            知乎工具
+    ├── twitter-mcp/          Twitter/X 工具
+    └── reddit-mcp/           Reddit 工具
+```
+
+---
+
+## Security
+
+- Loop Guard — 工具循环检测 + 熔断器
+- SSRF 防护 — 阻断私有 IP、云元数据端点
+- Capability Gates — RBAC 能力门控
+- Secret Zeroization — API key 自动擦除
+- Merkle 哈希链审计 — 每个操作密码学链接
+
+---
+
+## Development
+
+```bash
+cargo build --workspace --lib          # 编译
+cargo test --workspace                 # 1389 tests
+cargo clippy --workspace --all-targets -- -D warnings  # 0 warnings
+```
 
 ---
 
@@ -50,278 +218,6 @@
   <img src="docs/wechat-group.jpg" width="200" alt="微信群" /><br/>
   <sub>扫码加入微信群，聊聊你的 AI 分身</sub>
 </p>
-
----
-
-## Installation
-
-### 一键安装（推荐）
-
-```bash
-curl -sSf https://carrier.sh | sh
-```
-
-国内用户自动 fallback 到 hub.aginx.net 镜像，无需访问 GitHub。
-
-### 手动下载
-
-从 [GitHub Releases](https://github.com/yinnho/carrier/releases) 下载对应平台的二进制：
-
-```bash
-# Linux x86_64
-curl -L https://github.com/yinnho/carrier/releases/latest/download/carrier-x86_64-unknown-linux-gnu.tar.gz | tar xz
-sudo mv carrier /usr/local/bin/
-
-# macOS ARM (Apple Silicon)
-curl -L https://github.com/yinnho/carrier/releases/latest/download/carrier-aarch64-apple-darwin.tar.gz | tar xz
-sudo mv carrier /usr/local/bin/
-
-# macOS x86_64 (Intel)
-curl -L https://github.com/yinnho/carrier/releases/latest/download/carrier-x86_64-apple-darwin.tar.gz | tar xz
-sudo mv carrier /usr/local/bin/
-```
-
-### 从源码编译
-
-```bash
-git clone https://github.com/yinnho/carrier.git
-cd carrier
-cargo build --release -p carrier-cli
-cp target/release/carrier /usr/local/bin/
-```
-
----
-
-## Quick Start
-
-```bash
-# 1. 初始化（自动注册 Hub，生成配置和登录凭据）
-carrier init
-
-# 2. 启动守护进程（首次启动自动从 Hub 拉取 brain.json）
-carrier start
-
-# 3. 打开 Dashboard
-open http://localhost:4200
-```
-
-### 配置 Brain（LLM 路由）
-
-OpenCarrier 使用 `brain.json` 进行 LLM 智能路由，**不是** config.toml。
-
-`carrier init` 首次启动时会自动从 Hub 拉取 `brain.json`。如需自定义，编辑 `~/.carrier/brain.json`：
-
-```json
-{
-  "providers": {
-    "zhipu": { "api_key_env": "ZHIPU_API_KEY" },
-    "deepseek": { "api_key_env": "DEEPSEEK_API_KEY" },
-    "ollama": {}
-  },
-  "endpoints": {
-    "zhipu_chat": {
-      "provider": "zhipu",
-      "model": "glm-4-flash",
-      "base_url": "https://open.bigmodel.cn/api/paas/v4",
-      "format": "openai"
-    },
-    "deepseek_chat": {
-      "provider": "deepseek",
-      "model": "deepseek-chat",
-      "base_url": "https://api.deepseek.com/v1",
-      "format": "openai"
-    },
-    "ollama_local": {
-      "provider": "ollama",
-      "model": "llama3:latest",
-      "base_url": "http://localhost:11434/v1"
-    }
-  },
-  "modalities": {
-    "chat": { "primary": "zhipu_chat", "fallbacks": ["deepseek_chat"] },
-    "fast": { "primary": "ollama_local" }
-  }
-}
-```
-
-三层路由结构：
-- **Provider** — 身份 + 凭据（API key 从环境变量读取）
-- **Endpoint** — 完整调用单元（provider + model + base_url + format）
-- **Modality** — 任务类型 → endpoint 映射（chat/fast/vision...）支持 fallback 链
-
-支持的 format: `openai`（兼容 OpenAI/Groq/DeepSeek/Ollama 等）、`anthropic`、`gemini`
-
-修改 `brain.json` 后**即时生效**，无需重启（热重载）。
-
-> **提示**: API key 通过环境变量设置（如 `export ZHIPU_API_KEY=xxx`），也可写入 `~/.carrier/.env`。
-
-### 安装插件
-
-```bash
-# 搜索插件
-carrier plugin search wechat
-
-# 安装插件（从 Hub 下载预编译二进制）
-carrier plugin install weixin
-
-# 查看已安装插件
-carrier plugin list
-
-# 重启 daemon 加载插件
-carrier stop && carrier start
-```
-
----
-
-## What is OpenCarrier?
-
-OpenCarrier is an **open-source Agent Operating System** — 不是聊天框架，不是 LLM 的 Python 包装，而是一个从零开始用 Rust 构建的完整 Agent 操作系统。
-
-核心理念：**分身（Clone）**。每个分身是一个独立的数字实体，拥有自己的人格、知识、技能和工作空间。分身从 Hub 下载，在本地运行，能学习、进化、自我维护。
-
-**v0.3.0** 的核心突破：分身不再是 Dashboard 里的抽象概念——你在微信、飞书、钉钉里扫个码，机器人就是你的 AI 助理。聊天就是交互界面。
-
----
-
-## 五层架构
-
-```
-┌──────────────────────────────────────────┐
-│  分身 (Clone) — WHO: 身份 + 工作空间     │
-├──────────────────────────────────────────┤
-│  大脑 (Brain) — THINK: LLM 智能路由      │
-├──────────────────────────────────────────┤
-│  工具 (Tool) — DO: 内置系统能力          │
-├──────────────────────────────────────────┤
-│  MCP — EXTEND: 外部工具接入              │
-├──────────────────────────────────────────┤
-│  记忆 (Memory) — REMEMBER: 生命周期管理   │
-└──────────────────────────────────────────┘
-```
-
-### 分身层 (Clone) — WHO
-
-分身是系统的核心实体，决定"做什么"：
-
-```
-~/.carrier/workspaces/<name>/
-├── SOUL.md              # 人格 — "你是谁"
-├── system_prompt.md     # 行为指令 — "你怎么做事"
-├── MEMORY.md            # 知识索引（始终加载）
-├── data/knowledge/      # 知识库（按需加载）
-├── skills/              # 技能（per-agent 自定义）
-├── agents/              # 子代理（可派出去干活）
-└── agent.toml           # 运行参数（模型、资源、能力）
-```
-
-关键设计：
-- **Workspace 即分身** — workspace 里的文件就是分身的身份
-- **动态组装** — system prompt 每次对话从文件构建，不预存
-- **Lifecycle 系统** — 对话后自动进化、知识过期清理、版本管理
-
-### 大脑层 (Brain) — THINK
-
-大脑负责 LLM 调用的智能路由，配置在 `brain.json` 中：
-
-```
-Provider (OpenAI / Anthropic / Gemini / ...)
-  └── Endpoint (gpt-4o / claude-sonnet / ...)
-        └── Modality (chat / vision / tools / ...)
-```
-
-- **三层路由**: Provider → Endpoint → Modality
-- **熔断器**: 连续失败 >= 3 次触发熔断，60 秒冷却
-- **热重载**: 修改 `brain.json` 即时生效，无需重启
-- **20+ Provider**: Anthropic, OpenAI, Gemini, Groq, DeepSeek, OpenRouter, Ollama, vLLM 等
-
-### 工具层 (Tool) — DO
-
-系统级内置工具，所有分身共享：
-
-| 类别 | 工具 |
-|------|------|
-| 文件 | file_read, file_write, file_list |
-| 网络 | web_fetch, web_search |
-| 执行 | shell_exec |
-| 知识 | knowledge_add, knowledge_import, knowledge_compile |
-| 记忆 | memory_store, memory_recall, user_profile |
-
-### MCP 层 — EXTEND
-
-外部工具接入层（Model Context Protocol）：
-
-- **连接方式**: stdio（本地进程）或 SSE（HTTP 长连接）
-- **命名空间**: `mcp_{server}_{tool}` 防冲突
-- **per-agent 过滤**: 每个分身可通过白名单选择使用哪些 MCP 服务器
-- **热重载**: 修改配置即时生效
-
-### 记忆层 (Memory) — REMEMBER
-
-跨分身的记忆生命周期管理：
-
-- **ConsolidationEngine** — 每 24h 对 7 天未访问的记忆降低 confidence
-- **Session Compaction** — 三阶段 LLM 压缩（>30 条消息触发）
-- **Structured KV / Semantic / Knowledge Graph** — 多种记忆存储
-- **Canonical Session** — 跨渠道持久会话
-
----
-
-## Crate 结构
-
-```
-carrier-types          共享类型 (Agent, Capability, Config, Message, Tool...)
-carrier-memory         SQLite 记忆层 (KV / Semantic / Knowledge Graph / Session)
-carrier-runtime        Agent loop + 3 LLM drivers + 23 tools + MCP + A2A
-carrier-kernel         内核: 组装所有子系统, RBAC, 调度, 触发器
-carrier-api            REST/WS/SSE API + Dashboard + 引导页 + 出生证
-carrier-cli            CLI (init/start/agent/chat/config/mcp)
-carrier-lifecycle      分身生命周期: 进化, 编译, 健康, 评估, 版本
-carrier-clone          分身管理: Hub 下载, .agx 加载, workspace 安装
-carrier-skills         Bundled skills
-carrier-plugin-sdk     Plugin SDK (crates.io) for external integrations
-```
-
----
-
-## 插件系统
-
-消息渠道通过独立插件实现，插件通过 Plugin SDK（[crates.io](https://crates.io/crates/carrier-plugin-sdk)）开发，动态加载：
-
-| 插件 | 说明 |
-|------|------|
-| wecom | 企业微信（SmartBot / 应用 / 客服） |
-| weixin | 个人微信（iLink 协议，QR 码登录） |
-| feishu | 飞书 |
-| dingtalk | 钉钉 |
-| bilibili | B站 |
-| xiaohongshu | 小红书 |
-| zhihu | 知乎 |
-| twitter | Twitter/X |
-| reddit | Reddit |
-
-插件仓库: [carrier-plugins](https://github.com/yinnho/carrier-plugins)
-
----
-
-## Security
-
-- WASM 双计量沙箱 — 燃料 + epoch 中断
-- Merkle 哈希链审计 — 每个操作密码学链接
-- Ed25519 分身签名 — 身份和能力集签名
-- SSRF 防护 — 阻断私有 IP、云元数据端点
-- Capability Gates — RBAC 能力门控
-- Loop Guard — SHA256 工具循环检测 + 熔断器
-- Secret Zeroization — API key 自动擦除
-
----
-
-## Development
-
-```bash
-cargo build --workspace --lib          # 编译
-cargo test --workspace                 # tests
-cargo clippy --workspace --all-targets -- -D warnings  # 0 warnings
-```
 
 ---
 
