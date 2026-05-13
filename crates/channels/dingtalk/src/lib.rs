@@ -1,7 +1,8 @@
 //! DingTalk channel adapter.
 //!
-//! `SessionWatcher` discovers bots from `~/.opencarrier/dingtalk-sessions/*.json`,
+//! `SessionWatcher` discovers bots from `~/.opencarrier/senders/{app_key}/session.json`,
 //! spawns per-bot WebSocket connections, and handles message dispatch.
+//! New bots are started via `start_sender()` (event-driven), not polling.
 
 pub mod api;
 pub mod channel;
@@ -9,10 +10,8 @@ pub mod token;
 pub mod models;
 pub mod ws;
 
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use types::channel::Channel;
 use types::plugin::PluginMessage;
@@ -51,19 +50,15 @@ impl DingTalkBotEntry {
 
 /// Global state manager for all DingTalk bots.
 ///
-/// Discovers bots by scanning `~/.opencarrier/dingtalk-sessions/*.json`.
+/// Discovers bots by scanning `~/.opencarrier/senders/{app_key}/session.json`.
 pub struct DingTalkState {
     pub bots: DashMap<String, DingTalkBotEntry>, // key: app_key
-    pub session_dir: std::path::PathBuf,
 }
 
 impl DingTalkState {
     fn new() -> Self {
-        let home = types::config::home_dir();
-        let session_dir = home.join("dingtalk-sessions");
         Self {
             bots: DashMap::new(),
-            session_dir,
         }
     }
 
@@ -95,34 +90,18 @@ impl DingTalkState {
         Some(DingTalkBotEntry::new(cfg))
     }
 
-    /// Load all sessions from the session directory (initial load at startup).
+    /// Load all sessions from senders/*/session.json (initial load at startup).
+    /// Only loads files where channel == "dingtalk".
     pub fn load_from_dir(&self) {
-        if !self.session_dir.exists() {
-            return;
-        }
-        let entries = match std::fs::read_dir(&self.session_dir) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!(dir = %self.session_dir.display(), "Failed to read session directory: {e}");
-                return;
-            }
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        let home = types::config::home_dir();
+        for (sender_id, json) in types::config::scan_sender_sessions(&home) {
+            if json.get("channel").and_then(|v| v.as_str()) != Some("dingtalk") {
                 continue;
             }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!(path = %path.display(), "Failed to read session file: {e}");
-                    continue;
-                }
-            };
-            let sf = match serde_json::from_str::<models::DingTalkSessionFile>(&content) {
+            let sf: models::DingTalkSessionFile = match serde_json::from_value(json) {
                 Ok(s) => s,
                 Err(e) => {
-                    warn!(path = %path.display(), "Failed to parse session file: {e}");
+                    warn!(sender_id = %sender_id, "Failed to parse dingtalk session: {e}");
                     continue;
                 }
             };
@@ -141,32 +120,20 @@ impl DingTalkState {
         }
     }
 
-    /// Load new sessions (skips already-loaded bots). Called by watcher loop.
+    /// Load new sessions from senders/*/session.json (skips already-loaded).
+    /// Only loads files where channel == "dingtalk".
     pub fn load_new_from_dir(&self) {
-        if !self.session_dir.exists() {
-            return;
-        }
-        let entries = match std::fs::read_dir(&self.session_dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        let home = types::config::home_dir();
+        for (sender_id, json) in types::config::scan_sender_sessions(&home) {
+            if json.get("channel").and_then(|v| v.as_str()) != Some("dingtalk") {
                 continue;
             }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let sf = match serde_json::from_str::<models::DingTalkSessionFile>(&content) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            if sf.app_key.is_empty() {
-                continue;
-            }
-            if let Some(mut existing) = self.bots.get_mut(&sf.app_key) {
+            // Refresh existing bot if session file changed
+            if let Some(mut existing) = self.bots.get_mut(&sender_id) {
+                let sf: models::DingTalkSessionFile = match serde_json::from_value(json) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
                 let new_entry = match Self::build_entry(&sf) {
                     Some(e) => e,
                     None => continue,
@@ -175,6 +142,13 @@ impl DingTalkState {
                     info!(app_key = %sf.app_key, "Refreshing DingTalk session from updated file");
                     *existing = new_entry;
                 }
+                continue;
+            }
+            let sf: models::DingTalkSessionFile = match serde_json::from_value(json) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if sf.app_key.is_empty() {
                 continue;
             }
             let entry = match Self::build_entry(&sf) {
@@ -186,13 +160,20 @@ impl DingTalkState {
         }
     }
 
-    /// Save a session file to disk.
+    /// Save a session file to senders/{app_key}/session.json.
     pub fn save_session(&self, sf: &models::DingTalkSessionFile) {
-        if let Err(e) = std::fs::create_dir_all(&self.session_dir) {
-            warn!(dir = %self.session_dir.display(), "Failed to create session directory: {e}");
+        let sender_id = &sf.app_key;
+        if sender_id.is_empty() {
+            warn!("Cannot save dingtalk session with empty app_key");
             return;
         }
-        let path = self.session_dir.join(format!("{}.json", sf.app_key));
+        let home = types::config::home_dir();
+        let dir = home.join("senders").join(sender_id);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!(dir = %dir.display(), "Failed to create sender directory: {e}");
+            return;
+        }
+        let path = dir.join("session.json");
         match serde_json::to_string_pretty(sf) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
@@ -239,7 +220,8 @@ pub static DINGTALK_STATE: std::sync::LazyLock<DingTalkState> =
 
 /// Watcher that discovers DingTalk bots from session files and spawns WS connections.
 ///
-/// Scans `~/.opencarrier/dingtalk-sessions/*.json` every 5 seconds.
+/// On startup, scans `senders/*/session.json` and spawns all matching bots.
+/// New bots added after startup are started via `start_sender()`.
 pub struct SessionWatcher {
     shutdown: Arc<AtomicBool>,
 }
@@ -272,33 +254,9 @@ impl Channel for SessionWatcher {
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let shutdown = self.shutdown.clone();
-
-        // Initial load
+        // Initial load + spawn all discovered bots
         DINGTALK_STATE.load_from_dir();
-
-        // Spawn watcher loop
-        std::thread::Builder::new()
-            .name("dingtalk-watcher".to_string())
-            .spawn(move || {
-                let mut spawned: HashSet<String> = HashSet::new();
-                spawn_new_bots(&sender, &mut spawned);
-
-                loop {
-                    if shutdown.load(Ordering::Relaxed) {
-                        info!("DingTalk session watcher shutting down");
-                        return;
-                    }
-                    std::thread::sleep(Duration::from_secs(5));
-                    if shutdown.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    DINGTALK_STATE.load_new_from_dir();
-                    spawn_new_bots(&sender, &mut spawned);
-                }
-            })
-            .map_err(|e| format!("Failed to spawn DingTalk watcher thread: {e}"))?;
-
+        spawn_inactive_bots(&sender);
         info!("DingTalk session watcher started");
         Ok(())
     }
@@ -344,17 +302,24 @@ impl Channel for SessionWatcher {
     fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
     }
+
+    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+        DINGTALK_STATE.load_new_from_dir();
+        spawn_bot_by_id(sender_id, &sender);
+        info!(sender_id = %sender_id, "DingTalk: started new sender");
+        Ok(())
+    }
 }
 
-/// Spawn channel threads for newly discovered bots.
-fn spawn_new_bots(sender: &mpsc::Sender<PluginMessage>, spawned: &mut HashSet<String>) {
+/// Spawn channel threads for all bots that are loaded but not yet active.
+fn spawn_inactive_bots(sender: &mpsc::Sender<PluginMessage>) {
     for entry in DINGTALK_STATE.bots.iter() {
         let app_key = entry.key().clone();
-        if spawned.contains(&app_key) {
+        let session = entry.value();
+        if session.active.load(Ordering::Relaxed) {
             continue;
         }
 
-        let session = entry.value();
         let bot_name = session.config.name.clone();
         let token_cache = session.token_cache.clone();
         session.active.store(true, Ordering::Relaxed);
@@ -367,7 +332,26 @@ fn spawn_new_bots(sender: &mpsc::Sender<PluginMessage>, spawned: &mut HashSet<St
                 warn!(bot = %bot_name, "DingTalk channel start error: {e}");
             }
         });
+    }
+}
 
-        spawned.insert(app_key);
+/// Spawn a specific bot by app_key (if loaded and not yet active).
+fn spawn_bot_by_id(sender_id: &str, sender: &mpsc::Sender<PluginMessage>) {
+    if let Some(session) = DINGTALK_STATE.bots.get(sender_id) {
+        if session.active.load(Ordering::Relaxed) {
+            return;
+        }
+        let bot_name = session.config.name.clone();
+        let token_cache = session.token_cache.clone();
+        session.active.store(true, Ordering::Relaxed);
+
+        let tx = sender.clone();
+        let app_key_for_ws = sender_id.to_string();
+        std::thread::spawn(move || {
+            let mut ch = channel::DingTalkChannel::new(bot_name.clone(), app_key_for_ws, token_cache);
+            if let Err(e) = ch.start(tx) {
+                warn!(bot = %bot_name, "DingTalk channel start error: {e}");
+            }
+        });
     }
 }

@@ -4,7 +4,6 @@ use crate::api;
 use crate::token::WEIXIN_STATE;
 use crate::models::*;
 use types::plugin::{PluginContent, PluginMessage};
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -234,8 +233,9 @@ fn process_inbound_message(
 // SessionWatcher — monitors for new bots added after plugin startup
 // ---------------------------------------------------------------------------
 
-/// Dynamic session watcher that polls `WEIXIN_STATE` for new bots and
-/// starts polling threads for them. Handles outbound `send()` for any bot.
+/// Dynamic session watcher that starts poll threads for bots and handles
+/// respawn of inactive-but-valid sessions. New bots are started via
+/// `start_sender()` (event-driven), not polling.
 pub struct SessionWatcher {
     shutdown: Arc<AtomicBool>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
@@ -270,13 +270,18 @@ impl Channel for SessionWatcher {
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+        // Initial load + spawn all discovered bots
+        WEIXIN_STATE.load_from_dir();
+        spawn_all_bots(&sender);
+
+        // Start respawn watcher (handles reconnection of inactive-but-valid bots)
         let shutdown = self.shutdown.clone();
         let handle = std::thread::Builder::new()
-            .name("weixin-session-watcher".to_string())
+            .name("weixin-respawn-watcher".to_string())
             .spawn(move || {
-                watcher_loop(sender, shutdown);
+                respawn_watcher_loop(sender, shutdown);
             })
-            .map_err(|e| format!("Failed to spawn watcher thread: {e}"))?;
+            .map_err(|e| format!("Failed to spawn respawn watcher thread: {e}"))?;
         self.thread_handle = Some(handle);
         info!("WeChat SessionWatcher started");
         Ok(())
@@ -344,63 +349,101 @@ impl Channel for SessionWatcher {
         }
         info!("SessionWatcher stopped");
     }
+
+    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+        WEIXIN_STATE.load_new_from_dir();
+        spawn_bot_by_id(sender_id, &sender);
+        info!(sender_id = %sender_id, "WeChat: started new sender");
+        Ok(())
+    }
 }
 
-fn watcher_loop(sender: mpsc::Sender<PluginMessage>, shutdown: Arc<AtomicBool>) {
+/// Spawn poll threads for all bots that are loaded but not yet active.
+fn spawn_all_bots(sender: &mpsc::Sender<PluginMessage>) {
+    for entry in WEIXIN_STATE.bots.iter() {
+        let user_id = entry.key().clone();
+        let state = entry.value();
+        if state.active.load(Ordering::Relaxed) || state.is_expired() {
+            continue;
+        }
+        state.active.store(true, Ordering::Relaxed);
+        let s = sender.clone();
+        let poll_key = user_id.clone();
+        info!(user_id = %user_id, "Spawning poll thread for bot");
+        if let Err(e) = std::thread::Builder::new()
+            .name(format!("weixin-dyn-{user_id}"))
+            .spawn(move || {
+                let shutdown = Arc::new(AtomicBool::new(false));
+                run_poll_loop(&poll_key, s, &shutdown);
+            })
+        {
+            error!(user_id = %user_id, "Failed to spawn poll thread: {e}");
+        }
+    }
+}
+
+/// Spawn a specific bot by user_id (if loaded and not yet active).
+fn spawn_bot_by_id(sender_id: &str, sender: &mpsc::Sender<PluginMessage>) {
+    if let Some(state) = WEIXIN_STATE.bots.get(sender_id) {
+        if state.active.load(Ordering::Relaxed) || state.is_expired() {
+            return;
+        }
+        state.active.store(true, Ordering::Relaxed);
+        let s = sender.clone();
+        let poll_key = sender_id.to_string();
+        info!(user_id = %sender_id, "Spawning poll thread for new sender");
+        if let Err(e) = std::thread::Builder::new()
+            .name(format!("weixin-dyn-{sender_id}"))
+            .spawn(move || {
+                let shutdown = Arc::new(AtomicBool::new(false));
+                run_poll_loop(&poll_key, s, &shutdown);
+            })
+        {
+            error!(user_id = %sender_id, "Failed to spawn poll thread: {e}");
+        }
+    }
+}
+
+/// Background loop that respawns poll threads for inactive-but-valid bots.
+/// This handles the case where a bot's poll loop exits (e.g. session expired
+/// in iLink) but the session file has been refreshed with a new token.
+fn respawn_watcher_loop(sender: mpsc::Sender<PluginMessage>, shutdown: Arc<AtomicBool>) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
         Err(e) => {
-            error!("Failed to create watcher tokio runtime: {e}");
+            error!("Failed to create respawn watcher tokio runtime: {e}");
             return;
         }
     };
 
     rt.block_on(async move {
-        let mut spawned: HashSet<String> = HashSet::new();
-
         loop {
             if shutdown.load(Ordering::Relaxed) {
-                info!("SessionWatcher shutdown signal received");
+                info!("Respawn watcher shutdown signal received");
                 return;
             }
-
-            WEIXIN_STATE.load_new_from_dir();
 
             for entry in WEIXIN_STATE.bots.iter() {
                 let user_id = entry.key().clone();
                 let state = entry.value();
-                if spawned.contains(&user_id) {
-                    // Poll thread exited (e.g. session expired) but token is now valid again
-                    if !state.active.load(Ordering::Relaxed) && !state.is_expired() {
-                        spawned.remove(&user_id);
-                    } else {
-                        continue;
+                // Respawn: inactive but not expired (session refreshed with new token)
+                if !state.active.load(Ordering::Relaxed) && !state.is_expired() {
+                    state.active.store(true, Ordering::Relaxed);
+                    let s = sender.clone();
+                    let poll_key = user_id.clone();
+                    info!(user_id = %user_id, "Respawning poll thread for inactive bot");
+                    if let Err(e) = std::thread::Builder::new()
+                        .name(format!("weixin-dyn-{user_id}"))
+                        .spawn(move || {
+                            let shutdown = Arc::new(AtomicBool::new(false));
+                            run_poll_loop(&poll_key, s, &shutdown);
+                        })
+                    {
+                        error!(user_id = %user_id, "Failed to respawn poll thread: {e}");
                     }
-                }
-                if state.is_expired() {
-                    continue;
-                }
-                if state.active.load(Ordering::Relaxed) {
-                    spawned.insert(user_id);
-                    continue;
-                }
-                state.active.store(true, Ordering::Relaxed);
-                spawned.insert(user_id.clone());
-                let s = sender.clone();
-                let sh = shutdown.clone();
-                let thread_name = user_id.clone();
-                let poll_key = user_id.clone();
-                info!(user_id = %user_id, "SessionWatcher spawning poll thread for new bot");
-                if let Err(e) = std::thread::Builder::new()
-                    .name(format!("weixin-dyn-{thread_name}"))
-                    .spawn(move || {
-                        run_poll_loop(&poll_key, s, &sh);
-                    })
-                {
-                    error!(user_id = %user_id, "Failed to spawn poll thread: {e}");
                 }
             }
 

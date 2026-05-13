@@ -13,7 +13,6 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
-use crate::routes::plugin_toml::*;
 use crate::routes::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -1348,9 +1347,8 @@ fn cleanup_wecom_pending() {
 
 /// Register a bot from a successful scan/auth flow.
 ///
-/// Writes a session file to the platform's sessions directory and sets the
-/// sender route. The channel's watcher loop will auto-discover the new
-/// session file and start the connection.
+/// Writes a session file to `senders/{sender_id}/session.json`, sets the sender
+/// route, and immediately starts the channel connection via `start_sender()`.
 async fn register_bot_from_scan(
     state: &Arc<AppState>,
     platform: &str,
@@ -1368,13 +1366,7 @@ async fn register_bot_from_scan(
         }
     };
 
-    let bot_name = format!("{}-{}", agent_name, platform);
-    let bot_id = match channel_sanitize_name(&bot_name) {
-        Some(s) => s,
-        None => return Err("名称无效".to_string()),
-    };
-
-    // Write session file + set sender route based on platform
+    // Write session file to senders/{sender_id}/session.json + set route
     match platform {
         "wecom" => {
             let wecom_bot_id = credentials
@@ -1389,7 +1381,9 @@ async fn register_bot_from_scan(
                 .to_string();
 
             let sf = channel_wecom::token::WecomSessionFile {
-                name: bot_id.clone(),
+                channel: "wecom".to_string(),
+                sender_key: "bot_id".to_string(),
+                name: format!("{}-wecom", agent_name),
                 mode: "smartbot".to_string(),
                 bot_id: Some(wecom_bot_id.clone()),
                 agent_id: None,
@@ -1406,16 +1400,19 @@ async fn register_bot_from_scan(
             };
             channel_wecom::token::WECOM_STATE.save_session(&sf);
 
-            // Set sender route using WeCom bot_id (the platform ID)
+            // Set sender route — sender_id = wecom bot_id
             if let Some(ref pm) = state.channel_manager {
                 let pm = pm.lock().await;
                 pm.set_sender_route(&wecom_bot_id, &agent_uuid);
+                // Immediately start the new bot's connection
+                if let Err(e) = pm.start_sender("wecom", &wecom_bot_id) {
+                    tracing::warn!(sender_id = %wecom_bot_id, error = %e, "start_sender failed for wecom");
+                }
             }
 
             tracing::info!(
                 platform = "wecom",
-                bot = %bot_id,
-                wecom_bot_id = %wecom_bot_id,
+                sender_id = %wecom_bot_id,
                 agent = %agent_uuid,
                 "Registered WeCom bot from scan"
             );
@@ -1434,7 +1431,9 @@ async fn register_bot_from_scan(
                 .to_string();
 
             let sf = channel_feishu::models::FeishuSessionFile {
-                name: bot_id.clone(),
+                channel: "feishu".to_string(),
+                sender_key: "app_id".to_string(),
+                name: format!("{}-feishu", agent_name),
                 app_id: app_id.clone(),
                 app_secret: Some(app_secret),
                 secret_env: None,
@@ -1447,12 +1446,15 @@ async fn register_bot_from_scan(
             if let Some(ref pm) = state.channel_manager {
                 let pm = pm.lock().await;
                 pm.set_sender_route(&app_id, &agent_uuid);
+                // Immediately start the new bot's connection
+                if let Err(e) = pm.start_sender("feishu", &app_id) {
+                    tracing::warn!(sender_id = %app_id, error = %e, "start_sender failed for feishu");
+                }
             }
 
             tracing::info!(
                 platform = "feishu",
-                bot = %bot_id,
-                app_id = %app_id,
+                sender_id = %app_id,
                 agent = %agent_uuid,
                 "Registered Feishu bot from scan"
             );
@@ -1471,7 +1473,9 @@ async fn register_bot_from_scan(
                 .to_string();
 
             let sf = channel_dingtalk::models::DingTalkSessionFile {
-                name: bot_id.clone(),
+                channel: "dingtalk".to_string(),
+                sender_key: "app_key".to_string(),
+                name: format!("{}-dingtalk", agent_name),
                 app_key: app_key.clone(),
                 app_secret: Some(app_secret),
                 secret_env: None,
@@ -1484,12 +1488,15 @@ async fn register_bot_from_scan(
             if let Some(ref pm) = state.channel_manager {
                 let pm = pm.lock().await;
                 pm.set_sender_route(&app_key, &agent_uuid);
+                // Immediately start the new bot's connection
+                if let Err(e) = pm.start_sender("dingtalk", &app_key) {
+                    tracing::warn!(sender_id = %app_key, error = %e, "start_sender failed for dingtalk");
+                }
             }
 
             tracing::info!(
                 platform = "dingtalk",
-                bot = %bot_id,
-                app_key = %app_key,
+                sender_id = %app_key,
                 agent = %agent_uuid,
                 "Registered DingTalk bot from scan"
             );

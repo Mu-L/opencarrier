@@ -230,6 +230,8 @@ pub async fn run_daemon(
 
         // Migrate old plugins/{platform}/bot/*.toml → {platform}-sessions/*.json
         crate::migration::migrate_bot_toml_to_sessions(&kernel.config.home_dir);
+        // Migrate {platform}-sessions/*.json → senders/{sender_id}/session.json
+        crate::migration::migrate_sessions_to_senders(&kernel.config.home_dir);
 
         // Register channel adapters from independent crates
         cm.register("feishu", Box::new(channel_feishu::SessionWatcher::new()));

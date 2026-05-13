@@ -191,6 +191,23 @@ impl ChannelManager {
         }
     }
 
+    /// Start a new sender that was added after initial startup.
+    ///
+    /// Called by the API after writing a new `senders/{sender_id}/session.json`.
+    /// The matching channel loads the session and starts its connection immediately.
+    pub fn start_sender(&self, channel_type: &str, sender_id: &str) -> Result<(), String> {
+        let mut channels = self.channels.lock().unwrap();
+        for channel in channels.values_mut() {
+            if channel.channel_type() == channel_type {
+                return channel.start_sender(sender_id, self.message_tx.clone());
+            }
+        }
+        Err(format!(
+            "Channel not found for type: {}, sender: {}",
+            channel_type, sender_id
+        ))
+    }
+
     /// Get all plugin tool definitions.
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.tool_dispatcher.definitions()

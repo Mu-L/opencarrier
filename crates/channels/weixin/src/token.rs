@@ -1,12 +1,11 @@
 //! Token storage and management for the WeChat iLink Bot plugin.
 //!
 //! Manages per-bot bot_tokens (24h expiry) and per-user context_tokens.
-//! Tokens are persisted to `~/.opencarrier/weixin-sessions/<bot_id>.json`.
+//! Tokens are persisted to `~/.opencarrier/senders/{user_id}/session.json`.
 
 use dashmap::DashMap;
 use reqwest::Client;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -120,98 +119,70 @@ impl BotSession {
 pub struct WeixinState {
     /// Per-bot state keyed by user_id (stable unique identifier for WeChat).
     pub bots: DashMap<String, BotSession>,
-    /// Directory for persisting token files.
-    pub token_dir: PathBuf,
     /// Shared HTTP client for API routes (QR code login).
     pub http: Client,
 }
 
 impl WeixinState {
     fn new() -> Self {
-        let home = types::config::home_dir();
-        let token_dir = home.join("weixin-sessions");
-
         Self {
             bots: DashMap::new(),
-            token_dir,
             http: Client::new(),
         }
     }
 
-    /// Load persisted tokens from the token directory.
-    pub fn load_from_dir(&self, dir: &Path) {
-        if !dir.exists() {
-            return;
-        }
+    /// Load persisted tokens from senders/*/session.json.
+    /// Only loads files where channel == "weixin".
+    pub fn load_from_dir(&self) {
+        let home = types::config::home_dir();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let entries = std::fs::read_dir(dir);
-        match entries {
-            Ok(entries) => {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                        continue;
-                    }
-                    match std::fs::read_to_string(&path) {
-                        Ok(content) => {
-                            match serde_json::from_str::<BotTokenFile>(&content) {
-                                Ok(tf) => {
-                                    let user_id = match &tf.user_id {
-                                        Some(uid) if !uid.is_empty() => uid.clone(),
-                                        _ => {
-                                            info!(
-                                                bot_id = %tf.bot_id,
-                                                "Skipping iLink token without user_id"
-                                            );
-                                            continue;
-                                        }
-                                    };
-                                    if now >= tf.expires_at {
-                                        info!(
-                                            user_id = %user_id,
-                                            "Skipping expired iLink token"
-                                        );
-                                        continue;
-                                    }
-                                    info!(
-                                        user_id = %user_id,
-                                        expires_in = tf.expires_at - now,
-                                        "Loaded iLink token"
-                                    );
-                                    let state = BotSession {
-                                        bot_id: tf.bot_id.clone(),
-                                        bot_token: tf.bot_token,
-                                        baseurl: tf.baseurl,
-                                        ilink_bot_id: tf.ilink_bot_id,
-                                        user_id: Some(user_id.clone()),
-                                        expires_at: AtomicI64::new(tf.expires_at),
-                                        http: Client::new(),
-                                        context_tokens: Mutex::new(HashMap::new()),
-                                        typing_tickets: Mutex::new(HashMap::new()),
-                                        cursor: Mutex::new(String::new()),
-                                        active: AtomicBool::new(false),
-                                        bind_agent: tf.bind_agent,
-                                    };
-                                    self.bots.insert(user_id, state);
-                                }
-                                Err(e) => {
-                                    warn!(path = %path.display(), "Failed to parse token file: {e}");
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            warn!(path = %path.display(), "Failed to read token file: {e}");
-                        }
-                    }
+        for (sender_id, json) in types::config::scan_sender_sessions(&home) {
+            if json.get("channel").and_then(|v| v.as_str()) != Some("weixin") {
+                continue;
+            }
+            let tf: BotTokenFile = match serde_json::from_value(json) {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(sender_id = %sender_id, "Failed to parse weixin session: {e}");
+                    continue;
                 }
+            };
+            // Use sender_id as user_id/openid
+            let user_id = match &tf.user_id {
+                Some(uid) if !uid.is_empty() => uid.clone(),
+                _ => sender_id.clone(),
+            };
+            if now >= tf.expires_at {
+                info!(
+                    user_id = %user_id,
+                    "Skipping expired iLink token"
+                );
+                continue;
             }
-            Err(e) => {
-                warn!(dir = %dir.display(), "Failed to read token directory: {e}");
-            }
+            info!(
+                user_id = %user_id,
+                expires_in = tf.expires_at - now,
+                "Loaded iLink token"
+            );
+            let state = BotSession {
+                bot_id: tf.bot_id.clone(),
+                bot_token: tf.bot_token,
+                baseurl: tf.baseurl,
+                ilink_bot_id: tf.ilink_bot_id,
+                user_id: Some(user_id.clone()),
+                expires_at: AtomicI64::new(tf.expires_at),
+                http: Client::new(),
+                context_tokens: Mutex::new(HashMap::new()),
+                typing_tickets: Mutex::new(HashMap::new()),
+                cursor: Mutex::new(String::new()),
+                active: AtomicBool::new(false),
+                bind_agent: tf.bind_agent,
+            };
+            self.bots.insert(user_id, state);
         }
     }
 
@@ -262,15 +233,18 @@ impl WeixinState {
         info!(user_id = ?user_id, bot_id = bot_id, "Registered iLink bot from QR scan");
     }
 
-    /// Save a bot session's state to disk.
+    /// Save a bot session's state to disk at senders/{user_id}/session.json.
     pub fn save_session(&self, state: &BotSession) {
-        let dir = &self.token_dir;
-        if let Err(e) = std::fs::create_dir_all(dir) {
-            warn!(dir = %dir.display(), "Failed to create token directory: {e}");
+        let filename_key = state.user_id.as_deref().unwrap_or(&state.bot_id);
+        let dir = types::config::home_dir().join("senders").join(filename_key);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!(dir = %dir.display(), "Failed to create sender directory: {e}");
             return;
         }
 
         let tf = BotTokenFile {
+            channel: "weixin".to_string(),
+            sender_key: "openid".to_string(),
             bot_id: state.bot_id.clone(),
             bot_token: state.bot_token.clone(),
             baseurl: state.baseurl.clone(),
@@ -280,13 +254,11 @@ impl WeixinState {
             bind_agent: state.bind_agent.clone(),
         };
 
-        // Use user_id as filename (stable unique key for WeChat)
-        let filename_key = state.user_id.as_deref().unwrap_or(&state.bot_id);
-        let path = dir.join(format!("{}.json", filename_key));
+        let path = dir.join("session.json");
         match serde_json::to_string_pretty(&tf) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
-                    warn!(path = %path.display(), "Failed to write token file: {e}");
+                    warn!(path = %path.display(), "Failed to write session file: {e}");
                 }
             }
             Err(e) => {
@@ -332,43 +304,28 @@ impl WeixinState {
             .collect()
     }
 
-    /// Load new bots from the token directory (skips already-loaded bots).
+    /// Load new bots from senders/*/session.json (skips already-loaded bots).
+    /// Only loads files where channel == "weixin".
     /// Used by the dynamic session watcher to pick up QR-scanned bots.
     pub fn load_new_from_dir(&self) {
-        if !self.token_dir.exists() {
-            return;
-        }
+        let home = types::config::home_dir();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let entries = match std::fs::read_dir(&self.token_dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        for (sender_id, json) in types::config::scan_sender_sessions(&home) {
+            if json.get("channel").and_then(|v| v.as_str()) != Some("weixin") {
                 continue;
             }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let tf = match serde_json::from_str::<BotTokenFile>(&content) {
+            let tf: BotTokenFile = match serde_json::from_value(json) {
                 Ok(t) => t,
                 Err(_) => continue,
             };
-            let user_id = match &tf.user_id {
-                Some(uid) if !uid.is_empty() => uid.clone(),
-                _ => continue,
-            };
             // Refresh existing bot only if a new bot_token was written (re-scan).
-            if let Some(mut existing) = self.bots.get_mut(&user_id) {
+            if let Some(mut existing) = self.bots.get_mut(&sender_id) {
                 if existing.bot_token != tf.bot_token {
-                    info!(user_id = %user_id, "Refreshing iLink bot from updated token file (new bot_token)");
+                    info!(sender_id = %sender_id, "Refreshing iLink bot from updated session file (new bot_token)");
                     existing.bot_token = tf.bot_token.clone();
                     existing.baseurl = tf.baseurl;
                     existing.ilink_bot_id = tf.ilink_bot_id;
@@ -383,13 +340,13 @@ impl WeixinState {
             if now >= tf.expires_at {
                 continue;
             }
-            info!(user_id = %user_id, "Dynamic watcher loaded new iLink bot");
+            info!(sender_id = %sender_id, "Dynamic watcher loaded new iLink bot");
             let state = BotSession {
                 bot_id: tf.bot_id.clone(),
                 bot_token: tf.bot_token,
                 baseurl: tf.baseurl,
                 ilink_bot_id: tf.ilink_bot_id,
-                user_id: Some(user_id.clone()),
+                user_id: Some(sender_id.clone()),
                 expires_at: AtomicI64::new(tf.expires_at),
                 http: Client::new(),
                 context_tokens: Mutex::new(HashMap::new()),
@@ -398,7 +355,7 @@ impl WeixinState {
                 active: AtomicBool::new(false),
                 bind_agent: tf.bind_agent,
             };
-            self.bots.insert(user_id, state);
+            self.bots.insert(sender_id, state);
         }
     }
 

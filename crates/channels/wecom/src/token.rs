@@ -5,13 +5,12 @@
 //! - **Kf** (微信客服): corp_id + open_kfid + secret → kf/send_msg
 //! - **SmartBot** (智能对话机器人): WebSocket long connection + response_url reply
 //!
-//! Session files are stored in `~/.opencarrier/wecom-sessions/<name>.json` and
-//! discovered dynamically via `WecomState::load_new_from_dir()`.
+//! Session files are stored in `~/.opencarrier/senders/{sender_id}/session.json` and
+//! discovered at startup via `WecomState::load_from_dir()`.
 
 use dashmap::DashMap;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -414,6 +413,10 @@ pub async fn send_smartbot_response_async(
 /// Session file format (written to `wecom-sessions/<name>.json`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WecomSessionFile {
+    #[serde(default)]
+    pub channel: String, // "wecom"
+    #[serde(default)]
+    pub sender_key: String, // "bot_id"
     pub name: String,
     pub mode: String, // "app" | "kf" | "smartbot"
     // smartbot fields
@@ -433,6 +436,17 @@ pub struct WecomSessionFile {
     pub bind_agent: Option<String>,
 }
 
+impl WecomSessionFile {
+    /// Derive the sender_id for this session.
+    /// For smartbot: bot_id; for app/kf: name (legacy fallback).
+    pub fn sender_id(&self) -> String {
+        match self.mode.as_str() {
+            "smartbot" => self.bot_id.clone().unwrap_or_default(),
+            _ => self.name.clone(),
+        }
+    }
+}
+
 /// Runtime state for a single WeCom bot session.
 pub struct WecomBotSession {
     pub entry: BotEntry,
@@ -443,18 +457,14 @@ pub struct WecomBotSession {
 ///
 /// Discovers bots by scanning `~/.opencarrier/wecom-sessions/*.json`.
 pub struct WecomState {
-    pub bots: DashMap<String, WecomBotSession>, // key: name
-    pub session_dir: PathBuf,
+    pub bots: DashMap<String, WecomBotSession>, // key: sender_id (bot_id for smartbot)
     pub http: Client,
 }
 
 impl WecomState {
     fn new() -> Self {
-        let home = types::config::home_dir();
-        let session_dir = home.join("wecom-sessions");
         Self {
             bots: DashMap::new(),
-            session_dir,
             http: Client::new(),
         }
     }
@@ -531,50 +541,31 @@ impl WecomState {
         }
     }
 
-    /// Load all sessions from the session directory (initial load at startup).
+    /// Load all sessions from senders/*/session.json (initial load at startup).
+    /// Only loads files where channel == "wecom".
     pub fn load_from_dir(&self) {
-        if !self.session_dir.exists() {
-            return;
-        }
-        let entries = match std::fs::read_dir(&self.session_dir) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!(dir = %self.session_dir.display(), "Failed to read session directory: {e}");
-                return;
-            }
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        let home = types::config::home_dir();
+        for (sender_id, json) in types::config::scan_sender_sessions(&home) {
+            if json.get("channel").and_then(|v| v.as_str()) != Some("wecom") {
                 continue;
             }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!(path = %path.display(), "Failed to read session file: {e}");
-                    continue;
-                }
-            };
-            let sf = match serde_json::from_str::<WecomSessionFile>(&content) {
+            let sf: WecomSessionFile = match serde_json::from_value(json) {
                 Ok(s) => s,
                 Err(e) => {
-                    warn!(path = %path.display(), "Failed to parse session file: {e}");
+                    warn!(sender_id = %sender_id, "Failed to parse wecom session: {e}");
                     continue;
                 }
             };
-            if sf.name.is_empty() {
-                continue;
-            }
-            if self.bots.contains_key(&sf.name) {
+            if self.bots.contains_key(&sender_id) {
                 continue;
             }
             let entry = match Self::build_entry(&sf) {
                 Some(e) => e,
                 None => continue,
             };
-            info!(name = %sf.name, mode = %sf.mode, "Loaded WeCom session");
+            info!(sender_id = %sender_id, mode = %sf.mode, "Loaded WeCom session");
             self.bots.insert(
-                sf.name.clone(),
+                sender_id,
                 WecomBotSession {
                     entry,
                     active: AtomicBool::new(false),
@@ -583,33 +574,20 @@ impl WecomState {
         }
     }
 
-    /// Load new sessions (skips already-loaded bots). Called by watcher loop.
+    /// Load new sessions from senders/*/session.json (skips already-loaded).
+    /// Only loads files where channel == "wecom".
     pub fn load_new_from_dir(&self) {
-        if !self.session_dir.exists() {
-            return;
-        }
-        let entries = match std::fs::read_dir(&self.session_dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        let home = types::config::home_dir();
+        for (sender_id, json) in types::config::scan_sender_sessions(&home) {
+            if json.get("channel").and_then(|v| v.as_str()) != Some("wecom") {
                 continue;
             }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let sf = match serde_json::from_str::<WecomSessionFile>(&content) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            if sf.name.is_empty() {
-                continue;
-            }
-            // Refresh existing bot if session file changed (e.g. new secret)
-            if let Some(mut existing) = self.bots.get_mut(&sf.name) {
+            // Refresh existing bot if session file changed
+            if let Some(mut existing) = self.bots.get_mut(&sender_id) {
+                let sf: WecomSessionFile = match serde_json::from_value(json) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
                 let new_entry = match Self::build_entry(&sf) {
                     Some(e) => e,
                     None => continue,
@@ -617,19 +595,23 @@ impl WecomState {
                 if existing.entry.secret != new_entry.secret
                     || existing.entry.corp_id != new_entry.corp_id
                 {
-                    info!(name = %sf.name, "Refreshing WeCom session from updated file");
+                    info!(sender_id = %sender_id, "Refreshing WeCom session from updated file");
                     existing.entry = new_entry;
                     existing.active.store(true, Ordering::Relaxed);
                 }
                 continue;
             }
+            let sf: WecomSessionFile = match serde_json::from_value(json) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
             let entry = match Self::build_entry(&sf) {
                 Some(e) => e,
                 None => continue,
             };
-            info!(name = %sf.name, mode = %sf.mode, "Dynamic watcher loaded new WeCom session");
+            info!(sender_id = %sender_id, mode = %sf.mode, "Dynamic watcher loaded new WeCom session");
             self.bots.insert(
-                sf.name.clone(),
+                sender_id,
                 WecomBotSession {
                     entry,
                     active: AtomicBool::new(false),
@@ -638,13 +620,21 @@ impl WecomState {
         }
     }
 
-    /// Save a session file to disk.
+    /// Save a session file to senders/{sender_id}/session.json.
+    /// The sender_id is derived from the session: bot_id for smartbot, name for others.
     pub fn save_session(&self, sf: &WecomSessionFile) {
-        if let Err(e) = std::fs::create_dir_all(&self.session_dir) {
-            warn!(dir = %self.session_dir.display(), "Failed to create session directory: {e}");
+        let sender_id = sf.sender_id();
+        if sender_id.is_empty() {
+            warn!("Cannot save wecom session with empty sender_id");
             return;
         }
-        let path = self.session_dir.join(format!("{}.json", sf.name));
+        let home = types::config::home_dir();
+        let dir = home.join("senders").join(&sender_id);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!(dir = %dir.display(), "Failed to create sender directory: {e}");
+            return;
+        }
+        let path = dir.join("session.json");
         match serde_json::to_string_pretty(sf) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
@@ -657,19 +647,20 @@ impl WecomState {
         }
     }
 
-    /// Find a bot for sending by name. Falls back to scanning by bot_id.
+    /// Find a bot for sending by sender_id (which is bot_id for smartbot).
     pub fn get_session_for_send(
         &self,
-        name: &str,
+        sender_id: &str,
     ) -> Option<dashmap::mapref::one::Ref<'_, String, WecomBotSession>> {
-        if let Some(s) = self.bots.get(name) {
+        // Primary: direct lookup by sender_id (which is now the DashMap key)
+        if let Some(s) = self.bots.get(sender_id) {
             return Some(s);
         }
-        // Fallback: find by smartbot bot_id
+        // Legacy fallback: scan by name field for app/kf mode
         let found_key = self
             .bots
             .iter()
-            .find(|e| e.value().entry.bot_id() == Some(name))
+            .find(|e| e.value().entry.name == sender_id)
             .map(|e| e.key().clone())?;
         self.bots.get(&found_key)
     }

@@ -1,7 +1,8 @@
 //! Feishu/Lark channel adapter.
 //!
-//! `SessionWatcher` discovers bots from `~/.opencarrier/feishu-sessions/*.json`,
+//! `SessionWatcher` discovers bots from `~/.opencarrier/senders/{app_id}/session.json`,
 //! spawns per-bot WebSocket connections, and handles message dispatch.
+//! New bots are started via `start_sender()` (event-driven), not polling.
 
 pub mod api;
 pub mod channel;
@@ -10,10 +11,8 @@ pub mod token;
 pub mod models;
 pub mod ws;
 
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use types::channel::Channel;
 use types::plugin::PluginMessage;
@@ -54,19 +53,15 @@ impl FeishuBotEntry {
 
 /// Global state manager for all Feishu bots.
 ///
-/// Discovers bots by scanning `~/.opencarrier/feishu-sessions/*.json`.
+/// Discovers bots by scanning `~/.opencarrier/senders/{app_id}/session.json`.
 pub struct FeishuState {
     pub bots: DashMap<String, FeishuBotEntry>, // key: app_id
-    pub session_dir: std::path::PathBuf,
 }
 
 impl FeishuState {
     fn new() -> Self {
-        let home = types::config::home_dir();
-        let session_dir = home.join("feishu-sessions");
         Self {
             bots: DashMap::new(),
-            session_dir,
         }
     }
 
@@ -99,34 +94,18 @@ impl FeishuState {
         Some(FeishuBotEntry::new(cfg))
     }
 
-    /// Load all sessions from the session directory (initial load at startup).
+    /// Load all sessions from senders/*/session.json (initial load at startup).
+    /// Only loads files where channel == "feishu".
     pub fn load_from_dir(&self) {
-        if !self.session_dir.exists() {
-            return;
-        }
-        let entries = match std::fs::read_dir(&self.session_dir) {
-            Ok(e) => e,
-            Err(e) => {
-                warn!(dir = %self.session_dir.display(), "Failed to read session directory: {e}");
-                return;
-            }
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        let home = types::config::home_dir();
+        for (sender_id, json) in types::config::scan_sender_sessions(&home) {
+            if json.get("channel").and_then(|v| v.as_str()) != Some("feishu") {
                 continue;
             }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!(path = %path.display(), "Failed to read session file: {e}");
-                    continue;
-                }
-            };
-            let sf = match serde_json::from_str::<models::FeishuSessionFile>(&content) {
+            let sf: models::FeishuSessionFile = match serde_json::from_value(json) {
                 Ok(s) => s,
                 Err(e) => {
-                    warn!(path = %path.display(), "Failed to parse session file: {e}");
+                    warn!(sender_id = %sender_id, "Failed to parse feishu session: {e}");
                     continue;
                 }
             };
@@ -145,32 +124,20 @@ impl FeishuState {
         }
     }
 
-    /// Load new sessions (skips already-loaded bots). Called by watcher loop.
+    /// Load new sessions from senders/*/session.json (skips already-loaded).
+    /// Only loads files where channel == "feishu".
     pub fn load_new_from_dir(&self) {
-        if !self.session_dir.exists() {
-            return;
-        }
-        let entries = match std::fs::read_dir(&self.session_dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        let home = types::config::home_dir();
+        for (sender_id, json) in types::config::scan_sender_sessions(&home) {
+            if json.get("channel").and_then(|v| v.as_str()) != Some("feishu") {
                 continue;
             }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let sf = match serde_json::from_str::<models::FeishuSessionFile>(&content) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            if sf.app_id.is_empty() {
-                continue;
-            }
-            if let Some(mut existing) = self.bots.get_mut(&sf.app_id) {
+            // Refresh existing bot if session file changed
+            if let Some(mut existing) = self.bots.get_mut(&sender_id) {
+                let sf: models::FeishuSessionFile = match serde_json::from_value(json) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
                 let new_entry = match Self::build_entry(&sf) {
                     Some(e) => e,
                     None => continue,
@@ -179,6 +146,13 @@ impl FeishuState {
                     info!(app_id = %sf.app_id, "Refreshing Feishu session from updated file");
                     *existing = new_entry;
                 }
+                continue;
+            }
+            let sf: models::FeishuSessionFile = match serde_json::from_value(json) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            if sf.app_id.is_empty() {
                 continue;
             }
             let entry = match Self::build_entry(&sf) {
@@ -190,13 +164,20 @@ impl FeishuState {
         }
     }
 
-    /// Save a session file to disk.
+    /// Save a session file to senders/{app_id}/session.json.
     pub fn save_session(&self, sf: &models::FeishuSessionFile) {
-        if let Err(e) = std::fs::create_dir_all(&self.session_dir) {
-            warn!(dir = %self.session_dir.display(), "Failed to create session directory: {e}");
+        let sender_id = &sf.app_id;
+        if sender_id.is_empty() {
+            warn!("Cannot save feishu session with empty app_id");
             return;
         }
-        let path = self.session_dir.join(format!("{}.json", sf.app_id));
+        let home = types::config::home_dir();
+        let dir = home.join("senders").join(sender_id);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!(dir = %dir.display(), "Failed to create sender directory: {e}");
+            return;
+        }
+        let path = dir.join("session.json");
         match serde_json::to_string_pretty(sf) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
@@ -244,7 +225,8 @@ pub static FEISHU_STATE: std::sync::LazyLock<FeishuState> =
 
 /// Watcher that discovers Feishu bots from session files and spawns WS connections.
 ///
-/// Scans `~/.opencarrier/feishu-sessions/*.json` every 5 seconds.
+/// On startup, scans `senders/*/session.json` and spawns all matching bots.
+/// New bots added after startup are started via `start_sender()`.
 pub struct SessionWatcher {
     shutdown: Arc<AtomicBool>,
 }
@@ -277,33 +259,9 @@ impl Channel for SessionWatcher {
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let shutdown = self.shutdown.clone();
-
-        // Initial load
+        // Initial load + spawn all discovered bots
         FEISHU_STATE.load_from_dir();
-
-        // Spawn watcher loop
-        std::thread::Builder::new()
-            .name("feishu-watcher".to_string())
-            .spawn(move || {
-                let mut spawned: HashSet<String> = HashSet::new();
-                spawn_new_bots(&sender, &mut spawned);
-
-                loop {
-                    if shutdown.load(Ordering::Relaxed) {
-                        info!("Feishu session watcher shutting down");
-                        return;
-                    }
-                    std::thread::sleep(Duration::from_secs(5));
-                    if shutdown.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    FEISHU_STATE.load_new_from_dir();
-                    spawn_new_bots(&sender, &mut spawned);
-                }
-            })
-            .map_err(|e| format!("Failed to spawn Feishu watcher thread: {e}"))?;
-
+        spawn_inactive_bots(&sender);
         info!("Feishu session watcher started");
         Ok(())
     }
@@ -358,17 +316,24 @@ impl Channel for SessionWatcher {
     fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
     }
+
+    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+        FEISHU_STATE.load_new_from_dir();
+        spawn_bot_by_id(sender_id, &sender);
+        info!(sender_id = %sender_id, "Feishu: started new sender");
+        Ok(())
+    }
 }
 
-/// Spawn channel threads for newly discovered bots.
-fn spawn_new_bots(sender: &mpsc::Sender<PluginMessage>, spawned: &mut HashSet<String>) {
+/// Spawn channel threads for all bots that are loaded but not yet active.
+fn spawn_inactive_bots(sender: &mpsc::Sender<PluginMessage>) {
     for entry in FEISHU_STATE.bots.iter() {
         let app_id = entry.key().clone();
-        if spawned.contains(&app_id) {
+        let session = entry.value();
+        if session.active.load(Ordering::Relaxed) {
             continue;
         }
 
-        let session = entry.value();
         let bot_name = session.config.name.clone();
         let token_cache = session.token_cache.clone();
         session.active.store(true, Ordering::Relaxed);
@@ -381,7 +346,26 @@ fn spawn_new_bots(sender: &mpsc::Sender<PluginMessage>, spawned: &mut HashSet<St
                 warn!(bot = %bot_name, "Feishu channel start error: {e}");
             }
         });
+    }
+}
 
-        spawned.insert(app_id);
+/// Spawn a specific bot by app_id (if loaded and not yet active).
+fn spawn_bot_by_id(sender_id: &str, sender: &mpsc::Sender<PluginMessage>) {
+    if let Some(session) = FEISHU_STATE.bots.get(sender_id) {
+        if session.active.load(Ordering::Relaxed) {
+            return;
+        }
+        let bot_name = session.config.name.clone();
+        let token_cache = session.token_cache.clone();
+        session.active.store(true, Ordering::Relaxed);
+
+        let tx = sender.clone();
+        let app_id_for_ws = sender_id.to_string();
+        std::thread::spawn(move || {
+            let mut ch = channel::FeishuChannel::new(bot_name.clone(), app_id_for_ws, token_cache);
+            if let Err(e) = ch.start(tx) {
+                warn!(bot = %bot_name, "Feishu channel start error: {e}");
+            }
+        });
     }
 }

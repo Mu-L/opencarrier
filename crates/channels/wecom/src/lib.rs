@@ -1,13 +1,11 @@
 //! WeCom (Enterprise WeChat) channel adapter.
 //!
-//! `SessionWatcher` discovers bots from `~/.opencarrier/wecom-sessions/*.json`,
-//! spawns per-bot connections (SmartBot WS, App/Kf webhook), and handles
-//! message dispatch.
+//! `SessionWatcher` discovers bots from `~/.opencarrier/senders/{sender_id}/session.json`,
+//! spawns per-bot connections (SmartBot WS, App/Kf webhook), and handles message dispatch.
+//! New bots are started via `start_sender()` (event-driven), not polling.
 
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use types::channel::Channel;
 use types::plugin::PluginMessage;
@@ -25,8 +23,8 @@ pub mod token;
 
 /// Watcher that discovers WeCom bots from session files and spawns connections.
 ///
-/// Scans `~/.opencarrier/wecom-sessions/*.json` every 5 seconds.
-/// Supports SmartBot (WS), App (webhook), and Kf (webhook) modes.
+/// On startup, scans `senders/*/session.json` and spawns all matching bots.
+/// New bots added after startup are started via `start_sender()`.
 pub struct SessionWatcher {
     shutdown: Arc<AtomicBool>,
 }
@@ -59,29 +57,9 @@ impl Channel for SessionWatcher {
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
-        let shutdown = self.shutdown.clone();
-
-        // Initial load
+        // Initial load + spawn all discovered bots
         token::WECOM_STATE.load_from_dir();
-
-        // Spawn watcher loop
-        std::thread::spawn(move || {
-            let mut spawned: HashSet<String> = HashSet::new();
-
-            // Spawn initial bots
-            spawn_new_bots(&sender, &mut spawned);
-
-            loop {
-                if shutdown.load(Ordering::Relaxed) {
-                    info!("WeCom session watcher shutting down");
-                    return;
-                }
-                std::thread::sleep(Duration::from_secs(5));
-                token::WECOM_STATE.load_new_from_dir();
-                spawn_new_bots(&sender, &mut spawned);
-            }
-        });
-
+        spawn_inactive_bots(&sender);
         info!("WeCom session watcher started");
         Ok(())
     }
@@ -135,68 +113,95 @@ impl Channel for SessionWatcher {
     fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
     }
+
+    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+        token::WECOM_STATE.load_new_from_dir();
+        spawn_bot_by_id(sender_id, &sender);
+        info!(sender_id = %sender_id, "WeCom: started new sender");
+        Ok(())
+    }
 }
 
-/// Spawn channel threads for newly discovered bots.
-fn spawn_new_bots(sender: &mpsc::Sender<PluginMessage>, spawned: &mut HashSet<String>) {
+/// Spawn channel threads for all bots that are loaded but not yet active.
+fn spawn_inactive_bots(sender: &mpsc::Sender<PluginMessage>) {
     for entry in token::WECOM_STATE.bots.iter() {
-        let name = entry.key().clone();
-        if spawned.contains(&name) {
+        let key = entry.key().clone();
+        let session = entry.value();
+        if session.active.load(Ordering::Relaxed) {
             continue;
         }
+        spawn_single_bot(&key, session, sender);
+        session.active.store(true, Ordering::Relaxed);
+    }
+}
 
-        let session = entry.value();
-        match &session.entry.mode {
-            token::WecomMode::SmartBot { .. } => {
-                let bot_name = session.entry.name.clone();
-                let bot_id = session.entry.bot_id().unwrap_or("").to_string();
-                let secret = session.entry.bot_secret().unwrap_or("").to_string();
-
-                let tx = sender.clone();
-                std::thread::spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .expect("Failed to create tokio runtime for SmartBot");
-                    rt.block_on(async {
-                        let mut ch = smartbot::SmartBotChannel::new(
-                            bot_name.clone(),
-                            bot_id,
-                            secret,
-                        );
-                        if let Err(e) = ch.start(tx) {
-                            warn!(bot = %bot_name, "SmartBot channel start error: {e}");
-                        }
-                    });
-                });
-            }
-            token::WecomMode::App { .. } | token::WecomMode::Kf { .. } => {
-                let bot_id = session.entry.name.clone();
-                let webhook_port = session.entry.webhook_port;
-                let encoding_aes_key = session.entry.encoding_aes_key.clone();
-                let callback_token = session.entry.callback_token.clone();
-
-                let tx = sender.clone();
-                std::thread::spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .expect("Failed to create tokio runtime for WeCom channel");
-                    rt.block_on(async {
-                        let mut ch = channel::WeComChannel::new(
-                            bot_id.clone(),
-                            webhook_port,
-                            encoding_aes_key,
-                            callback_token,
-                        );
-                        if let Err(e) = ch.start(tx) {
-                            warn!(bot = %bot_id, "WeCom channel start error: {e}");
-                        }
-                    });
-                });
-            }
+/// Spawn a specific bot by sender_id (if loaded and not yet active).
+fn spawn_bot_by_id(sender_id: &str, sender: &mpsc::Sender<PluginMessage>) {
+    if let Some(session) = token::WECOM_STATE.bots.get(sender_id) {
+        if session.active.load(Ordering::Relaxed) {
+            return;
         }
+        spawn_single_bot(sender_id, session.value(), sender);
+        session.active.store(true, Ordering::Relaxed);
+    }
+}
 
-        spawned.insert(name);
+/// Spawn a single bot's channel thread.
+fn spawn_single_bot(
+    key: &str,
+    session: &token::WecomBotSession,
+    sender: &mpsc::Sender<PluginMessage>,
+) {
+    match &session.entry.mode {
+        token::WecomMode::SmartBot { .. } => {
+            let bot_name = session.entry.name.clone();
+            let bot_id = session.entry.bot_id().unwrap_or("").to_string();
+            let secret = session.entry.bot_secret().unwrap_or("").to_string();
+
+            let tx = sender.clone();
+            info!(sender_id = %key, "Spawning SmartBot thread");
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create tokio runtime for SmartBot");
+                rt.block_on(async {
+                    let mut ch = smartbot::SmartBotChannel::new(
+                        bot_name.clone(),
+                        bot_id,
+                        secret,
+                    );
+                    if let Err(e) = ch.start(tx) {
+                        warn!(bot = %bot_name, "SmartBot channel start error: {e}");
+                    }
+                });
+            });
+        }
+        token::WecomMode::App { .. } | token::WecomMode::Kf { .. } => {
+            let bot_id = session.entry.name.clone();
+            let webhook_port = session.entry.webhook_port;
+            let encoding_aes_key = session.entry.encoding_aes_key.clone();
+            let callback_token = session.entry.callback_token.clone();
+
+            let tx = sender.clone();
+            info!(sender_id = %key, "Spawning WeCom App/Kf thread");
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create tokio runtime for WeCom channel");
+                rt.block_on(async {
+                    let mut ch = channel::WeComChannel::new(
+                        bot_id.clone(),
+                        webhook_port,
+                        encoding_aes_key,
+                        callback_token,
+                    );
+                    if let Err(e) = ch.start(tx) {
+                        warn!(bot = %bot_id, "WeCom channel start error: {e}");
+                    }
+                });
+            });
+        }
     }
 }

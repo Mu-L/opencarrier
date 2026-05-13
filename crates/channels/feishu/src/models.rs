@@ -122,9 +122,13 @@ impl FeishuBotConfig {
 // Session file format
 // ---------------------------------------------------------------------------
 
-/// Session file format (written to `feishu-sessions/<app_id>.json`).
+/// Session file format (written to `senders/{app_id}/session.json`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeishuSessionFile {
+    #[serde(default)]
+    pub channel: String,
+    #[serde(default)]
+    pub sender_key: String,
     pub name: String,
     pub app_id: String,
     pub app_secret: Option<String>,

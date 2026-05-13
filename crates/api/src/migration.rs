@@ -1,7 +1,6 @@
-//! One-time migration: `plugins/{platform}/bot/<uuid>/bot.toml` → `{platform}-sessions/<id>.json`
-//!
-//! Runs at startup before channel registration. Idempotent — skips if
-//! session files already exist.
+//! Migrations:
+//! 1. `plugins/{platform}/bot/<uuid>/bot.toml` → `{platform}-sessions/<id>.json` (legacy)
+//! 2. `{platform}-sessions/<id>.json` → `senders/{sender_id}/session.json` (current)
 
 use std::path::Path;
 use tracing::{info, warn};
@@ -10,6 +9,139 @@ pub fn migrate_bot_toml_to_sessions(home_dir: &Path) {
     migrate_platform(home_dir, "wecom");
     migrate_platform(home_dir, "feishu");
     migrate_platform(home_dir, "dingtalk");
+}
+
+/// Migrate `{platform}-sessions/*.json` → `senders/{sender_id}/session.json`.
+///
+/// For each session file, extracts the sender_id (bot_id for wecom smartbot,
+/// app_id for feishu, app_key for dingtalk, openid for weixin), creates
+/// `senders/{sender_id}/session.json` with `channel` and `sender_key` fields added,
+/// and removes the old file.
+///
+/// Idempotent — skips if the target already exists.
+pub fn migrate_sessions_to_senders(home_dir: &Path) {
+    migrate_sessions_platform(home_dir, "wecom");
+    migrate_sessions_platform(home_dir, "feishu");
+    migrate_sessions_platform(home_dir, "dingtalk");
+    migrate_sessions_platform(home_dir, "weixin");
+}
+
+fn migrate_sessions_platform(home_dir: &Path, platform: &str) {
+    let session_dir = home_dir.join(format!("{platform}-sessions"));
+    if !session_dir.exists() {
+        return;
+    }
+
+    let entries = match std::fs::read_dir(&session_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    let mut migrated = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let mut json: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        // Determine sender_id based on platform
+        let sender_id = match platform {
+            "wecom" => {
+                let mode = json.get("mode").and_then(|v| v.as_str()).unwrap_or("app");
+                if mode == "smartbot" {
+                    json.get("bot_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                } else {
+                    // app/kf: use name as sender_id
+                    json.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                }
+            }
+            "feishu" => json.get("app_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            "dingtalk" => json.get("app_key").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            "weixin" => json.get("user_id")
+                .or_else(|| json.get("bot_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            _ => continue,
+        };
+
+        if sender_id.is_empty() {
+            continue;
+        }
+
+        // Add channel and sender_key fields
+        let sender_key = match platform {
+            "wecom" => {
+                let mode = json.get("mode").and_then(|v| v.as_str()).unwrap_or("app");
+                if mode == "smartbot" { "bot_id" } else { "name" }
+            }
+            "feishu" => "app_id",
+            "dingtalk" => "app_key",
+            "weixin" => "openid",
+            _ => continue,
+        };
+
+        json.as_object_mut().map(|obj| {
+            obj.insert("channel".to_string(), serde_json::Value::String(platform.to_string()));
+            obj.insert("sender_key".to_string(), serde_json::Value::String(sender_key.to_string()));
+        });
+
+        // Write to senders/{sender_id}/session.json
+        let sender_dir = home_dir.join("senders").join(&sender_id);
+        let target_path = sender_dir.join("session.json");
+
+        if target_path.exists() {
+            continue; // Already migrated
+        }
+
+        if let Err(e) = std::fs::create_dir_all(&sender_dir) {
+            warn!(dir = %sender_dir.display(), "Migration: failed to create sender dir: {e}");
+            continue;
+        }
+
+        let json_str = match serde_json::to_string_pretty(&json) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Migration: failed to serialize: {e}");
+                continue;
+            }
+        };
+
+        if let Err(e) = std::fs::write(&target_path, &json_str) {
+            warn!(path = %target_path.display(), "Migration: failed to write: {e}");
+            continue;
+        }
+
+        // Remove old file
+        if let Err(e) = std::fs::remove_file(&path) {
+            warn!(path = %path.display(), "Migration: failed to remove old file: {e}");
+        }
+
+        info!(
+            platform = %platform,
+            sender_id = %sender_id,
+            "Migrated {platform}-sessions → senders/{{sender_id}}/session.json"
+        );
+        migrated += 1;
+    }
+
+    if migrated > 0 {
+        // Try to remove the now-empty session directory
+        let _ = std::fs::remove_dir(&session_dir);
+    }
 }
 
 fn migrate_platform(home_dir: &Path, platform: &str) {

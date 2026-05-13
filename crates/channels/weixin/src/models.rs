@@ -283,6 +283,10 @@ pub struct SendTypingRequest {
 /// Serialized form of a bot's iLink credentials, stored on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BotTokenFile {
+    #[serde(default)]
+    pub channel: String, // "weixin"
+    #[serde(default)]
+    pub sender_key: String, // "openid"
     pub bot_id: String,
     pub bot_token: String,
     pub baseurl: String,

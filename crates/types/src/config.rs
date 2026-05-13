@@ -1146,6 +1146,66 @@ pub fn sender_data_dir(home_dir: &std::path::Path, sender_id: &str, agent_name: 
     home_dir.join("senders").join(sender_id).join(agent_name)
 }
 
+/// Path to a sender's session.json.
+///
+/// Returns `~/.opencarrier/senders/{sender_id}/session.json`.
+pub fn sender_session_path(home_dir: &std::path::Path, sender_id: &str) -> PathBuf {
+    home_dir.join("senders").join(sender_id).join("session.json")
+}
+
+/// Scan all senders/*/session.json files and return (sender_id, raw_json) pairs.
+///
+/// Each entry corresponds to a sender directory that has a session.json.
+/// The `channel` field in the JSON identifies which platform owns it.
+pub fn scan_sender_sessions(home_dir: &std::path::Path) -> Vec<(String, serde_json::Value)> {
+    let senders_dir = home_dir.join("senders");
+    let mut results = Vec::new();
+
+    let Ok(entries) = std::fs::read_dir(&senders_dir) else {
+        return results;
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let session_path = entry.path().join("session.json");
+        if session_path.exists() {
+            if let Ok(data) = std::fs::read_to_string(&session_path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                    results.push((name, json));
+                }
+            }
+        }
+    }
+
+    results
+}
+
+/// Unified session header fields present in every session.json.
+///
+/// Each platform's session.json contains these two fields plus
+/// platform-specific credential fields. The `channel` field identifies
+/// which platform owns the session; `sender_key` declares which field
+/// in the JSON holds the value that matches the `senders/` directory name.
+///
+/// Example (企微 SmartBot):
+/// ```json
+/// {
+///   "channel": "wecom",
+///   "sender_key": "bot_id",
+///   "bot_id": "aibOXHOLZh1...",
+///   "secret": "...",
+///   "mode": "smartbot"
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SenderSessionHeader {
+    /// Platform identifier: "wecom" | "feishu" | "dingtalk" | "weixin"
+    pub channel: String,
+    /// Which field in this JSON holds the sender_id value
+    /// (e.g., "bot_id" for wecom, "app_id" for feishu, "app_key" for dingtalk, "openid" for weixin)
+    pub sender_key: String,
+}
+
 /// Default LLM model configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
