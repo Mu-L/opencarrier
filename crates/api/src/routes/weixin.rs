@@ -233,132 +233,103 @@ pub async fn weixin_qrcode_status(
             None
         };
 
+        let home_dir = state.kernel.config.home_dir.clone();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
         // Check if this WeChat user already has a bot (dedup by user_id)
-        let token_dir = state.kernel.config.home_dir.join("weixin-sessions");
         if let Some(uid) = ilink_user_id {
-            if let Ok(entries) = std::fs::read_dir(&token_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                        continue;
-                    }
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content) {
-                            let existing_uid = tf.get("user_id").and_then(|v| v.as_str());
-                            if existing_uid == Some(uid) {
-                                let existing_bot = tf
-                                    .get("name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or(bot)
-                                    .to_string();
-                                let existing_bind = tf
-                                    .get("bind_agent")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
+            let sender_session = home_dir.join("senders").join(uid).join("session.json");
+            if sender_session.exists() {
+                if let Ok(content) = std::fs::read_to_string(&sender_session) {
+                    if let Ok(mut tf) = serde_json::from_str::<serde_json::Value>(&content) {
+                        let existing_uid = tf.get("user_id").and_then(|v| v.as_str());
+                        if existing_uid == Some(uid) {
+                            let existing_bot = tf
+                                .get("bot_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(bot)
+                                .to_string();
+                            let existing_bind = tf
+                                .get("bind_agent")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
 
-                                tracing::info!(
-                                    new_bot = %bot,
-                                    existing_bot = %existing_bot,
-                                    user_id = %uid,
-                                    "WeChat user already has a bot, reusing"
-                                );
+                            tracing::info!(
+                                new_bot = %bot,
+                                existing_bot = %existing_bot,
+                                user_id = %uid,
+                                "WeChat user already has a bot, reusing"
+                            );
 
-                                // Update the existing token file with new bot_token/expires
-                                let now = std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs() as i64;
-                                let mut updated = tf.clone();
-                                updated["bot_token"] =
-                                    serde_json::Value::String(bot_token.to_string());
-                                updated["baseurl"] =
-                                    serde_json::Value::String(raw_baseurl.to_string());
-                                updated["ilink_bot_id"] =
-                                    serde_json::Value::String(ilink_bot_id.to_string());
-                                updated["expires_at"] = serde_json::Value::Number(
-                                    serde_json::Number::from(now + 86400),
-                                );
+                            tf["bot_token"] = serde_json::Value::String(bot_token.to_string());
+                            tf["baseurl"] = serde_json::Value::String(raw_baseurl.to_string());
+                            tf["ilink_bot_id"] = serde_json::Value::String(ilink_bot_id.to_string());
+                            tf["expires_at"] = serde_json::Value::Number(serde_json::Number::from(now + 86400));
+                            tf["bot_id"] = serde_json::Value::String(existing_bot.clone());
 
-                                // Look up real bot_id (UUID) from bot store
-                                let real_bot_id = existing_bot.clone();
+                            let effective_agent = resolved_agent
+                                .as_ref()
+                                .or(existing_bind.as_ref())
+                                .filter(|a| !a.is_empty() && uuid::Uuid::parse_str(a).is_ok())
+                                .cloned();
 
-                                // Ensure token file has bot_id
-                                updated["bot_id"] =
-                                    serde_json::Value::String(real_bot_id.clone());
-
-                                if let Ok(json) = serde_json::to_string_pretty(&updated) {
-                                    let _ = atomic_write(&path, &json);
-                                }
-
-                                // Use resolved_agent from query param if provided,
-                                // otherwise fall back to existing_bind
-                                let effective_agent = resolved_agent
-                                    .as_ref()
-                                    .or(existing_bind.as_ref())
-                                    .filter(|a| !a.is_empty() && uuid::Uuid::parse_str(a).is_ok())
-                                    .cloned();
-
-                                // Update bind_agent in token file if a new agent was resolved
-                                if let Some(ref new_agent) = resolved_agent {
-                                    updated["bind_agent"] =
-                                        serde_json::Value::String(new_agent.clone());
-                                    if let Ok(json) = serde_json::to_string_pretty(&updated) {
-                                        let _ = atomic_write(&path, &json);
-                                    }
-                                }
-
-                                // Register dynamic bridge binding
-                                if let Some(ref agent_id) = effective_agent {
-                                    if let Some(ref pm_arc) = state.channel_manager {
-                                        let pm = pm_arc.lock().await;
-                                        pm.set_sender_route(uid, agent_id);
-                                        tracing::info!(
-                                            bot = %existing_bot,
-                                            agent = %agent_id,
-                                            "Dynamically bound WeChat bot to agent (rebind)"
-                                        );
-                                    }
-                                }
-
-                                // Create session token with real bot_id
-                                return (
-                                    StatusCode::OK,
-                                    Json(serde_json::json!({
-                                        "bot_id": real_bot_id,
-                                        "status": "confirmed",
-                                        "existing": true,
-                                        "bind_agent": effective_agent,
-                                        "ilink_bot_id": ilink_bot_id,
-                                        "ilink_user_id": ilink_user_id,
-                                        "bot_token": bot_token,
-                                        "baseurl": raw_baseurl,
-                                        "data": data,
-                                    })),
-                                );
+                            if let Some(ref new_agent) = resolved_agent {
+                                tf["bind_agent"] = serde_json::Value::String(new_agent.clone());
                             }
+
+                            if let Ok(json) = serde_json::to_string_pretty(&tf) {
+                                let _ = atomic_write(&sender_session, &json);
+                            }
+
+                            // Register dynamic bridge binding + start sender
+                            if let Some(ref agent_id) = effective_agent {
+                                if let Some(ref pm_arc) = state.channel_manager {
+                                    let pm = pm_arc.lock().await;
+                                    pm.set_sender_route(uid, agent_id);
+                                    if let Err(e) = pm.start_sender("weixin", uid) {
+                                        tracing::warn!(sender_id = %uid, error = %e, "start_sender failed for weixin rebind");
+                                    }
+                                    tracing::info!(
+                                        bot = %existing_bot,
+                                        agent = %agent_id,
+                                        "Dynamically bound WeChat bot to agent (rebind)"
+                                    );
+                                }
+                            }
+
+                            return (
+                                StatusCode::OK,
+                                Json(serde_json::json!({
+                                    "bot_id": existing_bot,
+                                    "status": "confirmed",
+                                    "existing": true,
+                                    "bind_agent": effective_agent,
+                                    "ilink_bot_id": ilink_bot_id,
+                                    "ilink_user_id": ilink_user_id,
+                                    "bot_token": bot_token,
+                                    "baseurl": raw_baseurl,
+                                    "data": data,
+                                })),
+                            );
                         }
                     }
                 }
             }
         }
 
-        // New user — save token and optionally bind to agent
+        // New user — save token to senders/{sender_id}/session.json
         let baseurl = if weixin_validate_baseurl(raw_baseurl) {
             raw_baseurl
         } else {
             WEIXIN_ILINK_BASE
         };
 
-        // Save ilink token file
-        let token_dir = state.kernel.config.home_dir.join("weixin-sessions");
-        let _ = std::fs::create_dir_all(&token_dir);
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
         let token_data = serde_json::json!({
+            "channel": "weixin",
+            "sender_key": "openid",
             "bot_id": bot,
             "bot_token": bot_token,
             "baseurl": baseurl,
@@ -368,21 +339,25 @@ pub async fn weixin_qrcode_status(
             "bind_agent": resolved_agent.as_deref().unwrap_or(""),
         });
 
-        let filename = ilink_user_id.unwrap_or(bot);
-        let token_path = token_dir.join(format!("{filename}.json"));
+        let sender_id = ilink_user_id.unwrap_or(bot);
+        let sender_dir = home_dir.join("senders").join(sender_id);
+        let _ = std::fs::create_dir_all(&sender_dir);
+        let session_path = sender_dir.join("session.json");
         if let Ok(json) = serde_json::to_string_pretty(&token_data) {
-            let _ = atomic_write(&token_path, &json);
+            let _ = atomic_write(&session_path, &json);
         }
 
-        // Register dynamic binding if agent was resolved
+        // Register dynamic binding + start sender
         if let Some(ref agent_id) = resolved_agent {
             if uuid::Uuid::parse_str(agent_id).is_ok() {
                 if let Some(ref pm_arc) = state.channel_manager {
                     let pm = pm_arc.lock().await;
-                    // Create sender route for the QR-scanning user
                     if let Some(uid) = ilink_user_id {
                         if !uid.is_empty() {
                             pm.set_sender_route(uid, agent_id);
+                            if let Err(e) = pm.start_sender("weixin", uid) {
+                                tracing::warn!(sender_id = %uid, error = %e, "start_sender failed for weixin new user");
+                            }
                         }
                     }
                 }
@@ -470,14 +445,6 @@ pub async fn weixin_save_token(
         );
     }
 
-    let token_dir = state.kernel.config.home_dir.join("weixin-sessions");
-    if let Err(e) = std::fs::create_dir_all(&token_dir) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to create token dir: {e}")})),
-        );
-    }
-
     let bind_agent = body
         .get("bind_agent")
         .and_then(|v| v.as_str())
@@ -490,7 +457,8 @@ pub async fn weixin_save_token(
         .as_secs() as i64;
 
     let token_data = serde_json::json!({
-        "name": bot_name,
+        "channel": "weixin",
+        "sender_key": "openid",
         "bot_id": bot_id,
         "bot_token": bot_token,
         "baseurl": baseurl,
@@ -500,9 +468,15 @@ pub async fn weixin_save_token(
         "bind_agent": if bind_agent.is_empty() { serde_json::Value::Null } else { serde_json::Value::String(bind_agent.clone()) },
     });
 
-    // Use ilink_user_id as filename for dedup; fallback to bot_name
-    let filename = ilink_user_id.as_deref().unwrap_or(&bot_name);
-    let path = token_dir.join(format!("{filename}.json"));
+    let sender_id = ilink_user_id.as_deref().unwrap_or(&bot_name);
+    let sender_dir = state.kernel.config.home_dir.join("senders").join(sender_id);
+    if let Err(e) = std::fs::create_dir_all(&sender_dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to create sender dir: {e}")})),
+        );
+    }
+    let path = sender_dir.join("session.json");
     match serde_json::to_string_pretty(&token_data) {
         Ok(json) => {
             if let Err(e) = atomic_write(&path, &json) {
@@ -520,14 +494,16 @@ pub async fn weixin_save_token(
         }
     }
 
-    // Register dynamic bridge binding if bind_agent is provided
+    // Register dynamic bridge binding + start sender
     if !bind_agent.is_empty() && uuid::Uuid::parse_str(&bind_agent).is_ok() {
         if let Some(ref pm_arc) = state.channel_manager {
             let pm = pm_arc.lock().await;
-            // WeChat uses user_id as route key
             if let Some(ref uid) = ilink_user_id {
                 if !uid.is_empty() {
                     pm.set_sender_route(uid, &bind_agent);
+                    if let Err(e) = pm.start_sender("weixin", uid) {
+                        tracing::warn!(sender_id = %uid, error = %e, "start_sender failed for weixin save-token");
+                    }
                 }
             }
             tracing::info!(
@@ -544,41 +520,30 @@ pub async fn weixin_save_token(
 
 /// GET `/api/weixin/status` — list all bound WeChat accounts with expiry info.
 pub async fn weixin_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let token_dir = state.kernel.config.home_dir.join("weixin-sessions");
-
+    let home = &state.kernel.config.home_dir;
     let mut bots: Vec<serde_json::Value> = Vec::new();
 
-    if token_dir.exists() {
+    for (sender_id, json) in types::config::scan_sender_sessions(home) {
+        if json.get("channel").and_then(|v| v.as_str()) != Some("weixin") {
+            continue;
+        }
+        let expires_at = json.get("expires_at").and_then(|v| v.as_i64()).unwrap_or(0);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
+        let expired = now >= expires_at;
+        let remaining = (expires_at - now).max(0);
 
-        if let Ok(entries) = std::fs::read_dir(&token_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content) {
-                        let expires_at = tf.get("expires_at").and_then(|v| v.as_i64()).unwrap_or(0);
-                        let expired = now >= expires_at;
-                        let remaining = (expires_at - now).max(0);
-
-                        bots.push(serde_json::json!({
-                            "name": tf.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                            "ilink_bot_id": tf.get("ilink_bot_id").and_then(|v| v.as_str()).unwrap_or(""),
-                            "user_id": tf.get("user_id").and_then(|v| v.as_str()),
-                            "expires_at": expires_at,
-                            "remaining_secs": remaining,
-                            "expired": expired,
-                            "bind_agent": tf.get("bind_agent").and_then(|v| v.as_str()),
-                        }));
-                    }
-                }
-            }
-        }
+        bots.push(serde_json::json!({
+            "sender_id": sender_id,
+            "ilink_bot_id": json.get("ilink_bot_id").and_then(|v| v.as_str()).unwrap_or(""),
+            "user_id": json.get("user_id").and_then(|v| v.as_str()),
+            "expires_at": expires_at,
+            "remaining_secs": remaining,
+            "expired": expired,
+            "bind_agent": json.get("bind_agent").and_then(|v| v.as_str()),
+        }));
     }
 
     Json(serde_json::json!({
@@ -592,87 +557,60 @@ pub async fn weixin_status(State(state): State<Arc<AppState>>) -> impl IntoRespo
 
 /// GET `/api/channels/status` — aggregate status for all channel plugins.
 ///
-/// Reads WeChat token files, WeCom and Feishu session files.
+/// Reads session files from senders/ directory.
 pub async fn channels_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let home = &state.kernel.config.home_dir;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
 
-    // ── WeChat iLink ──────────────────────────────────────────────────
-    let weixin_dir = home.join("weixin-sessions");
     let mut weixin_bots: Vec<serde_json::Value> = Vec::new();
-
-    if weixin_dir.exists() {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
-        if let Ok(entries) = std::fs::read_dir(&weixin_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                    continue;
-                }
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content) {
-                        let expires_at = tf.get("expires_at").and_then(|v| v.as_i64()).unwrap_or(0);
-                        let expired = now >= expires_at;
-                        let remaining = (expires_at - now).max(0);
-                        weixin_bots.push(serde_json::json!({
-                            "name": tf.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                            "ilink_bot_id": tf.get("ilink_bot_id").and_then(|v| v.as_str()).unwrap_or(""),
-                            "expired": expired,
-                            "remaining_secs": remaining,
-                        }));
-                    }
-                }
-            }
-        }
-    }
-
-    // ── WeCom — scan wecom-sessions/ ────────────────────────────
-    let wecom_dir = home.join("wecom-sessions");
     let mut wecom_bots: Vec<serde_json::Value> = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(&wecom_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(sf) = serde_json::from_str::<serde_json::Value>(&content) {
-                    wecom_bots.push(serde_json::json!({
-                        "name": sf.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                        "mode": sf.get("mode").and_then(|v| v.as_str()).unwrap_or("smartbot"),
-                        "bot_id": sf.get("bot_id").and_then(|v| v.as_str()).unwrap_or(""),
-                        "corp_id": sf.get("corp_id").and_then(|v| v.as_str()).unwrap_or(""),
-                        "bind_agent": sf.get("bind_agent").and_then(|v| v.as_str()).unwrap_or(""),
-                    }));
-                }
-            }
-        }
-    }
-
-    // ── Feishu — scan feishu-sessions/ ───────────────────────────
-    let feishu_dir = home.join("feishu-sessions");
     let mut feishu_bots: Vec<serde_json::Value> = Vec::new();
+    let mut dingtalk_bots: Vec<serde_json::Value> = Vec::new();
 
-    if let Ok(entries) = std::fs::read_dir(&feishu_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
+    for (sender_id, json) in types::config::scan_sender_sessions(home) {
+        let channel = json.get("channel").and_then(|v| v.as_str()).unwrap_or("");
+        match channel {
+            "weixin" => {
+                let expires_at = json.get("expires_at").and_then(|v| v.as_i64()).unwrap_or(0);
+                let expired = now >= expires_at;
+                let remaining = (expires_at - now).max(0);
+                weixin_bots.push(serde_json::json!({
+                    "sender_id": sender_id,
+                    "ilink_bot_id": json.get("ilink_bot_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "expired": expired,
+                    "remaining_secs": remaining,
+                }));
             }
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(sf) = serde_json::from_str::<serde_json::Value>(&content) {
-                    feishu_bots.push(serde_json::json!({
-                        "name": sf.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
-                        "app_id": sf.get("app_id").and_then(|v| v.as_str()).unwrap_or(""),
-                        "brand": sf.get("brand").and_then(|v| v.as_str()).unwrap_or("feishu"),
-                        "bind_agent": sf.get("bind_agent").and_then(|v| v.as_str()).unwrap_or(""),
-                    }));
-                }
+            "wecom" => {
+                wecom_bots.push(serde_json::json!({
+                    "sender_id": sender_id,
+                    "name": json.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "mode": json.get("mode").and_then(|v| v.as_str()).unwrap_or("smartbot"),
+                    "bot_id": json.get("bot_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "bind_agent": json.get("bind_agent").and_then(|v| v.as_str()).unwrap_or(""),
+                }));
             }
+            "feishu" => {
+                feishu_bots.push(serde_json::json!({
+                    "sender_id": sender_id,
+                    "name": json.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "app_id": json.get("app_id").and_then(|v| v.as_str()).unwrap_or(""),
+                    "brand": json.get("brand").and_then(|v| v.as_str()).unwrap_or("feishu"),
+                    "bind_agent": json.get("bind_agent").and_then(|v| v.as_str()).unwrap_or(""),
+                }));
+            }
+            "dingtalk" => {
+                dingtalk_bots.push(serde_json::json!({
+                    "sender_id": sender_id,
+                    "name": json.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "app_key": json.get("app_key").and_then(|v| v.as_str()).unwrap_or(""),
+                    "bind_agent": json.get("bind_agent").and_then(|v| v.as_str()).unwrap_or(""),
+                }));
+            }
+            _ => {}
         }
     }
 
@@ -682,6 +620,7 @@ pub async fn channels_status(State(state): State<Arc<AppState>>) -> impl IntoRes
             "weixin": { "bots": weixin_bots, "count": weixin_bots.len() },
             "wecom": { "bots": wecom_bots, "count": wecom_bots.len() },
             "feishu": { "bots": feishu_bots, "count": feishu_bots.len() },
+            "dingtalk": { "bots": dingtalk_bots, "count": dingtalk_bots.len() },
         })),
     )
 }
@@ -759,54 +698,41 @@ pub async fn weixin_bind_bot(
         }
     };
 
-    let token_dir = state.kernel.config.home_dir.join("weixin-sessions");
-    let entries = match std::fs::read_dir(&token_dir) {
-        Ok(e) => e,
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "微信机器人不存在"})),
-            );
-        }
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+    // Scan senders/ for weixin sessions matching the bot name
+    let home = &state.kernel.config.home_dir;
+    for (sender_id, json) in types::config::scan_sender_sessions(home) {
+        if json.get("channel").and_then(|v| v.as_str()) != Some("weixin") {
             continue;
         }
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(mut tf) = serde_json::from_str::<serde_json::Value>(&content) {
-                let token_name = tf.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                if token_name != name {
-                    continue;
-                }
+        let bot_id = json.get("bot_id").and_then(|v| v.as_str()).unwrap_or("");
+        if bot_id != name {
+            continue;
+        }
 
-                tf["bind_agent"] = serde_json::Value::String(agent_uuid.clone());
-                if let Ok(json) = serde_json::to_string_pretty(&tf) {
-                    let _ = atomic_write(&path, &json);
-                }
+        let session_path = home.join("senders").join(&sender_id).join("session.json");
+        let mut tf = json.clone();
+        tf["bind_agent"] = serde_json::Value::String(agent_uuid.clone());
+        if let Ok(json_str) = serde_json::to_string_pretty(&tf) {
+            let _ = atomic_write(&session_path, &json_str);
+        }
 
-                // Register dynamic binding
-                if let Some(ref pm_arc) = state.channel_manager {
-                    let pm = pm_arc.lock().await;
-                    // WeChat uses user_id as route key
-                    let uid = tf.get("user_id").and_then(|v| v.as_str()).unwrap_or("");
-                    if !uid.is_empty() {
-                        pm.set_sender_route(uid, &agent_uuid);
-                    }
-                }
-
-                return (
-                    StatusCode::OK,
-                    Json(serde_json::json!({
-                        "status": "bound",
-                        "message": "微信机器人已绑定",
-                        "bind_agent": agent_uuid,
-                    })),
-                );
+        // Register dynamic binding + start sender
+        if let Some(ref pm_arc) = state.channel_manager {
+            let pm = pm_arc.lock().await;
+            pm.set_sender_route(&sender_id, &agent_uuid);
+            if let Err(e) = pm.start_sender("weixin", &sender_id) {
+                tracing::warn!(sender_id = %sender_id, error = %e, "start_sender failed for weixin bind");
             }
         }
+
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "bound",
+                "message": "微信机器人已绑定",
+                "bind_agent": agent_uuid,
+            })),
+        );
     }
 
     (
