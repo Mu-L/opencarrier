@@ -61,10 +61,34 @@ define_params!(UploadMediaFromUrlParams {
     url: String,
 });
 
+// Sub-structs for newspic article type
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct ImageItem {
+    #[schemars(description = "Image media_id (from upload_media or upload_media_from_url)")]
+    image_media_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CoverCrop {
+    #[schemars(description = "Aspect ratio, e.g. \"1_1\", \"4_3\"")]
+    ratio: String,
+    #[schemars(description = "Crop left (0-1 as string, e.g. \"0\")")]
+    x1: String,
+    #[schemars(description = "Crop top (0-1 as string, e.g. \"0\")")]
+    y1: String,
+    #[schemars(description = "Crop right (0-1 as string, e.g. \"1\")")]
+    x2: String,
+    #[schemars(description = "Crop bottom (0-1 as string, e.g. \"1\")")]
+    y2: String,
+}
+
 define_params!(CreateDraftParams {
+    #[schemars(description = "Article type: \"news\" (default) or \"newspic\" (image gallery)")]
+    article_type: Option<String>,
     #[schemars(description = "Article title")]
     title: String,
-    #[schemars(description = "Article HTML content")]
+    #[schemars(description = "Article content (HTML for news, plain text for newspic)")]
     content: String,
     #[schemars(description = "Author name")]
     author: Option<String>,
@@ -72,10 +96,14 @@ define_params!(CreateDraftParams {
     content_source_url: Option<String>,
     #[schemars(description = "Article digest / summary")]
     digest: Option<String>,
-    #[schemars(description = "Cover image media_id (from upload_media)")]
+    #[schemars(description = "Cover image media_id for news type (from upload_media)")]
     thumb_media_id: Option<String>,
     #[schemars(description = "Show cover in article body (1=yes 0=no, default 1)")]
     need_open_comment: Option<i32>,
+    #[schemars(description = "Image list for newspic type. Each item has an image_media_id.")]
+    image_info: Option<Vec<ImageItem>>,
+    #[schemars(description = "Cover crop info for newspic type. Each item has ratio, x1, y1, x2, y2.")]
+    cover_info: Option<Vec<CoverCrop>>,
 });
 
 define_params!(GetDraftParams {
@@ -206,9 +234,14 @@ impl WeChatOaServer {
 
     // ---- Drafts ----
 
-    #[tool(description = "Create a new draft article. Returns media_id of the draft.")]
+    #[tool(description = "Create a new draft article (news or newspic). For newspic image gallery, set article_type=\"newspic\" and provide image_info with image_media_ids.")]
     async fn create_draft(&self, Parameters(params): Parameters<CreateDraftParams>) -> String {
+        let article_type = params
+            .article_type
+            .unwrap_or_else(|| "news".to_string());
+
         let mut article = serde_json::json!({
+            "article_type": article_type,
             "title": params.title,
             "content": params.content,
             "author": params.author.unwrap_or_default(),
@@ -217,11 +250,35 @@ impl WeChatOaServer {
             "need_open_comment": params.need_open_comment.unwrap_or(1),
             "only_fans_can_comment": 0,
         });
-        if let Some(tid) = params.thumb_media_id {
-            if !tid.is_empty() {
-                article["thumb_media_id"] = serde_json::Value::String(tid);
+
+        if article_type == "news" {
+            if let Some(tid) = params.thumb_media_id {
+                if !tid.is_empty() {
+                    article["thumb_media_id"] = serde_json::Value::String(tid);
+                }
             }
         }
+
+        if let Some(images) = params.image_info {
+            article["image_info"] = serde_json::json!({
+                "image_list": images.iter().map(|img| {
+                    serde_json::json!({ "image_media_id": img.image_media_id })
+                }).collect::<Vec<_>>()
+            });
+        }
+
+        if let Some(crops) = params.cover_info {
+            article["cover_info"] = serde_json::json!({
+                "crop_percent_list": crops.iter().map(|c| {
+                    serde_json::json!({
+                        "ratio": c.ratio,
+                        "x1": c.x1, "y1": c.y1,
+                        "x2": c.x2, "y2": c.y2,
+                    })
+                }).collect::<Vec<_>>()
+            });
+        }
+
         let body = serde_json::json!({ "articles": [article] });
         match self
             .client
