@@ -272,7 +272,7 @@ pub async fn brain_page(
         .providers
         .iter()
         .map(|(name, p)| {
-            let has_key = !p.api_key_env.is_empty() && std::env::var(&p.api_key_env).is_ok();
+            let has_key = !p.api_key_env.is_empty() && types::env::get_env(&p.api_key_env).is_some();
             minijinja::context! {
                 name => name,
                 api_key_env => p.api_key_env.clone(),

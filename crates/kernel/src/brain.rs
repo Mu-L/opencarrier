@@ -435,12 +435,12 @@ impl Brain {
                         param: "secret_key_env".to_string(),
                     })?;
                 let access_key =
-                    std::env::var(ak_env).map_err(|_| BrainError::MissingJwtCredential {
+                    types::env::get_env(ak_env).ok_or_else(|| BrainError::MissingJwtCredential {
                         endpoint: name.to_string(),
                         env_var: ak_env.clone(),
                     })?;
                 let secret_key =
-                    std::env::var(sk_env).map_err(|_| BrainError::MissingJwtCredential {
+                    types::env::get_env(sk_env).ok_or_else(|| BrainError::MissingJwtCredential {
                         endpoint: name.to_string(),
                         env_var: sk_env.clone(),
                     })?;

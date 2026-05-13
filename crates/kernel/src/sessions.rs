@@ -356,7 +356,7 @@ impl CarrierKernel {
     /// Replaces the existing text-truncation compaction with an intelligent
     /// LLM-generated summary of older messages, keeping only recent messages.
     pub async fn compact_agent_session(&self, agent_id: AgentId) -> KernelResult<String> {
-        use runtime::compactor::{compact_session, needs_compaction, CompactionConfig};
+        use runtime::compactor::{compact_session, needs_compaction, needs_compaction_by_tokens, estimate_token_count, CompactionConfig};
 
         let entry = self.registry.get(agent_id).ok_or_else(|| {
             KernelError::Carrier(CarrierError::AgentNotFound(agent_id.to_string()))
@@ -376,7 +376,13 @@ impl CarrierKernel {
 
         let config = CompactionConfig::default();
 
-        if !needs_compaction(&session, &config) {
+        let by_messages = needs_compaction(&session, &config);
+        let by_tokens = {
+            let estimated = estimate_token_count(&session.messages, None, None);
+            needs_compaction_by_tokens(estimated, &config)
+        };
+
+        if !by_messages && !by_tokens {
             return Ok(format!(
                 "No compaction needed ({} messages, threshold {})",
                 session.messages.len(),
