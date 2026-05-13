@@ -355,7 +355,7 @@ impl CarrierKernel {
     ///
     /// Replaces the existing text-truncation compaction with an intelligent
     /// LLM-generated summary of older messages, keeping only recent messages.
-    pub async fn compact_agent_session(&self, agent_id: AgentId) -> KernelResult<String> {
+    pub async fn compact_agent_session(&self, agent_id: AgentId, session_id: types::agent::SessionId) -> KernelResult<String> {
         use runtime::compactor::{compact_session, needs_compaction, needs_compaction_by_tokens, estimate_token_count, CompactionConfig};
 
         let entry = self.registry.get(agent_id).ok_or_else(|| {
@@ -364,14 +364,15 @@ impl CarrierKernel {
 
         let session = self
             .memory
-            .get_session(entry.session_id)
+            .get_session(session_id)
             .map_err(KernelError::Carrier)?
             .unwrap_or_else(|| memory::session::Session {
-                id: entry.session_id,
+                id: session_id,
                 agent_id,
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
+                active_toolsets: vec![],
             });
 
         let config = CompactionConfig::default();
@@ -390,10 +391,22 @@ impl CarrierKernel {
             ));
         }
 
-        let driver = self.resolve_driver(&entry.manifest)?;
-        let model = entry.manifest.model.modality.clone();
+        // Use "fast" modality for compaction (cheaper, faster); fall back to agent modality
+        let compaction_modality = if self.brain_read().has_modality("fast") { "fast" } else { &entry.manifest.model.modality };
+        let compaction_model = self.brain_read().model_for(compaction_modality).to_string();
+        let driver = {
+            let brain = self.brain_read();
+            let endpoints = brain.endpoints_for(compaction_modality);
+            if let Some(ep) = endpoints.first() {
+                brain.driver_for_endpoint(&ep.id).ok_or_else(|| KernelError::Carrier(CarrierError::LlmDriver(format!(
+                    "No driver for compaction modality '{compaction_modality}'"
+                ))))?
+            } else {
+                self.resolve_driver(&entry.manifest)?
+            }
+        };
 
-        let result = compact_session(driver, &model, &session, &config)
+        let result = compact_session(driver, &compaction_model, &session, &config)
             .await
             .map_err(|e| KernelError::Carrier(CarrierError::Internal(e)))?;
 
@@ -460,11 +473,12 @@ impl CarrierKernel {
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
+                active_toolsets: vec![],
             });
 
         let system_prompt = &entry.manifest.model.system_prompt;
         // Use the agent's actual filtered tools instead of all builtins
-        let tools = self.available_tools(agent_id);
+        let tools = self.available_tools(agent_id, Some(&[]));
         // Use 200K default or the model's known context window
         let context_window = if session.context_window_tokens > 0 {
             session.context_window_tokens

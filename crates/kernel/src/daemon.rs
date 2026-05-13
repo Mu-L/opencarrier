@@ -356,6 +356,7 @@ impl CarrierKernel {
             let kernel = Arc::clone(self);
             tokio::spawn(async move {
                 kernel.connect_mcp_servers().await;
+                kernel.build_toolset_registry();
             });
         }
 

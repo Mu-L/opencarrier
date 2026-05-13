@@ -9,6 +9,7 @@ pub mod knowledge;
 pub mod media;
 pub mod misc;
 pub mod shell;
+pub mod toolset;
 
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
@@ -43,6 +44,7 @@ pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
         Box::new(filesystem::FilesystemTools),
         Box::new(shell::ShellTools),
         Box::new(misc::MiscTools),
+        Box::new(toolset::ToolsetTools),
         Box::new(knowledge::KnowledgeTools),
         Box::new(media::MediaTools),
         Box::new(agent::AgentTools),

@@ -493,7 +493,39 @@ impl KernelHandle for CarrierKernel {
         agent_id_str: &str,
     ) -> Option<Vec<types::tool::ToolDefinition>> {
         let agent_id: types::agent::AgentId = agent_id_str.parse().ok()?;
-        let tools = self.available_tools(agent_id);
+        let entry = self.registry.get(agent_id)?;
+        let session = self.memory.get_session(entry.session_id).ok()??;
+        let tools = self.available_tools(agent_id, Some(&session.active_toolsets));
+        if tools.is_empty() {
+            None
+        } else {
+            Some(tools)
+        }
+    }
+
+    fn activate_toolset(
+        &self,
+        agent_id_str: &str,
+        toolset_name: &str,
+    ) -> Option<Vec<types::tool::ToolDefinition>> {
+        let agent_id: types::agent::AgentId = agent_id_str.parse().ok()?;
+        let entry = self.registry.get(agent_id)?;
+
+        // Add toolset to session's active_toolsets and persist
+        let mut session = self.memory.get_session(entry.session_id).ok()??;
+        if !session.active_toolsets.iter().any(|t| t == toolset_name) {
+            session.active_toolsets.push(toolset_name.to_string());
+            self.memory.save_session(&session).ok()?;
+        }
+
+        // Merge auto_load + active and return refreshed tools
+        let mut combined = entry.manifest.auto_load_toolsets.clone();
+        for ts in &session.active_toolsets {
+            if !combined.contains(ts) {
+                combined.push(ts.clone());
+            }
+        }
+        let tools = self.available_tools(agent_id, Some(&combined));
         if tools.is_empty() {
             None
         } else {

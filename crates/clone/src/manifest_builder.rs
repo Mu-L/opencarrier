@@ -70,6 +70,9 @@ pub fn build_manifest_from_workspace(
     tools.sort();
     tools.dedup();
 
+    // 5.5 Derive auto_load_toolsets from the tool list
+    let auto_load_toolsets = derive_auto_load_toolsets(&tools, &template);
+
     // 6. Build CloneSource
     let clone_source = CloneSource {
         template_name: name.to_string(),
@@ -142,6 +145,7 @@ pub fn build_manifest_from_workspace(
             .as_ref()
             .map(|t| t.mcp_servers.clone())
             .unwrap_or_default(),
+        auto_load_toolsets,
         generate_identity_files: false, // .agx already has identity files
         ..Default::default()
     };
@@ -268,4 +272,43 @@ fn collect_knowledge_recursive(base: &Path, current: &Path, files: &mut Vec<Stri
             }
         }
     }
+}
+
+/// Map a tool name to its toolset. Returns None for core tools (always visible).
+fn tool_to_toolset(name: &str) -> Option<&'static str> {
+    match name {
+        "memory_store" | "memory_recall" | "session_summarize" | "use_toolset" => None,
+        n if n.starts_with("file_") || n == "apply_patch" => Some("filesystem"),
+        "shell_exec" => Some("shell"),
+        n if n.starts_with("knowledge_") || n.starts_with("skill_") || n == "clone_evaluate" => Some("knowledge"),
+        n if n.starts_with("media_") || n.starts_with("image_") || n == "text_to_speech" || n == "speech_to_text" => Some("media"),
+        n if n.starts_with("web_") => Some("web"),
+        n if n.starts_with("agent_") || n.starts_with("train_") => Some("agent"),
+        n if n.starts_with("location_") || n.starts_with("system_") || n == "user_profile" => Some("misc"),
+        n if n.starts_with("docker_exec") || n.starts_with("process_") => Some("media"),
+        _ => Some("misc"),
+    }
+}
+
+/// Derive auto_load_toolsets from the capabilities.tools list and MCP servers.
+fn derive_auto_load_toolsets(tools: &[String], template: &Option<TemplateManifest>) -> Vec<String> {
+    let mut toolsets = std::collections::HashSet::new();
+
+    // Map each declared tool to its toolset
+    for tool in tools {
+        if let Some(ts) = tool_to_toolset(tool) {
+            toolsets.insert(ts.to_string());
+        }
+    }
+
+    // MCP servers are also toolsets
+    if let Some(t) = template {
+        for server in &t.mcp_servers {
+            toolsets.insert(server.clone());
+        }
+    }
+
+    let mut result: Vec<String> = toolsets.into_iter().collect();
+    result.sort();
+    result
 }

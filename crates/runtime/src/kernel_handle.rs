@@ -182,6 +182,16 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
+    /// Activate a toolset for an agent's session and return refreshed tool list.
+    fn activate_toolset(
+        &self,
+        agent_id_str: &str,
+        toolset_name: &str,
+    ) -> Option<Vec<types::tool::ToolDefinition>> {
+        let _ = (agent_id_str, toolset_name);
+        None
+    }
+
     /// Get the home directory path (~/.opencarrier/).
     fn home_dir(&self) -> Option<std::path::PathBuf> {
         None

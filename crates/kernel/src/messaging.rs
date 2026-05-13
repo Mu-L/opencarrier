@@ -279,6 +279,7 @@ impl CarrierKernel {
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     label: None,
+                    active_toolsets: vec![],
                 })
         };
 
@@ -323,7 +324,10 @@ impl CarrierKernel {
             by_messages || by_tokens || by_quota
         };
 
-        let tools = self.available_tools(agent_id);
+        let tools = {
+            let active = session.active_toolsets.clone();
+            self.available_tools(agent_id, Some(&active))
+        };
         let tools = entry.mode.filter_tools(tools);
         let driver = self.resolve_driver(&entry.manifest)?;
 
@@ -358,7 +362,7 @@ impl CarrierKernel {
             // Auto-compact if the session is large before running the loop
             if needs_compact {
                 info!(agent_id = %agent_id, messages = session.messages.len(), "Auto-compacting session");
-                match kernel_clone.compact_agent_session(agent_id).await {
+                match kernel_clone.compact_agent_session(agent_id, session.id).await {
                     Ok(msg) => {
                         info!(agent_id = %agent_id, "{msg}");
                         // Reload the session after compaction
@@ -497,10 +501,11 @@ impl CarrierKernel {
                         let config = CompactionConfig::default();
                         let estimated = estimate_token_count(&session.messages, None, None);
                         if needs_compaction_by_tokens(estimated, &config) {
+                            let compact_session_id = session.id;
                             let kc = kernel_clone.clone();
                             tokio::spawn(async move {
                                 info!(agent_id = %agent_id, estimated_tokens = estimated, "Post-loop compaction triggered");
-                                if let Err(e) = kc.compact_agent_session(agent_id).await {
+                                if let Err(e) = kc.compact_agent_session(agent_id, compact_session_id).await {
                                     warn!(agent_id = %agent_id, "Post-loop compaction failed: {e}");
                                 }
                             });
@@ -711,6 +716,7 @@ impl CarrierKernel {
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     label: None,
+                    active_toolsets: vec![],
                 })
         };
 
@@ -736,7 +742,7 @@ impl CarrierKernel {
             };
             if by_messages || by_tokens || by_quota {
                 info!(agent_id = %agent_id, messages = session.messages.len(), estimated_tokens = estimated, "Pre-emptive compaction before LLM call");
-                match self.compact_agent_session(agent_id).await {
+                match self.compact_agent_session(agent_id, session.id).await {
                     Ok(msg) => {
                         info!(agent_id = %agent_id, "{msg}");
                         if let Ok(Some(reloaded)) = self.memory.get_session(session.id) {
@@ -752,7 +758,10 @@ impl CarrierKernel {
 
         let messages_before = session.messages.len();
 
-        let tools = self.available_tools(agent_id);
+        let tools = {
+            let active = session.active_toolsets.clone();
+            self.available_tools(agent_id, Some(&active))
+        };
         let tools = entry.mode.filter_tools(tools);
 
         info!(

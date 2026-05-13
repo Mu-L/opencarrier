@@ -1,8 +1,9 @@
-//! Tool resolution and prompt building — available_tools, MCP summary, system prompt.
+//! Tool resolution and prompt building — available_tools, toolset registry, system prompt.
 //!
-//! Assembles the tool set for each agent request: builtin tools filtered by
-//! profile/allowlist/blocklist, MCP tools, plugin tools, and whitelist additions.
-//! Also builds the structured system prompt via `PromptContext`.
+//! Assembles the tool set for each agent request using the toolset model:
+//! - Core tools (always visible): memory_store, memory_recall, session_summarize, use_toolset
+//! - Toolsets (on-demand): filesystem, shell, knowledge, media, misc, web, agent, + MCP servers
+//! - Toolset activation: auto_load_toolsets (manifest) + active_toolsets (session-level)
 
 use crate::kernel::CarrierKernel;
 use crate::prompt_sources::{
@@ -11,154 +12,140 @@ use crate::prompt_sources::{
     read_workspace_skills_prompts,
 };
 use types::agent::*;
-use types::capability::Capability;
 use types::tool::ToolDefinition;
 
+/// Tool names that are always visible (core tools).
+const CORE_TOOLS: &[&str] = &["memory_store", "memory_recall", "session_summarize", "use_toolset"];
+
+/// Map a builtin tool name to its toolset. Returns None for core tools.
+fn tool_to_toolset(name: &str) -> Option<&'static str> {
+    match name {
+        "memory_store" | "memory_recall" | "session_summarize" | "use_toolset" => None,
+        n if n.starts_with("file_") => Some("filesystem"),
+        "shell_exec" => Some("shell"),
+        n if n.starts_with("knowledge_") || n.starts_with("skill_") || n == "clone_evaluate" => Some("knowledge"),
+        n if n.starts_with("media_") || n.starts_with("image_") || n == "text_to_speech" || n == "speech_to_text" => Some("media"),
+        n if n.starts_with("web_") => Some("web"),
+        n if n.starts_with("agent_") || n.starts_with("train_") => Some("agent"),
+        n if n.starts_with("location_") || n.starts_with("system_") || n == "user_profile" => Some("misc"),
+        n if n.starts_with("docker_exec") || n.starts_with("process_") => Some("media"),
+        "apply_patch" => Some("filesystem"),
+        _ => Some("misc"),
+    }
+}
+
+/// Builtin toolset names (used to distinguish from MCP toolsets).
+const BUILTIN_TOOLSETS: &[&str] = &["filesystem", "shell", "knowledge", "media", "web", "agent", "misc"];
+
 impl CarrierKernel {
-    /// Collect the tools available to an agent based on its profile and allowlists.
+    /// Collect the tools available to an agent using toolset mode.
     ///
-    /// If `capabilities.tools` is empty (or contains `"*"`), all tools are
-    /// available (backwards compatible).
-    pub(crate) fn available_tools(&self, agent_id: AgentId) -> Vec<ToolDefinition> {
+    /// Always shows core tools + use_toolset. Additional tools come from
+    /// auto_load_toolsets (manifest) + active_toolsets (session-level).
+    pub(crate) fn available_tools(&self, agent_id: AgentId, active_toolsets: Option<&[String]>) -> Vec<ToolDefinition> {
         let all_builtins = runtime::tool_runner::builtin_tool_definitions();
-
-        // Look up agent entry for profile, skill/MCP allowlists, and declared tools
         let entry = self.registry.get(agent_id);
-        let (_skill_allowlist, mcp_allowlist, tool_profile) = entry
+
+        // Merge auto_load + active toolsets
+        let auto_load = entry
             .as_ref()
-            .map(|e| {
-                (
-                    e.manifest.skills.clone(),
-                    e.manifest.mcp_servers.clone(),
-                    e.manifest.profile.clone(),
-                )
-            })
+            .map(|e| e.manifest.auto_load_toolsets.clone())
             .unwrap_or_default();
-
-        // Extract the agent's declared tool list from capabilities.tools.
-        // This is the primary mechanism: only send declared tools to the LLM.
-        let declared_tools: Vec<String> = entry
-            .as_ref()
-            .map(|e| e.manifest.capabilities.tools.clone())
+        let active: Vec<String> = active_toolsets
+            .map(|s| s.to_vec())
             .unwrap_or_default();
-
-        // Only explicit "*" wildcard means unrestricted.
-        // Empty declared_tools + no profile = only whitelist tools.
-        let tools_unrestricted = declared_tools.iter().any(|t| t == "*");
-
-        // Step 1: Filter builtin tools.
-        // Priority: declared tools > ToolProfile > whitelist only.
-        let has_tool_all = entry.as_ref().is_some_and(|_| {
-            let caps = self.coordination.capabilities.list(agent_id);
-            caps.iter().any(|c| matches!(c, Capability::ToolAll))
-        });
-
-        let mut all_tools: Vec<ToolDefinition> = if tools_unrestricted {
-            // Explicit "*" — all builtins
-            all_builtins
-        } else if !declared_tools.is_empty() {
-            // Agent declares specific tools — only include matching builtins
-            all_builtins
-                .into_iter()
-                .filter(|t| declared_tools.iter().any(|d| d == &t.name))
-                .collect()
-        } else {
-            // No declared tools — fall back to profile or whitelist only
-            match &tool_profile {
-                Some(profile)
-                    if *profile != ToolProfile::Full && *profile != ToolProfile::Custom =>
-                {
-                    let allowed = profile.tools();
-                    all_builtins
-                        .into_iter()
-                        .filter(|t| allowed.iter().any(|a| a == "*" || a == &t.name))
-                        .collect()
-                }
-                Some(_) if has_tool_all => all_builtins,
-                // No profile, no declared tools, no ToolAll — only whitelist tools
-                _ => vec![],
+        let mut combined = auto_load;
+        for ts in &active {
+            if !combined.contains(ts) {
+                combined.push(ts.clone());
             }
-        };
-
-        // Step 3: Add MCP tools (filtered by agent's MCP server allowlist,
-        // then by declared tools).
-        if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
-            let mcp_candidates: Vec<ToolDefinition> = if mcp_allowlist.is_empty() {
-                mcp_tools.iter().cloned().collect()
-            } else {
-                let normalized: Vec<String> = mcp_allowlist
-                    .iter()
-                    .map(|s| runtime::mcp::normalize_name(s))
-                    .collect();
-                let known: Vec<&str> = normalized.iter().map(|s| s.as_str()).collect();
-                mcp_tools
-                    .iter()
-                    .filter(|t| {
-                        runtime::mcp::extract_mcp_server_from_known(&t.name, &known)
-                            .is_some()
-                    })
-                    .cloned()
-                    .collect()
-            };
-            // MCP tools are already filtered by mcp_servers allowlist above.
-            // Since mcp_servers is an explicit opt-in (like a plugin), all tools
-            // from declared servers are included automatically — no need to also
-            // list them in capabilities.tools.
-            all_tools.extend(mcp_candidates);
         }
 
-        // Step 3.5: Add plugin tools (from dlopen-loaded shared libraries).
-        if let Ok(guard) = self.plugins.plugin_tool_dispatcher.lock() {
-            if let Some(ref dispatcher) = *guard {
-                let plugin_defs = dispatcher.definitions();
-                tracing::info!(
-                    agent = %agent_id,
-                    plugin_tools_total = plugin_defs.len(),
-                    declared_tools_count = declared_tools.len(),
-                    tools_unrestricted,
-                    "Plugin tool filtering"
-                );
-                let mut matched = 0;
-                let mut unmatched = Vec::new();
-                for t in &plugin_defs {
-                    if !tools_unrestricted && !declared_tools.iter().any(|d| d == &t.name) {
-                        unmatched.push(t.name.clone());
-                        continue;
+        // When auto_load_toolsets is empty but capabilities.tools is non-empty
+        // (legacy clones), auto-derive toolsets from declared tool names + mcp_servers
+        if combined.is_empty() {
+            if let Some(ref e) = entry {
+                let declared = &e.manifest.capabilities.tools;
+                if !declared.is_empty() && !declared.iter().any(|t| t == "*") {
+                    for tool_name in declared {
+                        if let Some(ts) = tool_to_toolset(tool_name) {
+                            let ts_str = ts.to_string();
+                            if !combined.contains(&ts_str) {
+                                combined.push(ts_str);
+                            }
+                        }
+                        // MCP tool names: extract server and activate that toolset
+                        if let Some(server) = runtime::mcp::extract_mcp_server_from_known(
+                            tool_name,
+                            BUILTIN_TOOLSETS,
+                        ) {
+                            let ts_str = server.to_string();
+                            if !combined.contains(&ts_str) {
+                                combined.push(ts_str);
+                            }
+                        }
                     }
-                    matched += 1;
-                    all_tools.push(t.clone());
+                    // mcp_servers in manifest are also toolsets
+                    for server in &e.manifest.mcp_servers {
+                        if !combined.contains(server) {
+                            combined.push(server.clone());
+                        }
+                    }
                 }
-                tracing::info!(
-                    agent = %agent_id,
-                    matched,
-                    unmatched_count = unmatched.len(),
-                    "Plugin tool filter result"
-                );
-                tracing::info!(agent = %agent_id, ?unmatched, "All unmatched plugin tools");
-                tracing::info!(agent = %agent_id, ?declared_tools, "Declared tools in manifest");
             }
         }
 
-        // Step 4: Apply per-agent tool_allowlist/tool_blocklist overrides.
-        // These are separate from capabilities.tools and act as additional filters.
+        // Auto-activate toolsets for tools in whitelist_tools
+        let whitelist = &self.config.whitelist_tools;
+        if !whitelist.is_empty() {
+            for tool_name in whitelist {
+                if let Some(ts) = tool_to_toolset(tool_name) {
+                    if !combined.contains(&ts.to_string()) {
+                        combined.push(ts.to_string());
+                    }
+                }
+                // MCP whitelist tools: extract server name and activate that toolset
+                if let Some(server) = runtime::mcp::extract_mcp_server_from_known(
+                    tool_name,
+                    BUILTIN_TOOLSETS,
+                ) {
+                    let ts_name = server.to_string();
+                    if !combined.contains(&ts_name) {
+                        combined.push(ts_name);
+                    }
+                }
+            }
+        }
+
+        // Core tools always visible
+        let mut tools: Vec<ToolDefinition> = all_builtins
+            .iter()
+            .filter(|t| CORE_TOOLS.contains(&t.name.as_str()))
+            .cloned()
+            .collect();
+
+        // Add tools from each active/auto toolset
+        if let Ok(registry) = self.plugins.toolset_registry.read() {
+            for ts_name in &combined {
+                if let Some(toolset_tools) = registry.get(ts_name) {
+                    tools.extend(toolset_tools.iter().cloned());
+                }
+            }
+        }
+
+        // Apply tool_allowlist / tool_blocklist
         let (tool_allowlist, tool_blocklist) = entry
             .as_ref()
-            .map(|e| {
-                (
-                    e.manifest.tool_allowlist.clone(),
-                    e.manifest.tool_blocklist.clone(),
-                )
-            })
+            .map(|e| (e.manifest.tool_allowlist.clone(), e.manifest.tool_blocklist.clone()))
             .unwrap_or_default();
-
         if !tool_allowlist.is_empty() {
-            all_tools.retain(|t| tool_allowlist.iter().any(|a| a == &t.name));
+            tools.retain(|t| tool_allowlist.iter().any(|a| a == &t.name));
         }
         if !tool_blocklist.is_empty() {
-            all_tools.retain(|t| !tool_blocklist.iter().any(|b| b == &t.name));
+            tools.retain(|t| !tool_blocklist.iter().any(|b| b == &t.name));
         }
 
-        // Step 5: Remove shell_exec if exec_policy denies it.
+        // Remove shell_exec if exec_policy denies it
         let exec_blocks_shell = entry.as_ref().is_some_and(|e| {
             e.manifest
                 .exec_policy
@@ -166,138 +153,171 @@ impl CarrierKernel {
                 .is_some_and(|p| p.mode == types::config::ExecSecurityMode::Deny)
         });
         if exec_blocks_shell {
-            all_tools.retain(|t| t.name != "shell_exec");
+            tools.retain(|t| t.name != "shell_exec");
         }
 
-        // Step 6: Union with global whitelist tools.
-        // Whitelist tools are always available regardless of declaration.
-        let whitelist = &self.config.whitelist_tools;
+        // Add whitelist tools that aren't already included (covers edge cases
+        // like MCP whitelist tools whose server toolset isn't auto-activated)
         if !whitelist.is_empty() {
             let existing_names: std::collections::HashSet<String> =
-                all_tools.iter().map(|t| t.name.clone()).collect();
-            let all_defs: Vec<ToolDefinition> = runtime::tool_runner::builtin_tool_definitions();
-            let mut added = Vec::new();
-            for def in all_defs {
-                if whitelist.iter().any(|w| w == &def.name) && !existing_names.contains(&def.name) {
-                    added.push(def.name.clone());
-                    all_tools.push(def);
+                tools.iter().map(|t| t.name.clone()).collect();
+            // Check builtins
+            let all_defs = runtime::tool_runner::builtin_tool_definitions();
+            for def in &all_defs {
+                if whitelist.iter().any(|w| w == &def.name)
+                    && !existing_names.contains(&def.name)
+                {
+                    tools.push(def.clone());
                 }
             }
-            // Also check MCP tools and plugin tools for whitelist matches
+            // Check MCP tools
             if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
                 for def in mcp_tools.iter() {
                     if whitelist.iter().any(|w| w == &def.name)
                         && !existing_names.contains(&def.name)
-                        && !added.iter().any(|a| a == &def.name)
                     {
-                        added.push(def.name.clone());
-                        all_tools.push(def.clone());
+                        tools.push(def.clone());
                     }
                 }
             }
-            if let Ok(guard) = self.plugins.plugin_tool_dispatcher.lock() {
-                if let Some(ref dispatcher) = *guard {
-                    for def in dispatcher.definitions() {
-                        if whitelist.iter().any(|w| w == &def.name)
-                            && !existing_names.contains(&def.name)
-                            && !added.iter().any(|a| a == &def.name)
-                        {
-                            added.push(def.name.clone());
-                            all_tools.push(def.clone());
-                        }
-                    }
-                }
-            }
-            if !added.is_empty() {
-                tracing::info!(
-                    agent = %agent_id,
-                    ?added,
-                    "Whitelist tools added"
-                );
-            }
-        } else {
-            tracing::warn!(agent = %agent_id, "whitelist_tools is empty in config");
         }
 
-        all_tools
+        tools
     }
 
-    /// Build a compact MCP server/tool summary for the system prompt so the
-    /// agent knows what external tool servers are connected.
-    fn build_mcp_summary(&self, mcp_allowlist: &[String]) -> String {
-        let tools = match self.plugins.mcp_tools.lock() {
-            Ok(t) => t.clone(),
+    /// Build the toolset registry from builtin modules and MCP tools.
+    /// Must be called after MCP connections are established.
+    pub(crate) fn build_toolset_registry(&self) {
+        let mut registry: std::collections::HashMap<String, Vec<ToolDefinition>> =
+            std::collections::HashMap::new();
+
+        // Group builtin tools by toolset
+        let all_builtins = runtime::tool_runner::builtin_tool_definitions();
+        for tool in &all_builtins {
+            if let Some(ts_name) = tool_to_toolset(&tool.name) {
+                registry
+                    .entry(ts_name.to_string())
+                    .or_default()
+                    .push(tool.clone());
+            }
+        }
+
+        // Group MCP tools by server
+        if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
+            let known_names: Vec<String> = self
+                .plugins
+                .mcp_connections
+                .iter()
+                .map(|e| e.value().name().to_string())
+                .collect();
+            let known_refs: Vec<&str> = known_names.iter().map(|s| s.as_str()).collect();
+
+            for tool in mcp_tools.iter() {
+                if let Some(server) =
+                    runtime::mcp::extract_mcp_server_from_known(&tool.name, &known_refs)
+                {
+                    registry
+                        .entry(server.to_string())
+                        .or_default()
+                        .push(tool.clone());
+                }
+            }
+        }
+
+        tracing::info!(
+            toolset_count = registry.len(),
+            toolsets = ?registry.keys().collect::<Vec<_>>(),
+            "Built toolset registry"
+        );
+
+        if let Ok(mut reg) = self.plugins.toolset_registry.write() {
+            *reg = registry;
+        }
+    }
+
+    /// Build a compact toolset summary for the system prompt.
+    fn build_toolset_summary(
+        &self,
+        active_toolsets: &[String],
+        auto_load_toolsets: &[String],
+        mcp_allowlist: &[String],
+    ) -> String {
+        let registry = match self.plugins.toolset_registry.read() {
+            Ok(r) => r.clone(),
             Err(_) => return String::new(),
         };
-        if tools.is_empty() {
+        if registry.is_empty() {
             return String::new();
         }
 
-        // Normalize allowlist for matching
-        let normalized: Vec<String> = mcp_allowlist
-            .iter()
-            .map(|s| runtime::mcp::normalize_name(s))
-            .collect();
+        let mut summary = String::from(
+            "\n\n--- Toolsets ---\nYou can activate additional tools by calling use_toolset(\"name\").\n\n",
+        );
 
-        // Collect known server names from live connections for correct grouping.
-        // DashMap iteration doesn't block tool calls.
-        let known_names: Vec<String> = self
-            .plugins
-            .mcp_connections
-            .iter()
-            .map(|e| e.value().name().to_string())
-            .collect();
-        let known_refs: Vec<&str> = known_names.iter().map(|s| s.as_str()).collect();
+        // Sort: builtins first, MCP servers last
+        let mut entries: Vec<_> = registry.iter().collect();
+        entries.sort_by_key(|(name, _)| {
+            if BUILTIN_TOOLSETS.contains(&name.as_str()) {
+                0
+            } else {
+                1
+            }
+        });
 
-        // Group tools by MCP server using known-names resolver
-        let mut servers: std::collections::HashMap<String, Vec<String>> =
-            std::collections::HashMap::new();
-        let mut tool_count = 0usize;
-        for tool in &tools {
-            let server =
-                runtime::mcp::extract_mcp_server_from_known(&tool.name, &known_refs)
-                    .map(String::from)
-                    .unwrap_or_else(|| "unknown".to_string());
-
-            // Filter by MCP allowlist if set
-            if !mcp_allowlist.is_empty() && !normalized.iter().any(|n| n == &server) {
-                continue;
+        for (name, tools) in &entries {
+            // Filter by mcp_allowlist for MCP toolsets
+            let is_builtin = BUILTIN_TOOLSETS.contains(&name.as_str());
+            if !is_builtin && !mcp_allowlist.is_empty() {
+                let normalized = runtime::mcp::normalize_name(name);
+                if !mcp_allowlist
+                    .iter()
+                    .any(|a| runtime::mcp::normalize_name(a) == normalized)
+                {
+                    continue;
+                }
             }
 
-            // Extract the original tool name (after the mcp_{server}_ prefix)
-            let prefix = format!("mcp_{}_", server);
-            let tool_display = tool.name.strip_prefix(&prefix).unwrap_or(&tool.name);
+            let is_active = active_toolsets.contains(name) || auto_load_toolsets.contains(name);
+            let status = if is_active { "ACTIVE" } else { "available" };
 
-            servers
-                .entry(server)
-                .or_default()
-                .push(tool_display.to_string());
-            tool_count += 1;
-        }
-        if tool_count == 0 {
-            return String::new();
-        }
-        let mut summary = format!("\n\n--- Connected MCP Servers ({} tools) ---\n", tool_count);
-        for (server, tool_names) in &servers {
+            let examples: Vec<&str> = tools
+                .iter()
+                .take(3)
+                .map(|t| {
+                    let prefix = format!("mcp_{}_", name);
+                    t.name.strip_prefix(&prefix).unwrap_or(&t.name)
+                })
+                .collect();
+            let example_str = if tools.len() > 3 {
+                format!(
+                    "{}, ... ({} total)",
+                    examples.join(", "),
+                    tools.len()
+                )
+            } else {
+                examples.join(", ")
+            };
+
             summary.push_str(&format!(
-                "- {server}: {} tools ({})\n",
-                tool_names.len(),
-                tool_names.join(", ")
+                "- {} [{}]: {} tools ({})\n",
+                name,
+                status,
+                tools.len(),
+                example_str
             ));
         }
-        summary
-            .push_str("MCP tools are prefixed with mcp_{server}_ and work like regular tools.\n");
-        // Add filesystem-specific guidance when a filesystem MCP server is connected
-        let has_filesystem = servers.keys().any(|s| s.contains("filesystem"));
-        if has_filesystem {
+
+        // Filesystem MCP guidance
+        if registry.keys().any(|s| s.contains("filesystem")) {
             summary.push_str(
                 "IMPORTANT: For accessing files OUTSIDE your workspace directory, you MUST use \
                  the MCP filesystem tools (e.g. mcp_filesystem_read_file, mcp_filesystem_list_directory) \
                  instead of the built-in file_read/file_list/file_write tools, which are restricted to \
                  the workspace. The MCP filesystem server has been granted access to specific directories \
-                 by the user.",
+                 by the user.\n",
             );
         }
+
         summary
     }
 
@@ -311,7 +331,6 @@ impl CarrierKernel {
         sender_id: &Option<String>,
         sender_name: Option<String>,
     ) {
-        let mcp_tool_count = self.plugins.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
         // Read user_name from the agent's KV namespace (per-sender memory)
         let sid = sender_id.as_deref().unwrap_or("");
         let user_name = self
@@ -335,6 +354,16 @@ impl CarrierKernel {
             })
             .collect();
 
+        // Load session for toolset summary
+        let entry_ref = self.registry.get(*agent_id);
+        let session = entry_ref
+            .as_ref()
+            .and_then(|e| self.memory.get_session(e.session_id).ok().flatten());
+        let active = session
+            .as_ref()
+            .map(|s| s.active_toolsets.clone())
+            .unwrap_or_default();
+
         let prompt_ctx = runtime::prompt_builder::PromptContext {
             agent_name: manifest.name.clone(),
             agent_description: manifest.description.clone(),
@@ -343,11 +372,11 @@ impl CarrierKernel {
             recalled_memories: vec![],
             skill_summary: String::new(),
             skill_prompt_context: String::new(),
-            mcp_summary: if mcp_tool_count > 0 {
-                self.build_mcp_summary(&manifest.mcp_servers)
-            } else {
-                String::new()
-            },
+            mcp_summary: self.build_toolset_summary(
+                &active,
+                &manifest.auto_load_toolsets,
+                &manifest.mcp_servers,
+            ),
             workspace_path: manifest.workspace.as_ref().map(|p| p.display().to_string()),
             soul_md: manifest
                 .workspace

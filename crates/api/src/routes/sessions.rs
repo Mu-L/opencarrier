@@ -454,7 +454,7 @@ pub async fn compact_session(
         Ok(id) => id,
         Err(resp) => return resp,
     };
-    match state.kernel.compact_agent_session(agent_id).await {
+    match state.kernel.compact_agent_session(agent_id, state.kernel.registry.get(agent_id).map(|e| e.session_id).unwrap_or_else(|| types::agent::SessionId(uuid::Uuid::nil()))).await {
         Ok(msg) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "message": msg})),

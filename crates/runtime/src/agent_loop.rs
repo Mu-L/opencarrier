@@ -989,19 +989,39 @@ async fn run_agent_loop_impl(
                 let tools_may_have_changed = response.tool_calls.iter().any(|tc| {
                     matches!(
                         tc.name.as_str(),
-                        "train_write" | "file_write"
+                        "train_write" | "file_write" | "use_toolset"
                     )
                 });
                 if tools_may_have_changed {
                     if let Some(ref kernel) = kernel {
                         let agent_id_str = session.agent_id.to_string();
-                        if let Some(new_tools) = kernel.refresh_tools(&agent_id_str) {
+                        // Check for use_toolset calls — activate the toolset instead of simple refresh
+                        let toolset_calls: Vec<&str> = response.tool_calls.iter()
+                            .filter(|tc| tc.name == "use_toolset")
+                            .filter_map(|tc| tc.input.get("toolset").and_then(|v| v.as_str()))
+                            .collect();
+
+                        let new_tools = if !toolset_calls.is_empty() {
+                            // Activate each requested toolset
+                            let mut latest_tools = None;
+                            for ts_name in &toolset_calls {
+                                if let Some(tools) = kernel.activate_toolset(&agent_id_str, ts_name) {
+                                    info!(toolset = ts_name, tools_count = tools.len(), "Toolset activated");
+                                    latest_tools = Some(tools);
+                                }
+                            }
+                            latest_tools
+                        } else {
+                            kernel.refresh_tools(&agent_id_str)
+                        };
+
+                        if let Some(new_tools) = new_tools {
                             if new_tools.len() != available_tools.len() {
                                 let added = new_tools.len().saturating_sub(available_tools.len());
                                 info!(
                                     added,
                                     total = new_tools.len(),
-                                    "Tool list refreshed after skill installation "
+                                    "Tool list refreshed after toolset activation"
                                 );
                                 tools_owned = new_tools;
                                 available_tools = &tools_owned;
@@ -1336,6 +1356,7 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            active_toolsets: vec![],
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyAfterToolUseDriver::new());
@@ -1387,6 +1408,7 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            active_toolsets: vec![],
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyAfterToolUseDriver::new());
@@ -1440,6 +1462,7 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            active_toolsets: vec![],
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyMaxTokensDriver);
@@ -1491,6 +1514,7 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            active_toolsets: vec![],
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(NormalDriver);
@@ -1533,6 +1557,7 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            active_toolsets: vec![],
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyAfterToolUseDriver::new());
@@ -1660,6 +1685,7 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            active_toolsets: vec![],
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyThenNormalDriver::new());
@@ -1705,6 +1731,7 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            active_toolsets: vec![],
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(AlwaysEmptyDriver);
@@ -1756,6 +1783,7 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            active_toolsets: vec![],
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyMaxTokensDriver);
@@ -2634,6 +2662,7 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            active_toolsets: vec![],
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(TextToolCallDriver::new());
@@ -2705,6 +2734,7 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            active_toolsets: vec![],
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(NormalDriver);
@@ -2758,6 +2788,7 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
+            active_toolsets: vec![],
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(TextToolCallDriver::new());

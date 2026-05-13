@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 14;
+const SCHEMA_VERSION: u32 = 15;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -65,6 +65,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 14 {
         migrate_v14(conn)?;
+    }
+
+    if current_version < 15 {
+        migrate_v15(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -582,6 +586,22 @@ fn migrate_v14(conn: &Connection) -> Result<(), rusqlite::Error> {
         INSERT OR IGNORE INTO migrations (version, applied_at, description)
         VALUES (14, datetime('now'), 'Owner/user model: split sender_id into owner_id + user_id in kv_store/kv_history');
         ",
+    )?;
+    Ok(())
+}
+
+fn migrate_v15(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "sessions", "active_toolsets") {
+        conn.execute_batch(
+            "
+            ALTER TABLE sessions ADD COLUMN active_toolsets TEXT NOT NULL DEFAULT '[]';
+            ",
+        )?;
+    }
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![15, "Session: add active_toolsets for toolset on-demand loading"],
     )?;
     Ok(())
 }

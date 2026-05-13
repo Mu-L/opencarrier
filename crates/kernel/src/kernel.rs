@@ -70,6 +70,8 @@ pub struct KernelPlugins {
     pub mcp_connections: dashmap::DashMap<String, runtime::mcp::McpConnection>,
     /// MCP tool definitions cache (populated after connections are established).
     pub mcp_tools: std::sync::Mutex<Vec<ToolDefinition>>,
+    /// Toolset registry: name -> tool definitions for that toolset.
+    pub toolset_registry: std::sync::RwLock<std::collections::HashMap<String, Vec<ToolDefinition>>>,
     /// Configured MCP server list (from config, used for MCP connections).
     pub effective_mcp_servers: std::sync::RwLock<Vec<types::config::McpServerConfigEntry>>,
     /// Plugin tool dispatcher — routes plugin tool calls to loaded shared libraries.
@@ -570,6 +572,7 @@ impl CarrierKernel {
             plugins: KernelPlugins {
                 mcp_connections: dashmap::DashMap::new(),
                 mcp_tools: std::sync::Mutex::new(Vec::new()),
+                toolset_registry: std::sync::RwLock::new(std::collections::HashMap::new()),
                 effective_mcp_servers: std::sync::RwLock::new(all_mcp_servers),
                 plugin_tool_dispatcher: std::sync::Mutex::new(None),
                 mcp_reconnect_failures: dashmap::DashMap::new(),
@@ -843,6 +846,7 @@ mod tests {
             tools: HashMap::new(),
             skills: vec![],
             mcp_servers: vec![],
+            auto_load_toolsets: vec![],
             metadata: HashMap::new(),
             tags: vec![],
             autonomous: None,
@@ -878,6 +882,7 @@ mod tests {
             tools: HashMap::new(),
             skills: vec![],
             mcp_servers: vec![],
+            auto_load_toolsets: vec![],
             metadata: HashMap::new(),
             tags,
             autonomous: None,

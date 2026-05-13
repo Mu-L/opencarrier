@@ -424,7 +424,10 @@ async fn tool_media_describe(
     let prompt = input["prompt"]
         .as_str()
         .unwrap_or("Describe this image in detail.");
-    let _ = crate::tools::validate_path(path)?;
+    // Allow /tmp/ paths for browser screenshots; validate relative paths normally
+    if !path.starts_with("/tmp/") {
+        let _ = crate::tools::validate_path(path)?;
+    }
 
     // Read image file
     let data = tokio::fs::read(path)
@@ -511,7 +514,10 @@ async fn tool_media_transcribe(
     use base64::Engine;
     let brain = brain.ok_or("Brain not available. Ensure audio modality is configured.")?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let _ = crate::tools::validate_path(path)?;
+    // Allow /tmp/ paths for browser screenshots; validate relative paths normally
+    if !path.starts_with("/tmp/") {
+        let _ = crate::tools::validate_path(path)?;
+    }
 
     // Read audio file
     let data = tokio::fs::read(path)

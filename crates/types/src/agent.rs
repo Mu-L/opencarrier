@@ -379,6 +379,10 @@ pub struct AgentManifest {
     /// MCP server allowlist (empty = all connected MCP servers available).
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub mcp_servers: Vec<String>,
+    /// Toolsets that are active by default (no use_toolset call needed).
+    /// When non-empty, only core tools + listed toolsets are shown to the LLM.
+    #[serde(default)]
+    pub auto_load_toolsets: Vec<String>,
     /// Custom metadata.
     #[serde(default, deserialize_with = "crate::serde_compat::map_lenient")]
     pub metadata: HashMap<String, serde_json::Value>,
@@ -460,6 +464,7 @@ impl Default for AgentManifest {
             tools: HashMap::new(),
             skills: Vec::new(),
             mcp_servers: Vec::new(),
+            auto_load_toolsets: Vec::new(),
             metadata: HashMap::new(),
             tags: Vec::new(),
             autonomous: None,
@@ -670,6 +675,7 @@ mod tests {
             tools: HashMap::new(),
             skills: vec![],
             mcp_servers: vec![],
+            auto_load_toolsets: vec![],
             metadata: HashMap::new(),
             tags: vec!["test".to_string()],
             autonomous: None,
