@@ -78,9 +78,9 @@ define_params!(CreateDraftParams {
     thumb_media_id: Option<String>,
     #[schemars(description = "Show cover in article body (1=yes 0=no, default 1)")]
     need_open_comment: Option<i32>,
-    #[schemars(description = "Image list for newspic type. JSON array: [{\"image_media_id\": \"...\"}]")]
+    #[schemars(description = "Image info for newspic type. JSON object: {\"image_list\": [{\"image_media_id\": \"...\"}]}")]
     image_info: Option<serde_json::Value>,
-    #[schemars(description = "Cover crop for newspic type. JSON array: [{\"ratio\": \"1_1\", \"x1\": \"0\", \"y1\": \"0\", \"x2\": \"1\", \"y2\": \"1\"}]")]
+    #[schemars(description = "Cover crop for newspic type. JSON object: {\"crop_percent_list\": [{\"ratio\": \"1_1\", \"x1\": \"0\", \"y1\": \"0\", \"x2\": \"1\", \"y2\": \"1\"}]}")]
     cover_info: Option<serde_json::Value>,
 });
 
@@ -238,20 +238,14 @@ impl WeChatOaServer {
         }
 
         if let Some(images) = params.image_info {
-            tracing::warn!("[create_draft] image_info raw type={}, value={}", images, serde_json::to_string(&images).unwrap_or_default());
             let parsed = coerce_json_value(images);
-            tracing::warn!("[create_draft] image_info after coerce type={}, value={}", parsed, serde_json::to_string(&parsed).unwrap_or_default());
-            article["image_info"] = serde_json::json!({ "image_list": parsed });
+            article["image_info"] = parsed;
         }
 
         if let Some(crops) = params.cover_info {
-            tracing::warn!("[create_draft] cover_info raw type={}, value={}", crops, serde_json::to_string(&crops).unwrap_or_default());
             let parsed = coerce_json_value(crops);
-            tracing::warn!("[create_draft] cover_info after coerce type={}, value={}", parsed, serde_json::to_string(&parsed).unwrap_or_default());
-            article["cover_info"] = serde_json::json!({ "crop_percent_list": parsed });
+            article["cover_info"] = parsed;
         }
-
-        tracing::warn!("[create_draft] final body={}", serde_json::to_string(&article).unwrap_or_default());
 
         let body = serde_json::json!({ "articles": [article] });
         match self
@@ -439,14 +433,9 @@ fn json_to_string(v: &serde_json::Value) -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Log to file for debugging — stdout is reserved for MCP protocol.
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/home/ubuntu/.opencarrier/wechat-oa-mcp.log")
-        .unwrap_or_else(|_| std::fs::File::create("/tmp/wechat-oa-mcp.log").unwrap());
+    // Log to stderr — stdout is reserved for the MCP protocol.
     tracing_subscriber::fmt()
-        .with_writer(std::sync::Mutex::new(log_file))
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("WECHAT_OA_MCP_LOG")
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
