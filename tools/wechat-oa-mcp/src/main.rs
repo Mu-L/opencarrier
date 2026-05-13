@@ -61,28 +61,6 @@ define_params!(UploadMediaFromUrlParams {
     url: String,
 });
 
-// Sub-structs for newspic article type
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct ImageItem {
-    #[schemars(description = "Image media_id (from upload_media or upload_media_from_url)")]
-    image_media_id: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct CoverCrop {
-    #[schemars(description = "Aspect ratio, e.g. \"1_1\", \"4_3\"")]
-    ratio: String,
-    #[schemars(description = "Crop left (0-1 as string, e.g. \"0\")")]
-    x1: String,
-    #[schemars(description = "Crop top (0-1 as string, e.g. \"0\")")]
-    y1: String,
-    #[schemars(description = "Crop right (0-1 as string, e.g. \"1\")")]
-    x2: String,
-    #[schemars(description = "Crop bottom (0-1 as string, e.g. \"1\")")]
-    y2: String,
-}
-
 define_params!(CreateDraftParams {
     #[schemars(description = "Article type: \"news\" (default) or \"newspic\" (image gallery)")]
     article_type: Option<String>,
@@ -100,10 +78,10 @@ define_params!(CreateDraftParams {
     thumb_media_id: Option<String>,
     #[schemars(description = "Show cover in article body (1=yes 0=no, default 1)")]
     need_open_comment: Option<i32>,
-    #[schemars(description = "Image list for newspic type. Each item has an image_media_id.")]
-    image_info: Option<Vec<ImageItem>>,
-    #[schemars(description = "Cover crop info for newspic type. Each item has ratio, x1, y1, x2, y2.")]
-    cover_info: Option<Vec<CoverCrop>>,
+    #[schemars(description = "Image list for newspic type. JSON array: [{\"image_media_id\": \"...\"}]")]
+    image_info: Option<serde_json::Value>,
+    #[schemars(description = "Cover crop for newspic type. JSON array: [{\"ratio\": \"1_1\", \"x1\": \"0\", \"y1\": \"0\", \"x2\": \"1\", \"y2\": \"1\"}]")]
+    cover_info: Option<serde_json::Value>,
 });
 
 define_params!(GetDraftParams {
@@ -260,23 +238,13 @@ impl WeChatOaServer {
         }
 
         if let Some(images) = params.image_info {
-            article["image_info"] = serde_json::json!({
-                "image_list": images.iter().map(|img| {
-                    serde_json::json!({ "image_media_id": img.image_media_id })
-                }).collect::<Vec<_>>()
-            });
+            let parsed = coerce_json_value(images);
+            article["image_info"] = serde_json::json!({ "image_list": parsed });
         }
 
         if let Some(crops) = params.cover_info {
-            article["cover_info"] = serde_json::json!({
-                "crop_percent_list": crops.iter().map(|c| {
-                    serde_json::json!({
-                        "ratio": c.ratio,
-                        "x1": c.x1, "y1": c.y1,
-                        "x2": c.x2, "y2": c.y2,
-                    })
-                }).collect::<Vec<_>>()
-            });
+            let parsed = coerce_json_value(crops);
+            article["cover_info"] = serde_json::json!({ "crop_percent_list": parsed });
         }
 
         let body = serde_json::json!({ "articles": [article] });
@@ -443,6 +411,17 @@ impl WeChatOaServer {
 // ================================================================== //
 //  Helpers                                                             //
 // ================================================================== //
+
+/// If the LLM passed a JSON value as a string (common with complex MCP params),
+/// parse it back into a proper JSON value. Otherwise return as-is.
+fn coerce_json_value(v: serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::String(s) => {
+            serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))
+        }
+        other => other,
+    }
+}
 
 fn json_to_string(v: &serde_json::Value) -> String {
     serde_json::to_string(v).unwrap_or_else(|e| format!("{{\"error\": \"serialize: {}\"}}", e))
