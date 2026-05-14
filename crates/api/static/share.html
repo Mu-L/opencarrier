@@ -64,10 +64,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 .stat .num{font-size:20px;font-weight:700;color:#1a1a1a}
 .stat .label{font-size:11px;color:#999}
 
-/* ── Birth Certificate ── */
-.birth-cert{background:#fff;border-radius:16px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.05);margin-bottom:16px}
-.birth-cert h3{font-size:14px;font-weight:600;color:#333;margin-bottom:12px}
-#share-img{width:100%;max-width:320px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.1);display:block;margin:0 auto}
+/* ── Share Card ── */
+.share-card{background:#fff;border-radius:16px;padding:20px;box-shadow:0 1px 4px rgba(0,0,0,.05);margin-bottom:16px}
+.share-card h3{font-size:14px;font-weight:600;color:#333;margin-bottom:12px}
+#share-img{width:100%;max-width:320px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.08);display:block;margin:0 auto}
 .save-hint{font-size:12px;color:#999;text-align:center;margin-top:8px}
 
 /* ── Bottom Bar ── */
@@ -479,8 +479,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         '<div class="stat"><div class="num">' + formatCount(installs) + '</div><div class="label">安装</div></div>' +
         '<div class="stat"><div class="num">' + esc(agent.source === 'hub' ? 'Hub' : '本地') + '</div><div class="label">来源</div></div>' +
       '</div>' +
-      '<div class="birth-cert">' +
-        '<h3>分身出生证</h3>' +
+      '<div class="share-card">' +
+        '<h3>分享</h3>' +
         '<canvas id="cert-canvas" style="display:none"></canvas>' +
         '<img id="share-img" style="display:none">' +
         '<div id="cert-loading" style="text-align:center;padding:20px;color:#999">生成中…</div>' +
@@ -500,69 +500,88 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     showView('home');
   };
 
-  // ── Birth Certificate Canvas ──
+  // ── Share Card Canvas ──
   function generateBirthCert(agent) {
-    var canvas = document.createElement('canvas');
     var scale = 2;
     var cw = 340;
     var pad = 28;
-    var qrSize = 140;
+    var qrSize = 136;
+    var avatarSize = 52;
     var color = getColor(agent);
     var displayName = agent.display_name || agent.name || '';
-    var desc = (agent.description || '').substring(0, 80);
+    var desc = agent.description || '';
     var shareUrl = location.origin + '/share?clone=' + encodeURIComponent(agent.name);
 
     // Measure text
-    var ctx = canvas.getContext('2d');
-    ctx.font = 'bold 20px -apple-system,sans-serif';
-    var titleLines = wrapLines(displayName, cw - pad * 2, ctx, 2);
-    ctx.font = '13px -apple-system,sans-serif';
-    var descLines = wrapLines(desc, cw - pad * 2, ctx, 3);
+    var tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = 1; tmpCanvas.height = 1;
+    var tc = tmpCanvas.getContext('2d');
+    tc.font = 'bold 20px -apple-system,sans-serif';
+    var titleLines = wrapLines(displayName, cw - pad * 2, tc, 2);
+    tc.font = '13px -apple-system,sans-serif';
+    var descLines = wrapLines(desc, cw - pad * 2, tc, 3);
 
-    var titleH = titleLines.length * 26;
+    var titleH = titleLines.length * 28;
     var descH = descLines.length * 20;
-    var totalH = pad + 8 + titleH + 6 + descH + 20 + qrSize + 16 + 20 + 16 + pad;
+    var totalH = pad + avatarSize + 14 + titleH + 6 + descH + 24 + qrSize + 12 + 22 + 16 + pad;
 
+    var canvas = document.createElement('canvas');
     canvas.width = cw * scale;
     canvas.height = totalH * scale;
-    ctx = canvas.getContext('2d');
+    var ctx = canvas.getContext('2d');
     ctx.scale(scale, scale);
 
-    // Background
+    // White rounded card
     ctx.fillStyle = '#ffffff';
     roundRect(ctx, 0, 0, cw, totalH, 16);
     ctx.fill();
 
-    // Top accent bar
-    ctx.fillStyle = color;
-    ctx.fillRect(0, 0, cw, 5);
+    // Top gradient accent
+    var grad = ctx.createLinearGradient(0, 0, cw, 0);
+    grad.addColorStop(0, color);
+    grad.addColorStop(1, shiftColor(color, 40));
+    ctx.fillStyle = grad;
+    roundRectTop(ctx, 0, 0, cw, 5, 16);
+    ctx.fill();
 
-    // Initial
+    var y = pad;
+
+    // Avatar circle
+    var ax = cw / 2;
+    ctx.fillStyle = color + '20';
+    ctx.beginPath();
+    ctx.arc(ax, y + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Avatar emoji
     var initial = getInitial(agent);
-    ctx.font = '36px -apple-system,sans-serif';
+    ctx.fillStyle = color;
+    ctx.font = avatarSize * 0.5 + 'px -apple-system,sans-serif';
     ctx.textAlign = 'center';
-    var y = pad + 8 + 28;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(initial, ax, y + avatarSize / 2 + 1);
+    ctx.textBaseline = 'alphabetic';
+
+    y += avatarSize + 14;
 
     // Title
     ctx.fillStyle = '#1a1a1a';
     ctx.font = 'bold 20px -apple-system,sans-serif';
     ctx.textAlign = 'center';
     titleLines.forEach(function(line) {
-      ctx.fillText(line, cw / 2, y);
-      y += 26;
+      ctx.fillText(line, cw / 2, y + 20);
+      y += 28;
     });
-
     y += 6;
 
     // Description
-    ctx.fillStyle = '#888888';
+    ctx.fillStyle = '#999999';
     ctx.font = '13px -apple-system,sans-serif';
     descLines.forEach(function(line) {
       ctx.fillText(line, cw / 2, y + 14);
       y += 20;
     });
-
-    y += 20;
+    y += 24;
 
     // QR code
     var qrX = (cw - qrSize) / 2;
@@ -574,31 +593,39 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
         var qrImg = new Image();
         var qrDataUrl = 'data:image/gif;base64,' + qr.createDataURL(3, 0);
         qrImg.onload = function() {
+          // QR white background with rounded corners
+          ctx.fillStyle = '#ffffff';
+          roundRect(ctx, qrX - 6, y - 6, qrSize + 12, qrSize + 12, 10);
+          ctx.fill();
+          ctx.strokeStyle = '#f0f0f0';
+          ctx.lineWidth = 1;
+          roundRect(ctx, qrX - 6, y - 6, qrSize + 12, qrSize + 12, 10);
+          ctx.stroke();
           ctx.drawImage(qrImg, qrX, y, qrSize, qrSize);
-          finishCert();
+          finishCard(y);
         };
         qrImg.src = qrDataUrl;
       } catch(e) {
-        finishCert();
+        finishCard(y);
       }
     } else {
-      finishCert();
+      finishCard(y);
     }
 
-    function finishCert() {
-      y += qrSize + 16;
+    function finishCard(qrY) {
+      var fy = qrY + qrSize + 14;
 
-      // "扫码安装分身"
+      // "扫码安装"
       ctx.fillStyle = '#1a1a1a';
-      ctx.font = '15px -apple-system,sans-serif';
+      ctx.font = '14px -apple-system,sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('扫码安装分身', cw / 2, y + 14);
-      y += 26;
+      ctx.fillText('扫码安装', cw / 2, fy + 12);
+      fy += 26;
 
-      // Footer
-      ctx.fillStyle = '#aaaaaa';
+      // Branding
+      ctx.fillStyle = '#cccccc';
       ctx.font = '11px -apple-system,sans-serif';
-      ctx.fillText('OpenCarrier', cw / 2, y + 10);
+      ctx.fillText('OpenCarrier', cw / 2, fy + 8);
 
       // Show image
       var imgEl = document.getElementById('share-img');
@@ -611,6 +638,27 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       var hint = document.getElementById('cert-hint');
       if (hint) hint.style.display = 'block';
     }
+  }
+
+  function shiftColor(hex, amount) {
+    hex = hex.replace('#', '');
+    if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+    var r = Math.min(255, parseInt(hex.substring(0,2), 16) + amount);
+    var g = Math.min(255, parseInt(hex.substring(2,4), 16) + amount);
+    var b = Math.min(255, parseInt(hex.substring(4,6), 16) + amount);
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+  }
+
+  function roundRectTop(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h);
+    ctx.lineTo(x, y + h);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
   }
 
   function wrapLines(text, maxWidth, ctx, maxLines) {
