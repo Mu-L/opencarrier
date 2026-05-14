@@ -1383,7 +1383,7 @@ async fn register_bot_from_scan(
             let sf = channel_wecom::token::WecomSessionFile {
                 channel: "wecom".to_string(),
                 sender_key: "bot_id".to_string(),
-                name: format!("{}-wecom", agent_name),
+                name: agent_name.to_string(),
                 mode: "smartbot".to_string(),
                 bot_id: Some(wecom_bot_id.clone()),
                 agent_id: None,
@@ -1433,7 +1433,7 @@ async fn register_bot_from_scan(
             let sf = channel_feishu::models::FeishuSessionFile {
                 channel: "feishu".to_string(),
                 sender_key: "app_id".to_string(),
-                name: format!("{}-feishu", agent_name),
+                name: agent_name.to_string(),
                 app_id: app_id.clone(),
                 app_secret: Some(app_secret),
                 secret_env: None,
@@ -1475,7 +1475,7 @@ async fn register_bot_from_scan(
             let sf = channel_dingtalk::models::DingTalkSessionFile {
                 channel: "dingtalk".to_string(),
                 sender_key: "app_key".to_string(),
-                name: format!("{}-dingtalk", agent_name),
+                name: agent_name.to_string(),
                 app_key: app_key.clone(),
                 app_secret: Some(app_secret),
                 secret_env: None,
