@@ -1,12 +1,20 @@
 //! Sender-based routing — dispatches inbound messages to agents by sender_id.
 //!
 //! Directory structure:
-//!   ~/.opencarrier/senders/{sender_id}/config.json   — default routing config
-//!   ~/.opencarrier/senders/{sender_id}/aliases.json   — name → agent_id mappings
-//!   ~/.opencarrier/senders/{sender_id}/{agent_id}/    — per-sender per-agent session data
+//!   ~/.opencarrier/senders/{sender_id}/config.json   — routing + clone registry
 //!
-//! New senders are auto-assigned to the first available agent.
-//! Each sender can give agents custom names (aliases) for natural-language routing.
+//! config.json format (unified):
+//!   {
+//!     "default": "<agent_id>",          // current active clone
+//!     "clones": {
+//!       "<agent_id>": { "alias": "名字", "installed_at": 1778713691 },
+//!       ...
+//!     },
+//!     "created_at": 1778389219
+//!   }
+//!
+//! Legacy format (auto-migrated on first load):
+//!   { "agent_id": "...", "created_at": ... }  +  aliases.json
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -15,16 +23,31 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tracing::{info, warn};
 
-/// Per-sender routing config (default agent).
-#[derive(Serialize, Deserialize)]
+/// A clone bound to a sender.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CloneEntry {
+    pub alias: String,
+    pub installed_at: i64,
+}
+
+/// Unified sender config: default route + all bound clones.
+#[derive(Serialize, Deserialize, Debug)]
 struct SenderConfig {
+    default: String,
+    clones: HashMap<String, CloneEntry>,
+    created_at: i64,
+}
+
+/// Legacy format for migration.
+#[derive(Deserialize)]
+struct LegacySenderConfig {
     agent_id: String,
     created_at: i64,
 }
 
-/// Per-sender alias mappings persisted to disk.
-#[derive(Serialize, Deserialize, Default)]
-struct AliasMap {
+/// Legacy alias map for migration.
+#[derive(Deserialize, Default)]
+struct LegacyAliasMap {
     aliases: HashMap<String, String>,
 }
 
@@ -34,8 +57,8 @@ struct AliasMap {
 pub struct SenderRouter {
     /// In-memory cache: sender_id → agent_id (default route).
     routes: DashMap<String, String>,
-    /// In-memory cache: sender_id → { name → agent_id } aliases.
-    aliases: DashMap<String, HashMap<String, String>>,
+    /// In-memory cache: sender_id → { agent_id → CloneEntry }.
+    clones: DashMap<String, HashMap<String, CloneEntry>>,
     /// Root directory: ~/.opencarrier/senders/
     senders_dir: PathBuf,
     /// First available agent (for auto-assigning new senders).
@@ -47,7 +70,7 @@ impl SenderRouter {
         let senders_dir = home_dir.join("senders");
         let router = Self {
             routes: DashMap::new(),
-            aliases: DashMap::new(),
+            clones: DashMap::new(),
             senders_dir,
             first_agent: Mutex::new(None),
         };
@@ -65,6 +88,7 @@ impl SenderRouter {
     }
 
     /// Load all existing sender configs from disk into memory.
+    /// Handles both new and legacy formats, migrating on the fly.
     fn load_all_from_disk(&self) {
         if !self.senders_dir.exists() {
             return;
@@ -77,42 +101,80 @@ impl SenderRouter {
             let sender_id = entry.file_name().to_string_lossy().to_string();
             let sender_dir = entry.path();
 
-            // Load default route
             let config_path = sender_dir.join("config.json");
-            if config_path.exists() {
-                match std::fs::read_to_string(&config_path) {
-                    Ok(content) => match serde_json::from_str::<SenderConfig>(&content) {
-                        Ok(config) => {
-                            self.routes
-                                .insert(sender_id.clone(), config.agent_id.clone());
-                            info!(sender = %sender_id, agent = %config.agent_id, "Loaded sender route");
-                        }
-                        Err(e) => warn!("Failed to parse sender config: {e}"),
-                    },
-                    Err(e) => warn!("Failed to read sender config: {e}"),
+            if !config_path.exists() {
+                continue;
+            }
+            let content = match std::fs::read_to_string(&config_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(sender = %sender_id, "Failed to read config: {e}");
+                    continue;
                 }
+            };
+
+            // Try new format first
+            if let Ok(config) = serde_json::from_str::<SenderConfig>(&content) {
+                self.routes.insert(sender_id.clone(), config.default);
+                self.clones.insert(sender_id.clone(), config.clones);
+                info!(sender = %sender_id, default = ?self.routes.get(&sender_id).map(|r| r.value().clone()), clones = ?self.clones.get(&sender_id).map(|c| c.len()), "Loaded sender config (new format)");
+                continue;
             }
 
-            // Load aliases
+            // Fall back to legacy format
+            let legacy: LegacySenderConfig = match serde_json::from_str(&content) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(sender = %sender_id, "Failed to parse config: {e}");
+                    continue;
+                }
+            };
+
+            self.routes
+                .insert(sender_id.clone(), legacy.agent_id.clone());
+
+            // Merge aliases.json into clones map
+            let mut clones_map = HashMap::new();
             let alias_path = sender_dir.join("aliases.json");
             if alias_path.exists() {
-                match std::fs::read_to_string(&alias_path) {
-                    Ok(content) => match serde_json::from_str::<AliasMap>(&content) {
-                        Ok(alias_map) => {
-                            if !alias_map.aliases.is_empty() {
-                                info!(
-                                    sender = %sender_id,
-                                    count = alias_map.aliases.len(),
-                                    "Loaded sender aliases"
-                                );
-                                self.aliases.insert(sender_id.clone(), alias_map.aliases);
-                            }
+                if let Ok(alias_content) = std::fs::read_to_string(&alias_path) {
+                    if let Ok(alias_map) = serde_json::from_str::<LegacyAliasMap>(&alias_content) {
+                        for (name, agent_id) in alias_map.aliases {
+                            clones_map.insert(
+                                agent_id,
+                                CloneEntry {
+                                    alias: name,
+                                    installed_at: legacy.created_at,
+                                },
+                            );
                         }
-                        Err(e) => warn!("Failed to parse sender aliases: {e}"),
-                    },
-                    Err(e) => warn!("Failed to read sender aliases: {e}"),
+                    }
                 }
             }
+            // Ensure the default agent is in clones
+            if !clones_map.contains_key(&legacy.agent_id) {
+                clones_map.insert(
+                    legacy.agent_id.clone(),
+                    CloneEntry {
+                        alias: String::new(),
+                        installed_at: legacy.created_at,
+                    },
+                );
+            }
+
+            info!(
+                sender = %sender_id,
+                default = %legacy.agent_id,
+                clones = clones_map.len(),
+                "Migrated sender config from legacy format"
+            );
+            self.clones.insert(sender_id.clone(), clones_map);
+            self.routes
+                .insert(sender_id.clone(), legacy.agent_id.clone());
+
+            // Persist in new format and remove old aliases.json
+            self.persist_config(&sender_id);
+            let _ = std::fs::remove_file(&alias_path);
         }
         info!(count = self.routes.len(), "Loaded sender routes from disk");
     }
@@ -141,8 +203,10 @@ impl SenderRouter {
         let content = std::fs::read_to_string(&config_path).ok()?;
         let config: SenderConfig = serde_json::from_str(&content).ok()?;
         self.routes
-            .insert(sender_id.to_string(), config.agent_id.clone());
-        Some(config.agent_id)
+            .insert(sender_id.to_string(), config.default.clone());
+        self.clones
+            .insert(sender_id.to_string(), config.clones);
+        Some(config.default)
     }
 
     fn auto_assign(&self, sender_id: &str) -> Option<String> {
@@ -159,6 +223,7 @@ impl SenderRouter {
     }
 
     /// Write a sender's route config and create directory structure.
+    /// Adds the agent to clones if not already present.
     fn persist_route(&self, sender_id: &str, agent_id: &str) {
         let sender_dir = self.senders_dir.join(sender_id);
         if let Err(e) = std::fs::create_dir_all(&sender_dir) {
@@ -171,18 +236,88 @@ impl SenderRouter {
             warn!(sender = %sender_id, agent = %agent_id, "Failed to create sender/agent dir: {e}");
         }
 
+        // Add to clones if not present
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
+
+        let mut clones_map = self
+            .clones
+            .entry(sender_id.to_string())
+            .or_default()
+            .clone();
+        let created_at = clones_map
+            .values()
+            .map(|e| e.installed_at)
+            .min()
+            .unwrap_or(now);
+        if !clones_map.contains_key(agent_id) {
+            clones_map.insert(
+                agent_id.to_string(),
+                CloneEntry {
+                    alias: String::new(),
+                    installed_at: now,
+                },
+            );
+            self.clones.insert(sender_id.to_string(), clones_map);
+        }
+
         let config = SenderConfig {
-            agent_id: agent_id.to_string(),
-            created_at: now,
+            default: agent_id.to_string(),
+            clones: self
+                .clones
+                .get(sender_id)
+                .map(|c| c.value().clone())
+                .unwrap_or_default(),
+            created_at,
         };
         let config_path = sender_dir.join("config.json");
         if let Ok(json) = serde_json::to_string_pretty(&config) {
             if let Err(e) = std::fs::write(&config_path, json) {
                 warn!(sender = %sender_id, "Failed to write sender config: {e}");
+            }
+        }
+    }
+
+    /// Persist the full sender config to disk.
+    fn persist_config(&self, sender_id: &str) {
+        let sender_dir = self.senders_dir.join(sender_id);
+        if let Err(e) = std::fs::create_dir_all(&sender_dir) {
+            warn!(sender = %sender_id, "Failed to create sender dir: {e}");
+            return;
+        }
+
+        let default = self
+            .routes
+            .get(sender_id)
+            .map(|r| r.value().clone())
+            .unwrap_or_default();
+        let clones = self
+            .clones
+            .get(sender_id)
+            .map(|c| c.value().clone())
+            .unwrap_or_default();
+        let created_at = clones
+            .values()
+            .map(|e| e.installed_at)
+            .min()
+            .unwrap_or(0);
+
+        let config = SenderConfig {
+            default,
+            clones,
+            created_at,
+        };
+        let config_path = sender_dir.join("config.json");
+        match serde_json::to_string_pretty(&config) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&config_path, json) {
+                    warn!(sender = %sender_id, "Failed to write sender config: {e}");
+                }
+            }
+            Err(e) => {
+                warn!(sender = %sender_id, "Failed to serialize sender config: {e}");
             }
         }
     }
@@ -199,6 +334,7 @@ impl SenderRouter {
     pub fn remove_route(&self, sender_id: &str) -> Option<String> {
         let removed = self.routes.remove(sender_id).map(|(_, v)| v);
         if removed.is_some() {
+            self.clones.remove(sender_id);
             let config_path = self.senders_dir.join(sender_id).join("config.json");
             let _ = std::fs::remove_file(&config_path);
         }
@@ -222,22 +358,35 @@ impl SenderRouter {
     }
 
     // -----------------------------------------------------------------------
-    // Alias (name) support
+    // Alias (name) support — backed by clones map
     // -----------------------------------------------------------------------
 
     /// Set an alias for an agent under a sender's namespace.
-    /// Persists to aliases.json on disk.
+    /// Persists to config.json on disk.
     pub fn set_alias(&self, sender_id: &str, name: &str, agent_id: &str) {
-        let name_lower = name.to_lowercase();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
 
-        // Update in-memory
-        self.aliases
+        let mut clones_map = self
+            .clones
             .entry(sender_id.to_string())
-            .or_default()
-            .insert(name_lower.clone(), agent_id.to_string());
+            .or_default();
+        if let Some(entry) = clones_map.get_mut(agent_id) {
+            entry.alias = name.to_string();
+        } else {
+            clones_map.insert(
+                agent_id.to_string(),
+                CloneEntry {
+                    alias: name.to_string(),
+                    installed_at: now,
+                },
+            );
+        }
 
         // Persist to disk
-        self.persist_aliases(sender_id);
+        self.persist_config(sender_id);
 
         info!(
             sender = %sender_id,
@@ -253,27 +402,32 @@ impl SenderRouter {
         let name_lower = name.to_lowercase();
 
         // Check in-memory
-        if let Some(aliases) = self.aliases.get(sender_id) {
-            if let Some(agent_id) = aliases.get(&name_lower) {
-                return Some(agent_id.clone());
+        if let Some(clones_map) = self.clones.get(sender_id) {
+            for (agent_id, entry) in clones_map.iter() {
+                if entry.alias.to_lowercase() == name_lower {
+                    return Some(agent_id.clone());
+                }
             }
         }
 
         // Try loading from disk
-        self.load_aliases(sender_id);
-        if let Some(aliases) = self.aliases.get(sender_id) {
-            aliases.get(&name_lower).cloned()
-        } else {
-            None
+        self.load_sender_config(sender_id);
+        if let Some(clones_map) = self.clones.get(sender_id) {
+            for (agent_id, entry) in clones_map.iter() {
+                if entry.alias.to_lowercase() == name_lower {
+                    return Some(agent_id.clone());
+                }
+            }
         }
+        None
     }
 
     /// Get the alias (name) for a specific agent under a sender.
     pub fn get_alias(&self, sender_id: &str, agent_id: &str) -> Option<String> {
-        if let Some(aliases) = self.aliases.get(sender_id) {
-            for (name, aid) in aliases.iter() {
-                if aid == agent_id {
-                    return Some(name.clone());
+        if let Some(clones_map) = self.clones.get(sender_id) {
+            if let Some(entry) = clones_map.get(agent_id) {
+                if !entry.alias.is_empty() {
+                    return Some(entry.alias.clone());
                 }
             }
         }
@@ -282,8 +436,8 @@ impl SenderRouter {
 
     /// Check if a sender has any aliases set.
     pub fn has_aliases(&self, sender_id: &str) -> bool {
-        if let Some(aliases) = self.aliases.get(sender_id) {
-            !aliases.is_empty()
+        if let Some(clones_map) = self.clones.get(sender_id) {
+            clones_map.values().any(|e| !e.alias.is_empty())
         } else {
             false
         }
@@ -299,57 +453,30 @@ impl SenderRouter {
         }
     }
 
-    /// List all aliases for a sender as (name, agent_id) pairs.
+    /// List all aliases for a sender as (alias, agent_id) pairs.
+    /// Only returns entries with non-empty aliases.
     pub fn list_aliases(&self, sender_id: &str) -> Vec<(String, String)> {
-        if let Some(aliases) = self.aliases.get(sender_id) {
-            aliases.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        if let Some(clones_map) = self.clones.get(sender_id) {
+            clones_map
+                .iter()
+                .filter(|(_, e)| !e.alias.is_empty())
+                .map(|(agent_id, e)| (e.alias.clone(), agent_id.clone()))
+                .collect()
         } else {
             Vec::new()
         }
     }
 
-    /// Load aliases from disk for a sender.
-    fn load_aliases(&self, sender_id: &str) {
-        let alias_path = self.senders_dir.join(sender_id).join("aliases.json");
-        if !alias_path.exists() {
-            return;
-        }
-        let content = match std::fs::read_to_string(&alias_path) {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let alias_map: AliasMap = match serde_json::from_str(&content) {
-            Ok(m) => m,
-            Err(_) => return,
-        };
-        if !alias_map.aliases.is_empty() {
-            self.aliases.insert(sender_id.to_string(), alias_map.aliases);
-        }
-    }
-
-    /// Persist aliases to disk for a sender.
-    fn persist_aliases(&self, sender_id: &str) {
-        let sender_dir = self.senders_dir.join(sender_id);
-        if let Err(e) = std::fs::create_dir_all(&sender_dir) {
-            warn!(sender = %sender_id, "Failed to create sender dir: {e}");
-            return;
-        }
-
-        let aliases = self.aliases.get(sender_id);
-        let alias_map = AliasMap {
-            aliases: aliases.map(|a| a.value().clone()).unwrap_or_default(),
-        };
-
-        let alias_path = sender_dir.join("aliases.json");
-        match serde_json::to_string_pretty(&alias_map) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(&alias_path, json) {
-                    warn!(sender = %sender_id, "Failed to write sender aliases: {e}");
-                }
-            }
-            Err(e) => {
-                warn!(sender = %sender_id, "Failed to serialize sender aliases: {e}");
-            }
+    /// List all clones for a sender as (agent_id, CloneEntry) pairs.
+    /// Includes entries with and without aliases.
+    pub fn list_clones(&self, sender_id: &str) -> Vec<(String, CloneEntry)> {
+        if let Some(clones_map) = self.clones.get(sender_id) {
+            clones_map
+                .iter()
+                .map(|(agent_id, e)| (agent_id.clone(), e.clone()))
+                .collect()
+        } else {
+            Vec::new()
         }
     }
 }
