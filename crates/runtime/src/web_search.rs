@@ -1,10 +1,11 @@
 //! Multi-provider web search engine.
 //!
 //! Two search modes:
-//! - **Free search** (`search_free`): Bing → 360 → Sogou, zero-config HTML scraping.
-//!   Always available, no API keys needed. Works in China.
 //! - **Brain search** (`search_brain`): `brain.complete("search", request)`.
 //!   Used when brain is configured with a search modality (Tavily, Brave, Perplexity, etc.).
+//!   Preferred — API-based, reliable, no scraping issues.
+//! - **Free search** (`search_free`): Bing → 360 → Sogou, zero-config HTML scraping.
+//!   Fallback when no brain search is configured. May be blocked by anti-bot measures.
 //!
 //! The public `search()` method tries brain first, then falls back to free search.
 
@@ -29,7 +30,7 @@ pub struct WebToolsContext {
 }
 
 impl WebToolsContext {
-    /// Perform a web search: free search (Bing/360/Sogou) first, brain as fallback.
+    /// Perform a web search: brain search first (if configured), free search as fallback.
     pub async fn search(&self, query: &str, max_results: usize) -> Result<String, String> {
         // Check cache first
         let cache_key = format!("search:{}:{}", query, max_results);
@@ -38,19 +39,20 @@ impl WebToolsContext {
             return Ok(cached);
         }
 
-        // Free search (Bing → 360 → Sogou) is real-time web scraping — always prefer it
-        let result = match self.search.search_free(query, max_results).await {
-            Ok(r) => Ok(r),
-            Err(e) => {
-                warn!("Free search failed, trying brain search: {e}");
-                // Fallback to brain if configured
-                if let Some(brain) = &self.brain {
-                    self.search_brain(brain, query, max_results).await
-                } else {
-                    Err(e)
+        // Brain search (API-based) is preferred — reliable, no scraping issues
+        if let Some(brain) = &self.brain {
+            debug!(query, "Trying brain search first");
+            match self.search_brain(brain, query, max_results).await {
+                Ok(r) => {
+                    self.search.cache.put(cache_key, r.clone());
+                    return Ok(r);
                 }
+                Err(e) => warn!("Brain search failed, trying free search: {e}"),
             }
-        };
+        }
+
+        // Free search as fallback (Bing → 360 → Sogou)
+        let result = self.search.search_free(query, max_results).await;
 
         if let Ok(ref content) = result {
             self.search.cache.put(cache_key, content.clone());
@@ -126,7 +128,34 @@ impl WebSearchEngine {
 
         // Sogou last resort
         debug!(query, "Free search: trying Sogou");
-        self.search_sogou(query, max_results).await
+        match self.search_sogou(query, max_results).await {
+            Ok(result) => Ok(result),
+            Err(e) => {
+                warn!("All free search engines failed: {e}");
+                Err(format!(
+                    "All search engines are blocked by anti-bot measures. \
+                     Configure brain search (Tavily/Brave/Serper API key) for reliable results. \
+                     Last error: {e}"
+                ))
+            }
+        }
+    }
+
+    /// Check if HTML response is an anti-bot challenge page rather than actual search results.
+    fn is_challenge_page(html: &str) -> bool {
+        let lower = html.to_lowercase();
+        lower.contains("captcha")
+            || lower.contains("verify you are human")
+            || lower.contains("please verify")
+            || lower.contains("challenge-platform")
+            || lower.contains("cf-challenge")
+            || lower.contains("ray id") && lower.contains("error") && html.len() < 5000
+            || lower.contains("验证") && lower.contains("码")
+            || lower.contains("安全验证")
+            || lower.contains("人机验证")
+            || lower.contains("just a moment")
+            || lower.contains("checking your browser")
+            || lower.contains("enable javascript") && html.len() < 8000
     }
 
     /// Search via Bing HTML (no API key needed, works in China).
@@ -151,6 +180,10 @@ impl WebSearchEngine {
             .text()
             .await
             .map_err(|e| format!("Failed to read Bing response: {e}"))?;
+
+        if Self::is_challenge_page(&body) {
+            return Err("Bing returned anti-bot challenge page".to_string());
+        }
 
         let results = parse_bing_results(&body, max_results);
 
@@ -194,6 +227,10 @@ impl WebSearchEngine {
             .await
             .map_err(|e| format!("Failed to read 360 response: {e}"))?;
 
+        if Self::is_challenge_page(&body) {
+            return Err("360 Search returned anti-bot challenge page".to_string());
+        }
+
         let results = parse_360_results(&body, max_results);
 
         if results.is_empty() {
@@ -234,6 +271,10 @@ impl WebSearchEngine {
             .text()
             .await
             .map_err(|e| format!("Failed to read Sogou response: {e}"))?;
+
+        if Self::is_challenge_page(&body) {
+            return Err("Sogou returned anti-bot challenge page".to_string());
+        }
 
         let results = parse_sogou_results(&body, max_results);
 
@@ -471,6 +512,14 @@ pub fn urldecode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_challenge_page_detection() {
+        assert!(WebSearchEngine::is_challenge_page("<html>please verify you are human</html>"));
+        assert!(WebSearchEngine::is_challenge_page("<html>安全验证</html>"));
+        assert!(WebSearchEngine::is_challenge_page("<html>Just a Moment...</html>"));
+        assert!(!WebSearchEngine::is_challenge_page("<html>normal search results page</html>"));
+    }
 
     #[test]
     fn test_bing_parser_basic() {
