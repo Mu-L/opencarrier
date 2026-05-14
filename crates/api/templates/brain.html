@@ -173,13 +173,7 @@
       <input type="text" id="e-model" placeholder="模型 (如 glm-5.1)" style="margin-bottom:8px">
       <input type="text" id="e-url" placeholder="Base URL (https://...)" style="margin-bottom:8px">
       <select id="e-format" style="margin-bottom:8px">
-        <option value="openai">openai</option>
-        <option value="anthropic">anthropic</option>
-        <option value="gemini">gemini</option>
-        <option value="dashscope_tts">dashscope_tts</option>
-        <option value="dashscope_image">dashscope_image</option>
-        <option value="dashscope_video">dashscope_video</option>
-        <option value="kling">kling</option>
+        {% for fmt in supported_formats %}<option value="{{ fmt }}">{{ fmt }}</option>{% endfor %}
       </select>
       <div style="display:flex;gap:8px;margin-top:12px">
         <button class="btn btn-primary" onclick="saveEndpoint()">保存</button>
