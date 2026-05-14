@@ -12,8 +12,10 @@ pub mod dashscope_tts;
 pub mod dashscope_video;
 pub mod fallback;
 pub mod gemini;
+pub mod glm_search;
 pub mod kling;
 pub mod minimax_image;
+pub mod minimax_search;
 pub mod openai;
 pub mod openai_images;
 pub mod qwen_code;
@@ -166,6 +168,30 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
                 message: "base_url required for MiniMax Image format".to_string(),
             })?;
             Ok(Arc::new(minimax_image::MiniMaxImageDriver::new(
+                api_key, base_url,
+            )))
+        }
+        ApiFormat::MiniMaxSearch => {
+            let api_key = config.api_key.clone().ok_or_else(|| {
+                LlmError::MissingApiKey("API key required for MiniMax Search format".to_string())
+            })?;
+            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
+                status: 0,
+                message: "base_url required for MiniMax Search format".to_string(),
+            })?;
+            Ok(Arc::new(minimax_search::MiniMaxSearchDriver::new(
+                api_key, base_url,
+            )))
+        }
+        ApiFormat::GlmSearch => {
+            let api_key = config.api_key.clone().ok_or_else(|| {
+                LlmError::MissingApiKey("API key required for GLM Search format".to_string())
+            })?;
+            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
+                status: 0,
+                message: "base_url required for GLM Search format".to_string(),
+            })?;
+            Ok(Arc::new(glm_search::GlmSearchDriver::new(
                 api_key, base_url,
             )))
         }

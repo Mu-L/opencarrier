@@ -99,6 +99,10 @@ pub enum ApiFormat {
     OpenAIImages,
     #[serde(rename = "minimax_image")]
     MiniMaxImage,
+    #[serde(rename = "minimax_search")]
+    MiniMaxSearch,
+    #[serde(rename = "glm_search")]
+    GlmSearch,
 }
 
 /// Authentication header type for HTTP API drivers.
@@ -127,6 +131,8 @@ impl std::fmt::Display for ApiFormat {
             ApiFormat::Kling => write!(f, "kling"),
             ApiFormat::OpenAIImages => write!(f, "openai_images"),
             ApiFormat::MiniMaxImage => write!(f, "minimax_image"),
+            ApiFormat::MiniMaxSearch => write!(f, "minimax_search"),
+            ApiFormat::GlmSearch => write!(f, "glm_search"),
         }
     }
 }
