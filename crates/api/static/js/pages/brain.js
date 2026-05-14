@@ -14,7 +14,7 @@ function brainPage() {
     showAddModality: false,
     newEndpoint: { name: '', provider: '', model: '', base_url: '', format: 'openai' },
     newModality: { name: '', primary: '', fallbacks: '' },
-    formatOptions: ['openai', 'anthropic', 'gemini', 'dashscope_tts', 'dashscope_image', 'dashscope_video', 'kling', 'openai_images', 'minimax_image', 'minimax_search', 'glm_search'],
+    formatOptions: [],
 
     async loadBrain() {
       this.loading = true;
@@ -28,6 +28,9 @@ function brainPage() {
     async loadBrainInfo() {
       try {
         this.brainInfo = await OpenCarrierAPI.get('/api/brain');
+        if (this.brainInfo && this.brainInfo.supported_formats) {
+          this.formatOptions = this.brainInfo.supported_formats;
+        }
       } catch(e) { this.brainInfo = null; }
     },
 

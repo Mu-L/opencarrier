@@ -44,6 +44,7 @@ pub async fn brain_info(State(state): State<Arc<AppState>>) -> impl IntoResponse
         "default_modality": config.default_modality,
         "modalities": modalities,
         "endpoints": endpoints,
+        "supported_formats": types::brain::SUPPORTED_FORMATS,
     }))
 }
 /// GET /api/brain/status — Brain health status (driver readiness, latency, success/failure).

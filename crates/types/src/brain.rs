@@ -105,6 +105,21 @@ pub enum ApiFormat {
     GlmSearch,
 }
 
+/// All supported API format names (for dashboard UI).
+pub const SUPPORTED_FORMATS: &[&str] = &[
+    "openai",
+    "anthropic",
+    "gemini",
+    "dashscope_tts",
+    "dashscope_image",
+    "dashscope_video",
+    "kling",
+    "openai_images",
+    "minimax_image",
+    "minimax_search",
+    "glm_search",
+];
+
 /// Authentication header type for HTTP API drivers.
 ///
 /// Only meaningful for `OpenAI` format drivers; `Anthropic` and `Gemini`
