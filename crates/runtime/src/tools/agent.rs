@@ -356,15 +356,17 @@ async fn tool_user_profile(
     input: &serde_json::Value,
     home_dir: Option<&Path>,
     agent_name: Option<&str>,
+    owner_id: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
     let sender = sender_id.ok_or("user_profile requires a sender context (sender_id). This tool is only available when a user identity is provided.")?;
     let hd = home_dir.ok_or("user_profile requires home_dir")?;
     let an = agent_name.ok_or("user_profile requires agent_name")?;
+    let oid = sanitize_path_component(owner_id.unwrap_or(sender))?;
     let sender = sanitize_path_component(sender)?;
 
     let action = input["action"].as_str().unwrap_or("read");
-    let profile_path = types::config::sender_data_dir(hd, sender, an).join("profile.json");
+    let profile_path = types::config::sender_data_dir(hd, oid, an, Some(sender)).join("profile.json");
 
     match action {
         "read" => {
@@ -1544,7 +1546,7 @@ impl ToolModule for AgentTools {
             "train_evaluate" => Some(tool_train_evaluate(input, kernel, caller_agent_id).await),
 
             // User profile
-            "user_profile" => Some(tool_user_profile(input, ctx.home_dir, ctx.agent_name, sender_id).await),
+            "user_profile" => Some(tool_user_profile(input, ctx.home_dir, ctx.agent_name, owner_id, sender_id).await),
 
             // Clone management tools
 

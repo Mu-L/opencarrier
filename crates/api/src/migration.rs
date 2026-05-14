@@ -94,10 +94,10 @@ fn migrate_sessions_platform(home_dir: &Path, platform: &str) {
             _ => continue,
         };
 
-        json.as_object_mut().map(|obj| {
+        if let Some(obj) = json.as_object_mut() {
             obj.insert("channel".to_string(), serde_json::Value::String(platform.to_string()));
             obj.insert("sender_key".to_string(), serde_json::Value::String(sender_key.to_string()));
-        });
+        }
 
         // Write to senders/{sender_id}/session.json
         let sender_dir = home_dir.join("senders").join(&sender_id);

@@ -373,13 +373,14 @@ impl SessionStore {
         &self,
         session: &Session,
         sessions_dir: &Path,
+        owner_id: Option<&str>,
         sender_id: Option<&str>,
         home_dir: Option<&Path>,
         agent_name: Option<&str>,
     ) -> Result<(), std::io::Error> {
         // Route to per-sender sessions directory when sender_id is present
-        let effective_dir = if let (Some(sid), Some(hd), Some(an)) = (sender_id, home_dir, agent_name) {
-            let user_dir = types::config::sender_data_dir(hd, sid, an).join("sessions");
+        let effective_dir = if let (Some(oid), Some(hd), Some(an)) = (owner_id.or(sender_id), home_dir, agent_name) {
+            let user_dir = types::config::sender_data_dir(hd, oid, an, sender_id).join("sessions");
             std::fs::create_dir_all(&user_dir)?;
             user_dir
         } else {
@@ -575,7 +576,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let sessions_dir = dir.path().join("sessions");
         store
-            .write_jsonl_mirror(&session, &sessions_dir, None, None, None)
+            .write_jsonl_mirror(&session, &sessions_dir, None, None, None, None)
             .unwrap();
 
         let jsonl_path = sessions_dir.join(format!("{}.jsonl", session.id.0));

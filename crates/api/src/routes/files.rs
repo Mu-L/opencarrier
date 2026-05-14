@@ -330,6 +330,10 @@ pub async fn upload_file(
         .get("X-Sender-Id")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
+    let owner_id = headers
+        .get("X-Owner-Id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
     // Validate size
     if body.len() > MAX_UPLOAD_SIZE {
@@ -358,7 +362,7 @@ pub async fn upload_file(
             if let Some(ref _ws) = entry.manifest.workspace {
                 let agent_name = &entry.manifest.name;
                 let user_input_dir = types::config::sender_data_dir(
-                    &state.kernel.config.home_dir, sid, agent_name,
+                    &state.kernel.config.home_dir, owner_id.as_deref().unwrap_or(sid), agent_name, Some(sid),
                 ).join("input");
                 if let Err(e) = std::fs::create_dir_all(&user_input_dir) {
                     tracing::warn!("Failed to create user input dir: {e}");
@@ -563,6 +567,7 @@ pub async fn serve_upload(Path(file_id): Path<String>) -> impl IntoResponse {
 #[derive(serde::Deserialize)]
 pub struct OutputQuery {
     pub sender_id: String,
+    pub owner_id: Option<String>,
 }
 
 /// GET /api/agents/{id}/output — List output files for a specific user.
@@ -590,7 +595,7 @@ pub async fn list_output_files(
 
     let agent_name = &entry.manifest.name;
     let output_dir = types::config::sender_data_dir(
-        &state.kernel.config.home_dir, &params.sender_id, agent_name,
+        &state.kernel.config.home_dir, params.owner_id.as_deref().unwrap_or(&params.sender_id), agent_name, Some(&params.sender_id),
     ).join("output");
 
     if !output_dir.exists() {
@@ -683,10 +688,10 @@ pub async fn serve_output_file(
         None => return err(StatusCode::NOT_FOUND, "Agent has no workspace"),
     };
 
-    // Build the safe base: senders/{sender_id}/{agent_name}/output/
+    // Build the safe base: senders/{owner_id}/{agent_name}/.../output/
     let agent_name = &entry.manifest.name;
     let safe_base = types::config::sender_data_dir(
-        &state.kernel.config.home_dir, &params.sender_id, agent_name,
+        &state.kernel.config.home_dir, params.owner_id.as_deref().unwrap_or(&params.sender_id), agent_name, Some(&params.sender_id),
     ).join("output");
 
     // Reject any ".." in file_path

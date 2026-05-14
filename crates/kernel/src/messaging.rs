@@ -339,7 +339,7 @@ impl CarrierKernel {
 
         // Build the structured system prompt via prompt_builder
         {
-            self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name);
+            self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id);
         }
 
         let memory = Arc::clone(&self.memory);
@@ -440,11 +440,11 @@ impl CarrierKernel {
             match result {
                 Ok(result) => {
                     // Evolution hook — post-conversation auto-learning for clones
-                    kernel_clone.maybe_run_evolution(&manifest, &message_owned, &result.response, sender_id.as_deref());
+                    kernel_clone.maybe_run_evolution(&manifest, &message_owned, &result.response, owner_id.as_deref(), sender_id.as_deref());
 
                     // Multi-tenancy: update user profile
                     if let Some(ref sid) = &sender_id {
-                        touch_user_profile(&kernel_clone.config.home_dir, sid, &manifest.name);
+                        touch_user_profile(&kernel_clone.config.home_dir, owner_id.as_deref().unwrap_or(sid), &manifest.name, Some(sid));
                     }
 
                     // Append new messages to canonical session for cross-channel memory
@@ -457,6 +457,7 @@ impl CarrierKernel {
                         if let Err(e) = memory.write_jsonl_mirror(
                             &session,
                             &workspace.join("sessions"),
+                            owner_id.as_deref(),
                             sender_id.as_deref(),
                             Some(&kernel_clone.config.home_dir),
                             Some(&manifest.name),
@@ -464,7 +465,7 @@ impl CarrierKernel {
                             warn!("Failed to write JSONL session mirror (streaming): {e}");
                         }
                         // Append daily memory log (best-effort)
-                        append_daily_memory_log(&kernel_clone.config.home_dir, &manifest.name, &result.response, sender_id.as_deref());
+                        append_daily_memory_log(&kernel_clone.config.home_dir, &manifest.name, &result.response, owner_id.as_deref(), sender_id.as_deref());
                     }
 
                     kernel_clone
@@ -775,7 +776,7 @@ impl CarrierKernel {
         // Apply model routing if configured (disabled in Stable mode)
         let mut manifest = entry.manifest.clone();
 
-        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name);
+        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id);
 
         // Model routing is handled by Brain
 
@@ -787,7 +788,8 @@ impl CarrierKernel {
         // Snapshot output directory before the agent loop to detect new files
         let output_dir_before = sender_id.as_ref().and_then(|sid| {
             manifest.workspace.as_ref().map(|_ws| {
-                let dir = types::config::sender_data_dir(&self.config.home_dir, sid, &manifest.name).join("output");
+                let oid = owner_id.as_deref().unwrap_or(sid);
+                let dir = types::config::sender_data_dir(&self.config.home_dir, oid, &manifest.name, Some(sid)).join("output");
                 let existing = std::fs::read_dir(&dir)
                     .ok()
                     .map(|rd| {
@@ -866,11 +868,11 @@ impl CarrierKernel {
         }
 
         // Evolution hook — post-conversation auto-learning for clones
-        self.maybe_run_evolution(&manifest, message, &result.response, sender_id.as_deref());
+        self.maybe_run_evolution(&manifest, message, &result.response, owner_id.as_deref(), sender_id.as_deref());
 
         // Multi-tenancy: update user profile (touch last_seen, increment conversation_count)
         if let Some(ref sid) = sender_id {
-            touch_user_profile(&self.config.home_dir, sid, &manifest.name);
+            touch_user_profile(&self.config.home_dir, owner_id.as_deref().unwrap_or(sid), &manifest.name, Some(sid));
         }
 
         // Append new messages to canonical session for cross-channel memory
@@ -883,6 +885,7 @@ impl CarrierKernel {
             if let Err(e) = self.memory.write_jsonl_mirror(
                 &session,
                 &workspace.join("sessions"),
+                owner_id.as_deref(),
                 sender_id.as_deref(),
                 Some(&self.config.home_dir),
                 Some(&manifest.name),
@@ -890,7 +893,7 @@ impl CarrierKernel {
                 warn!("Failed to write JSONL session mirror: {e}");
             }
             // Append daily memory log (best-effort)
-            append_daily_memory_log(&self.config.home_dir, &manifest.name, &result.response, sender_id.as_deref());
+            append_daily_memory_log(&self.config.home_dir, &manifest.name, &result.response, owner_id.as_deref(), sender_id.as_deref());
         }
 
         // Record usage and check budget thresholds

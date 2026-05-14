@@ -34,16 +34,17 @@ pub fn read_identity_file(workspace: &Path, filename: &str) -> Option<String> {
 
 /// Read user profile for multi-tenancy context injection.
 /// Returns a short summary string suitable for the system prompt.
-pub fn read_user_profile_summary(home_dir: &Path, sender_id: &str, agent_name: &str) -> Option<String> {
-    // SECURITY: sanitize sender_id to prevent path traversal
-    if sender_id.contains('/')
-        || sender_id.contains('\\')
-        || sender_id.contains("..")
-        || sender_id.is_empty()
-    {
+pub fn read_user_profile_summary(home_dir: &Path, owner_id: &str, agent_name: &str, user_id: Option<&str>) -> Option<String> {
+    // SECURITY: sanitize to prevent path traversal
+    if owner_id.contains('/') || owner_id.contains('\\') || owner_id.contains("..") || owner_id.is_empty() {
         return None;
     }
-    let profile_path = types::config::sender_data_dir(home_dir, sender_id, agent_name).join("profile.json");
+    if let Some(uid) = user_id {
+        if uid.contains('/') || uid.contains('\\') || uid.contains("..") || uid.is_empty() {
+            return None;
+        }
+    }
+    let profile_path = types::config::sender_data_dir(home_dir, owner_id, agent_name, user_id).join("profile.json");
     if !profile_path.exists() {
         return None;
     }
@@ -88,16 +89,17 @@ pub fn read_user_profile_summary(home_dir: &Path, sender_id: &str, agent_name: &
 }
 
 /// Update user profile after a conversation (touch last_seen, increment count).
-pub fn touch_user_profile(home_dir: &Path, sender_id: &str, agent_name: &str) {
-    // SECURITY: sanitize sender_id to prevent path traversal
-    if sender_id.contains('/')
-        || sender_id.contains('\\')
-        || sender_id.contains("..")
-        || sender_id.is_empty()
-    {
+pub fn touch_user_profile(home_dir: &Path, owner_id: &str, agent_name: &str, user_id: Option<&str>) {
+    // SECURITY: sanitize to prevent path traversal
+    if owner_id.contains('/') || owner_id.contains('\\') || owner_id.contains("..") || owner_id.is_empty() {
         return;
     }
-    let profile_path = types::config::sender_data_dir(home_dir, sender_id, agent_name).join("profile.json");
+    if let Some(uid) = user_id {
+        if uid.contains('/') || uid.contains('\\') || uid.contains("..") || uid.is_empty() {
+            return;
+        }
+    }
+    let profile_path = types::config::sender_data_dir(home_dir, owner_id, agent_name, user_id).join("profile.json");
     let mut profile: serde_json::Value = if profile_path.exists() {
         std::fs::read_to_string(&profile_path)
             .ok()
@@ -105,12 +107,12 @@ pub fn touch_user_profile(home_dir: &Path, sender_id: &str, agent_name: &str) {
             .unwrap_or_else(|| serde_json::json!({}))
     } else {
         serde_json::json!({
-            "sender_id": sender_id,
+            "sender_id": user_id.unwrap_or(owner_id),
             "first_seen": chrono::Utc::now().to_rfc3339(),
         })
     };
 
-    profile["sender_id"] = serde_json::Value::String(sender_id.to_string());
+    profile["sender_id"] = serde_json::Value::String(user_id.unwrap_or(owner_id).to_string());
     profile["last_seen"] = serde_json::Value::String(chrono::Utc::now().to_rfc3339());
     let count = profile["conversation_count"].as_u64().unwrap_or(0);
     profile["conversation_count"] = serde_json::Value::Number((count + 1).into());
@@ -186,8 +188,10 @@ pub fn read_skills_catalog(workspace: &Path) -> Option<String> {
 /// with the same filename. Capped at ~6KB to avoid context overflow.
 pub fn read_knowledge_content(
     workspace: &Path,
+    owner_id: Option<&str>,
     sender_id: Option<&str>,
     home_dir: Option<&Path>,
+    agent_name: Option<&str>,
 ) -> Option<String> {
     const MAX_KNOWLEDGE_TOTAL_BYTES: usize = 6144; // 6KB cap
     let knowledge_dir = workspace.join("knowledge");
@@ -203,11 +207,18 @@ pub fn read_knowledge_content(
     }
 
     // Collect private knowledge (overrides shared with same filename)
-    if let (Some(sid), Some(hd)) = (sender_id, home_dir) {
-        let agent_name = workspace.file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let private_dir = types::config::sender_data_dir(hd, sid, &agent_name).join("knowledge");
+    if let (Some(oid), Some(hd)) = (owner_id, home_dir) {
+        let aname;
+        let aname_ref: &str = match agent_name {
+            Some(a) => a,
+            None => {
+                aname = workspace.file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                &aname
+            }
+        };
+        let private_dir = types::config::sender_data_dir(hd, oid, aname_ref, sender_id).join("knowledge");
         if private_dir.is_dir() {
             if let Some(private) = read_knowledge_dir(&private_dir, &mut total_bytes, MAX_KNOWLEDGE_TOTAL_BYTES) {
                 // Private overrides shared: remove shared entries with same name

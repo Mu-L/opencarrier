@@ -201,12 +201,12 @@ impl ToolModule for MediaTools {
 
             // Image generation
             "image_generate" => {
-                Some(tool_image_generate(input, ctx.brain, ctx.home_dir, ctx.agent_name, ctx.sender_id).await)
+                Some(tool_image_generate(input, ctx.brain, ctx.home_dir, ctx.agent_name, ctx.owner_id, ctx.sender_id).await)
             }
 
             // TTS/STT
             "text_to_speech" => {
-                Some(tool_text_to_speech(input, ctx.brain, ctx.home_dir, ctx.agent_name, ctx.sender_id).await)
+                Some(tool_text_to_speech(input, ctx.brain, ctx.home_dir, ctx.agent_name, ctx.owner_id, ctx.sender_id).await)
             }
             "speech_to_text" => {
                 Some(tool_speech_to_text(input, ctx.brain, ctx.workspace_root).await)
@@ -242,7 +242,7 @@ impl ToolModule for MediaTools {
 
             // Canvas / A2UI
             "canvas_present" => {
-                Some(tool_canvas_present(input, ctx.workspace_root, ctx.home_dir, ctx.agent_name, ctx.sender_id).await)
+                Some(tool_canvas_present(input, ctx.workspace_root, ctx.home_dir, ctx.agent_name, ctx.owner_id, ctx.sender_id).await)
             }
 
             _ => None,
@@ -582,6 +582,7 @@ async fn tool_image_generate(
     brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
     home_dir: Option<&Path>,
     agent_name: Option<&str>,
+    owner_id: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
     let brain = brain.ok_or("Brain not available. Ensure image modality is configured.")?;
@@ -653,7 +654,8 @@ async fn tool_image_generate(
     // Save images to sender output directory if available
     let saved_paths = if let (Some(hd), Some(an)) = (home_dir, agent_name) {
         let sid = sender_id.ok_or("Cannot save images: no sender context")?;
-        let output_dir = types::config::sender_data_dir(hd, sid, an).join("output");
+        let oid = owner_id.unwrap_or(sid);
+        let output_dir = types::config::sender_data_dir(hd, oid, an, Some(sid)).join("output");
         tokio::fs::create_dir_all(&output_dir)
             .await
             .map_err(|e| format!("Failed to create output dir: {e}"))?;
@@ -746,6 +748,7 @@ async fn tool_text_to_speech(
     brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
     home_dir: Option<&Path>,
     agent_name: Option<&str>,
+    owner_id: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
     let brain = brain.ok_or("Brain not available. Ensure tts modality is configured.")?;
@@ -793,7 +796,8 @@ async fn tool_text_to_speech(
     // Save audio to per-sender output directory
     let saved_path = if let (Some(hd), Some(an)) = (home_dir, agent_name) {
         let sid = sender_id.ok_or("Cannot save audio: no sender context")?;
-        let output_dir = types::config::sender_data_dir(hd, sid, an).join("output");
+        let oid = owner_id.unwrap_or(sid);
+        let output_dir = types::config::sender_data_dir(hd, oid, an, Some(sid)).join("output");
         tokio::fs::create_dir_all(&output_dir)
             .await
             .map_err(|e| format!("Failed to create output dir: {e}"))?;
@@ -1132,6 +1136,7 @@ async fn tool_canvas_present(
     workspace_root: Option<&Path>,
     home_dir: Option<&Path>,
     agent_name: Option<&str>,
+    owner_id: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
     let html = input["html"].as_str().ok_or("Missing 'html' parameter")?;
@@ -1149,7 +1154,8 @@ async fn tool_canvas_present(
     // Save to per-sender output directory
     let output_dir = if let (Some(_root), Some(hd), Some(an)) = (workspace_root, home_dir, agent_name) {
         let sid = sender_id.ok_or("Cannot save canvas: no sender context")?;
-        types::config::sender_data_dir(hd, sid, an).join("output")
+        let oid = owner_id.unwrap_or(sid);
+        types::config::sender_data_dir(hd, oid, an, Some(sid)).join("output")
     } else {
         return Err("Cannot save canvas: no workspace".into());
     };

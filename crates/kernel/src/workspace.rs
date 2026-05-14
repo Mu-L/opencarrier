@@ -174,14 +174,14 @@ pub fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
 /// Append an assistant response summary to the daily memory log (best-effort, append-only).
 /// Caps daily log at 1MB to prevent unbounded growth.
 /// When sender_id is present, writes to per-sender memory directory.
-pub fn append_daily_memory_log(home_dir: &Path, agent_name: &str, response: &str, sender_id: Option<&str>) {
+pub fn append_daily_memory_log(home_dir: &Path, agent_name: &str, response: &str, owner_id: Option<&str>, sender_id: Option<&str>) {
     let trimmed = response.trim();
     if trimmed.is_empty() {
         return;
     }
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let log_path = if let Some(sid) = sender_id {
-        types::config::sender_data_dir(home_dir, sid, agent_name)
+    let log_path = if let Some(oid) = owner_id.or(sender_id) {
+        types::config::sender_data_dir(home_dir, oid, agent_name, sender_id)
             .join("memory")
             .join(format!("{today}.md"))
     } else {

@@ -1139,11 +1139,17 @@ pub fn home_dir() -> PathBuf {
 
 /// Resolve the per-user per-agent data directory under `senders/`.
 ///
-/// Returns `~/.opencarrier/senders/{sender_id}/{agent_name}/`.
-/// This is where user-private data lives: knowledge/, input/, output/,
-/// profile.json, sessions/.
-pub fn sender_data_dir(home_dir: &std::path::Path, sender_id: &str, agent_name: &str) -> PathBuf {
-    home_dir.join("senders").join(sender_id).join(agent_name)
+/// - `owner_id` is the route_key: for WeChat it's the openid, for WeCom/Feishu/DingTalk it's the bot_id/app_id/app_key.
+/// - `user_id` is the actual user identity from the platform message. When present and different
+///   from `owner_id`, the path becomes `senders/{owner_id}/{agent_name}/users/{user_id}/`
+///   (group users under a bot). When `None` or equal to `owner_id`, the path is
+///   `senders/{owner_id}/{agent_name}/` (the owner's own data).
+pub fn sender_data_dir(home_dir: &std::path::Path, owner_id: &str, agent_name: &str, user_id: Option<&str>) -> PathBuf {
+    let base = home_dir.join("senders").join(owner_id).join(agent_name);
+    match user_id {
+        Some(uid) if uid != owner_id => base.join("users").join(uid),
+        _ => base,
+    }
 }
 
 /// Path to a sender's session.json.

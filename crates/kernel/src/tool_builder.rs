@@ -330,9 +330,11 @@ impl CarrierKernel {
         tools: &[types::tool::ToolDefinition],
         sender_id: &Option<String>,
         sender_name: Option<String>,
+        owner_id: &Option<String>,
     ) {
         // Read user_name from the agent's KV namespace (per-sender memory)
         let sid = sender_id.as_deref().unwrap_or("");
+        let oid = owner_id.as_deref().unwrap_or(sid);
         let user_name = self
             .memory
             .structured_get(*agent_id, sid, sid, "user_name")
@@ -431,7 +433,7 @@ impl CarrierKernel {
             sender_id: sender_id.clone(),
             sender_name,
             user_profile_summary: sender_id.as_ref().and_then(|sid| {
-                read_user_profile_summary(&self.config.home_dir, sid, &manifest.name)
+                read_user_profile_summary(&self.config.home_dir, oid, &manifest.name, Some(sid))
             }),
             clone_system_prompt_md: manifest
                 .workspace
@@ -452,7 +454,7 @@ impl CarrierKernel {
             knowledge_content: manifest
                 .workspace
                 .as_ref()
-                .and_then(|w| read_knowledge_content(w, sender_id.as_deref(), Some(&self.config.home_dir))),
+                .and_then(|w| read_knowledge_content(w, Some(oid), sender_id.as_deref(), Some(&self.config.home_dir), Some(&manifest.name))),
             clone_agents_md: manifest
                 .workspace
                 .as_ref()

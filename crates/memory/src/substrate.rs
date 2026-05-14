@@ -255,12 +255,13 @@ impl MemorySubstrate {
         &self,
         session: &Session,
         sessions_dir: &Path,
+        owner_id: Option<&str>,
         sender_id: Option<&str>,
         home_dir: Option<&Path>,
         agent_name: Option<&str>,
     ) -> Result<(), std::io::Error> {
         self.sessions
-            .write_jsonl_mirror(session, sessions_dir, sender_id, home_dir, agent_name)
+            .write_jsonl_mirror(session, sessions_dir, owner_id, sender_id, home_dir, agent_name)
     }
 
     // -----------------------------------------------------------------

@@ -181,6 +181,7 @@ pub fn parse_analysis_response(text: &str) -> Result<EvolutionAnalysis> {
 pub fn apply_evolution(
     workspace: &Path,
     analysis: &EvolutionAnalysis,
+    owner_id: Option<&str>,
     sender_id: Option<&str>,
     home_dir: Option<&Path>,
 ) -> Vec<PathBuf> {
@@ -190,8 +191,8 @@ pub fn apply_evolution(
     for candidate in &analysis.knowledge {
         let is_private = candidate.scope == "private";
         let target_workspace = if is_private {
-            if let (Some(sid), Some(hd)) = (sender_id, home_dir) {
-                Some(types::config::sender_data_dir(hd, sid, &extract_agent_name(workspace)))
+            if let (Some(oid), Some(hd)) = (owner_id.or(sender_id), home_dir) {
+                Some(types::config::sender_data_dir(hd, oid, &extract_agent_name(workspace), sender_id))
             } else {
                 None
             }
@@ -228,8 +229,8 @@ pub fn apply_evolution(
         }
         // Also update private MEMORY.md if we wrote private knowledge
         if analysis.knowledge.iter().any(|k| k.scope == "private") {
-            if let (Some(sid), Some(hd)) = (sender_id, home_dir) {
-                let sender_dir = types::config::sender_data_dir(hd, sid, &extract_agent_name(workspace));
+            if let (Some(oid), Some(hd)) = (owner_id.or(sender_id), home_dir) {
+                let sender_dir = types::config::sender_data_dir(hd, oid, &extract_agent_name(workspace), sender_id);
                 if let Err(e) = update_private_memory_index(&sender_dir) {
                     tracing::warn!(error = %e, "Evolution: failed to update private memory index");
                 }
@@ -673,7 +674,7 @@ mod tests {
             trivial: false,
         };
 
-        let saved = apply_evolution(workspace, &analysis, None, None);
+        let saved = apply_evolution(workspace, &analysis, None, None, None);
         assert_eq!(saved.len(), 1);
 
         // Knowledge file created with dual-layer format
@@ -724,7 +725,7 @@ mod tests {
             gaps: vec![],
             trivial: false,
         };
-        let saved = apply_evolution(workspace, &analysis, None, None);
+        let saved = apply_evolution(workspace, &analysis, None, None, None);
         assert_eq!(saved.len(), 1, "should append, not skip");
 
         // File should have dual-layer format: compiled truth preserved + timeline appended

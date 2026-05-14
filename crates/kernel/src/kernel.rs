@@ -195,6 +195,7 @@ impl CarrierKernel {
         manifest: &types::agent::AgentManifest,
         user_msg: &str,
         response: &str,
+        owner_id: Option<&str>,
         sender_id: Option<&str>,
     ) {
         // Check config + clone mode
@@ -225,6 +226,7 @@ impl CarrierKernel {
         let user_msg = user_msg.to_string();
         let response = response.to_string();
         let clone_name = manifest.name.clone();
+        let owner_id_owned = owner_id.map(|s| s.to_string());
         let sender_id_owned = sender_id.map(|s| s.to_string());
         let home_dir = self.config.home_dir.clone();
         let feedback_to_hub = evo_config.feedback_to_hub;
@@ -276,6 +278,7 @@ impl CarrierKernel {
                         Ok(analysis) => {
                             let saved = lifecycle::evolution::apply_evolution(
                                 &workspace, &analysis,
+                                owner_id_owned.as_deref(),
                                 sender_id_owned.as_deref(),
                                 Some(&home_dir),
                             );

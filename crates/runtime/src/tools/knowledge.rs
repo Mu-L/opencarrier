@@ -437,7 +437,7 @@ async fn tool_knowledge_extract(
         gaps: vec![],
         trivial: false,
     };
-    let saved = lifecycle::evolution::apply_evolution(root, &analysis, None, None);
+    let saved = lifecycle::evolution::apply_evolution(root, &analysis, None, None, None);
     match saved.len() {
         0 => Ok("No knowledge extracted (nothing new to save).".to_string()),
         n => Ok(format!(
