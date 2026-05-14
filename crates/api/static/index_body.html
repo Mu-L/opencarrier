@@ -1267,17 +1267,9 @@
                   <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px">
                     <input class="form-input" style="font-size:12px" placeholder="名称 (如 qwen_tts)" x-model="newEndpoint.name">
                     <select class="form-input" style="font-size:12px" x-model="newEndpoint.format">
-                      <option value="openai">openai</option>
-                      <option value="anthropic">anthropic</option>
-                      <option value="gemini">gemini</option>
-                      <option value="dashscope_tts">dashscope_tts</option>
-                      <option value="dashscope_image">dashscope_image</option>
-                      <option value="dashscope_video">dashscope_video</option>
-                      <option value="kling">kling</option>
-                      <option value="openai_images">openai_images</option>
-                      <option value="minimax_image">minimax_image</option>
-                      <option value="minimax_search">minimax_search</option>
-                      <option value="glm_search">glm_search</option>
+                      <template x-for="fmt in formatOptions" :key="fmt">
+                        <option :value="fmt" x-text="fmt"></option>
+                      </template>
                     </select>
                     <input class="form-input" style="font-size:12px" placeholder="Provider (如 qwen)" x-model="newEndpoint.provider">
                     <input class="form-input" style="font-size:12px" placeholder="Model (如 qwen3-tts-flash)" x-model="newEndpoint.model">

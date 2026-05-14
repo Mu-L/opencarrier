@@ -14,6 +14,7 @@ function brainPage() {
     showAddModality: false,
     newEndpoint: { name: '', provider: '', model: '', base_url: '', format: 'openai' },
     newModality: { name: '', primary: '', fallbacks: '' },
+    formatOptions: ['openai', 'anthropic', 'gemini', 'dashscope_tts', 'dashscope_image', 'dashscope_video', 'kling', 'openai_images', 'minimax_image', 'minimax_search', 'glm_search'],
 
     async loadBrain() {
       this.loading = true;
