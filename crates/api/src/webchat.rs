@@ -265,6 +265,9 @@ const SHARE_HTML: &str = concat!(
     "<script>\n",
     include_str!("../static/vendor/qrcode.min.js"),
     "\n</script>\n",
+    "<script>\n",
+    "if(typeof initShare==='function')initShare();\n",
+    "\n</script>\n",
     "</body>\n</html>"
 );
 

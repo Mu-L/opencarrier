@@ -176,7 +176,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 </div>
 
 <script>
-(function(){
+var initShare;
+initShare = function(){
   var params = new URLSearchParams(location.search);
   var cloneName = params.get('clone') || '';
   var activePlatform = '';
@@ -1042,5 +1043,5 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
 
   // ── Init ──
   initHome();
-})();
+};
 </script>
