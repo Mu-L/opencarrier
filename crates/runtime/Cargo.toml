@@ -10,10 +10,6 @@ types = { path = "../types" }
 clone = { path = "../clone" }
 memory = { path = "../memory" }
 lifecycle = { path = "../lifecycle" }
-channel-feishu = { path = "../channels/feishu" }
-channel-wecom = { path = "../channels/wecom" }
-channel-weixin = { path = "../channels/weixin" }
-channel-dingtalk = { path = "../channels/dingtalk" }
 tokio = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }

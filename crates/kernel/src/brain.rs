@@ -19,8 +19,8 @@ use types::brain::{
     BrainConfig, BrainStatus, EndpointConfig, EndpointHealth, EndpointReport, ModalityInfo,
     ResolvedEndpoint,
 };
-use dashmap::DashMap;
-use tracing::{info, warn};
+use dashmap::{DashMap, DashSet};
+use tracing::{info, warn, debug};
 
 // ---------------------------------------------------------------------------
 // Per-endpoint health tracker (lock-free atomics)
@@ -136,6 +136,9 @@ pub struct Brain {
     drivers: DashMap<String, Arc<dyn LlmDriver>>,
     /// Per-endpoint health tracking. Thread-safe for concurrent report() calls.
     health: DashMap<String, EndpointTracker>,
+    /// Endpoints whose driver creation failed (e.g. missing API key).
+    /// Prevents repeated creation attempts and log spam.
+    failed_endpoints: DashSet<String>,
 }
 
 impl Brain {
@@ -156,6 +159,7 @@ impl Brain {
             config,
             drivers: DashMap::new(),
             health: DashMap::new(),
+            failed_endpoints: DashSet::new(),
         })
     }
 
@@ -198,7 +202,7 @@ impl Brain {
                 let endpoint = self.config.endpoints.get(&name)?;
                 // Only include endpoints that can produce a driver
                 if self.get_or_create_driver(&name).is_none() {
-                    warn!(
+                    debug!(
                         endpoint = %name,
                         "Endpoint skipped: driver creation failed"
                     );
@@ -377,6 +381,13 @@ impl Brain {
         if let Some(entry) = self.drivers.get(endpoint_name) {
             return Some(entry.value().clone());
         }
+        if self.failed_endpoints.contains(endpoint_name) {
+            debug!(
+                endpoint = %endpoint_name,
+                "Skipping driver creation for previously failed endpoint"
+            );
+            return None;
+        }
         let endpoint = self.config.endpoints.get(endpoint_name)?;
         match Self::create_driver(endpoint_name, endpoint, &self.config.providers) {
             Ok(driver) => {
@@ -388,8 +399,9 @@ impl Brain {
                 warn!(
                     endpoint = %endpoint_name,
                     error = %e,
-                    "Failed to create driver for endpoint"
+                    "Failed to create driver for endpoint (subsequent attempts will be silently skipped)"
                 );
+                self.failed_endpoints.insert(endpoint_name.to_string());
                 None
             }
         }

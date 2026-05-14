@@ -34,6 +34,10 @@ pub enum CarrierError {
     #[error("Session not found: {0}")]
     SessionNotFound(String),
 
+    /// The LLM concurrency limit was reached.
+    #[error("LLM concurrency limit reached — too many parallel requests")]
+    RateLimited,
+
     /// A memory substrate error occurred.
     #[error("Memory error: {0}")]
     Memory(String),

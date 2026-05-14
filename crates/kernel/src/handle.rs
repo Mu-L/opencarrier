@@ -518,18 +518,16 @@ impl KernelHandle for CarrierKernel {
             self.memory.save_session(&session).ok()?;
         }
 
-        // Merge auto_load + active and return refreshed tools
-        let mut combined = entry.manifest.auto_load_toolsets.clone();
-        for ts in &session.active_toolsets {
-            if !combined.contains(ts) {
-                combined.push(ts.clone());
-            }
-        }
-        let tools = self.available_tools(agent_id, Some(&combined));
-        if tools.is_empty() {
-            None
+        // Return ONLY the tools from the requested toolset (按需加载)
+        let tools = if let Ok(registry) = self.plugins.toolset_registry.read() {
+            registry.get(toolset_name).cloned()
         } else {
-            Some(tools)
+            None
+        };
+
+        match tools {
+            Some(t) if t.is_empty() => None,
+            other => other,
         }
     }
 

@@ -77,15 +77,6 @@ pub fn hint(msg: &str) {
     println!("  {} {}", "hint:".dimmed(), msg.dimmed());
 }
 
-/// Numbered "Next steps:" list.
-#[allow(dead_code)]
-pub fn next_steps(steps: &[&str]) {
-    println!("  {}:", "Next steps".bold());
-    for (i, step) in steps.iter().enumerate() {
-        println!("    {}. {step}", i + 1);
-    }
-}
-
 /// Suggest a command: "    label  command" with command highlighted.
 pub fn suggest_cmd(label: &str, cmd: &str) {
     println!("    {:<22}{}", label, cmd.bright_cyan());

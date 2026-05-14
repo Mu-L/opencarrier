@@ -760,63 +760,7 @@ pub(crate) fn daemon_json(
 // Commands
 // ---------------------------------------------------------------------------
 
-/// Launch the opencarrier-desktop Tauri app, connecting to the running daemon.
-#[allow(dead_code)]
-fn launch_desktop_app(_carrier_dir: &std::path::Path) {
-    // Look for the desktop binary next to our own executable.
-    let desktop_bin = {
-        let exe = std::env::current_exe().ok();
-        let dir = exe.as_ref().and_then(|e| e.parent());
 
-        #[cfg(windows)]
-        let name = "opencarrier-desktop.exe";
-        #[cfg(not(windows))]
-        let name = "opencarrier-desktop";
-
-        dir.map(|d| d.join(name))
-    };
-
-    match desktop_bin {
-        Some(ref path) if path.exists() => {
-            ui::success("Launching OpenCarrier Desktop...");
-            match std::process::Command::new(path)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                Ok(_) => {
-                    ui::success("Desktop app started.");
-                }
-                Err(e) => {
-                    ui::error(&format!("Failed to launch desktop app: {e}"));
-                    ui::hint("Try: opencarrier dashboard");
-                }
-            }
-        }
-        _ => {
-            ui::error("Desktop app not found.");
-            ui::hint("Install it with: cargo install opencarrier-desktop");
-            ui::hint("Falling back to web dashboard...");
-            ui::blank();
-            if let Some(base) = find_daemon() {
-                let url = format!("{base}/");
-                if !open_in_browser(&url) {
-                    // Browser launch failed entirely (e.g., sandbox EPERM,
-                    // no display server, container environment).
-                    ui::hint("Could not open a browser automatically.");
-                }
-                // Always print the URL so the user can open it manually,
-                // even when open_in_browser reported success — the spawned
-                // opener may still fail asynchronously.
-                ui::hint(&format!("Dashboard: {url}"));
-            } else {
-                ui::hint("Daemon is not running. Start it with: opencarrier start");
-                ui::hint("Then open: http://127.0.0.1:4200");
-            }
-        }
-    }
-}
 
 /// Auto-detect the best available provider.
 fn detect_best_provider() -> (&'static str, &'static str, &'static str) {

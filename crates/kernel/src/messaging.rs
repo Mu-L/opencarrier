@@ -85,17 +85,28 @@ impl CarrierKernel {
         sender_name: Option<String>,
         owner_id: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
-        // Acquire per-agent lock to serialize concurrent messages for the same agent.
-        // This prevents session corruption when multiple messages arrive in quick
-        // succession (e.g. rapid voice messages via Telegram). Messages for different
-        // agents are not blocked — each agent has its own independent lock.
+        // Acquire per-(agent, owner) lock to serialize concurrent messages for the same
+        // agent+owner combination. This prevents session corruption when the same user
+        // sends messages in quick succession. Different owners of the same agent run in
+        // parallel — each has an independent lock. Messages for different agents are also
+        // not blocked.
+        let lock_key = (agent_id, owner_id.clone());
         let lock = self
             .runtime
             .agent_msg_locks
-            .entry(agent_id)
+            .entry(lock_key)
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone();
         let _guard = lock.lock().await;
+
+        // Acquire concurrency permit — limits parallel LLM requests to protect the API.
+        // This is held until the function returns (permit dropped with _permit).
+        let _permit = self
+            .runtime
+            .llm_concurrency_limit
+            .acquire()
+            .await
+            .map_err(|_| KernelError::Carrier(CarrierError::RateLimited))?;
 
         // Enforce quota before running the agent loop
         self.runtime
@@ -819,6 +830,7 @@ impl CarrierKernel {
             driver,
             &tools,
             kernel_handle,
+            None, // stream_tx: non-streaming path
             Some(&self.plugins.mcp_connections),
             Some(&self.services.web_ctx),
             manifest.workspace.as_deref(),

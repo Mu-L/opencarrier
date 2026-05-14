@@ -1,207 +1,27 @@
 //! LLM driver implementations.
 //!
-//! Contains drivers for Anthropic Claude, Google Gemini, OpenAI-compatible APIs, and more.
-//! Supports: Anthropic, Gemini, OpenAI, Groq, OpenRouter, DeepSeek, Together,
-//! Mistral, Fireworks, Ollama, vLLM, Chutes.ai, Cloud Proxy, and any OpenAI-compatible endpoint.
-//! Also: DashScope (TTS/image/video) and Kling (video/image with JWT auth).
+//! CLI subprocess drivers (claude-code, qwen-code) and fallback chain driver.
+//! All HTTP API drivers are handled by `UnifiedHttpDriver` in `llm_driver_impl.rs`.
 
-pub mod anthropic;
 pub mod claude_code;
-pub mod dashscope_image;
-pub mod dashscope_tts;
-pub mod dashscope_video;
 pub mod fallback;
-pub mod gemini;
-pub mod glm_search;
-pub mod kling;
-pub mod minimax_image;
-pub mod minimax_search;
-pub mod openai;
-pub mod openai_images;
 pub mod qwen_code;
 
 use crate::llm_driver::{DriverConfig, LlmDriver, LlmError};
-use types::brain::ApiFormat;
 use std::sync::Arc;
 
 /// Create an LLM driver based on the format field in configuration.
 ///
-/// The `format` field (from brain.json) determines the driver type:
-/// - `anthropic` → Anthropic Claude Messages API driver
-/// - `gemini`    → Google Gemini generateContent API driver
-/// - `openai`    → OpenAI-compatible driver (covers Groq, OpenRouter, DeepSeek, Ollama, etc.)
-///
-/// `base_url` is used as-is — it must be the complete API endpoint URL.
-/// No path suffix is appended by any driver.
+/// Delegates to `llm_driver::create_driver()` which handles both CLI
+/// subprocess drivers and HTTP API drivers (via `UnifiedHttpDriver`).
 pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmError> {
-    let provider = config.provider.as_str();
-
-    // CLI subprocess drivers (not HTTP API) — dispatched by provider name
-    if provider == "claude-code" {
-        return Ok(Arc::new(claude_code::ClaudeCodeDriver::new(
-            config.base_url.clone(),
-            config.skip_permissions,
-        )));
-    }
-    if provider == "qwen-code" {
-        return Ok(Arc::new(qwen_code::QwenCodeDriver::new(
-            config.base_url.clone(),
-            config.skip_permissions,
-        )));
-    }
-
-    // HTTP API drivers — dispatched by format
-    let format = config.format.unwrap_or_default();
-
-    match format {
-        ApiFormat::Anthropic => {
-            let api_key = config.api_key.clone().ok_or_else(|| {
-                LlmError::MissingApiKey("API key required for Anthropic format".to_string())
-            })?;
-            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
-                status: 0,
-                message: "base_url required for Anthropic format".to_string(),
-            })?;
-            Ok(Arc::new(anthropic::AnthropicDriver::new(api_key, base_url)))
-        }
-        ApiFormat::Gemini => {
-            let api_key = config.api_key.clone().ok_or_else(|| {
-                LlmError::MissingApiKey("API key required for Gemini format".to_string())
-            })?;
-            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
-                status: 0,
-                message: "base_url required for Gemini format".to_string(),
-            })?;
-            Ok(Arc::new(gemini::GeminiDriver::new(api_key, base_url)))
-        }
-        ApiFormat::OpenAI => {
-            let api_key = config.api_key.clone().unwrap_or_default();
-            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
-                status: 0,
-                message: "base_url required for OpenAI format".to_string(),
-            })?;
-            Ok(Arc::new(openai::OpenAIDriver::with_auth_header(
-                api_key,
-                base_url,
-                config.auth_header,
-            )))
-        }
-        ApiFormat::DashScopeTts => {
-            let api_key = config.api_key.clone().ok_or_else(|| {
-                LlmError::MissingApiKey("API key required for DashScope TTS format".to_string())
-            })?;
-            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
-                status: 0,
-                message: "base_url required for DashScope TTS format".to_string(),
-            })?;
-            Ok(Arc::new(dashscope_tts::DashScopeTtsDriver::new(
-                api_key, base_url,
-            )))
-        }
-        ApiFormat::DashScopeImage => {
-            let api_key = config.api_key.clone().ok_or_else(|| {
-                LlmError::MissingApiKey("API key required for DashScope image format".to_string())
-            })?;
-            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
-                status: 0,
-                message: "base_url required for DashScope image format".to_string(),
-            })?;
-            Ok(Arc::new(dashscope_image::DashScopeImageDriver::new(
-                api_key, base_url,
-            )))
-        }
-        ApiFormat::DashScopeVideo => {
-            let api_key = config.api_key.clone().ok_or_else(|| {
-                LlmError::MissingApiKey("API key required for DashScope video format".to_string())
-            })?;
-            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
-                status: 0,
-                message: "base_url required for DashScope video format".to_string(),
-            })?;
-            Ok(Arc::new(dashscope_video::DashScopeVideoDriver::new(
-                api_key, base_url,
-            )))
-        }
-        ApiFormat::Kling => {
-            // Kling needs access_key + secret_key for JWT auth, passed via DriverConfig
-            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
-                status: 0,
-                message: "base_url required for Kling format".to_string(),
-            })?;
-            // access_key and secret_key are passed in api_key field as "ak:sk" format
-            // or separately if the kernel supports it
-            let combined = config.api_key.clone().ok_or_else(|| {
-                LlmError::MissingApiKey(
-                    "Kling requires access_key:secret_key in api_key field".to_string(),
-                )
-            })?;
-            let mut parts = combined.splitn(2, ':');
-            let access_key = parts.next().unwrap_or_default().to_string();
-            let secret_key = parts.next().unwrap_or_default().to_string();
-            if access_key.is_empty() || secret_key.is_empty() {
-                return Err(LlmError::Config(
-                    "Kling api_key must be in 'access_key:secret_key' format".to_string(),
-                ));
-            }
-            Ok(Arc::new(kling::KlingDriver::new(
-                access_key, secret_key, base_url,
-            )))
-        }
-        ApiFormat::OpenAIImages => {
-            let api_key = config.api_key.clone().ok_or_else(|| {
-                LlmError::MissingApiKey("API key required for OpenAI Images format".to_string())
-            })?;
-            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
-                status: 0,
-                message: "base_url required for OpenAI Images format".to_string(),
-            })?;
-            Ok(Arc::new(openai_images::OpenAIImagesDriver::new(
-                api_key, base_url,
-            )))
-        }
-        ApiFormat::MiniMaxImage => {
-            let api_key = config.api_key.clone().ok_or_else(|| {
-                LlmError::MissingApiKey("API key required for MiniMax Image format".to_string())
-            })?;
-            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
-                status: 0,
-                message: "base_url required for MiniMax Image format".to_string(),
-            })?;
-            Ok(Arc::new(minimax_image::MiniMaxImageDriver::new(
-                api_key, base_url,
-            )))
-        }
-        ApiFormat::MiniMaxSearch => {
-            let api_key = config.api_key.clone().ok_or_else(|| {
-                LlmError::MissingApiKey("API key required for MiniMax Search format".to_string())
-            })?;
-            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
-                status: 0,
-                message: "base_url required for MiniMax Search format".to_string(),
-            })?;
-            Ok(Arc::new(minimax_search::MiniMaxSearchDriver::new(
-                api_key, base_url,
-            )))
-        }
-        ApiFormat::GlmSearch => {
-            let api_key = config.api_key.clone().ok_or_else(|| {
-                LlmError::MissingApiKey("API key required for GLM Search format".to_string())
-            })?;
-            let base_url = config.base_url.clone().ok_or_else(|| LlmError::Api {
-                status: 0,
-                message: "base_url required for GLM Search format".to_string(),
-            })?;
-            Ok(Arc::new(glm_search::GlmSearchDriver::new(
-                api_key, base_url,
-            )))
-        }
-    }
+    crate::llm_driver::create_driver(config)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use types::brain::AuthHeaderType;
+    use types::brain::{ApiFormat, AuthHeaderType};
 
     #[test]
     fn test_anthropic_format_with_key_and_url() {

@@ -25,6 +25,7 @@ pub type ChannelSendFn =
 
 /// Routes inbound plugin messages to agents and delivers responses back
 /// through the originating channel.
+#[derive(Clone)]
 pub struct PluginBridgeManager {
     /// Kernel handle for sending messages to agents.
     kernel: Arc<dyn KernelHandle>,
@@ -86,11 +87,18 @@ impl PluginBridgeManager {
     }
 
     /// Run the message processing loop (consumes self).
+    ///
+    /// Each message is handled in its own tokio task, allowing concurrent
+    /// processing of messages from different users. Same-owner messages are
+    /// still serialized via the per-owner lock in messaging.rs.
     pub async fn run(self, mut rx: mpsc::Receiver<PluginMessage>) {
         info!("Plugin bridge started");
 
         while let Some(msg) = rx.recv().await {
-            self.handle_inbound(msg).await;
+            let bridge = self.clone();
+            tokio::spawn(async move {
+                bridge.handle_inbound(msg).await;
+            });
         }
 
         info!("Plugin bridge stopped (channel closed)");
@@ -130,11 +138,11 @@ impl PluginBridgeManager {
                     router.set_alias(&rk, &name, &agent_id);
                 }
                 let confirm = format!("好的，我现在叫{name}。以后叫我{name}我就出来啦！");
-                self.send_response(&msg, &confirm);
+                self.send_response(&msg, &confirm).await;
             } else {
                 // Empty name, keep in pending
                 self.pending_naming.insert(rk.clone(), agent_id);
-                self.send_response(&msg, "名字不能为空哦，请再告诉我你想叫我什么？");
+                self.send_response(&msg, "名字不能为空哦，请再告诉我你想叫我什么？").await;
             }
             return;
         }
@@ -167,10 +175,10 @@ impl PluginBridgeManager {
                 )
                 .await
             {
-                Ok(response) => self.send_response(&msg, &response),
+                Ok(response) => self.send_response(&msg, &response).await,
                 Err(e) => {
                     error!(agent = %agent_id, error = %e, "Failed to send message to agent");
-                    self.send_response(&msg, "抱歉，处理消息时遇到了问题，请稍后再试。");
+                    self.send_response(&msg, "抱歉，处理消息时遇到了问题，请稍后再试。").await;
                 }
             }
             return;
@@ -179,7 +187,7 @@ impl PluginBridgeManager {
         // 3. /list command
         if text.trim().eq_ignore_ascii_case("/list") {
             let response = self.format_agent_list(&rk);
-            self.send_response(&msg, &response);
+            self.send_response(&msg, &response).await;
             return;
         }
 
@@ -199,7 +207,7 @@ impl PluginBridgeManager {
         if let Some(ref router) = self.sender_router {
             if router.needs_naming(&rk) {
                 self.pending_naming.insert(rk.clone(), agent_id.clone());
-                self.send_response(&msg, "请给我取个名字吧！以后叫这个名字我就会出来。");
+                self.send_response(&msg, "请给我取个名字吧！以后叫这个名字我就会出来。").await;
                 return;
             }
         }
@@ -225,7 +233,7 @@ impl PluginBridgeManager {
             .await
         {
             Ok(response) => {
-                self.send_response(&msg, &response);
+                self.send_response(&msg, &response).await;
             }
             Err(e) => {
                 error!(
@@ -233,7 +241,7 @@ impl PluginBridgeManager {
                     error = %e,
                     "Failed to send message to agent"
                 );
-                self.send_response(&msg, "抱歉，处理消息时遇到了问题，请稍后再试。");
+                self.send_response(&msg, "抱歉，处理消息时遇到了问题，请稍后再试。").await;
             }
         }
     }
@@ -399,16 +407,24 @@ impl PluginBridgeManager {
     // Outbound response
     // -----------------------------------------------------------------------
 
-    fn send_response(&self, original: &PluginMessage, response: &str) {
+    async fn send_response(&self, original: &PluginMessage, response: &str) {
         if let Some(ref send_fn) = self.channel_send_fn {
-            if let Err(e) = send_fn(&original.channel_type, &original.bot_id, &original.sender_id, response) {
-                error!(
-                    channel = %original.channel_type,
-                    bot = %original.bot_id,
-                    error = %e,
-                    "Failed to send response through channel"
-                );
-            }
+            let send_fn = send_fn.clone();
+            let channel_type = original.channel_type.clone();
+            let bot_id = original.bot_id.clone();
+            let sender_id = original.sender_id.clone();
+            let text = response.to_string();
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Err(e) = send_fn(&channel_type, &bot_id, &sender_id, &text) {
+                    error!(
+                        channel = %channel_type,
+                        bot = %bot_id,
+                        error = %e,
+                        "Failed to send response through channel"
+                    );
+                }
+            })
+            .await;
         } else {
             warn!(
                 channel = %original.channel_type,

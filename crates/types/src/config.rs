@@ -832,6 +832,10 @@ pub struct KernelConfig {
     /// or via a ToolProfile. Default: empty (no free tools).
     #[serde(default)]
     pub whitelist_tools: Vec<String>,
+    /// Max concurrent LLM requests across all agents. Default: 10.
+    /// Prevents overwhelming the LLM API when many users send messages simultaneously.
+    #[serde(default = "default_llm_concurrency")]
+    pub llm_concurrency: usize,
 }
 
 /// Clone lifecycle configuration — controls post-conversation learning and knowledge evolution.
@@ -901,6 +905,10 @@ pub struct OAuthConfig {
 
 fn default_max_cron_jobs() -> usize {
     500
+}
+
+fn default_llm_concurrency() -> usize {
+    10
 }
 
 /// Configuration entry for an MCP server.
@@ -1016,6 +1024,7 @@ impl Default for KernelConfig {
             plugins_dir: None,
             external_url: None,
             whitelist_tools: Vec::new(),
+            llm_concurrency: default_llm_concurrency(),
         }
     }
 }

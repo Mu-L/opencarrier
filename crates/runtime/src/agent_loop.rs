@@ -115,6 +115,9 @@ pub struct AgentLoopResult {
 ///
 /// This is the core of Carrier: it loads session context, recalls memories,
 /// runs the LLM in a tool-use loop, and saves the updated session.
+///
+/// Pass `stream_tx = Some(tx)` to receive incremental `StreamEvent`s during
+/// execution; pass `None` for a non-streaming (blocking) call.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_agent_loop(
     manifest: &AgentManifest,
@@ -124,6 +127,7 @@ pub async fn run_agent_loop(
     driver: Arc<dyn LlmDriver>,
     available_tools: &[ToolDefinition],
     kernel: Option<Arc<dyn KernelHandle>>,
+    stream_tx: Option<mpsc::Sender<StreamEvent>>,
     mcp_connections: Option<&dashmap::DashMap<String, McpConnection>>,
     web_ctx: Option<&WebToolsContext>,
     workspace_root: Option<&Path>,
@@ -142,7 +146,7 @@ pub async fn run_agent_loop(
         timeout,
         run_agent_loop_impl(
             manifest, user_message, session, memory, driver, available_tools,
-            kernel, None, mcp_connections, web_ctx, workspace_root,
+            kernel, stream_tx, mcp_connections, web_ctx, workspace_root,
             on_phase, docker_config, hooks, context_window_tokens, process_manager,
             user_content_blocks, brain, sender_id, owner_id,
         ),
@@ -1001,30 +1005,43 @@ async fn run_agent_loop_impl(
                             .filter_map(|tc| tc.input.get("toolset").and_then(|v| v.as_str()))
                             .collect();
 
-                        let new_tools = if !toolset_calls.is_empty() {
-                            // Activate each requested toolset
-                            let mut latest_tools = None;
+                        let is_toolset_activation = !toolset_calls.is_empty();
+                        let new_tools = if is_toolset_activation {
+                            // Activate each requested toolset — returns only the new toolset's tools
+                            let mut added_tools: Vec<types::tool::ToolDefinition> = Vec::new();
                             for ts_name in &toolset_calls {
                                 if let Some(tools) = kernel.activate_toolset(&agent_id_str, ts_name) {
                                     info!(toolset = ts_name, tools_count = tools.len(), "Toolset activated");
-                                    latest_tools = Some(tools);
+                                    added_tools.extend(tools);
                                 }
                             }
-                            latest_tools
+                            if added_tools.is_empty() { None } else { Some(added_tools) }
                         } else {
                             kernel.refresh_tools(&agent_id_str)
                         };
 
                         if let Some(new_tools) = new_tools {
-                            if new_tools.len() != available_tools.len() {
-                                let added = new_tools.len().saturating_sub(available_tools.len());
-                                info!(
-                                    added,
-                                    total = new_tools.len(),
-                                    "Tool list refreshed after toolset activation"
-                                );
-                                tools_owned = new_tools;
-                                available_tools = &tools_owned;
+                            if is_toolset_activation {
+                                // Append new toolset tools to existing list (按需加载)
+                                let existing_names: std::collections::HashSet<String> =
+                                    available_tools.iter().map(|t| t.name.clone()).collect();
+                                let fresh: Vec<_> = new_tools.into_iter()
+                                    .filter(|t| !existing_names.contains(&t.name))
+                                    .collect();
+                                if !fresh.is_empty() {
+                                    info!(added = fresh.len(), total = available_tools.len() + fresh.len(), "Tools added from toolset");
+                                    tools_owned = available_tools.to_vec();
+                                    tools_owned.extend(fresh);
+                                    available_tools = &tools_owned;
+                                }
+                            } else {
+                                // Full refresh (after train_write/file_write) — replace entire list
+                                if new_tools.len() != available_tools.len() {
+                                    let added = new_tools.len().saturating_sub(available_tools.len());
+                                    info!(added, total = new_tools.len(), "Tool list refreshed");
+                                    tools_owned = new_tools;
+                                    available_tools = &tools_owned;
+                                }
                             }
                         }
                     }
@@ -1104,6 +1121,10 @@ async fn run_agent_loop_impl(
     Err(CarrierError::MaxIterationsExceeded(max_iterations))
 }
 
+/// Streaming variant of [`run_agent_loop`].
+///
+/// Equivalent to calling `run_agent_loop` with `stream_tx = Some(tx)`.
+/// Kept as a convenience wrapper for existing call sites.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_agent_loop_streaming(
     manifest: &AgentManifest,
@@ -1127,31 +1148,12 @@ pub async fn run_agent_loop_streaming(
     sender_id: Option<&str>,
     owner_id: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
-    let timeout = std::time::Duration::from_secs(AGENT_LOOP_TIMEOUT_SECS);
-    match tokio::time::timeout(
-        timeout,
-        run_agent_loop_impl(
-            manifest, user_message, session, memory, driver, available_tools,
-            kernel, Some(stream_tx), mcp_connections, web_ctx, workspace_root,
-            on_phase, docker_config, hooks, context_window_tokens, process_manager,
-            user_content_blocks, brain, sender_id, owner_id,
-        ),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => {
-            warn!(
-                agent = %manifest.name,
-                timeout_secs = AGENT_LOOP_TIMEOUT_SECS,
-                "Streaming agent loop timed out"
-            );
-            Err(CarrierError::LlmDriver(format!(
-                "Agent loop timed out after {}s — the LLM API did not respond in time. Please try again later.",
-                AGENT_LOOP_TIMEOUT_SECS
-            )))
-        }
-    }
+    run_agent_loop(
+        manifest, user_message, session, memory, driver, available_tools,
+        kernel, Some(stream_tx), mcp_connections, web_ctx, workspace_root,
+        on_phase, docker_config, hooks, context_window_tokens, process_manager,
+        user_content_blocks, brain, sender_id, owner_id,
+    ).await
 }
 
 
@@ -1368,10 +1370,11 @@ mod tests {
             &memory,
             driver,
             &[], // no tools registered — the tool call will fail, which is fine
-            None,
-            None,
-            None,
-            None,
+            None, // kernel
+            None, // stream_tx
+            None, // mcp_connections
+            None, // web_ctx
+            None, // workspace_root
             None, // on_phase
             None, // docker_config
             None, // hooks
@@ -1420,10 +1423,11 @@ mod tests {
             &memory,
             driver,
             &[], // no tools registered — the tool call will fail, which is fine
-            None,
-            None,
-            None,
-            None,
+            None, // kernel
+            None, // stream_tx
+            None, // mcp_connections
+            None, // web_ctx
+            None, // workspace_root
             None, // on_phase
             None, // docker_config
             None, // hooks
@@ -1475,6 +1479,7 @@ mod tests {
             driver,
             &[],
             None,
+            None, // stream_tx
             None,
             None,
             None,
@@ -1527,6 +1532,7 @@ mod tests {
             driver,
             &[],
             None,
+            None, // stream_tx
             None,
             None,
             None,
@@ -1698,6 +1704,7 @@ mod tests {
             driver,
             &[],
             None,
+            None, // stream_tx
             None,
             None,
             None,
@@ -1744,6 +1751,7 @@ mod tests {
             driver,
             &[],
             None,
+            None, // stream_tx
             None,
             None,
             None,
@@ -2687,6 +2695,7 @@ mod tests {
             driver,
             &tools,
             None,
+            None, // stream_tx
             None,
             None,
             None,
@@ -2753,6 +2762,7 @@ mod tests {
             driver,
             &tools, // tools available but not used
             None,
+            None, // stream_tx
             None,
             None,
             None,

@@ -383,6 +383,69 @@ impl std::fmt::Debug for DriverConfig {
     }
 }
 
+/// Create an LLM driver based on configuration.
+///
+/// - CLI subprocess drivers (claude-code, qwen-code) dispatched by provider name
+/// - HTTP API drivers dispatched by `ApiFormat`, all handled by `UnifiedHttpDriver`
+pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmError> {
+    let provider = config.provider.as_str();
+
+    // CLI subprocess drivers
+    if provider == "claude-code" {
+        return Ok(Arc::new(crate::drivers::claude_code::ClaudeCodeDriver::new(
+            config.base_url.clone(),
+            config.skip_permissions,
+        )));
+    }
+    if provider == "qwen-code" {
+        return Ok(Arc::new(crate::drivers::qwen_code::QwenCodeDriver::new(
+            config.base_url.clone(),
+            config.skip_permissions,
+        )));
+    }
+
+    // All HTTP API drivers — UnifiedHttpDriver handles all formats
+    let format = config.format.unwrap_or_default();
+
+    // Validate base_url for HTTP drivers
+    let base_url = config.base_url.clone().ok_or_else(|| LlmError::Config(
+        format!("base_url required for {format:?} format"),
+    ))?;
+
+    // Kling needs access_key:secret_key in api_key field
+    let (api_key, secret_key) = if format == ApiFormat::Kling {
+        let combined = config.api_key.clone().ok_or_else(|| {
+            LlmError::MissingApiKey("Kling requires access_key:secret_key in api_key field".to_string())
+        })?;
+        let mut parts = combined.splitn(2, ':');
+        let ak = parts.next().unwrap_or_default().to_string();
+        let sk = parts.next().unwrap_or_default().to_string();
+        if ak.is_empty() || sk.is_empty() {
+            return Err(LlmError::Config(
+                "Kling api_key must be in 'access_key:secret_key' format".to_string(),
+            ));
+        }
+        (ak, Some(sk))
+    } else {
+        // Most formats require an API key (except OpenAI for local providers like Ollama)
+        let api_key = config.api_key.clone().unwrap_or_default();
+        if api_key.is_empty() && format != ApiFormat::OpenAI && format != ApiFormat::OpenAIImages {
+            return Err(LlmError::MissingApiKey(
+                format!("API key required for {format:?} format"),
+            ));
+        }
+        (api_key, None)
+    };
+
+    Ok(Arc::new(crate::llm_driver_impl::UnifiedHttpDriver::new(
+        format,
+        api_key,
+        secret_key,
+        base_url,
+        config.auth_header,
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
