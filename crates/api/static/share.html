@@ -302,6 +302,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
       allAgents = res.agents || [];
       // Sort by install_count descending
       allAgents.sort(function(a, b) { return (b.install_count || 0) - (a.install_count || 0); });
+      // If clone= param, skip listing and go direct
+      if (checkDirectClone()) return;
       buildCategoryTabs();
       renderAgentList();
     }).catch(function(e){
@@ -696,17 +698,23 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
     ctx.closePath();
   }
 
-  // ── If clone= param, go directly to detail ──
+  // ── If clone= param, go directly to install ──
   function checkDirectClone() {
     if (!cloneName) return false;
-    // Wait for agents to load, then open detail
+    // Wait for agents to load
     if (!allAgents.length) return true; // still loading
     var agent = allAgents.find(function(a) { return a.name === cloneName; });
+    var isPlatformBrowser = /MicroMessenger|Feishu|Lark|DingTalk|wxwork/i.test(navigator.userAgent);
+    if (agent && isPlatformBrowser) {
+      // In platform browser, go directly to auth flow
+      targetAgentName = cloneName;
+      startAuth();
+      return true;
+    }
     if (agent) {
       openDetail(cloneName);
       return true;
     }
-    // Agent not found in list, show hero
     return false;
   }
 
