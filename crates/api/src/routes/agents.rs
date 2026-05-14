@@ -1180,8 +1180,18 @@ pub async fn verify_clone_access(
 /// GET /api/share/agents — Public agent list for the share page.
 ///
 /// Returns local running agents + Hub templates so the share page
-/// can show a picker without authentication.
+/// can show a picker without authentication. Includes category,
+/// tags, color, and install_count for search/filter/sort.
 pub async fn share_list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // Count senders per agent for install_count
+    let mut install_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    if let Some(ref cm) = state.channel_manager {
+        let cm = cm.lock().await;
+        for (_sender_id, agent_id) in cm.list_sender_routes() {
+            *install_counts.entry(agent_id).or_insert(0) += 1;
+        }
+    }
+
     let mut agents: Vec<serde_json::Value> = state
         .kernel
         .registry
@@ -1189,11 +1199,16 @@ pub async fn share_list_agents(State(state): State<Arc<AppState>>) -> impl IntoR
         .into_iter()
         .filter(|e| matches!(e.state, types::agent::AgentState::Running))
         .map(|e| {
+            let installs = install_counts.get(&e.id.to_string()).copied().unwrap_or(0);
             serde_json::json!({
                 "name": e.name,
                 "display_name": e.manifest.display_name,
                 "profile": e.manifest.profile,
                 "description": e.manifest.description,
+                "category": e.identity.archetype,
+                "tags": e.tags,
+                "color": e.identity.color,
+                "install_count": installs,
                 "source": "local",
                 "identity": {
                     "emoji": e.identity.emoji,
@@ -1213,12 +1228,18 @@ pub async fn share_list_agents(State(state): State<Arc<AppState>>) -> impl IntoR
                     if let Some(templates) = data.get("templates").and_then(|t| t.as_array()) {
                         for t in templates {
                             if t.get("visibility").and_then(|v| v.as_str()) == Some("public") {
+                                let downloads = t.get("download_count").and_then(|v| v.as_i64()).unwrap_or(0);
                                 agents.push(serde_json::json!({
                                     "name": t.get("name").and_then(|v| v.as_str()).unwrap_or(""),
                                     "display_name": t.get("display_name").and_then(|v| v.as_str())
                                         .or_else(|| t.get("name").and_then(|v| v.as_str()))
                                         .unwrap_or(""),
                                     "description": t.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+                                    "category": t.get("category").and_then(|v| v.as_str()).unwrap_or(""),
+                                    "tags": t.get("tags").and_then(|v| v.as_str())
+                                        .map(|s| serde_json::from_str::<Vec<String>>(s).unwrap_or_default())
+                                        .unwrap_or_default(),
+                                    "install_count": downloads,
                                     "source": "hub",
                                 }));
                             }
