@@ -108,6 +108,28 @@ impl WeChatClient {
         Ok(access_token)
     }
 
+    /// GET request with auto-injected access_token.
+    pub async fn api_get(
+        &self,
+        app_id: &str,
+        app_secret: &str,
+        path: &str,
+        query_params: &str,
+    ) -> Result<serde_json::Value> {
+        let token = self.get_token(app_id, app_secret).await?;
+        let url = if query_params.is_empty() {
+            format!("{}{}?access_token={}", WECHAT_API_BASE, path, token)
+        } else {
+            format!(
+                "{}{}?access_token={}&{}",
+                WECHAT_API_BASE, path, token, query_params
+            )
+        };
+        let json: serde_json::Value = self.http.get(&url).send().await?.json().await?;
+        check_error(&json)?;
+        Ok(json)
+    }
+
     /// POST JSON body with auto-injected access_token.
     pub async fn api_post(
         &self,

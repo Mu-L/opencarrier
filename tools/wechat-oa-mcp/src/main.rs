@@ -127,6 +127,215 @@ define_params!(DeleteMaterialParams {
     media_id: String,
 });
 
+// ---- Comment management params ----
+
+define_params!(OpenCommentParams {
+    #[schemars(description = "图文消息的 msg_data_id（从群发通知或 publish_status 获取）")]
+    msg_data_id: i64,
+    #[schemars(description = "多图文时第几篇文章（从0开始，默认0即第一篇）")]
+    index: Option<i32>,
+});
+
+define_params!(CloseCommentParams {
+    #[schemars(description = "图文消息的 msg_data_id")]
+    msg_data_id: i64,
+    #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
+    index: Option<i32>,
+});
+
+define_params!(ListCommentsParams {
+    #[schemars(description = "图文消息的 msg_data_id")]
+    msg_data_id: i64,
+    #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
+    index: Option<i32>,
+    #[schemars(description = "评论类型：0=全部 1=普通评论 2=精选评论（默认0）")]
+    comment_type: Option<i32>,
+    #[schemars(description = "页偏移（0开始，默认0）")]
+    offset: Option<i32>,
+    #[schemars(description = "每页条数（默认10）")]
+    count: Option<i32>,
+});
+
+define_params!(MarkElectParams {
+    #[schemars(description = "图文消息的 msg_data_id")]
+    msg_data_id: i64,
+    #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
+    index: Option<i32>,
+    #[schemars(description = "评论 id")]
+    comment_id: i64,
+});
+
+define_params!(UnmarkElectParams {
+    #[schemars(description = "图文消息的 msg_data_id")]
+    msg_data_id: i64,
+    #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
+    index: Option<i32>,
+    #[schemars(description = "评论 id")]
+    comment_id: i64,
+});
+
+define_params!(DeleteCommentParams {
+    #[schemars(description = "图文消息的 msg_data_id")]
+    msg_data_id: i64,
+    #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
+    index: Option<i32>,
+    #[schemars(description = "评论 id")]
+    comment_id: i64,
+});
+
+define_params!(ReplyCommentParams {
+    #[schemars(description = "图文消息的 msg_data_id")]
+    msg_data_id: i64,
+    #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
+    index: Option<i32>,
+    #[schemars(description = "评论 id")]
+    comment_id: i64,
+    #[schemars(description = "回复内容")]
+    content: String,
+});
+
+define_params!(DeleteReplyParams {
+    #[schemars(description = "图文消息的 msg_data_id")]
+    msg_data_id: i64,
+    #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
+    index: Option<i32>,
+    #[schemars(description = "评论 id")]
+    comment_id: i64,
+    #[schemars(description = "回复 id")]
+    reply_id: i64,
+});
+
+// ---- Publish (freepublish) params ----
+
+define_params!(ListPublishedParams {
+    #[schemars(description = "页偏移（0开始，默认0）")]
+    offset: Option<i32>,
+    #[schemars(description = "每页条数（默认20）")]
+    count: Option<i32>,
+    #[schemars(description = "1=返回内容 0=不返回（默认0）")]
+    no_content: Option<i32>,
+});
+
+define_params!(DeletePublishedParams {
+    #[schemars(description = "已发布图文的 article_id")]
+    article_id: String,
+});
+
+define_params!(GetArticleParams {
+    #[schemars(description = "已发布图文的 article_id")]
+    article_id: String,
+});
+
+// ---- User management: tags ----
+
+define_params!(CreateTagParams {
+    #[schemars(description = "标签名称（30字符以内）")]
+    name: String,
+});
+
+define_params!(UpdateTagParams {
+    #[schemars(description = "标签 id")]
+    id: i64,
+    #[schemars(description = "新标签名称")]
+    name: String,
+});
+
+define_params!(DeleteTagParams {
+    #[schemars(description = "标签 id")]
+    id: i64,
+});
+
+define_params!(BatchTaggingParams {
+    #[schemars(description = "标签 id")]
+    tag_id: i64,
+    #[schemars(description = "用户 openid 列表（JSON数组）")]
+    openid_list: serde_json::Value,
+});
+
+define_params!(BatchUntaggingParams {
+    #[schemars(description = "标签 id")]
+    tag_id: i64,
+    #[schemars(description = "用户 openid 列表（JSON数组）")]
+    openid_list: serde_json::Value,
+});
+
+define_params!(GetTagUsersParams {
+    #[schemars(description = "标签 id")]
+    tag_id: i64,
+    #[schemars(description = "翻页 openid，第一页不传")]
+    next_openid: Option<String>,
+});
+
+define_params!(GetUserTagsParams {
+    #[schemars(description = "用户 openid")]
+    openid: String,
+});
+
+// ---- User management: user info ----
+
+define_params!(GetUserInfoParams {
+    #[schemars(description = "用户 openid")]
+    openid: String,
+    #[schemars(description = "语言：zh_CN, zh_TW, en（默认 zh_CN）")]
+    lang: Option<String>,
+});
+
+define_params!(BatchGetUserInfoParams {
+    #[schemars(description = "用户列表（JSON数组，每项含 openid 字段）")]
+    user_list: serde_json::Value,
+});
+
+define_params!(GetFollowersParams {
+    #[schemars(description = "翻页 openid，第一页不传")]
+    next_openid: Option<String>,
+});
+
+define_params!(UpdateRemarkParams {
+    #[schemars(description = "用户 openid")]
+    openid: String,
+    #[schemars(description = "备注名")]
+    remark: String,
+});
+
+// ---- User management: blacklist ----
+
+define_params!(GetBlacklistParams {
+    #[schemars(description = "翻页 openid，第一页不传")]
+    begin_openid: Option<String>,
+});
+
+define_params!(BatchBlacklistParams {
+    #[schemars(description = "用户 openid 列表（JSON数组）")]
+    openid_list: serde_json::Value,
+});
+
+define_params!(BatchUnblacklistParams {
+    #[schemars(description = "用户 openid 列表（JSON数组）")]
+    openid_list: serde_json::Value,
+});
+
+// ---- User management: tags (list has no extra params) ----
+
+define_params!(ListTagsParams {});
+
+// ---- OpenID conversion ----
+
+define_params!(ConvertOpenIdParams {
+    #[schemars(description = "原公众号的 appid")]
+    from_appid: String,
+    #[schemars(description = "需要转换的 openid 列表（JSON数组）")]
+    openid_list: serde_json::Value,
+});
+
+// ---- Data statistics (datacube) ----
+
+define_params!(DatacubeParams {
+    #[schemars(description = "开始日期（格式：yyyy-MM-dd）")]
+    begin_date: String,
+    #[schemars(description = "结束日期（格式：yyyy-MM-dd，最大跨度见微信文档）")]
+    end_date: String,
+});
+
 // ================================================================== //
 //  MCP Server                                                         //
 // ================================================================== //
@@ -398,6 +607,989 @@ impl WeChatOaServer {
                 &params.app_id,
                 &params.app_secret,
                 "/cgi-bin/material/del_material",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    // ---- Comment management ----
+
+    #[tool(description = "Open comment section for a published article. The account must have comment capability.")]
+    async fn open_comment(
+        &self,
+        Parameters(params): Parameters<OpenCommentParams>,
+    ) -> String {
+        let body = serde_json::json!({
+            "msg_data_id": params.msg_data_id,
+            "index": params.index.unwrap_or(0),
+        });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/comment/open",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Close comment section for a published article.")]
+    async fn close_comment(
+        &self,
+        Parameters(params): Parameters<CloseCommentParams>,
+    ) -> String {
+        let body = serde_json::json!({
+            "msg_data_id": params.msg_data_id,
+            "index": params.index.unwrap_or(0),
+        });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/comment/close",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "List comments for a published article. Filter by type: 0=all, 1=normal, 2=featured.")]
+    async fn list_comments(
+        &self,
+        Parameters(params): Parameters<ListCommentsParams>,
+    ) -> String {
+        let body = serde_json::json!({
+            "msg_data_id": params.msg_data_id,
+            "index": params.index.unwrap_or(0),
+            "type": params.comment_type.unwrap_or(0),
+            "begin": params.offset.unwrap_or(0),
+            "count": params.count.unwrap_or(10),
+        });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/comment/list",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Mark a comment as featured (精选).")]
+    async fn mark_elect(
+        &self,
+        Parameters(params): Parameters<MarkElectParams>,
+    ) -> String {
+        let body = serde_json::json!({
+            "msg_data_id": params.msg_data_id,
+            "index": params.index.unwrap_or(0),
+            "comment_id": params.comment_id,
+        });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/comment/markelect",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Remove featured (精选) mark from a comment.")]
+    async fn unmark_elect(
+        &self,
+        Parameters(params): Parameters<UnmarkElectParams>,
+    ) -> String {
+        let body = serde_json::json!({
+            "msg_data_id": params.msg_data_id,
+            "index": params.index.unwrap_or(0),
+            "comment_id": params.comment_id,
+        });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/comment/unmarkelect",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Delete a comment from a published article.")]
+    async fn delete_comment(
+        &self,
+        Parameters(params): Parameters<DeleteCommentParams>,
+    ) -> String {
+        let body = serde_json::json!({
+            "msg_data_id": params.msg_data_id,
+            "index": params.index.unwrap_or(0),
+            "comment_id": params.comment_id,
+        });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/comment/delete",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Reply to a comment on a published article.")]
+    async fn reply_comment(
+        &self,
+        Parameters(params): Parameters<ReplyCommentParams>,
+    ) -> String {
+        let body = serde_json::json!({
+            "msg_data_id": params.msg_data_id,
+            "index": params.index.unwrap_or(0),
+            "comment_id": params.comment_id,
+            "content": params.content,
+        });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/comment/reply/add",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Delete a reply to a comment.")]
+    async fn delete_reply(
+        &self,
+        Parameters(params): Parameters<DeleteReplyParams>,
+    ) -> String {
+        let body = serde_json::json!({
+            "msg_data_id": params.msg_data_id,
+            "index": params.index.unwrap_or(0),
+            "comment_id": params.comment_id,
+            "reply_id": params.reply_id,
+        });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/comment/reply/delete",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    // ---- Publish (freepublish) ----
+
+    #[tool(description = "List published articles. Returns article_id, title, and update_time for each.")]
+    async fn list_published(
+        &self,
+        Parameters(params): Parameters<ListPublishedParams>,
+    ) -> String {
+        let body = serde_json::json!({
+            "offset": params.offset.unwrap_or(0),
+            "count": params.count.unwrap_or(20),
+            "no_content": params.no_content.unwrap_or(0),
+        });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/freepublish/batchget",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Delete a published article by article_id. This action is irreversible.")]
+    async fn delete_published(
+        &self,
+        Parameters(params): Parameters<DeletePublishedParams>,
+    ) -> String {
+        let body = serde_json::json!({ "article_id": params.article_id });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/freepublish/delete",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get full article content for a published article by article_id.")]
+    async fn get_article(
+        &self,
+        Parameters(params): Parameters<GetArticleParams>,
+    ) -> String {
+        let body = serde_json::json!({ "article_id": params.article_id });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/freepublish/getarticle",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    // ---- User management: Tags ----
+
+    #[tool(description = "List all tags for a WeChat OA account.")]
+    async fn list_tags(&self, Parameters(params): Parameters<ListTagsParams>) -> String {
+        let body = serde_json::json!({});
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/tags/get",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Create a new tag for user categorization.")]
+    async fn create_tag(&self, Parameters(params): Parameters<CreateTagParams>) -> String {
+        let body = serde_json::json!({ "tag": { "name": params.name } });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/tags/create",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Update an existing tag's name.")]
+    async fn update_tag(&self, Parameters(params): Parameters<UpdateTagParams>) -> String {
+        let body = serde_json::json!({ "tag": { "id": params.id, "name": params.name } });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/tags/update",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Delete a tag by id.")]
+    async fn delete_tag(&self, Parameters(params): Parameters<DeleteTagParams>) -> String {
+        let body = serde_json::json!({ "tag": { "id": params.id } });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/tags/delete",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Batch tag users with a given tag id.")]
+    async fn batch_tagging(&self, Parameters(params): Parameters<BatchTaggingParams>) -> String {
+        let openid_list = coerce_json_value(params.openid_list);
+        let body = serde_json::json!({ "openid_list": openid_list, "tagid": params.tag_id });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/tags/members/batchtagging",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Batch untag users from a given tag id.")]
+    async fn batch_untagging(&self, Parameters(params): Parameters<BatchUntaggingParams>) -> String {
+        let openid_list = coerce_json_value(params.openid_list);
+        let body = serde_json::json!({ "openid_list": openid_list, "tagid": params.tag_id });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/tags/members/batchuntagging",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get users under a tag. Supports pagination via next_openid.")]
+    async fn get_tag_users(&self, Parameters(params): Parameters<GetTagUsersParams>) -> String {
+        let body = serde_json::json!({
+            "tagid": params.tag_id,
+            "next_openid": params.next_openid.unwrap_or_default(),
+        });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/user/tag/get",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get tag ids that a user belongs to.")]
+    async fn get_user_tags(&self, Parameters(params): Parameters<GetUserTagsParams>) -> String {
+        let body = serde_json::json!({ "openid": params.openid });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/tags/getidlist",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    // ---- User management: User info ----
+
+    #[tool(description = "Get user info by openid. Uses GET request to WeChat API.")]
+    async fn get_user_info(&self, Parameters(params): Parameters<GetUserInfoParams>) -> String {
+        let lang = params.lang.unwrap_or_else(|| "zh_CN".to_string());
+        let query = format!("openid={}&lang={}", params.openid, lang);
+        match self
+            .client
+            .api_get(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/user/info",
+                &query,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Batch get user info for multiple openids.")]
+    async fn batch_get_user_info(
+        &self,
+        Parameters(params): Parameters<BatchGetUserInfoParams>,
+    ) -> String {
+        let user_list = coerce_json_value(params.user_list);
+        let body = serde_json::json!({ "user_list": user_list });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/user/info/batchget",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get follower list (all users who follow the account). Uses GET request.")]
+    async fn get_followers(&self, Parameters(params): Parameters<GetFollowersParams>) -> String {
+        let query = match params.next_openid {
+            Some(ref n) if !n.is_empty() => format!("next_openid={}", n),
+            _ => String::new(),
+        };
+        match self
+            .client
+            .api_get(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/user/get",
+                &query,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Update remark name for a user.")]
+    async fn update_remark(&self, Parameters(params): Parameters<UpdateRemarkParams>) -> String {
+        let body = serde_json::json!({ "openid": params.openid, "remark": params.remark });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/user/info/updateremark",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    // ---- User management: Blacklist ----
+
+    #[tool(description = "Get blacklist (users blocked by the account). Supports pagination.")]
+    async fn get_blacklist(&self, Parameters(params): Parameters<GetBlacklistParams>) -> String {
+        let body = serde_json::json!({ "begin_openid": params.begin_openid.unwrap_or_default() });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/tags/members/getblacklist",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Batch block users (add to blacklist).")]
+    async fn batch_blacklist(&self, Parameters(params): Parameters<BatchBlacklistParams>) -> String {
+        let openid_list = coerce_json_value(params.openid_list);
+        let body = serde_json::json!({ "openid_list": openid_list });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/tags/members/batchblacklist",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Batch unblock users (remove from blacklist).")]
+    async fn batch_unblacklist(
+        &self,
+        Parameters(params): Parameters<BatchUnblacklistParams>,
+    ) -> String {
+        let openid_list = coerce_json_value(params.openid_list);
+        let body = serde_json::json!({ "openid_list": openid_list });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/tags/members/batchunblacklist",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    // ---- OpenID conversion ----
+
+    #[tool(description = "Convert openid from one appid to another (for account migration).")]
+    async fn convert_openid(&self, Parameters(params): Parameters<ConvertOpenIdParams>) -> String {
+        let openid_list = coerce_json_value(params.openid_list);
+        let body = serde_json::json!({ "from_appid": params.from_appid, "openid_list": openid_list });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/cgi-bin/changeopenid",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    // ---- Data statistics (datacube) ----
+
+    #[tool(description = "Get user growth summary (datacube). Max date range: 7 days.")]
+    async fn get_user_summary(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getusersummary",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get cumulative user count (datacube). Max date range: 7 days.")]
+    async fn get_user_cumulate(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getusercumulate",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get article read summary (datacube). Max date range: 1 day.")]
+    async fn get_article_summary(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getarticlesummary",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get article total stats (datacube). Max date range: 1 day.")]
+    async fn get_article_total(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getarticletotal",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get user read stats (datacube). Max date range: 3 days.")]
+    async fn get_user_read(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getuserread",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get user read hourly stats (datacube). Max date range: 1 day.")]
+    async fn get_user_read_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getuserreadhour",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get user share stats (datacube). Max date range: 7 days.")]
+    async fn get_user_share(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getusershare",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get user share hourly stats (datacube). Max date range: 1 day.")]
+    async fn get_user_share_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getusersharehour",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get upstream message stats (datacube). Max date range: 7 days.")]
+    async fn get_upstream_msg(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getupstreammsg",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get upstream message weekly stats (datacube). Max date range: 30 days.")]
+    async fn get_upstream_msg_week(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getupstreammsgweek",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get upstream message monthly stats (datacube). Max date range: 30 days.")]
+    async fn get_upstream_msg_month(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getupstreammsgmonth",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get upstream message distribution stats (datacube). Max date range: 15 days.")]
+    async fn get_upstream_msg_dist(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getupstreammsgdist",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get upstream message weekly distribution stats (datacube). Max date range: 30 days.")]
+    async fn get_upstream_msg_dist_week(
+        &self,
+        Parameters(params): Parameters<DatacubeParams>,
+    ) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getupstreammsgdistweek",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get upstream message monthly distribution stats (datacube). Max date range: 30 days.")]
+    async fn get_upstream_msg_dist_month(
+        &self,
+        Parameters(params): Parameters<DatacubeParams>,
+    ) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getupstreammsgdistmonth",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get upstream message hourly stats (datacube). Max date range: 1 day.")]
+    async fn get_upstream_msg_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getupstreammsghour",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get interface summary stats (datacube). Max date range: 30 days.")]
+    async fn get_interface_summary(
+        &self,
+        Parameters(params): Parameters<DatacubeParams>,
+    ) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getinterfacesummary",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get interface summary hourly stats (datacube). Max date range: 1 day.")]
+    async fn get_interface_summary_hour(
+        &self,
+        Parameters(params): Parameters<DatacubeParams>,
+    ) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getinterfacesummaryhour",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get article read analytics (datacube). Max date range: 3 days.")]
+    async fn get_article_read(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getarticleread",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get article share analytics (datacube). Max date range: 7 days.")]
+    async fn get_article_share(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getarticleshare",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get business summary (datacube). Max date range: 7 days.")]
+    async fn get_biz_summary(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getbizsummary",
+                &body,
+            )
+            .await
+        {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+        }
+    }
+
+    #[tool(description = "Get article total detail stats (datacube). Max date range: 1 day.")]
+    async fn get_article_total_detail(
+        &self,
+        Parameters(params): Parameters<DatacubeParams>,
+    ) -> String {
+        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
+        match self
+            .client
+            .api_post(
+                &params.app_id,
+                &params.app_secret,
+                "/datacube/getarticletotaldetail",
                 &body,
             )
             .await
