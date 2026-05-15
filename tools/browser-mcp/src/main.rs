@@ -403,17 +403,23 @@ impl BrowserSession {
         let ws_url = if endpoint.starts_with("ws://") || endpoint.starts_with("wss://") {
             endpoint.to_string()
         } else {
-            // HTTP — fetch /json/version to get ws_url
-            let url = format!("{}/json/version", endpoint.trim_end_matches('/'));
-            let resp: Value = reqwest::get(&url)
+            // HTTP — fetch /json/list to get a page-level websocket URL.
+            // /json/version gives browser-level WS which doesn't support Page.navigate.
+            let list_url = format!("{}/json/list", endpoint.trim_end_matches('/'));
+            let targets: Vec<Value> = reqwest::get(&list_url)
                 .await
-                .map_err(|e| format!("Failed to fetch CDP version: {e}"))?
+                .map_err(|e| format!("Failed to fetch CDP target list: {e}"))?
                 .json()
                 .await
-                .map_err(|e| format!("Invalid CDP version response: {e}"))?;
-            resp.get("webSocketDebuggerUrl")
-                .and_then(|v| v.as_str())
-                .unwrap_or(endpoint)
+                .map_err(|e| format!("Invalid CDP target list response: {e}"))?;
+            targets
+                .iter()
+                .find_map(|t| {
+                    let is_page = t.get("type").and_then(|v| v.as_str()) == Some("page");
+                    let ws = t.get("webSocketDebuggerUrl").and_then(|v| v.as_str());
+                    if is_page { ws } else { None }
+                })
+                .ok_or_else(|| "No page target found in CDP target list".to_string())?
                 .to_string()
         };
 
