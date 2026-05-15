@@ -971,19 +971,21 @@ async fn tool_cron_create(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    owner_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Agent ID required for cron_create")?;
-    kh.cron_create(agent_id, input.clone()).await
+    kh.cron_create(agent_id, owner_id, input.clone()).await
 }
 
 async fn tool_cron_list(
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    owner_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Agent ID required for cron_list")?;
-    let jobs = kh.cron_list(agent_id).await?;
+    let jobs = kh.cron_list(agent_id, owner_id).await?;
     serde_json::to_string_pretty(&jobs).map_err(|e| format!("Failed to serialize cron jobs: {e}"))
 }
 
@@ -991,6 +993,7 @@ async fn tool_cron_cancel(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
+    owner_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Agent ID required for cron_cancel")?;
@@ -998,7 +1001,7 @@ async fn tool_cron_cancel(
         .as_str()
         .ok_or("Missing 'job_id' parameter")?;
     // Ownership check: verify this job belongs to the caller
-    let jobs = kh.cron_list(agent_id).await?;
+    let jobs = kh.cron_list(agent_id, owner_id).await?;
     let owned = jobs
         .iter()
         .any(|j| j.get("id").and_then(|v| v.as_str()) == Some(job_id));
@@ -1591,9 +1594,9 @@ impl ToolModule for AgentTools {
             "knowledge_query" => Some(tool_knowledge_query(input, kernel, caller_agent_id).await),
 
             // Cron scheduling tools
-            "cron_create" => Some(tool_cron_create(input, kernel, caller_agent_id).await),
-            "cron_list" => Some(tool_cron_list(kernel, caller_agent_id).await),
-            "cron_cancel" => Some(tool_cron_cancel(input, kernel, caller_agent_id).await),
+            "cron_create" => Some(tool_cron_create(input, kernel, caller_agent_id, owner_id).await),
+            "cron_list" => Some(tool_cron_list(kernel, caller_agent_id, owner_id).await),
+            "cron_cancel" => Some(tool_cron_cancel(input, kernel, caller_agent_id, owner_id).await),
 
             // A2A outbound tools (cross-instance agent communication)
             "a2a_discover" => Some(tool_a2a_discover(input).await),

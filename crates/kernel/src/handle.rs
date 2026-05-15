@@ -346,6 +346,7 @@ impl KernelHandle for CarrierKernel {
     async fn cron_create(
         &self,
         agent_id: &str,
+        owner_id: Option<&str>,
         job_json: serde_json::Value,
     ) -> Result<String, String> {
         use types::scheduler::{
@@ -375,6 +376,7 @@ impl KernelHandle for CarrierKernel {
         let job = CronJob {
             id: CronJobId::new(),
             agent_id: aid,
+            owner_id: owner_id.map(|s| s.to_string()),
             name,
             schedule,
             action,
@@ -401,11 +403,14 @@ impl KernelHandle for CarrierKernel {
         .to_string())
     }
 
-    async fn cron_list(&self, agent_id: &str) -> Result<Vec<serde_json::Value>, String> {
+    async fn cron_list(&self, agent_id: &str, owner_id: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
         let aid = types::agent::AgentId(
             uuid::Uuid::parse_str(agent_id).map_err(|e| format!("Invalid agent ID: {e}"))?,
         );
-        let jobs = self.cron_scheduler.list_jobs(aid);
+        let mut jobs = self.cron_scheduler.list_jobs(aid);
+        if let Some(oid) = owner_id {
+            jobs.retain(|j| j.owner_id.as_deref() == Some(oid));
+        }
         let json_jobs: Vec<serde_json::Value> = jobs
             .into_iter()
             .map(|j| serde_json::to_value(&j).unwrap_or_default())

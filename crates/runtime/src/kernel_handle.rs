@@ -135,15 +135,16 @@ pub trait KernelHandle: Send + Sync {
     async fn cron_create(
         &self,
         agent_id: &str,
+        owner_id: Option<&str>,
         job_json: serde_json::Value,
     ) -> Result<String, String> {
-        let _ = (agent_id, job_json);
+        let _ = (agent_id, owner_id, job_json);
         Err("Cron scheduler not available".to_string())
     }
 
-    /// List cron jobs for the calling agent.
-    async fn cron_list(&self, agent_id: &str) -> Result<Vec<serde_json::Value>, String> {
-        let _ = agent_id;
+    /// List cron jobs for the calling agent, optionally filtered by owner_id.
+    async fn cron_list(&self, agent_id: &str, owner_id: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
+        let _ = (agent_id, owner_id);
         Err("Cron scheduler not available".to_string())
     }
 
