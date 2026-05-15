@@ -11,7 +11,7 @@ use crate::llm_driver::{
     Brain, CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent,
 };
 use crate::llm_errors;
-use crate::loop_guard::{LoopGuard, LoopGuardConfig, LoopGuardVerdict};
+
 use crate::mcp::McpConnection;
 use crate::tool_context::ToolContext;
 use crate::tool_runner;
@@ -48,14 +48,16 @@ const TOOL_TIMEOUT_SECS: u64 = 120;
 /// Prevents the agent from hanging indefinitely if the LLM API becomes
 /// unresponsive. After this timeout, the loop is aborted and an error
 /// is returned so the caller can notify the user.
-const AGENT_LOOP_TIMEOUT_SECS: u64 = 300;
+/// Raised from 300s to 600s — compaction + multiple LLM calls + tool
+/// execution easily exceed 300s with 30+ iterations.
+const AGENT_LOOP_TIMEOUT_SECS: u64 = 600;
 
 /// Maximum consecutive MaxTokens continuations before returning partial response.
 /// Raised from 3 to 5 to allow longer-form generation.
 const MAX_CONTINUATIONS: u32 = 5;
 
 /// Maximum message history size before auto-trimming to prevent context overflow.
-const MAX_HISTORY_MESSAGES: usize = 20;
+const MAX_HISTORY_MESSAGES: usize = 30;
 
 /// Extra guidance injected after failed tool calls to prevent fabricated follow-up actions.
 const TOOL_ERROR_GUIDANCE: &str =
@@ -74,7 +76,7 @@ fn append_tool_error_guidance(tool_result_blocks: &mut Vec<ContentBlock>) {
 }
 
 /// Default context window size (tokens) for token-based trimming.
-const DEFAULT_CONTEXT_WINDOW: usize = 200_000;
+const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
 
 /// Agent lifecycle phase within the execution loop.
 /// Used for UX indicators (typing, reactions) without coupling to channel types.
@@ -484,21 +486,16 @@ async fn run_agent_loop_impl(
         .map(|a| a.max_iterations)
         .unwrap_or(MAX_ITERATIONS);
 
-    // Initialize loop guard — scale circuit breaker for autonomous agents
-    let loop_guard_config = {
-        let mut cfg = LoopGuardConfig::default();
-        if max_iterations > cfg.global_circuit_breaker {
-            cfg.global_circuit_breaker = max_iterations * 3;
-        }
-        cfg
-    };
-    let mut loop_guard = LoopGuard::new(loop_guard_config);
     let mut consecutive_max_tokens: u32 = 0;
 
     // Build context budget from model's actual context window (or fallback to default)
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
     let context_budget = ContextBudget::new(ctx_window);
     let mut any_tools_executed = false;
+
+    // Track recent tool calls for loop detection
+    let mut recent_tool_calls: Vec<String> = Vec::new();
+    const LOOP_DETECTION_WINDOW: usize = 6;
 
     // Shadow with an owned Vec so we can refresh mid-loop when skills are installed
     let mut tools_owned: Vec<ToolDefinition> = available_tools.to_vec();
@@ -762,43 +759,50 @@ async fn run_agent_loop_impl(
                     available_tools.iter().map(|t| t.name.clone()).collect();
                 let caller_id_str = session.agent_id.to_string();
 
+                // Track tool calls for loop detection BEFORE execution
+                for tc in &response.tool_calls {
+                    recent_tool_calls.push(tc.name.clone());
+                }
+                if recent_tool_calls.len() > LOOP_DETECTION_WINDOW * 3 {
+                    let drain_count = recent_tool_calls.len() - LOOP_DETECTION_WINDOW * 2;
+                    recent_tool_calls.drain(..drain_count);
+                }
+
+                // Detect looping tool name
+                let looping_tool: Option<&str> = if recent_tool_calls.len() >= LOOP_DETECTION_WINDOW {
+                    let tail = &recent_tool_calls[recent_tool_calls.len() - LOOP_DETECTION_WINDOW..];
+                    if tail.iter().all(|n| n == &tail[0]) {
+                        warn!(
+                            agent = %manifest.name,
+                            tool = %tail[0],
+                            consecutive = LOOP_DETECTION_WINDOW,
+                            "Tool loop detected — blocking execution"
+                        );
+                        Some(&tail[0])
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 // Execute each tool call with loop guard, timeout, and truncation
                 let mut tool_result_blocks = Vec::new();
                 for tool_call in &response.tool_calls {
-                    // Loop guard check
-                    let verdict = loop_guard.check(&tool_call.name, &tool_call.input);
-                    match &verdict {
-                        LoopGuardVerdict::CircuitBreak(msg) => {
-                            warn!(tool = %tool_call.name, "Circuit breaker triggered ");
-                            if let Err(e) = memory.save_session_async(session).await {
-                                warn!("Failed to save session on circuit break: {e}");
-                            }
-                            // Fire AgentLoopEnd hook on circuit break
-                            if let Some(hook_reg) = hooks {
-                                let ctx = crate::hooks::HookContext {
-                                    agent_name: &manifest.name,
-                                    agent_id: agent_id_str.as_str(),
-                                    event: types::agent::HookEvent::AgentLoopEnd,
-                                    data: serde_json::json!({
-                                        "reason": "circuit_break",
-                                        "error": msg.as_str(),
-                                    }),
-                                };
-                                let _ = hook_reg.fire(&ctx);
-                            }
-                            return Err(CarrierError::Internal(msg.clone()));
-                        }
-                        LoopGuardVerdict::Block(msg) => {
-                            warn!(tool = %tool_call.name, "Tool call blocked by loop guard ");
-                            tool_result_blocks.push(ContentBlock::ToolResult {
-                                tool_use_id: tool_call.id.clone(),
-                                tool_name: tool_call.name.clone(),
-                                content: msg.clone(),
-                                is_error: true,
-                            });
-                            continue;
-                        }
-                        _ => {} // Allow or Warn — proceed with execution
+                    // Block execution if this tool is in a detected loop
+                    if looping_tool == Some(&tool_call.name) {
+                        tool_result_blocks.push(ContentBlock::ToolResult {
+                            tool_use_id: tool_call.id.clone(),
+                            tool_name: tool_call.name.clone(),
+                            content: format!(
+                                "[BLOCKED: You have called '{}' {}+ times consecutively. \
+                                 This is a tool-use loop. Execution is blocked. \
+                                 Respond to the user now with whatever information you have.]",
+                                tool_call.name, LOOP_DETECTION_WINDOW
+                            ),
+                            is_error: true,
+                        });
+                        continue;
                     }
 
                     debug!(tool = %tool_call.name, id = %tool_call.id, "Executing tool ");
@@ -910,14 +914,7 @@ async fn run_agent_loop_impl(
                     }
 
                     // Dynamic truncation based on context budget (replaces flat MAX_TOOL_RESULT_CHARS)
-                    let content = truncate_tool_result_dynamic(&result.content, &context_budget);
-
-                    // Append warning if verdict was Warn
-                    let final_content = if let LoopGuardVerdict::Warn(ref warn_msg) = verdict {
-                        format!("{content}\n\n[LOOP GUARD] {warn_msg}")
-                    } else {
-                        content
-                    };
+                    let final_content = truncate_tool_result_dynamic(&result.content, &context_budget);
 
                     // Notify client of tool execution result (detect dead consumer)
                     if let Some(tx) = &stream_tx {
@@ -1225,7 +1222,7 @@ mod tests {
 
     #[test]
     fn test_max_history_messages() {
-        assert_eq!(MAX_HISTORY_MESSAGES, 20);
+        assert_eq!(MAX_HISTORY_MESSAGES, 30);
     }
 
     // --- Integration tests for empty response guards ---
@@ -1778,7 +1775,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_max_history_messages_constant() {
-        assert_eq!(MAX_HISTORY_MESSAGES, 20);
+        assert_eq!(MAX_HISTORY_MESSAGES, 30);
     }
 
     #[tokio::test]

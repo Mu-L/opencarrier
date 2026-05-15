@@ -331,19 +331,23 @@ impl SessionStore {
             if let Some(session_id_str) = session_info.get("session_id").and_then(|v| v.as_str()) {
                 if let Ok(session_id) = uuid::Uuid::parse_str(session_id_str).map(SessionId) {
                     if let Ok(Some(mut session)) = self.get_session(session_id) {
-                        // Prepend summary as a system message and set kept messages
-                        session.messages = kept_messages;
+                        // Prepend summary as a user message (system messages are filtered out by agent_loop)
+                        let mut messages = vec![Message::user(summary)];
+                        messages.extend(kept_messages);
+                        session.messages = messages;
                         self.save_session(&session)?;
                         return Ok(());
                     }
                 }
             }
         }
-        // No existing session — create one with the kept messages
+        // No existing session — create one with summary prepended
+        let mut messages = vec![Message::user(summary)];
+        messages.extend(kept_messages);
         let session = Session {
             id: SessionId::new(),
             agent_id,
-            messages: kept_messages,
+            messages,
             context_window_tokens: 0,
             label: Some(format!("compacted-{}", summary.len())),
             active_toolsets: vec![],

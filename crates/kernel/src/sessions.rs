@@ -419,9 +419,13 @@ impl CarrierKernel {
         let (repaired_messages, repair_stats) =
             runtime::session_repair::validate_and_repair_with_stats(&result.kept_messages);
 
+        // Prepend compaction summary as user message (system messages are filtered out by agent_loop)
+        let mut final_messages = vec![types::message::Message::user(&result.summary)];
+        final_messages.extend(repaired_messages);
+
         // Also update the regular session with the repaired messages
         let mut updated_session = session;
-        updated_session.messages = repaired_messages;
+        updated_session.messages = final_messages;
         self.memory
             .save_session(&updated_session)
             .map_err(KernelError::Carrier)?;

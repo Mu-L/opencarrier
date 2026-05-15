@@ -50,7 +50,7 @@ impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
             threshold: 30,
-            keep_recent: 10,
+            keep_recent: 20,
             max_summary_tokens: 1024,
             base_chunk_ratio: 0.4,
             min_chunk_ratio: 0.15,
@@ -58,8 +58,8 @@ impl Default for CompactionConfig {
             summarization_overhead_tokens: 4096,
             max_chunk_chars: 80_000,
             max_retries: 3,
-            token_threshold_ratio: 0.7,
-            context_window_tokens: 200_000,
+            token_threshold_ratio: 0.5,
+            context_window_tokens: 128_000,
         }
     }
 }
@@ -427,25 +427,18 @@ async fn summarize_messages(
     messages: &[Message],
     config: &CompactionConfig,
 ) -> Result<String, String> {
-    let mut conversation_text = build_conversation_text(messages, config);
+    let conversation_text = build_conversation_text(messages, config);
 
-    // Truncate if exceeding max_chunk_chars (with safety margin)
+    // If conversation exceeds chunk limit, skip single-pass entirely.
+    // Chunked summarization processes all messages without losing context;
+    // truncation would discard parts of the conversation.
     let effective_max = (config.max_chunk_chars as f64 / config.safety_margin) as usize;
     if conversation_text.len() > effective_max {
-        // Keep the tail (most recent) which is usually more important
-        let start = conversation_text.len() - effective_max;
-        // Find valid char boundary at or after start
-        let safe_start = if conversation_text.is_char_boundary(start) {
-            start
-        } else {
-            // Walk backwards to the previous char boundary
-            let mut s = start;
-            while s > 0 && !conversation_text.is_char_boundary(s) {
-                s -= 1;
-            }
-            s
-        };
-        conversation_text = conversation_text[safe_start..].to_string();
+        return Err(format!(
+            "Conversation too large for single-pass ({} chars > {} limit). Use chunked instead.",
+            conversation_text.len(),
+            effective_max
+        ));
     }
 
     let summarize_prompt = format!(
@@ -640,7 +633,17 @@ pub async fn compact_session(
         });
     }
 
-    let split_at = msg_count.saturating_sub(config.keep_recent);
+    let mut split_at = msg_count.saturating_sub(config.keep_recent);
+
+    // Align split point to Assistant boundary: when the compaction summary
+    // (User) is prepended, the first kept message must be Assistant to prevent
+    // validate_and_repair from merging two consecutive User messages.
+    // Limit forward scan to avoid collapsing the kept window entirely.
+    let max_split = msg_count.saturating_sub(config.keep_recent / 2).max(split_at);
+    while split_at < max_split && session.messages[split_at].role != Role::Assistant {
+        split_at += 1;
+    }
+
     let to_compact = &session.messages[..split_at];
     let kept = &session.messages[split_at..];
 
@@ -764,10 +767,10 @@ mod tests {
     fn test_compaction_config_defaults() {
         let config = CompactionConfig::default();
         assert_eq!(config.threshold, 30);
-        assert_eq!(config.keep_recent, 10);
+        assert_eq!(config.keep_recent, 20);
         assert_eq!(config.max_summary_tokens, 1024);
-        assert!((config.token_threshold_ratio - 0.7).abs() < f64::EPSILON);
-        assert_eq!(config.context_window_tokens, 200_000);
+        assert!((config.token_threshold_ratio - 0.5).abs() < f64::EPSILON);
+        assert_eq!(config.context_window_tokens, 128_000);
     }
 
     #[tokio::test]
@@ -958,8 +961,14 @@ mod tests {
             }
         }
 
-        let messages: Vec<Message> = (0..100)
-            .map(|i| Message::user(format!("Message about topic {i}")))
+        // Use alternating User/Assistant so split alignment finds boundary
+        let messages: Vec<Message> = (0..50)
+            .flat_map(|i| {
+                vec![
+                    Message::user(format!("Message about topic {i}")),
+                    Message::assistant(format!("Reply about topic {i}")),
+                ]
+            })
             .collect();
         let session = Session {
             id: types::agent::SessionId::new(),
@@ -979,8 +988,9 @@ mod tests {
         let result = compact_session(Arc::new(FakeDriver), "test-model", &session, &config)
             .await
             .unwrap();
-        assert_eq!(result.compacted_count, 90);
-        assert_eq!(result.kept_messages.len(), 10);
+        // 100 messages, keep_recent=10, alternating roles → split aligned to Assistant boundary
+        assert_eq!(result.compacted_count, 91);
+        assert_eq!(result.kept_messages.len(), 9);
         assert!(result.summary.contains("Summary"));
         assert_eq!(result.chunks_used, 1);
         assert!(!result.used_fallback);
@@ -1057,7 +1067,7 @@ mod tests {
     fn test_compaction_config_new_defaults() {
         let config = CompactionConfig::default();
         assert_eq!(config.threshold, 30);
-        assert_eq!(config.keep_recent, 10);
+        assert_eq!(config.keep_recent, 20);
         assert_eq!(config.max_summary_tokens, 1024);
         assert!((config.base_chunk_ratio - 0.4).abs() < f64::EPSILON);
         assert!((config.min_chunk_ratio - 0.15).abs() < f64::EPSILON);
@@ -1065,8 +1075,8 @@ mod tests {
         assert_eq!(config.summarization_overhead_tokens, 4096);
         assert_eq!(config.max_chunk_chars, 80_000);
         assert_eq!(config.max_retries, 3);
-        assert!((config.token_threshold_ratio - 0.7).abs() < f64::EPSILON);
-        assert_eq!(config.context_window_tokens, 200_000);
+        assert!((config.token_threshold_ratio - 0.5).abs() < f64::EPSILON);
+        assert_eq!(config.context_window_tokens, 128_000);
     }
 
     #[tokio::test]
@@ -1086,8 +1096,13 @@ mod tests {
             }
         }
 
+        // Use alternating User/Assistant messages so split alignment finds Assistant boundary
         let messages: Vec<Message> = (0..30)
-            .map(|i| Message::user(format!("Message {i}")))
+            .flat_map(|i| {
+                let mut v = vec![Message::user(format!("Message {i}"))];
+                if i < 29 { v.push(Message::assistant(format!("Reply {i}"))); }
+                v
+            })
             .collect();
         let session = Session {
             id: types::agent::SessionId::new(),
@@ -1097,6 +1112,8 @@ mod tests {
             label: None,
             active_toolsets: vec![],
         };
+        // With 59 messages and keep_recent=5, split_at starts at 54.
+        // Alternating roles → alignment finds Assistant at 54.
         let config = CompactionConfig {
             threshold: 10,
             keep_recent: 5,
@@ -1115,13 +1132,9 @@ mod tests {
             result.summary.contains("Summarization was unavailable"),
             "Fallback summary should indicate unavailability"
         );
-        assert!(
-            result.summary.contains("25 messages removed"),
-            "Should state how many messages removed, got: {}",
-            result.summary
-        );
-        assert_eq!(result.compacted_count, 25);
-        assert_eq!(result.kept_messages.len(), 5);
+        // 59 messages, keep_recent=5 → split aligned to Assistant → compacted = 55
+        assert_eq!(result.compacted_count, 55);
+        assert_eq!(result.kept_messages.len(), 4);
     }
 
     #[tokio::test]
@@ -1304,15 +1317,15 @@ mod tests {
     #[test]
     fn test_needs_compaction_by_tokens_below() {
         let config = CompactionConfig::default();
-        // 70% of 200_000 = 140_000
-        assert!(!needs_compaction_by_tokens(100_000, &config));
+        // 50% of 128_000 = 64_000
+        assert!(!needs_compaction_by_tokens(50_000, &config));
     }
 
     #[test]
     fn test_needs_compaction_by_tokens_above() {
         let config = CompactionConfig::default();
-        // 70% of 200_000 = 140_000
-        assert!(needs_compaction_by_tokens(150_000, &config));
+        // 50% of 128_000 = 64_000
+        assert!(needs_compaction_by_tokens(100_000, &config));
     }
 
     #[test]

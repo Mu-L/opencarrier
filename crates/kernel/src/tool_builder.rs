@@ -15,12 +15,12 @@ use types::agent::*;
 use types::tool::ToolDefinition;
 
 /// Tool names that are always visible (core tools).
-const CORE_TOOLS: &[&str] = &["memory_store", "memory_recall", "session_summarize", "use_toolset"];
+const CORE_TOOLS: &[&str] = &["memory_store", "memory_recall", "memory_list", "session_summarize", "use_toolset"];
 
 /// Map a builtin tool name to its toolset. Returns None for core tools.
 fn tool_to_toolset(name: &str) -> Option<&'static str> {
     match name {
-        "memory_store" | "memory_recall" | "session_summarize" | "use_toolset" => None,
+        "memory_store" | "memory_recall" | "memory_list" | "session_summarize" | "use_toolset" | "cron_create" | "cron_list" | "cron_cancel" => None,
         n if n.starts_with("file_") => Some("filesystem"),
         "shell_exec" => Some("shell"),
         n if n.starts_with("knowledge_") || n.starts_with("skill_") || n == "clone_evaluate" => Some("knowledge"),
@@ -85,12 +85,15 @@ impl CarrierKernel {
                             }
                         }
                     }
-                    // mcp_servers in manifest are also toolsets
-                    for server in &e.manifest.mcp_servers {
-                        if !combined.contains(server) {
-                            combined.push(server.clone());
-                        }
-                    }
+                }
+            }
+        }
+
+        // mcp_servers in manifest are always activated (regardless of auto_load_toolsets)
+        if let Some(ref e) = entry {
+            for server in &e.manifest.mcp_servers {
+                if !combined.contains(server) {
+                    combined.push(server.clone());
                 }
             }
         }
@@ -115,6 +118,11 @@ impl CarrierKernel {
                     }
                 }
             }
+        }
+
+        // All agents need knowledge toolset to read their own knowledge base
+        if !combined.contains(&"knowledge".to_string()) {
+            combined.push("knowledge".to_string());
         }
 
         // Core tools always visible
