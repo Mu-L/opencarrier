@@ -4,7 +4,8 @@
 //! request building and response parsing. Shared HTTP infrastructure (auth,
 //! retry, error classification) is handled once.
 
-use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError};
+use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
+use crate::think_filter::{FilterAction, StreamingThinkFilter};
 use crate::llm_errors::classify_error;
 use crate::USER_AGENT;
 use async_trait::async_trait;
@@ -14,6 +15,7 @@ use types::message::{ContentBlock, Message, MessageContent, Role, StopReason, To
 use types::tool::ToolCall;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
+use futures::StreamExt;
 use zeroize::Zeroizing;
 
 // ---------------------------------------------------------------------------
@@ -309,6 +311,31 @@ impl LlmDriver for UnifiedHttpDriver {
             ApiFormat::MiniMaxSearch => self.complete_minimax_search(request).await,
             ApiFormat::GlmSearch => self.complete_glm_search(request).await,
             ApiFormat::OpenAIImages => self.complete_openai_images(request).await,
+        }
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+        tx: tokio::sync::mpsc::Sender<StreamEvent>,
+    ) -> Result<CompletionResponse, LlmError> {
+        match self.format {
+            ApiFormat::OpenAI | ApiFormat::OpenAIImages => self.stream_openai(request, tx).await,
+            ApiFormat::Anthropic => self.stream_anthropic(request, tx).await,
+            ApiFormat::Gemini => self.stream_gemini(request, tx).await,
+            _ => {
+                // Simple formats: fall back to complete() + single TextDelta
+                let response = self.complete(request).await?;
+                let text = response.text();
+                if !text.is_empty() {
+                    let _ = tx.send(StreamEvent::TextDelta { text }).await;
+                }
+                let _ = tx.send(StreamEvent::ContentComplete {
+                    stop_reason: response.stop_reason,
+                    usage: response.usage,
+                }).await;
+                Ok(response)
+            }
         }
     }
 }
@@ -747,6 +774,10 @@ struct OaiRequest {
     tools: Vec<OaiTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1046,6 +1077,8 @@ impl UnifiedHttpDriver {
             temperature,
             tools,
             tool_choice,
+            stream: false,
+            stream_options: None,
         }
     }
 
@@ -1251,6 +1284,8 @@ struct ApiRequest {
     tools: Vec<ApiTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1399,6 +1434,7 @@ impl UnifiedHttpDriver {
             messages: api_messages,
             tools: api_tools,
             temperature: if request.temperature > 0.0 { Some(request.temperature) } else { None },
+            stream: false,
         };
 
         let resp = self.send_request(&self.base_url, &api_request, &[]).await?;
@@ -1753,6 +1789,536 @@ fn extract_max_tokens_limit(body: &str) -> Option<u32> {
     let start = after.find(|c: char| c.is_ascii_digit())?;
     let digits: String = after[start..].chars().take_while(|c| c.is_ascii_digit()).collect();
     digits.parse().ok()
+}
+
+// ===========================================================================
+// SSE Streaming implementations
+// ===========================================================================
+
+impl UnifiedHttpDriver {
+    // --- OpenAI streaming ---
+
+    async fn stream_openai(
+        &self,
+        request: CompletionRequest,
+        tx: tokio::sync::mpsc::Sender<StreamEvent>,
+    ) -> Result<CompletionResponse, LlmError> {
+        let mut oai_request = self.build_oai_request(&request);
+        oai_request.stream = true;
+        oai_request.stream_options = Some(serde_json::json!({"include_usage": true}));
+
+        let resp = self.send_openai_with_retry(&mut oai_request).await?;
+
+        let mut buffer = String::new();
+        let mut text_content = String::new();
+        let mut reasoning_content = String::new();
+        let mut think_filter = StreamingThinkFilter::new();
+        let mut tool_accum: Vec<(String, String, String)> = Vec::new();
+        let mut finish_reason: Option<String> = None;
+        let mut usage = TokenUsage::default();
+
+        let mut byte_stream = resp.bytes_stream();
+        while let Some(chunk_result) = byte_stream.next().await {
+            let chunk = chunk_result.map_err(|e| LlmError::Http(e.to_string()))?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim_end().to_string();
+                buffer = buffer[pos + 1..].to_string();
+
+                if line.is_empty() || line.starts_with(':') { continue; }
+
+                let data = match line.strip_prefix("data:") {
+                    Some(d) => d.trim_start(),
+                    None => continue,
+                };
+                if data == "[DONE]" { continue; }
+
+                let json: serde_json::Value = match serde_json::from_str(data) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                if let Some(u) = json.get("usage") {
+                    if let Some(pt) = u["prompt_tokens"].as_u64() { usage.input_tokens = pt; }
+                    if let Some(ct) = u["completion_tokens"].as_u64() { usage.output_tokens = ct; }
+                }
+
+                let choices = match json["choices"].as_array() {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                for choice in choices {
+                    let delta = &choice["delta"];
+
+                    if let Some(text) = delta["content"].as_str() {
+                        if !text.is_empty() {
+                            text_content.push_str(text);
+                            for action in think_filter.process(text) {
+                                match action {
+                                    FilterAction::EmitText(t) => {
+                                        let _ = tx.send(StreamEvent::TextDelta { text: t }).await;
+                                    }
+                                    FilterAction::EmitThinking(t) => {
+                                        let _ = tx.send(StreamEvent::ThinkingDelta { text: t }).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(reasoning) = delta["reasoning_content"].as_str() {
+                        if !reasoning.is_empty() {
+                            reasoning_content.push_str(reasoning);
+                            let _ = tx.send(StreamEvent::ThinkingDelta { text: reasoning.to_string() }).await;
+                        }
+                    }
+
+                    if let Some(calls) = delta["tool_calls"].as_array() {
+                        for call in calls {
+                            let idx = call["index"].as_u64().unwrap_or(0) as usize;
+                            while tool_accum.len() <= idx {
+                                tool_accum.push((String::new(), String::new(), String::new()));
+                            }
+                            if let Some(id) = call["id"].as_str() {
+                                tool_accum[idx].0 = id.to_string();
+                            }
+                            if let Some(func) = call.get("function") {
+                                if let Some(name) = func["name"].as_str() {
+                                    tool_accum[idx].1 = name.to_string();
+                                    let _ = tx.send(StreamEvent::ToolUseStart {
+                                        id: tool_accum[idx].0.clone(),
+                                        name: name.to_string(),
+                                    }).await;
+                                }
+                                if let Some(args) = func["arguments"].as_str() {
+                                    tool_accum[idx].2.push_str(args);
+                                    let _ = tx.send(StreamEvent::ToolInputDelta { text: args.to_string() }).await;
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(fr) = choice["finish_reason"].as_str() {
+                        if !fr.is_empty() { finish_reason = Some(fr.to_string()); }
+                    }
+                }
+            }
+        }
+
+        // Flush think filter
+        for action in think_filter.flush() {
+            match action {
+                FilterAction::EmitText(t) => { let _ = tx.send(StreamEvent::TextDelta { text: t }).await; }
+                FilterAction::EmitThinking(t) => { let _ = tx.send(StreamEvent::ThinkingDelta { text: t }).await; }
+            }
+        }
+
+        // Build content
+        let mut content = Vec::new();
+        let mut tool_calls = Vec::new();
+
+        if !reasoning_content.is_empty() {
+            content.push(ContentBlock::Thinking { thinking: reasoning_content });
+        }
+
+        if !text_content.is_empty() {
+            let (clean_text, thinking) = extract_think_tags(&text_content);
+            if let Some(th) = thinking {
+                content.push(ContentBlock::Thinking { thinking: th });
+            }
+            if !clean_text.is_empty() {
+                content.push(ContentBlock::Text { text: clean_text, provider_metadata: None });
+            }
+        }
+
+        for (id, name, args_json) in &tool_accum {
+            let input: serde_json::Value = serde_json::from_str(args_json)
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+            content.push(ContentBlock::ToolUse {
+                id: id.clone(),
+                name: name.clone(),
+                input: input.clone(),
+                provider_metadata: None,
+            });
+            tool_calls.push(ToolCall { id: id.clone(), name: name.clone(), input });
+            let _ = tx.send(StreamEvent::ToolUseEnd {
+                id: id.clone(),
+                name: name.clone(),
+                input: serde_json::from_str(args_json).unwrap_or_default(),
+            }).await;
+        }
+
+        if content.is_empty() && tool_accum.is_empty() {
+            content.push(ContentBlock::Text { text: text_content.clone(), provider_metadata: None });
+        }
+
+        let stop_reason = match finish_reason.as_deref() {
+            Some("stop") => StopReason::EndTurn,
+            Some("tool_calls") => StopReason::ToolUse,
+            Some("length") => StopReason::MaxTokens,
+            _ => if !tool_accum.is_empty() { StopReason::ToolUse } else { StopReason::EndTurn },
+        };
+
+        if usage.output_tokens == 0 && (!content.is_empty() || !tool_accum.is_empty()) {
+            usage.output_tokens = 1;
+        }
+
+        let response = CompletionResponse { content, stop_reason, tool_calls, usage, media: None };
+        let _ = tx.send(StreamEvent::ContentComplete { stop_reason: response.stop_reason, usage: response.usage }).await;
+        Ok(response)
+    }
+
+    // --- Anthropic streaming ---
+
+    async fn stream_anthropic(
+        &self,
+        request: CompletionRequest,
+        tx: tokio::sync::mpsc::Sender<StreamEvent>,
+    ) -> Result<CompletionResponse, LlmError> {
+        let system = request.system.clone().or_else(|| {
+            request.messages.iter().find_map(|m| {
+                if m.role == Role::System {
+                    match &m.content { MessageContent::Text(t) => Some(t.clone()), _ => None }
+                } else { None }
+            })
+        });
+
+        let api_messages: Vec<ApiMessage> = request.messages.iter()
+            .filter(|m| m.role != Role::System)
+            .map(convert_anthropic_message)
+            .collect();
+
+        let api_tools: Vec<ApiTool> = request.tools.iter().map(|t| ApiTool {
+            name: t.name.clone(),
+            description: t.description.clone(),
+            input_schema: t.input_schema.clone(),
+        }).collect();
+
+        let api_request = ApiRequest {
+            model: request.model.clone(),
+            max_tokens: if request.max_tokens > 0 { request.max_tokens } else { 8192 },
+            system,
+            messages: api_messages,
+            tools: api_tools,
+            temperature: if request.temperature > 0.0 { Some(request.temperature) } else { None },
+            stream: true,
+        };
+
+        let resp = self.send_request(&self.base_url, &api_request, &[]).await?;
+
+        enum BlockAccum {
+            Text(String),
+            Thinking(String),
+            ToolUse { id: String, name: String, input_json: String },
+        }
+
+        let mut buffer = String::new();
+        let mut blocks: Vec<BlockAccum> = Vec::new();
+        let mut usage = TokenUsage::default();
+        let mut stop_reason = StopReason::EndTurn;
+
+        let mut byte_stream = resp.bytes_stream();
+        while let Some(chunk_result) = byte_stream.next().await {
+            let chunk = chunk_result.map_err(|e| LlmError::Http(e.to_string()))?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(pos) = buffer.find("\n\n") {
+                let event_block = buffer[..pos].to_string();
+                buffer = buffer[pos + 2..].to_string();
+
+                let mut event_type = String::new();
+                let mut event_data = String::new();
+                for line in event_block.lines() {
+                    if let Some(t) = line.strip_prefix("event:") { event_type = t.trim().to_string(); }
+                    if let Some(d) = line.strip_prefix("data:") { event_data = d.trim().to_string(); }
+                }
+                if event_data.is_empty() { continue; }
+
+                let json: serde_json::Value = match serde_json::from_str(&event_data) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                match event_type.as_str() {
+                    "message_start" => {
+                        if let Some(input) = json["message"]["usage"]["input_tokens"].as_u64() {
+                            usage.input_tokens = input;
+                        }
+                    }
+                    "content_block_start" => {
+                        let idx = json["index"].as_u64().unwrap_or(0) as usize;
+                        let block_type = json["content_block"]["type"].as_str().unwrap_or("");
+                        match block_type {
+                            "text" => {
+                                while blocks.len() <= idx { blocks.push(BlockAccum::Text(String::new())); }
+                                blocks[idx] = BlockAccum::Text(String::new());
+                            }
+                            "tool_use" => {
+                                let id = json["content_block"]["id"].as_str().unwrap_or_default().to_string();
+                                let name = json["content_block"]["name"].as_str().unwrap_or_default().to_string();
+                                while blocks.len() <= idx { blocks.push(BlockAccum::Text(String::new())); }
+                                blocks[idx] = BlockAccum::ToolUse { id: id.clone(), name: name.clone(), input_json: String::new() };
+                                let _ = tx.send(StreamEvent::ToolUseStart { id, name }).await;
+                            }
+                            "thinking" => {
+                                while blocks.len() <= idx { blocks.push(BlockAccum::Text(String::new())); }
+                                blocks[idx] = BlockAccum::Thinking(String::new());
+                            }
+                            _ => {}
+                        }
+                    }
+                    "content_block_delta" => {
+                        let idx = json["index"].as_u64().unwrap_or(0) as usize;
+                        let delta_type = json["delta"]["type"].as_str().unwrap_or("");
+                        if idx >= blocks.len() { continue; }
+                        match delta_type {
+                            "text_delta" => {
+                                let text = json["delta"]["text"].as_str().unwrap_or("");
+                                if !text.is_empty() {
+                                    if let BlockAccum::Text(ref mut s) = blocks[idx] { s.push_str(text); }
+                                    let _ = tx.send(StreamEvent::TextDelta { text: text.to_string() }).await;
+                                }
+                            }
+                            "input_json_delta" => {
+                                let partial = json["delta"]["partial_json"].as_str().unwrap_or("");
+                                if !partial.is_empty() {
+                                    if let BlockAccum::ToolUse { ref mut input_json, .. } = blocks[idx] { input_json.push_str(partial); }
+                                    let _ = tx.send(StreamEvent::ToolInputDelta { text: partial.to_string() }).await;
+                                }
+                            }
+                            "thinking_delta" => {
+                                let thinking = json["delta"]["thinking"].as_str().unwrap_or("");
+                                if !thinking.is_empty() {
+                                    if let BlockAccum::Thinking(ref mut s) = blocks[idx] { s.push_str(thinking); }
+                                    let _ = tx.send(StreamEvent::ThinkingDelta { text: thinking.to_string() }).await;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    "content_block_stop" => {
+                        let idx = json["index"].as_u64().unwrap_or(0) as usize;
+                        if idx < blocks.len() {
+                            if let BlockAccum::ToolUse { ref id, ref name, ref input_json } = blocks[idx] {
+                                let input: serde_json::Value = serde_json::from_str(input_json)
+                                    .unwrap_or(serde_json::Value::Object(Default::default()));
+                                let _ = tx.send(StreamEvent::ToolUseEnd {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    input: input.clone(),
+                                }).await;
+                            }
+                        }
+                    }
+                    "message_delta" => {
+                        if let Some(sr) = json["delta"]["stop_reason"].as_str() {
+                            stop_reason = match sr {
+                                "end_turn" => StopReason::EndTurn,
+                                "tool_use" => StopReason::ToolUse,
+                                "max_tokens" => StopReason::MaxTokens,
+                                "stop_sequence" => StopReason::StopSequence,
+                                _ => StopReason::EndTurn,
+                            };
+                        }
+                        if let Some(ot) = json["usage"]["output_tokens"].as_u64() {
+                            usage.output_tokens = ot;
+                        }
+                    }
+                    "message_stop" | "ping" => {}
+                    _ => {}
+                }
+            }
+        }
+
+        // Build response from accumulated blocks
+        let mut content = Vec::new();
+        let mut tool_calls = Vec::new();
+        for block in blocks {
+            match block {
+                BlockAccum::Text(text) if !text.is_empty() => {
+                    content.push(ContentBlock::Text { text, provider_metadata: None });
+                }
+                BlockAccum::Thinking(thinking) if !thinking.is_empty() => {
+                    content.push(ContentBlock::Thinking { thinking });
+                }
+                BlockAccum::ToolUse { id, name, input_json } => {
+                    let input: serde_json::Value = serde_json::from_str(&input_json)
+                        .unwrap_or(serde_json::Value::Object(Default::default()));
+                    content.push(ContentBlock::ToolUse { id: id.clone(), name: name.clone(), input: input.clone(), provider_metadata: None });
+                    tool_calls.push(ToolCall { id, name, input });
+                }
+                _ => {}
+            }
+        }
+
+        let response = CompletionResponse { content, stop_reason, tool_calls, usage, media: None };
+        let _ = tx.send(StreamEvent::ContentComplete { stop_reason: response.stop_reason, usage: response.usage }).await;
+        Ok(response)
+    }
+
+    // --- Gemini streaming ---
+
+    async fn stream_gemini(
+        &self,
+        request: CompletionRequest,
+        tx: tokio::sync::mpsc::Sender<StreamEvent>,
+    ) -> Result<CompletionResponse, LlmError> {
+        let (system_instruction, contents) = Self::convert_gemini_messages(&request.messages, &request.system);
+
+        let tools: Vec<GeminiToolConfig> = if request.tools.is_empty() { vec![] } else {
+            vec![GeminiToolConfig {
+                function_declarations: request.tools.iter().map(|t| {
+                    let schema = types::tool::normalize_schema_for_provider(&t.input_schema, "gemini");
+                    GeminiFunctionDeclaration { name: t.name.clone(), description: t.description.clone(), parameters: schema }
+                }).collect(),
+            }]
+        };
+
+        let generation_config = GenerationConfig {
+            temperature: if request.temperature > 0.0 { Some(request.temperature) } else { None },
+            max_output_tokens: if request.max_tokens > 0 { Some(request.max_tokens) } else { None },
+        };
+
+        let gemini_request = GeminiRequest {
+            contents,
+            system_instruction,
+            tools,
+            generation_config: Some(generation_config),
+        };
+
+        let url = format!(
+            "{}/v1beta/models/{}:streamGenerateContent?alt=sse&key={}",
+            self.base_url, request.model, self.api_key.as_str()
+        );
+
+        let resp = self.send_request(&url, &gemini_request, &[]).await?;
+
+        let mut buffer = String::new();
+        let mut text_content = String::new();
+        let mut fn_calls: Vec<(String, serde_json::Value, Option<String>)> = Vec::new();
+        let mut usage = TokenUsage::default();
+        let mut finish_reason: Option<String> = None;
+        let mut thought_signature: Option<String> = None;
+
+        let mut byte_stream = resp.bytes_stream();
+        while let Some(chunk_result) = byte_stream.next().await {
+            let chunk = chunk_result.map_err(|e| LlmError::Http(e.to_string()))?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(pos) = buffer.find("\n\n") {
+                let event_block = buffer[..pos].to_string();
+                buffer = buffer[pos + 2..].to_string();
+
+                for line in event_block.lines() {
+                    let data = match line.strip_prefix("data:") {
+                        Some(d) => d.trim_start(),
+                        None => continue,
+                    };
+
+                    let json: serde_json::Value = match serde_json::from_str(data) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+
+                    // Extract usage
+                    if let Some(um) = json.get("usageMetadata") {
+                        if let Some(pt) = um["promptTokenCount"].as_u64() { usage.input_tokens = pt; }
+                        if let Some(ct) = um["candidatesTokenCount"].as_u64() { usage.output_tokens = ct; }
+                    }
+
+                    // Extract finish reason
+                    if let Some(fr) = json["candidates"][0]["finishReason"].as_str() {
+                        finish_reason = Some(fr.to_string());
+                    }
+
+                    // Process parts
+                    let parts = match json["candidates"][0]["content"]["parts"].as_array() {
+                        Some(p) => p,
+                        None => continue,
+                    };
+
+                    for part in parts {
+                        // Thinking part
+                        if part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false) {
+                            if let Some(text) = part["text"].as_str() {
+                                if !text.is_empty() {
+                                    let _ = tx.send(StreamEvent::ThinkingDelta { text: text.to_string() }).await;
+                                }
+                            }
+                            continue;
+                        }
+
+                        // Function call (Gemini sends complete, not incremental)
+                        if let Some(fc) = part.get("functionCall") {
+                            let name = fc["name"].as_str().unwrap_or_default().to_string();
+                            let args = fc.get("args").cloned().unwrap_or(serde_json::Value::Object(Default::default()));
+                            let sig = part["thoughtSignature"].as_str().map(|s| s.to_string());
+                            if let Some(ref s) = sig { thought_signature = Some(s.clone()); }
+
+                            let id = format!("tool_{}", &uuid::Uuid::new_v4().to_string().replace('-', "")[..8]);
+                            let _ = tx.send(StreamEvent::ToolUseStart { id: id.clone(), name: name.clone() }).await;
+                            let args_str = serde_json::to_string(&args).unwrap_or_default();
+                            let _ = tx.send(StreamEvent::ToolInputDelta { text: args_str }).await;
+                            let _ = tx.send(StreamEvent::ToolUseEnd { id: id.clone(), name: name.clone(), input: args.clone() }).await;
+                            fn_calls.push((name, args, sig));
+                            continue;
+                        }
+
+                        // Text part
+                        if let Some(text) = part["text"].as_str() {
+                            if !text.is_empty() {
+                                text_content.push_str(text);
+                                if let Some(sig) = part["thoughtSignature"].as_str() {
+                                    thought_signature = Some(sig.to_string());
+                                }
+                                let _ = tx.send(StreamEvent::TextDelta { text: text.to_string() }).await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build response
+        let mut content = Vec::new();
+        let mut tool_calls = Vec::new();
+
+        if !text_content.is_empty() {
+            let pm = thought_signature.as_ref().map(|sig| {
+                serde_json::json!({ "thought_signature": sig })
+            });
+            content.push(ContentBlock::Text {
+                text: text_content,
+                provider_metadata: pm,
+            });
+        }
+
+        for (name, args, sig) in &fn_calls {
+            let id = format!("tool_{}", &uuid::Uuid::new_v4().to_string().replace('-', "")[..8]);
+            let pm = sig.as_ref().map(|s| serde_json::json!({ "thought_signature": s }));
+            content.push(ContentBlock::ToolUse {
+                id: id.clone(),
+                name: name.clone(),
+                input: args.clone(),
+                provider_metadata: pm,
+            });
+            tool_calls.push(ToolCall { id, name: name.clone(), input: args.clone() });
+        }
+
+        let stop_reason = match finish_reason.as_deref() {
+            Some("STOP") => StopReason::EndTurn,
+            Some("MAX_TOKENS") => StopReason::MaxTokens,
+            Some("SAFETY") => StopReason::EndTurn,
+            _ => if !fn_calls.is_empty() { StopReason::ToolUse } else { StopReason::EndTurn },
+        };
+
+        let response = CompletionResponse { content, stop_reason, tool_calls, usage, media: None };
+        let _ = tx.send(StreamEvent::ContentComplete { stop_reason: response.stop_reason, usage: response.usage }).await;
+        Ok(response)
+    }
+
 }
 
 // ===========================================================================
