@@ -233,20 +233,6 @@ impl MemorySubstrate {
         self.sessions.create_session_with_label(agent_id, label)
     }
 
-    /// Store an LLM-generated summary, replacing older messages with the kept subset.
-    ///
-    /// Used by the compactor to replace text-truncation compaction with an
-    /// LLM-generated summary of older conversation history.
-    pub fn store_llm_summary(
-        &self,
-        agent_id: AgentId,
-        summary: &str,
-        kept_messages: Vec<types::message::Message>,
-    ) -> CarrierResult<()> {
-        self.sessions
-            .store_llm_summary(agent_id, summary, kept_messages)
-    }
-
     /// Write a human-readable JSONL mirror of a session to disk.
     ///
     /// Best-effort — errors are returned but should be logged,

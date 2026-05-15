@@ -59,24 +59,42 @@ const MAX_CONTINUATIONS: u32 = 5;
 /// Maximum message history size before auto-trimming to prevent context overflow.
 const MAX_HISTORY_MESSAGES: usize = 30;
 
-/// Extra guidance injected after failed tool calls to prevent fabricated follow-up actions.
-const TOOL_ERROR_GUIDANCE: &str =
-    "[System: One or more tool calls failed. Failed tools did not produce usable data. Do NOT invent missing results, cite nonexistent search results, or pretend failed tools succeeded. If your next steps depend on a failed tool, either retry with a materially different approach or explain the failure to the user and stop. Do not write files, store memory, or take downstream actions based on failed tool outputs.]";
-
-fn append_tool_error_guidance(tool_result_blocks: &mut Vec<ContentBlock>) {
-    let has_tool_error = tool_result_blocks
-        .iter()
-        .any(|block| matches!(block, ContentBlock::ToolResult { is_error: true, .. }));
-    if has_tool_error {
-        tool_result_blocks.push(ContentBlock::Text {
-            text: TOOL_ERROR_GUIDANCE.to_string(),
-            provider_metadata: None,
-        });
-    }
-}
+/// Number of consecutive identical tool calls (same name AND same input) that
+/// constitute a loop. Picked at 6 because:
+/// - Below 4 risks blocking legitimate retries (e.g. eventual-consistency reads)
+/// - Above 8 wastes API calls before kicking in
+///
+/// Same-name-different-input (e.g. paginated search) is NOT a loop.
+const LOOP_DETECTION_WINDOW: usize = 6;
 
 /// Default context window size (tokens) for token-based trimming.
 const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
+
+/// Hash a tool input value for loop detection. Two calls with the same hash
+/// are considered identical for loop-detection purposes.
+fn tool_input_hash(input: &serde_json::Value) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let serialized = serde_json::to_string(input).unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    serialized.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Detect a tool-use loop: returns the (name, input_hash) of the looping call
+/// if the last `window` entries are all the same (name, input_hash), else None.
+fn detect_tool_loop(recent: &[(String, u64)], window: usize) -> Option<(String, u64)> {
+    if recent.len() < window {
+        return None;
+    }
+    let tail = &recent[recent.len() - window..];
+    let first = &tail[0];
+    if tail.iter().all(|entry| entry == first) {
+        Some(first.clone())
+    } else {
+        None
+    }
+}
 
 /// Agent lifecycle phase within the execution loop.
 /// Used for UX indicators (typing, reactions) without coupling to channel types.
@@ -474,7 +492,7 @@ async fn run_agent_loop_impl(
             agent = %manifest.name,
             total_messages = messages.len(),
             trimming = trim_count,
-            "Trimming old messages to prevent context overflow "
+            "Trimming old messages to prevent context overflow"
         );
         crate::context_overflow::pair_aware_drain(&mut messages, trim_count);
     }
@@ -493,9 +511,8 @@ async fn run_agent_loop_impl(
     let context_budget = ContextBudget::new(ctx_window);
     let mut any_tools_executed = false;
 
-    // Track recent tool calls for loop detection
-    let mut recent_tool_calls: Vec<String> = Vec::new();
-    const LOOP_DETECTION_WINDOW: usize = 6;
+    // Track recent (tool_name, input_hash) for loop detection
+    let mut recent_tool_calls: Vec<(String, u64)> = Vec::new();
 
     // Shadow with an owned Vec so we can refresh mid-loop when skills are installed
     let mut tools_owned: Vec<ToolDefinition> = available_tools.to_vec();
@@ -761,41 +778,38 @@ async fn run_agent_loop_impl(
 
                 // Track tool calls for loop detection BEFORE execution
                 for tc in &response.tool_calls {
-                    recent_tool_calls.push(tc.name.clone());
+                    recent_tool_calls.push((tc.name.clone(), tool_input_hash(&tc.input)));
                 }
                 if recent_tool_calls.len() > LOOP_DETECTION_WINDOW * 3 {
                     let drain_count = recent_tool_calls.len() - LOOP_DETECTION_WINDOW * 2;
                     recent_tool_calls.drain(..drain_count);
                 }
 
-                // Detect looping tool name
-                let looping_tool: Option<&str> = if recent_tool_calls.len() >= LOOP_DETECTION_WINDOW {
-                    let tail = &recent_tool_calls[recent_tool_calls.len() - LOOP_DETECTION_WINDOW..];
-                    if tail.iter().all(|n| n == &tail[0]) {
-                        warn!(
-                            agent = %manifest.name,
-                            tool = %tail[0],
-                            consecutive = LOOP_DETECTION_WINDOW,
-                            "Tool loop detected — blocking execution"
-                        );
-                        Some(&tail[0])
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
+                // Detect loop: same (name, input_hash) repeated LOOP_DETECTION_WINDOW times
+                let looping_call = detect_tool_loop(&recent_tool_calls, LOOP_DETECTION_WINDOW);
+                if let Some((ref looping_name, _)) = looping_call {
+                    warn!(
+                        agent = %manifest.name,
+                        tool = %looping_name,
+                        consecutive = LOOP_DETECTION_WINDOW,
+                        "Tool loop detected — blocking execution"
+                    );
+                }
 
                 // Execute each tool call with loop guard, timeout, and truncation
                 let mut tool_result_blocks = Vec::new();
                 for tool_call in &response.tool_calls {
-                    // Block execution if this tool is in a detected loop
-                    if looping_tool == Some(&tool_call.name) {
+                    // Block execution if this specific (name, input) call is in a detected loop
+                    let current_hash = tool_input_hash(&tool_call.input);
+                    if looping_call
+                        .as_ref()
+                        .is_some_and(|(n, h)| n == &tool_call.name && *h == current_hash)
+                    {
                         tool_result_blocks.push(ContentBlock::ToolResult {
                             tool_use_id: tool_call.id.clone(),
                             tool_name: tool_call.name.clone(),
                             content: format!(
-                                "[BLOCKED: You have called '{}' {}+ times consecutively. \
+                                "[BLOCKED: You have called '{}' with the same input {}+ times consecutively. \
                                  This is a tool-use loop. Execution is blocked. \
                                  Respond to the user now with whatever information you have.]",
                                 tool_call.name, LOOP_DETECTION_WINDOW
@@ -805,7 +819,7 @@ async fn run_agent_loop_impl(
                         continue;
                     }
 
-                    debug!(tool = %tool_call.name, id = %tool_call.id, "Executing tool ");
+                    debug!(tool = %tool_call.name, id = %tool_call.id, "Executing tool");
 
                     // Notify phase: ToolUse
                     if let Some(cb) = on_phase {
@@ -886,7 +900,7 @@ async fn run_agent_loop_impl(
                     {
                         Ok(result) => result,
                         Err(_) => {
-                            warn!(tool = %tool_call.name, "Tool execution timed out after {}s ", TOOL_TIMEOUT_SECS);
+                            warn!(tool = %tool_call.name, "Tool execution timed out after {}s", TOOL_TIMEOUT_SECS);
                             types::tool::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 content: format!(
@@ -940,8 +954,6 @@ async fn run_agent_loop_impl(
                         is_error: result.is_error,
                     });
                 }
-
-                append_tool_error_guidance(&mut tool_result_blocks);
 
                 // Detect tool errors and inject guidance to prevent fabrication
                 let error_count = tool_result_blocks
@@ -1225,6 +1237,61 @@ mod tests {
         assert_eq!(MAX_HISTORY_MESSAGES, 30);
     }
 
+    // --- Loop detection ---
+
+    fn make_call(name: &str, input: serde_json::Value) -> (String, u64) {
+        (name.to_string(), tool_input_hash(&input))
+    }
+
+    #[test]
+    fn test_loop_detection_blocks_consecutive_same_call() {
+        let recent: Vec<(String, u64)> = (0..LOOP_DETECTION_WINDOW)
+            .map(|_| make_call("web_search", serde_json::json!({"q": "rust"})))
+            .collect();
+        let result = detect_tool_loop(&recent, LOOP_DETECTION_WINDOW);
+        assert!(result.is_some(), "Should detect loop with same call repeated");
+        assert_eq!(result.unwrap().0, "web_search");
+    }
+
+    #[test]
+    fn test_loop_detection_allows_pagination() {
+        // Same tool name but different inputs (pagination) — not a loop
+        let recent: Vec<(String, u64)> = (0..LOOP_DETECTION_WINDOW)
+            .map(|i| make_call("web_search", serde_json::json!({"q": format!("rust page {}", i)})))
+            .collect();
+        let result = detect_tool_loop(&recent, LOOP_DETECTION_WINDOW);
+        assert!(result.is_none(), "Pagination with different queries should not be flagged");
+    }
+
+    #[test]
+    fn test_loop_detection_requires_full_window() {
+        // 5 same calls is below threshold of 6
+        let recent: Vec<(String, u64)> = (0..5)
+            .map(|_| make_call("web_search", serde_json::json!({"q": "rust"})))
+            .collect();
+        let result = detect_tool_loop(&recent, LOOP_DETECTION_WINDOW);
+        assert!(result.is_none(), "Below-threshold count should not trigger");
+    }
+
+    #[test]
+    fn test_loop_detection_breaks_on_different_tool() {
+        // 5 web_search + 1 web_fetch + 5 web_search → no loop (window is 6, last 6 are mixed)
+        let mut recent: Vec<(String, u64)> = (0..5)
+            .map(|_| make_call("web_search", serde_json::json!({"q": "rust"})))
+            .collect();
+        recent.push(make_call("web_fetch", serde_json::json!({"url": "https://example.com"})));
+        recent.extend(
+            (0..5).map(|_| make_call("web_search", serde_json::json!({"q": "rust"})))
+        );
+        let result = detect_tool_loop(&recent, LOOP_DETECTION_WINDOW);
+        assert!(result.is_none(), "Mixed tail should not trigger loop detection");
+    }
+
+    #[test]
+    fn test_loop_detection_window_constant() {
+        assert_eq!(LOOP_DETECTION_WINDOW, 6);
+    }
+
     // --- Integration tests for empty response guards ---
 
     fn test_manifest() -> AgentManifest {
@@ -1441,7 +1508,7 @@ mod tests {
         let guidance_seen = session.messages.iter().any(|msg| {
             match &msg.content {
             MessageContent::Blocks(blocks) => blocks.iter().any(|block| {
-                matches!(block, ContentBlock::Text { text, .. } if text == TOOL_ERROR_GUIDANCE)
+                matches!(block, ContentBlock::Text { text, .. } if text.contains("tool(s) returned errors"))
             }),
             _ => false,
         }

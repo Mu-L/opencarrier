@@ -410,16 +410,14 @@ impl CarrierKernel {
             .await
             .map_err(|e| KernelError::Carrier(CarrierError::Internal(e)))?;
 
-        // Store the LLM summary in the canonical session
-        self.memory
-            .store_llm_summary(agent_id, &result.summary, result.kept_messages.clone())
-            .map_err(KernelError::Carrier)?;
-
         // Post-compaction audit: validate and repair the kept messages
         let (repaired_messages, repair_stats) =
             runtime::session_repair::validate_and_repair_with_stats(&result.kept_messages);
 
-        // Prepend compaction summary as user message (system messages are filtered out by agent_loop)
+        // Prepend summary as a User message. Role::User is required (not System) because
+        // agent_loop filters out Role::System messages from the LLM request. The split
+        // alignment in compact_session ensures kept[0] is Assistant, so the summary
+        // (User) + kept[0] (Assistant) pair won't be merged by validate_and_repair.
         let mut final_messages = vec![types::message::Message::user(&result.summary)];
         final_messages.extend(repaired_messages);
 

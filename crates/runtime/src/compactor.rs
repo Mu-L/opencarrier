@@ -320,6 +320,44 @@ fn is_oversized(message: &Message, config: &CompactionConfig) -> bool {
     message.content.text_length() > config.max_chunk_chars / 2
 }
 
+/// Align a split point to an Assistant message boundary.
+///
+/// The compaction summary is prepended to kept messages as a User message. If the
+/// first kept message is also User, `validate_and_repair` will merge them and lose
+/// the summary boundary. To avoid this, we shift the split point so kept[0] is an
+/// Assistant message.
+///
+/// Scans up to 3 messages forward, then up to 3 backward. If neither direction
+/// finds an Assistant within range, returns the original split — `validate_and_repair`
+/// will merge the User+User pair but that's acceptable when no boundary exists nearby.
+fn align_split_to_assistant(messages: &[Message], split_at: usize) -> usize {
+    const SCAN_RADIUS: usize = 3;
+    let len = messages.len();
+    if split_at >= len {
+        return split_at;
+    }
+    if messages[split_at].role == Role::Assistant {
+        return split_at;
+    }
+    // Forward scan
+    let forward_limit = (split_at + SCAN_RADIUS).min(len);
+    if let Some(offset) = messages[split_at + 1..forward_limit]
+        .iter()
+        .position(|m| m.role == Role::Assistant)
+    {
+        return split_at + 1 + offset;
+    }
+    // Backward scan
+    let backward_limit = split_at.saturating_sub(SCAN_RADIUS);
+    if let Some(offset) = messages[backward_limit..split_at]
+        .iter()
+        .rposition(|m| m.role == Role::Assistant)
+    {
+        return backward_limit + offset;
+    }
+    split_at
+}
+
 /// Build conversation text from a slice of messages (block-aware).
 ///
 /// Handles all content block types: text, tool use, tool result, image, unknown.
@@ -633,16 +671,8 @@ pub async fn compact_session(
         });
     }
 
-    let mut split_at = msg_count.saturating_sub(config.keep_recent);
-
-    // Align split point to Assistant boundary: when the compaction summary
-    // (User) is prepended, the first kept message must be Assistant to prevent
-    // validate_and_repair from merging two consecutive User messages.
-    // Limit forward scan to avoid collapsing the kept window entirely.
-    let max_split = msg_count.saturating_sub(config.keep_recent / 2).max(split_at);
-    while split_at < max_split && session.messages[split_at].role != Role::Assistant {
-        split_at += 1;
-    }
+    let original_split = msg_count.saturating_sub(config.keep_recent);
+    let split_at = align_split_to_assistant(&session.messages, original_split);
 
     let to_compact = &session.messages[..split_at];
     let kept = &session.messages[split_at..];
@@ -1431,5 +1461,54 @@ mod tests {
         }];
         let text = build_conversation_text(&messages, &config);
         assert!(text.contains(short_result));
+    }
+
+    // --- align_split_to_assistant ---
+
+    fn msg(role: Role) -> Message {
+        Message {
+            role,
+            content: MessageContent::Text(String::new()),
+        }
+    }
+
+    #[test]
+    fn test_align_split_already_at_assistant() {
+        let messages = vec![msg(Role::User), msg(Role::Assistant), msg(Role::User)];
+        assert_eq!(align_split_to_assistant(&messages, 1), 1);
+    }
+
+    #[test]
+    fn test_align_split_forward_scan_finds_assistant() {
+        // split at 0 (User), next Assistant at 1 within scan radius
+        let messages = vec![msg(Role::User), msg(Role::Assistant), msg(Role::User)];
+        assert_eq!(align_split_to_assistant(&messages, 0), 1);
+    }
+
+    #[test]
+    fn test_align_split_backward_scan_finds_assistant() {
+        // split at 3 (User), no Assistant ahead, but Assistant at 1 within backward radius
+        let messages = vec![
+            msg(Role::User),
+            msg(Role::Assistant),
+            msg(Role::User),
+            msg(Role::User),
+            msg(Role::User),
+        ];
+        assert_eq!(align_split_to_assistant(&messages, 3), 1);
+    }
+
+    #[test]
+    fn test_align_split_no_assistant_in_range_returns_original() {
+        // All User, no Assistant anywhere
+        let messages = vec![msg(Role::User); 10];
+        assert_eq!(align_split_to_assistant(&messages, 5), 5);
+    }
+
+    #[test]
+    fn test_align_split_at_end_returns_unchanged() {
+        let messages = vec![msg(Role::User), msg(Role::Assistant)];
+        // split_at == len should return as-is
+        assert_eq!(align_split_to_assistant(&messages, 2), 2);
     }
 }

@@ -311,50 +311,6 @@ impl SessionStore {
         self.save_session(&session)?;
         Ok(session)
     }
-
-    /// Store an LLM-generated summary, replacing older messages with the summary
-    /// and keeping only the specified recent messages.
-    ///
-    /// This is used by the LLM-based compactor to replace text-truncation compaction
-    /// with an intelligent, LLM-generated summary of older conversation history.
-    ///
-    /// Stores the summary and kept messages in the first available session for the agent.
-    pub fn store_llm_summary(
-        &self,
-        agent_id: AgentId,
-        summary: &str,
-        kept_messages: Vec<Message>,
-    ) -> CarrierResult<()> {
-        // Find or create a session for this agent to store the summary
-        let sessions = self.list_agent_sessions(agent_id)?;
-        if let Some(session_info) = sessions.first() {
-            if let Some(session_id_str) = session_info.get("session_id").and_then(|v| v.as_str()) {
-                if let Ok(session_id) = uuid::Uuid::parse_str(session_id_str).map(SessionId) {
-                    if let Ok(Some(mut session)) = self.get_session(session_id) {
-                        // Prepend summary as a user message (system messages are filtered out by agent_loop)
-                        let mut messages = vec![Message::user(summary)];
-                        messages.extend(kept_messages);
-                        session.messages = messages;
-                        self.save_session(&session)?;
-                        return Ok(());
-                    }
-                }
-            }
-        }
-        // No existing session — create one with summary prepended
-        let mut messages = vec![Message::user(summary)];
-        messages.extend(kept_messages);
-        let session = Session {
-            id: SessionId::new(),
-            agent_id,
-            messages,
-            context_window_tokens: 0,
-            label: Some(format!("compacted-{}", summary.len())),
-            active_toolsets: vec![],
-        };
-        self.save_session(&session)?;
-        Ok(())
-    }
 }
 
 /// A single JSONL line in the session mirror file.

@@ -14,13 +14,33 @@ use crate::prompt_sources::{
 use types::agent::*;
 use types::tool::ToolDefinition;
 
-/// Tool names that are always visible (core tools).
-const CORE_TOOLS: &[&str] = &["memory_store", "memory_recall", "memory_list", "session_summarize", "use_toolset"];
+/// Tool names that are always visible (core tools). These bootstrap the agent:
+/// - memory_*: persistent state
+/// - session_summarize: explicit summarization
+/// - use_toolset: load other toolsets on-demand
+/// - skill_load: load workflow skills
+/// - knowledge_read / knowledge_list: read workflow docs and discover knowledge
+/// - cron_*: schedule tasks
+///
+/// All other tools are loaded on-demand via use_toolset (active_toolsets).
+const CORE_TOOLS: &[&str] = &[
+    "memory_store", "memory_recall", "memory_list",
+    "session_summarize",
+    "use_toolset",
+    "skill_load",
+    "knowledge_read", "knowledge_list",
+    "cron_create", "cron_list", "cron_cancel",
+];
 
 /// Map a builtin tool name to its toolset. Returns None for core tools.
 fn tool_to_toolset(name: &str) -> Option<&'static str> {
     match name {
-        "memory_store" | "memory_recall" | "memory_list" | "session_summarize" | "use_toolset" | "cron_create" | "cron_list" | "cron_cancel" => None,
+        "memory_store" | "memory_recall" | "memory_list"
+        | "session_summarize"
+        | "use_toolset"
+        | "skill_load"
+        | "knowledge_read" | "knowledge_list"
+        | "cron_create" | "cron_list" | "cron_cancel" => None,
         n if n.starts_with("file_") => Some("filesystem"),
         "shell_exec" => Some("shell"),
         n if n.starts_with("knowledge_") || n.starts_with("skill_") || n == "clone_evaluate" => Some("knowledge"),
@@ -85,15 +105,6 @@ impl CarrierKernel {
                             }
                         }
                     }
-                }
-            }
-        }
-
-        // mcp_servers in manifest are always activated (regardless of auto_load_toolsets)
-        if let Some(ref e) = entry {
-            for server in &e.manifest.mcp_servers {
-                if !combined.contains(server) {
-                    combined.push(server.clone());
                 }
             }
         }
