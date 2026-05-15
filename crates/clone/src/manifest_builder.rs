@@ -308,6 +308,9 @@ fn derive_auto_load_toolsets(tools: &[String], template: &Option<TemplateManifes
         }
     }
 
+    // All agents need knowledge tools to read their own knowledge base
+    toolsets.insert("knowledge".to_string());
+
     let mut result: Vec<String> = toolsets.into_iter().collect();
     result.sort();
     result

@@ -121,18 +121,8 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
         if let Some(ref catalog) = ctx.clone_skills_catalog {
             if !catalog.trim().is_empty() {
                 sections.push(format!(
-                    "## 技能目录\n当用户的请求匹配某个技能时，按该技能的流程执行。\n\n{}",
+                    "## 技能目录\n当用户的请求匹配某个技能时，使用 skill_load 加载该技能的详细指令，然后严格按指令执行。\n\n{}",
                     catalog
-                ));
-            }
-        }
-
-        // skills/ → 技能详细说明（完整 body + allowed_tools）
-        if let Some(ref prompts) = ctx.clone_skills_prompts {
-            if !prompts.trim().is_empty() {
-                sections.push(format!(
-                    "## 技能详细说明\n{}\n\n严格按照每个技能定义的流程和步骤执行。",
-                    prompts
                 ));
             }
         }
@@ -141,16 +131,6 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
         if let Some(ref mem) = ctx.memory_md {
             if !mem.trim().is_empty() {
                 sections.push(format!("## 知识索引\n{}", cap_str(mem, 1000)));
-            }
-        }
-
-        // knowledge/*.md → 知识内容（compiled truth，不含 timeline）
-        if let Some(ref knowledge) = ctx.knowledge_content {
-            if !knowledge.trim().is_empty() {
-                sections.push(format!(
-                    "## 知识库\n以下是你已经掌握的知识。在回答问题时优先参考这些知识。\n\n{}",
-                    knowledge
-                ));
             }
         }
 
