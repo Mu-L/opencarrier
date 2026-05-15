@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 15;
+const SCHEMA_VERSION: u32 = 16;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -69,6 +69,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 15 {
         migrate_v15(conn)?;
+    }
+
+    if current_version < 16 {
+        migrate_v16(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -602,6 +606,44 @@ fn migrate_v15(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![15, "Session: add active_toolsets for toolset on-demand loading"],
+    )?;
+    Ok(())
+}
+
+/// Version 16: Add tables for cron delivery routing.
+/// - `sender_channels`: tracks which channel a sender last used (for cron delivery)
+/// - `pending_notifications`: buffers cron notifications for channels that
+///   don't support proactive push, until the user sends an inbound message
+fn migrate_v16(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS sender_channels (
+            sender_id TEXT PRIMARY KEY,
+            channel_type TEXT NOT NULL,
+            bot_id TEXT NOT NULL,
+            last_seen_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS pending_notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            message TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'cron',
+            created_at INTEGER NOT NULL,
+            delivered_at INTEGER NULL,
+            expires_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_pending_sender_undelivered
+            ON pending_notifications(sender_id, delivered_at);
+        CREATE INDEX IF NOT EXISTS idx_pending_expires
+            ON pending_notifications(expires_at);
+        ",
+    )?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![16, "Cron delivery: sender_channels + pending_notifications"],
     )?;
     Ok(())
 }

@@ -261,6 +261,11 @@ impl Channel for SessionWatcher {
         "weixin"
     }
 
+    fn supports_proactive_push(&self) -> bool {
+        // iLink replies require a context_token from a recent inbound message.
+        false
+    }
+
     fn name(&self) -> &str {
         "__watcher__"
     }

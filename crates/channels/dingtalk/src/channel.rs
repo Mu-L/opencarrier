@@ -37,6 +37,10 @@ impl Channel for DingTalkChannel {
         "dingtalk"
     }
 
+    fn supports_proactive_push(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &str {
         &self.bot_name
     }

@@ -124,6 +124,9 @@ pub struct KernelCoordination {
     pub(crate) self_handle: OnceLock<Weak<CarrierKernel>>,
 }
 
+/// A probe that returns whether a given channel type supports proactive push.
+pub type ChannelProactivePushFn = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 /// The main Carrier kernel — coordinates all subsystems.
 pub struct CarrierKernel {
     /// Kernel configuration.
@@ -138,6 +141,14 @@ pub struct CarrierKernel {
     pub metering: Arc<MeteringEngine>,
     /// Cron job scheduler.
     pub cron_scheduler: crate::cron::CronScheduler,
+
+    /// Channel send function: (channel_type, bot_id, user_id, text) → Result.
+    /// Wired up by the API server after the ChannelManager starts. Used by
+    /// cron delivery to send notifications back to users.
+    pub channel_send_fn: std::sync::RwLock<Option<runtime::plugin::bridge::ChannelSendFn>>,
+    /// Channel proactive-push capability probe: channel_type → bool.
+    /// Wired up alongside channel_send_fn.
+    pub channel_supports_proactive_fn: std::sync::RwLock<Option<ChannelProactivePushFn>>,
 
     /// LLM brain and model catalog.
     pub brain: KernelBrain,
@@ -563,6 +574,8 @@ impl CarrierKernel {
             audit_log: Arc::new(AuditLog::with_db(memory.usage_conn())),
             metering,
             cron_scheduler,
+            channel_send_fn: std::sync::RwLock::new(None),
+            channel_supports_proactive_fn: std::sync::RwLock::new(None),
             brain: KernelBrain {
                 brain: Arc::new(std::sync::RwLock::new(brain_arc)),
                 brain_path: brain_path.clone(),

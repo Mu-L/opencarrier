@@ -9,6 +9,7 @@
 
 pub mod acp_session;
 pub mod consolidation;
+pub mod cron_delivery;
 pub mod invites;
 pub mod knowledge;
 pub mod migration;
@@ -18,6 +19,7 @@ pub mod structured;
 pub mod usage;
 
 mod substrate;
+pub use cron_delivery::CronDeliveryStore;
 pub use invites::InviteStore;
 pub use semantic::SemanticStore;
 pub use session::SessionStore;

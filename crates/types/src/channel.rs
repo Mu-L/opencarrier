@@ -41,4 +41,12 @@ pub trait Channel: Send + Sync {
         let _ = (sender_id, sender);
         Err(format!("start_sender not implemented for {}", self.channel_type()))
     }
+
+    /// Whether this channel supports proactive push (sending without an inbound
+    /// context). Channels that require a context_token / response_url should
+    /// return false; cron and other server-initiated notifications must be
+    /// buffered for these channels until the user sends an inbound message.
+    fn supports_proactive_push(&self) -> bool {
+        false
+    }
 }

@@ -245,6 +245,10 @@ impl Channel for SessionWatcher {
         "dingtalk"
     }
 
+    fn supports_proactive_push(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &str {
         "DingTalk Session Watcher"
     }

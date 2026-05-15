@@ -4,6 +4,7 @@
 //! session store, and consolidation engine behind a single async API.
 
 use crate::consolidation::ConsolidationEngine;
+use crate::cron_delivery::CronDeliveryStore;
 use crate::invites::InviteStore;
 use crate::knowledge::KnowledgeStore;
 use crate::migration::run_migrations;
@@ -34,6 +35,7 @@ pub struct MemorySubstrate {
     sessions: SessionStore,
     consolidation: ConsolidationEngine,
     invites: InviteStore,
+    cron_delivery: CronDeliveryStore,
 }
 
 impl MemorySubstrate {
@@ -55,6 +57,7 @@ impl MemorySubstrate {
             sessions: SessionStore::new(Arc::clone(&shared)),
             consolidation: ConsolidationEngine::new(Arc::clone(&shared), decay_rate),
             invites: InviteStore::new(Arc::clone(&shared)),
+            cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
         })
     }
 
@@ -72,7 +75,13 @@ impl MemorySubstrate {
             sessions: SessionStore::new(Arc::clone(&shared)),
             consolidation: ConsolidationEngine::new(Arc::clone(&shared), decay_rate),
             invites: InviteStore::new(Arc::clone(&shared)),
+            cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
         })
+    }
+
+    /// Get a reference to the cron delivery store (last-channel tracking + buffer).
+    pub fn cron_delivery(&self) -> &CronDeliveryStore {
+        &self.cron_delivery
     }
 
     /// Get a reference to the invite store.

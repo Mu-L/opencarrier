@@ -60,6 +60,12 @@ impl Channel for WeComChannel {
         "wecom"
     }
 
+    fn supports_proactive_push(&self) -> bool {
+        // App and Kf modes support proactive push. SmartBot mode does not,
+        // but that case is handled by SmartBotChannel (a separate impl).
+        true
+    }
+
     fn name(&self) -> &str {
         "WeChat Work"
     }

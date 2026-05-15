@@ -13,9 +13,16 @@ use crate::kernel::CarrierKernel;
 // ── Cron delivery helper ───────────────────────────────────
 
 /// Deliver a cron job's agent response to the configured delivery target.
+///
+/// - `None`: silent — no notification sent
+/// - `LastChannel`: route to the channel the sender (owner_id) most recently
+///   used. Buffered for later delivery if the channel doesn't support
+///   proactive push or if the send attempt fails.
+/// - `Webhook`: HTTP POST to the configured URL.
 pub(super) async fn cron_deliver_response(
-    _kernel: &CarrierKernel,
+    kernel: &CarrierKernel,
     agent_id: AgentId,
+    owner_id: Option<&str>,
     response: &str,
     delivery: &types::scheduler::CronDelivery,
 ) -> Result<(), String> {
@@ -27,7 +34,12 @@ pub(super) async fn cron_deliver_response(
 
     match delivery {
         CronDelivery::None => Ok(()),
-        CronDelivery::LastChannel => Ok(()),
+        CronDelivery::LastChannel => {
+            let sender_id = owner_id.ok_or_else(|| {
+                "LastChannel delivery requires owner_id on the cron job".to_string()
+            })?;
+            deliver_via_last_channel(kernel, agent_id, sender_id, response).await
+        }
         CronDelivery::Webhook { url } => {
             tracing::debug!(url = %url, "Cron: delivering via webhook");
             let client = reqwest::Client::builder()
@@ -44,6 +56,107 @@ pub(super) async fn cron_deliver_response(
                 format!("webhook delivery failed: {e}")
             })?;
             tracing::debug!(status = %resp.status(), "Cron webhook delivered");
+            Ok(())
+        }
+    }
+}
+
+/// Deliver a notification to the sender's most recent channel. Attempts a
+/// proactive push first; on failure (or for channels that don't support push)
+/// the notification is buffered for delivery on the next inbound message.
+async fn deliver_via_last_channel(
+    kernel: &CarrierKernel,
+    agent_id: AgentId,
+    sender_id: &str,
+    response: &str,
+) -> Result<(), String> {
+    let store = kernel.memory.cron_delivery();
+    let last = match store
+        .get_last_channel(sender_id)
+        .map_err(|e| format!("get_last_channel failed: {e}"))?
+    {
+        Some(c) => c,
+        None => {
+            // We've never seen this sender — buffer the notification so it
+            // delivers when they first send an inbound message.
+            store
+                .buffer_notification(
+                    sender_id,
+                    &agent_id.to_string(),
+                    response,
+                    "cron",
+                    memory::cron_delivery::DEFAULT_TTL_SECS,
+                )
+                .map_err(|e| format!("buffer notification failed: {e}"))?;
+            tracing::info!(sender = %sender_id, "Cron: buffered (no last channel)");
+            return Ok(());
+        }
+    };
+
+    // Check if the channel supports proactive push; if not, buffer directly.
+    let supports = kernel
+        .channel_supports_proactive_fn
+        .read()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(|f| f(&last.channel_type)))
+        .unwrap_or(false);
+
+    if !supports {
+        store
+            .buffer_notification(
+                sender_id,
+                &agent_id.to_string(),
+                response,
+                "cron",
+                memory::cron_delivery::DEFAULT_TTL_SECS,
+            )
+            .map_err(|e| format!("buffer notification failed: {e}"))?;
+        tracing::info!(
+            sender = %sender_id,
+            channel = %last.channel_type,
+            "Cron: buffered (channel does not support proactive push)"
+        );
+        return Ok(());
+    }
+
+    // Try proactive push. If it fails, fall back to buffering.
+    let send_fn = kernel
+        .channel_send_fn
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone());
+    let send_fn = match send_fn {
+        Some(f) => f,
+        None => {
+            return Err("channel_send_fn not configured".to_string());
+        }
+    };
+
+    match send_fn(&last.channel_type, &last.bot_id, sender_id, response) {
+        Ok(()) => {
+            tracing::info!(
+                sender = %sender_id,
+                channel = %last.channel_type,
+                "Cron: delivered via last channel"
+            );
+            Ok(())
+        }
+        Err(e) => {
+            tracing::warn!(
+                sender = %sender_id,
+                channel = %last.channel_type,
+                error = %e,
+                "Cron: proactive send failed, buffering"
+            );
+            store
+                .buffer_notification(
+                    sender_id,
+                    &agent_id.to_string(),
+                    response,
+                    "cron",
+                    memory::cron_delivery::DEFAULT_TTL_SECS,
+                )
+                .map_err(|e| format!("buffer notification failed: {e}"))?;
             Ok(())
         }
     }
@@ -410,6 +523,7 @@ impl CarrierKernel {
                                 let timeout_s = timeout_secs.unwrap_or(120);
                                 let timeout = std::time::Duration::from_secs(timeout_s);
                                 let delivery = job.delivery.clone();
+                                let owner_id = job.owner_id.clone();
                                 let kh: std::sync::Arc<
                                     dyn runtime::kernel_handle::KernelHandle,
                                 > = kernel.clone();
@@ -430,6 +544,7 @@ impl CarrierKernel {
                                         match cron_deliver_response(
                                             &kernel,
                                             agent_id,
+                                            owner_id.as_deref(),
                                             &result.response,
                                             &delivery,
                                         )
@@ -449,6 +564,21 @@ impl CarrierKernel {
                                         let err_msg = format!("{e}");
                                         tracing::warn!(job = %job_name, error = %err_msg, "Cron job failed");
                                         kernel.cron_scheduler.record_failure(job_id, &err_msg);
+                                        let notice = format!(
+                                            "⚠️ 定时任务「{}」执行失败：{}",
+                                            job_name, err_msg
+                                        );
+                                        if let Err(de) = cron_deliver_response(
+                                            &kernel,
+                                            agent_id,
+                                            owner_id.as_deref(),
+                                            &notice,
+                                            &delivery,
+                                        )
+                                        .await
+                                        {
+                                            tracing::warn!(job = %job_name, error = %de, "Failure-notice delivery failed");
+                                        }
                                     }
                                     Err(_) => {
                                         tracing::warn!(job = %job_name, timeout_s, "Cron job timed out");
@@ -456,6 +586,21 @@ impl CarrierKernel {
                                             job_id,
                                             &format!("timed out after {timeout_s}s"),
                                         );
+                                        let notice = format!(
+                                            "⚠️ 定时任务「{}」执行超时（{}秒未完成）",
+                                            job_name, timeout_s
+                                        );
+                                        if let Err(de) = cron_deliver_response(
+                                            &kernel,
+                                            agent_id,
+                                            owner_id.as_deref(),
+                                            &notice,
+                                            &delivery,
+                                        )
+                                        .await
+                                        {
+                                            tracing::warn!(job = %job_name, error = %de, "Timeout-notice delivery failed");
+                                        }
                                     }
                                 }
                             }
@@ -467,6 +612,12 @@ impl CarrierKernel {
                         persist_counter = 0;
                         if let Err(e) = kernel.cron_scheduler.persist() {
                             tracing::warn!("Cron persist failed: {e}");
+                        }
+                        // Periodically purge expired pending notifications.
+                        match kernel.memory.cron_delivery().purge_expired() {
+                            Ok(0) => {}
+                            Ok(n) => tracing::debug!(deleted = n, "Purged expired pending notifications"),
+                            Err(e) => tracing::warn!("Purge expired notifications failed: {e}"),
                         }
                     }
                 }

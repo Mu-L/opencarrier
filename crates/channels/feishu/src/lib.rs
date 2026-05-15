@@ -250,6 +250,10 @@ impl Channel for SessionWatcher {
         "feishu"
     }
 
+    fn supports_proactive_push(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &str {
         "Feishu Session Watcher"
     }

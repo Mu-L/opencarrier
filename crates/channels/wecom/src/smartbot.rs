@@ -125,6 +125,11 @@ impl Channel for SmartBotChannel {
         "wecom"
     }
 
+    fn supports_proactive_push(&self) -> bool {
+        // SmartBot replies require a response_url from a recent inbound callback.
+        false
+    }
+
     fn name(&self) -> &str {
         "WeChat Work SmartBot"
     }

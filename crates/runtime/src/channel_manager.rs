@@ -31,6 +31,8 @@ pub struct ChannelManager {
     kernel: Arc<dyn KernelHandle>,
     /// Sender-based router (route_key → agent_id), set before start().
     sender_router: Option<Arc<SenderRouter>>,
+    /// Cron delivery store (last-channel tracking + pending notifications).
+    cron_delivery: Option<Arc<memory::CronDeliveryStore>>,
     /// Tool dispatcher for plugin-style tools (weixin tools, etc.).
     tool_dispatcher: Arc<PluginToolDispatcher>,
 }
@@ -45,6 +47,7 @@ impl ChannelManager {
             message_rx: Some(rx),
             kernel,
             sender_router: None,
+            cron_delivery: None,
             tool_dispatcher: Arc::new(PluginToolDispatcher::new()),
         }
     }
@@ -52,6 +55,11 @@ impl ChannelManager {
     /// Set the sender-based router (must be called before start()).
     pub fn set_sender_router(&mut self, router: Arc<SenderRouter>) {
         self.sender_router = Some(router);
+    }
+
+    /// Set the cron delivery store (enables last-channel tracking + buffer drain).
+    pub fn set_cron_delivery(&mut self, store: Arc<memory::CronDeliveryStore>) {
+        self.cron_delivery = Some(store);
     }
 
     /// Register a channel adapter under a unique name.
@@ -101,6 +109,10 @@ impl ChannelManager {
             bridge.set_sender_router(router.clone());
         }
 
+        if let Some(ref store) = self.cron_delivery {
+            bridge.set_cron_delivery(store.clone());
+        }
+
         // Set up channel send function for bridge to deliver responses
         let channels_for_send = self.channels.clone();
         let send_fn: ChannelSendFn = Arc::new(move |channel_type, bot_id, user_id, text| {
@@ -146,6 +158,39 @@ impl ChannelManager {
             "Channel not found for type: {}, bot: {}",
             channel_type, bot_id
         ))
+    }
+
+    /// Build a closure that can send messages through this manager's channels.
+    /// Used by the kernel for cron delivery.
+    pub fn make_channel_send_fn(&self) -> crate::plugin::bridge::ChannelSendFn {
+        let channels = self.channels.clone();
+        Arc::new(move |channel_type, bot_id, user_id, text| {
+            let channels = channels.lock().unwrap();
+            for channel in channels.values() {
+                if channel.channel_type() == channel_type {
+                    return channel.send(bot_id, user_id, text);
+                }
+            }
+            Err(format!(
+                "Channel not found for type: {}, bot: {}",
+                channel_type, bot_id
+            ))
+        })
+    }
+
+    /// Build a closure that probes whether a channel type supports proactive
+    /// push (sending without an inbound context).
+    pub fn make_supports_proactive_fn(&self) -> Arc<dyn Fn(&str) -> bool + Send + Sync> {
+        let channels = self.channels.clone();
+        Arc::new(move |channel_type| {
+            let channels = channels.lock().unwrap();
+            for channel in channels.values() {
+                if channel.channel_type() == channel_type {
+                    return channel.supports_proactive_push();
+                }
+            }
+            false
+        })
     }
 
     /// Send a text message by searching all channels for a matching bot_id.

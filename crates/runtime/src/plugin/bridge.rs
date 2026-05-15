@@ -33,6 +33,8 @@ pub struct PluginBridgeManager {
     channel_send_fn: Option<ChannelSendFn>,
     /// Sender-based routing (route_key → agent_id).
     sender_router: Option<Arc<SenderRouter>>,
+    /// Cron delivery: last-channel tracking + buffered notifications.
+    cron_delivery: Option<Arc<memory::CronDeliveryStore>>,
     /// route_key of users currently in the "naming" flow (waiting for agent name).
     pending_naming: DashMap<String, String>,
 }
@@ -44,6 +46,7 @@ impl PluginBridgeManager {
             kernel,
             channel_send_fn: None,
             sender_router: None,
+            cron_delivery: None,
             pending_naming: DashMap::new(),
         }
     }
@@ -51,6 +54,11 @@ impl PluginBridgeManager {
     /// Set the sender-based router (enables route_key routing).
     pub fn set_sender_router(&mut self, router: Arc<SenderRouter>) {
         self.sender_router = Some(router);
+    }
+
+    /// Set the cron delivery store (enables last-channel tracking + buffer drain).
+    pub fn set_cron_delivery(&mut self, store: Arc<memory::CronDeliveryStore>) {
+        self.cron_delivery = Some(store);
     }
 
     /// Set the channel send function for delivering responses.
@@ -129,6 +137,28 @@ impl PluginBridgeManager {
         };
 
         let rk = self.route_key(&msg);
+
+        // Record the channel this sender last used (for cron delivery routing).
+        if let Some(ref cron_delivery) = self.cron_delivery {
+            if let Err(e) = cron_delivery.touch_sender_channel(&rk, &msg.channel_type, &msg.bot_id) {
+                tracing::warn!(error = %e, "Failed to touch sender channel");
+            }
+        }
+
+        // Deliver any buffered cron notifications for this sender before
+        // processing the actual message. We use msg's context so the reply
+        // can use the active context_token / response_url.
+        if let Some(ref cron_delivery) = self.cron_delivery {
+            match cron_delivery.drain_pending(&rk) {
+                Ok(notifications) if !notifications.is_empty() => {
+                    for n in notifications {
+                        self.send_response(&msg, &n.message).await;
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "Failed to drain pending notifications"),
+            }
+        }
 
         // 1. Check if route is in naming flow
         if let Some((_, agent_id)) = self.pending_naming.remove(&rk) {

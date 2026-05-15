@@ -228,6 +228,12 @@ pub async fn run_daemon(
             info!("Sender-based routing enabled");
         }
 
+        // Wire up cron delivery store (last-channel tracking + buffered notifications)
+        {
+            let store = std::sync::Arc::new(kernel.memory.cron_delivery().clone());
+            cm.set_cron_delivery(store);
+        }
+
         // Migrate old plugins/{platform}/bot/*.toml → {platform}-sessions/*.json
         crate::migration::migrate_bot_toml_to_sessions(&kernel.config.home_dir);
         // Migrate {platform}-sessions/*.json → senders/{sender_id}/session.json
@@ -255,6 +261,14 @@ pub async fn run_daemon(
         }
 
         cm.start().await;
+
+        // Inject channel send / proactive-push probe into kernel for cron delivery
+        {
+            let send_fn = cm.make_channel_send_fn();
+            *kernel.channel_send_fn.write().unwrap() = Some(send_fn);
+            let probe = cm.make_supports_proactive_fn();
+            *kernel.channel_supports_proactive_fn.write().unwrap() = Some(probe);
+        }
 
         // Inject tool dispatcher into kernel
         {

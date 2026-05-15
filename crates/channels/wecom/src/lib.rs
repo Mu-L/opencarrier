@@ -48,6 +48,13 @@ impl Channel for SessionWatcher {
         "wecom"
     }
 
+    fn supports_proactive_push(&self) -> bool {
+        // WeCom App and Kf modes support proactive push; SmartBot mode does not.
+        // SessionWatcher mixes all modes — return true and rely on send() to
+        // fall back to buffering when a SmartBot bot's send fails.
+        true
+    }
+
     fn name(&self) -> &str {
         "WeCom Session Watcher"
     }

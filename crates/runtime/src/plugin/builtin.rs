@@ -25,6 +25,14 @@ pub trait BuiltinChannel: Send + Sync {
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String>;
     fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String>;
     fn stop(&mut self);
+
+    /// Whether this channel supports proactive push (sending without an inbound
+    /// context). Channels that require a context_token / response_url should
+    /// return false; cron and other server-initiated notifications must be
+    /// buffered for these channels until the user sends an inbound message.
+    fn supports_proactive_push(&self) -> bool {
+        false
+    }
 }
 
 /// A built-in plugin that directly holds Rust trait objects.
