@@ -561,38 +561,102 @@ impl KernelHandle for CarrierKernel {
             Err(_) => return Vec::new(),
         };
         let query_lower = query.to_lowercase();
+        let keywords: Vec<&str> = query_lower
+            .split_whitespace()
+            .filter(|w| w.len() >= 2)
+            .collect();
         let mut scored: Vec<(usize, String, types::tool::ToolDefinition)> = Vec::new();
 
         for (ts_name, tools) in registry.iter() {
             let ts_lower = ts_name.to_lowercase();
-            let ts_match = ts_lower.contains(&query_lower);
             for tool in tools {
                 let name_lower = tool.name.to_lowercase();
                 let desc_lower = tool.description.to_lowercase();
-                let score = if name_lower == query_lower {
-                    10
-                } else if name_lower.contains(&query_lower) {
-                    5
-                } else if desc_lower.contains(&query_lower) {
-                    3
-                } else if ts_match {
-                    2
-                } else {
-                    continue;
-                };
-                scored.push((score, ts_name.clone(), tool.clone()));
+                let score = CarrierKernel::score_tool(
+                    &query_lower, &keywords,
+                    &name_lower, &desc_lower, &ts_lower,
+                );
+                if score > 0 {
+                    scored.push((score, ts_name.clone(), tool.clone()));
+                }
             }
         }
 
         scored.sort_by(|a, b| b.0.cmp(&a.0));
+        let count = scored.len();
         scored.truncate(limit);
+        tracing::info!(
+            query = query,
+            results = scored.len(),
+            total_candidates = count,
+            "tool_search executed"
+        );
         scored.into_iter().map(|(_, ts, def)| (ts, def)).collect()
     }
 
 }
 
+type ToolsetAlias = (fn(&str) -> bool, &'static str);
+
 // Non-trait methods on CarrierKernel (called directly, not via KernelHandle)
 impl CarrierKernel {
+    /// Score a tool against a search query using multi-signal matching.
+    fn score_tool(
+        query: &str,
+        keywords: &[&str],
+        tool_name: &str,
+        tool_desc: &str,
+        toolset_name: &str,
+    ) -> usize {
+        let mut score: usize = 0;
+
+        if tool_name == query {
+            return 20;
+        }
+        if tool_name.contains(query) {
+            score += 10;
+        }
+        for kw in keywords {
+            if tool_name.contains(kw) {
+                score += 5;
+            }
+        }
+        if tool_desc.contains(query) {
+            score += 5;
+        }
+        for kw in keywords {
+            if tool_desc.contains(kw) {
+                score += 2;
+            }
+        }
+        if toolset_name.contains(query) {
+            score += 3;
+        }
+        for kw in keywords {
+            if toolset_name.contains(kw) {
+                score += 2;
+            }
+        }
+
+        let aliases: &[ToolsetAlias] = &[
+            (|q: &str| q.contains("file") || q.contains("save") || q.contains("read") || q.contains("write"), "filesystem"),
+            (|q: &str| q.contains("browser") || q.contains("browse") || q.contains("网页") || q.contains("打开"), "browser"),
+            (|q: &str| q.contains("wechat") || q.contains("微信") || q.contains("公众号") || q.contains("draft"), "wechat-oa"),
+            (|q: &str| q.contains("feishu") || q.contains("飞书") || q.contains("lark"), "feishu"),
+            (|q: &str| q.contains("wecom") || q.contains("企微") || q.contains("企业微信"), "wecom"),
+            (|q: &str| q.contains("shell") || q.contains("command") || q.contains("exec") || q.contains("终端"), "shell"),
+            (|q: &str| q.contains("image") || q.contains("图片") || q.contains("media") || q.contains("photo"), "media"),
+            (|q: &str| q.contains("search") || q.contains("fetch") || q.contains("web"), "web"),
+        ];
+        for (matches, ts) in aliases {
+            if matches(query) && toolset_name == *ts {
+                score += 4;
+            }
+        }
+
+        score
+    }
+
     pub async fn clone_install(&self, name: &str, agx_data: &[u8]) -> Result<(String, String), String> {
         use clone::{build_manifest_from_workspace, extract_agx};
 
