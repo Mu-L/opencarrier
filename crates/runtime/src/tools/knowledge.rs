@@ -198,6 +198,22 @@ impl ToolModule for KnowledgeTools {
             _ => None,
         }
     }
+
+    fn permission_level(&self, tool_name: &str) -> types::tool::PermissionLevel {
+        match tool_name {
+            "knowledge_list" | "knowledge_read" | "session_summarize"
+            | "skill_load" | "clone_evaluate" => types::tool::PermissionLevel::None,
+            "knowledge_lint" | "knowledge_index" | "knowledge_extract"
+            | "train_read" | "train_list" | "train_knowledge_list"
+            | "train_knowledge_read" | "train_evaluate" | "user_profile" => types::tool::PermissionLevel::ReadOnly,
+            "knowledge_add" | "knowledge_remove" | "knowledge_import"
+            | "knowledge_heal" | "skill_create" | "skill_update"
+            | "apply_patch" | "train_write" | "train_knowledge_add"
+            | "train_knowledge_import" | "train_knowledge_lint"
+            | "train_knowledge_heal" => types::tool::PermissionLevel::Write,
+            _ => types::tool::PermissionLevel::Dangerous,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

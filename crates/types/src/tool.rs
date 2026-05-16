@@ -2,6 +2,26 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Permission level for a tool — used to filter tools per channel.
+///
+/// Levels are ordered: None < ReadOnly < Write < Execute < Dangerous.
+/// A channel's `max_permission` caps which tools are visible to the LLM.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionLevel {
+    /// Pure queries with no side effects: memory_recall, knowledge_read, etc.
+    #[default]
+    None,
+    /// Read from external sources: web_fetch, file_read, web_search.
+    ReadOnly,
+    /// Write within sandbox: file_write (workspace), memory_store (own ns).
+    Write,
+    /// Cross-boundary writes: file_write (arbitrary), agent_send, docker_exec.
+    Execute,
+    /// Irreversible operations: shell_exec, file_delete, process_kill.
+    Dangerous,
+}
+
 /// Definition of a tool that an agent can use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {

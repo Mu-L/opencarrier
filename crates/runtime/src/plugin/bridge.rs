@@ -202,6 +202,7 @@ impl PluginBridgeManager {
                     Some(&msg.sender_name),
                     None,
                     Some(&rk),
+                    Some(&msg.channel_type),
                 )
                 .await
             {
@@ -259,6 +260,7 @@ impl PluginBridgeManager {
                 Some(&msg.sender_name),
                 None,
                 Some(&rk),
+                Some(&msg.channel_type),
             )
             .await
         {

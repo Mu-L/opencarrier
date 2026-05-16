@@ -248,6 +248,18 @@ impl ToolModule for MediaTools {
             _ => None,
         }
     }
+
+    fn permission_level(&self, tool_name: &str) -> types::tool::PermissionLevel {
+        match tool_name {
+            "image_analyze" | "media_describe" | "media_transcribe"
+            | "speech_to_text" => types::tool::PermissionLevel::ReadOnly,
+            "image_generate" | "text_to_speech" | "canvas_present" => types::tool::PermissionLevel::Write,
+            "docker_exec" | "process_start" | "process_poll"
+            | "process_write" | "process_list" => types::tool::PermissionLevel::Execute,
+            "process_kill" => types::tool::PermissionLevel::Dangerous,
+            _ => types::tool::PermissionLevel::Dangerous,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ pub mod toolset;
 
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::tool::ToolDefinition;
+use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -36,6 +36,13 @@ pub trait ToolModule: Send + Sync {
         input: &Value,
         ctx: &ToolContext<'_>,
     ) -> Option<Result<String, String>>;
+
+    /// Return the permission level for a tool in this module.
+    ///
+    /// Default: `Dangerous` (fail-safe — unknown tools require maximum trust).
+    fn permission_level(&self, _tool_name: &str) -> PermissionLevel {
+        PermissionLevel::Dangerous
+    }
 }
 
 /// All built-in tool modules in dispatch order.

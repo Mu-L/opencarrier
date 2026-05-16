@@ -47,6 +47,7 @@ pub trait KernelHandle: Send + Sync {
         sender_name: Option<&str>,
         caller_agent_id: Option<&str>,
         owner_id: Option<&str>,
+        channel_type: Option<&str>,
     ) -> Result<String, String>;
 
     /// List all running agents visible to the caller.

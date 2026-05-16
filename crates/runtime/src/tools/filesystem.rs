@@ -86,6 +86,14 @@ impl super::ToolModule for FilesystemTools {
             _ => None,
         }
     }
+
+    fn permission_level(&self, tool_name: &str) -> types::tool::PermissionLevel {
+        match tool_name {
+            "file_read" | "file_list" | "file_convert" => types::tool::PermissionLevel::ReadOnly,
+            "file_write" => types::tool::PermissionLevel::Write,
+            _ => types::tool::PermissionLevel::Dangerous,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

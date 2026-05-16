@@ -45,6 +45,7 @@ impl KernelHandle for CarrierKernel {
         sender_name: Option<&str>,
         _caller_agent_id: Option<&str>,
         owner_id: Option<&str>,
+        channel_type: Option<&str>,
     ) -> Result<String, String> {
         let (id, _target_entry): (AgentId, types::agent::AgentEntry) = match agent_id.parse() {
             Ok(id) => {
@@ -78,6 +79,7 @@ impl KernelHandle for CarrierKernel {
                 sender_id.map(|s| s.to_string()),
                 sender_name.map(|s| s.to_string()),
                 owner_id.map(|s| s.to_string()),
+                channel_type.map(|s| s.to_string()),
             )
             .await
             .map_err(|e| format!("Send failed: {e}"))?;

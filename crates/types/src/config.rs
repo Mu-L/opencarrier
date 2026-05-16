@@ -836,6 +836,28 @@ pub struct KernelConfig {
     /// Prevents overwhelming the LLM API when many users send messages simultaneously.
     #[serde(default = "default_llm_concurrency")]
     pub llm_concurrency: usize,
+    /// Per-channel permission configuration. Key is channel_type (e.g. "weixin", "feishu").
+    /// Tools exceeding the channel's max_permission are filtered out before the LLM sees them.
+    #[serde(default)]
+    pub channels: HashMap<String, ChannelConfig>,
+}
+
+/// Per-channel configuration for tool permission filtering.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelConfig {
+    /// Maximum permission level allowed for this channel.
+    /// Tools with a higher permission level are hidden from the LLM.
+    /// Default: Dangerous (all tools allowed — backwards compatible).
+    pub max_permission: crate::tool::PermissionLevel,
+}
+
+impl Default for ChannelConfig {
+    fn default() -> Self {
+        Self {
+            max_permission: crate::tool::PermissionLevel::Dangerous,
+        }
+    }
 }
 
 /// Clone lifecycle configuration — controls post-conversation learning and knowledge evolution.
@@ -1025,6 +1047,7 @@ impl Default for KernelConfig {
             external_url: None,
             whitelist_tools: Vec::new(),
             llm_concurrency: default_llm_concurrency(),
+            channels: HashMap::new(),
         }
     }
 }

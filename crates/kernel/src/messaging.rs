@@ -38,13 +38,14 @@ impl CarrierKernel {
             .get()
             .and_then(|w| w.upgrade())
             .map(|arc| arc as Arc<dyn KernelHandle>);
-        self.send_message_with_handle(agent_id, message, handle, None, None, None)
+        self.send_message_with_handle(agent_id, message, handle, None, None, None, None)
             .await
     }
 
     /// Send a multimodal message (text + images) to an agent and get a response.
     ///
     /// Send a message with an optional kernel handle for inter-agent tools.
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_message_with_handle(
         &self,
         agent_id: AgentId,
@@ -53,6 +54,7 @@ impl CarrierKernel {
         sender_id: Option<String>,
         sender_name: Option<String>,
         owner_id: Option<String>,
+        channel_type: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
         self.send_message_with_handle_and_blocks(
             agent_id,
@@ -62,6 +64,7 @@ impl CarrierKernel {
             sender_id,
             sender_name,
             owner_id,
+            channel_type,
         )
         .await
     }
@@ -85,6 +88,7 @@ impl CarrierKernel {
         sender_id: Option<String>,
         sender_name: Option<String>,
         owner_id: Option<String>,
+        channel_type: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
         // Acquire per-(agent, owner) lock to serialize concurrent messages for the same
         // agent+owner combination. This prevents session corruption when the same user
@@ -154,6 +158,7 @@ impl CarrierKernel {
                 sender_id,
                 sender_name,
                 owner_id,
+                channel_type.clone(),
             )
             .await
         };
@@ -716,6 +721,7 @@ impl CarrierKernel {
         sender_id: Option<String>,
         sender_name: Option<String>,
         owner_id: Option<String>,
+        channel_type: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
         // Clone Brain Arc early so the RwLockReadGuard is dropped before any .await.
         let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> =
@@ -903,6 +909,29 @@ impl CarrierKernel {
                 "Tools selected for LLM request"
             );
             (tools, None, None)
+        };
+
+        // Filter tools by channel max permission level
+        let tools = if let Some(ref ct) = channel_type {
+            let max_perm = self.config.channels
+                .get(ct)
+                .map(|c| c.max_permission)
+                .unwrap_or(types::tool::PermissionLevel::Dangerous);
+            let before_count = tools.len();
+            let filtered = crate::tool_builder::filter_tools_by_channel_permission(tools, max_perm);
+            if filtered.len() != before_count {
+                info!(
+                    agent = %entry.name,
+                    channel = %ct,
+                    max_permission = ?max_perm,
+                    before = before_count,
+                    after = filtered.len(),
+                    "Tools filtered by channel permission"
+                );
+            }
+            filtered
+        } else {
+            tools
         };
 
         // Apply model routing if configured (disabled in Stable mode)

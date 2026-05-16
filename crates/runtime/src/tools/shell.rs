@@ -90,6 +90,11 @@ impl ToolModule for ShellTools {
 
         Some(exec_shell(input, allowed_env, workspace_root, exec_policy).await)
     }
+
+    fn permission_level(&self, _tool_name: &str) -> types::tool::PermissionLevel {
+        // shell_exec is the most dangerous tool — irreversible system access
+        types::tool::PermissionLevel::Dangerous
+    }
 }
 
 async fn exec_shell(

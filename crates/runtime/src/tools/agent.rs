@@ -476,7 +476,7 @@ async fn tool_agent_send(
 
     crate::tool_runner::AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.send_to_agent(agent_id, message, sender_id, None, caller_agent_id, owner_id)
+            kh.send_to_agent(agent_id, message, sender_id, None, caller_agent_id, owner_id, None)
                 .await
         })
         .await
@@ -1603,6 +1603,26 @@ impl ToolModule for AgentTools {
             "a2a_send" => Some(tool_a2a_send(input, kernel).await),
 
             _ => None,
+        }
+    }
+
+    fn permission_level(&self, tool_name: &str) -> types::tool::PermissionLevel {
+        match tool_name {
+            "memory_recall" | "memory_list" | "agent_find" | "agent_list"
+            | "train_read" | "train_list" | "train_knowledge_list"
+            | "train_knowledge_read" | "train_evaluate" | "user_profile"
+            | "task_list" | "schedule_list" | "cron_list"
+            | "a2a_discover" | "knowledge_query" => types::tool::PermissionLevel::None,
+            "memory_store" | "task_post" | "task_claim" | "task_complete"
+            | "event_publish" | "schedule_create" | "schedule_delete"
+            | "knowledge_add_entity" | "knowledge_add_relation"
+            | "train_write" | "train_knowledge_add" | "train_knowledge_import"
+            | "train_knowledge_lint" | "train_knowledge_heal"
+            | "cron_create" | "cron_cancel" => types::tool::PermissionLevel::Write,
+            "agent_send" | "agent_spawn" | "agent_restart"
+            | "a2a_send" => types::tool::PermissionLevel::Execute,
+            "agent_kill" => types::tool::PermissionLevel::Dangerous,
+            _ => types::tool::PermissionLevel::Dangerous,
         }
     }
 }

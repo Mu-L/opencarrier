@@ -109,4 +109,12 @@ impl ToolModule for ToolSearchTools {
 
         Some(Ok(out))
     }
+
+    fn permission_level(&self, tool_name: &str) -> types::tool::PermissionLevel {
+        if tool_name == "tool_search" {
+            types::tool::PermissionLevel::None
+        } else {
+            types::tool::PermissionLevel::Dangerous
+        }
+    }
 }

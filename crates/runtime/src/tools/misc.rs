@@ -39,6 +39,13 @@ impl ToolModule for MiscTools {
             _ => None,
         }
     }
+
+    fn permission_level(&self, tool_name: &str) -> types::tool::PermissionLevel {
+        match tool_name {
+            "location_get" | "system_time" => types::tool::PermissionLevel::ReadOnly,
+            _ => types::tool::PermissionLevel::Dangerous,
+        }
+    }
 }
 
 async fn location_get() -> Result<String, String> {

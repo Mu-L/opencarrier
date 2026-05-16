@@ -103,6 +103,71 @@ pub(crate) fn filter_tools_by_skill_allowed(
         .collect()
 }
 
+/// Get the permission level for a tool by name.
+/// Uses the builtin module dispatch to look up each tool's declared level.
+/// Falls back to Dangerous for unknown tools (fail-safe).
+fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
+    use types::tool::PermissionLevel;
+    match name {
+        // None — pure queries, no side effects
+        "memory_recall" | "memory_list" | "session_summarize"
+        | "knowledge_list" | "knowledge_read" | "skill_load"
+        | "tool_search" | "agent_find" | "agent_list"
+        | "train_read" | "train_list" | "train_knowledge_list"
+        | "train_knowledge_read" | "train_evaluate" | "user_profile"
+        | "task_list" | "schedule_list" | "cron_list"
+        | "a2a_discover" | "knowledge_query" | "clone_evaluate"
+        | "knowledge_lint" | "knowledge_index" | "knowledge_extract"
+        | "train_knowledge_lint" => PermissionLevel::None,
+
+        // ReadOnly — reads from external sources
+        "file_read" | "file_list" | "file_convert"
+        | "web_fetch" | "web_search"
+        | "image_analyze" | "media_describe" | "media_transcribe"
+        | "speech_to_text" | "location_get" | "system_time" => PermissionLevel::ReadOnly,
+
+        // Write — writes within sandbox
+        "file_write" | "memory_store"
+        | "knowledge_add" | "knowledge_remove" | "knowledge_import"
+        | "knowledge_heal" | "skill_create" | "skill_update"
+        | "apply_patch" | "train_write" | "train_knowledge_add"
+        | "train_knowledge_import" | "train_knowledge_heal"
+        | "image_generate" | "text_to_speech" | "canvas_present"
+        | "task_post" | "task_claim" | "task_complete"
+        | "event_publish" | "schedule_create" | "schedule_delete"
+        | "knowledge_add_entity" | "knowledge_add_relation"
+        | "cron_create" | "cron_cancel" => PermissionLevel::Write,
+
+        // Execute — cross-boundary writes
+        "docker_exec" | "process_start" | "process_poll"
+        | "process_write" | "process_list"
+        | "agent_send" | "agent_spawn" | "agent_restart"
+        | "a2a_send" => PermissionLevel::Execute,
+
+        // Dangerous — irreversible operations
+        "shell_exec" | "process_kill" | "agent_kill" => PermissionLevel::Dangerous,
+
+        // Unknown tools default to Dangerous (fail-safe)
+        _ => PermissionLevel::Dangerous,
+    }
+}
+
+/// Filter tools by a channel's maximum permission level.
+/// Tools exceeding the max are removed — the LLM never sees them.
+pub(crate) fn filter_tools_by_channel_permission(
+    tools: Vec<ToolDefinition>,
+    max_permission: types::tool::PermissionLevel,
+) -> Vec<ToolDefinition> {
+    // If max is Dangerous (the default), no filtering needed
+    if max_permission == types::tool::PermissionLevel::Dangerous {
+        return tools;
+    }
+    tools
+        .into_iter()
+        .filter(|t| tool_permission_level(&t.name) <= max_permission)
+        .collect()
+}
+
 impl CarrierKernel {
     /// Collect the tools available to an agent using toolset mode.
     ///
