@@ -78,6 +78,8 @@ pub async fn execute_tool(
         owner_id: _,
         home_dir: _,
         agent_name: _,
+        subagent_configs: _,
+        channel_type: _,
     } = *ctx;
 
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
@@ -332,6 +334,8 @@ mod tests {
             owner_id: None,
             home_dir: None,
             agent_name: None,
+            subagent_configs: None,
+            channel_type: None,
         }
     }
 

@@ -911,27 +911,72 @@ impl CarrierKernel {
             (tools, None, None)
         };
 
-        // Filter tools by channel max permission level
-        let tools = if let Some(ref ct) = channel_type {
-            let max_perm = self.config.channels
-                .get(ct)
-                .map(|c| c.max_permission)
-                .unwrap_or(types::tool::PermissionLevel::Dangerous);
-            let before_count = tools.len();
-            let filtered = crate::tool_builder::filter_tools_by_channel_permission(tools, max_perm);
-            if filtered.len() != before_count {
+        // Auto-match subagent trigger (only when no skill matched)
+        let (tools, auto_matched_subagent) = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
+            if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, &entry.manifest.subagents) {
+                // Replace tool list with delegate_{name} + ALWAYS_AVAILABLE core tools
+                let delegate_tools = crate::tool_builder::build_subagent_tool_definitions(&entry.manifest.subagents);
+                let core_names: Vec<&str> = crate::tool_builder::ALWAYS_AVAILABLE_WITH_SKILL.to_vec();
+                let core_tools: Vec<_> = tools.iter()
+                    .filter(|t| core_names.contains(&t.name.as_str()))
+                    .cloned()
+                    .collect();
+                let filtered: Vec<_> = core_tools.into_iter().chain(delegate_tools).collect();
                 info!(
                     agent = %entry.name,
-                    channel = %ct,
-                    max_permission = ?max_perm,
-                    before = before_count,
-                    after = filtered.len(),
-                    "Tools filtered by channel permission"
+                    subagent = %sa_match.name,
+                    tool_count = filtered.len(),
+                    "Subagent trigger matched, tools replaced with delegate tools"
                 );
+                (filtered, Some(sa_match.name.clone()))
+            } else {
+                (tools, None)
             }
-            filtered
         } else {
-            tools
+            (tools, None)
+        };
+
+        // Filter tools by channel max permission level
+        // Also handle subagent delegation (channel_type starts with "subagent:")
+        let (tools, subagent_config) = if let Some(ref ct) = channel_type {
+            if let Some(sa_name) = ct.strip_prefix("subagent:") {
+                // Subagent delegation: filter tools by the subagent's allowed_tools
+                let sa_config = entry.manifest.subagents.iter().find(|s| s.name == sa_name).cloned();
+                if let Some(ref sa) = sa_config {
+                    let filtered = crate::tool_builder::filter_tools_by_skill_allowed(tools, &sa.allowed_tools);
+                    info!(
+                        agent = %entry.name,
+                        subagent = %sa_name,
+                        tool_count = filtered.len(),
+                        "Tools filtered for subagent delegation"
+                    );
+                    (filtered, Some(sa.clone()))
+                } else {
+                    tracing::warn!(subagent = %sa_name, "Subagent not found in manifest, using all tools");
+                    (tools, None)
+                }
+            } else {
+                // Regular channel filtering
+                let max_perm = self.config.channels
+                    .get(ct)
+                    .map(|c| c.max_permission)
+                    .unwrap_or(types::tool::PermissionLevel::Dangerous);
+                let before_count = tools.len();
+                let filtered = crate::tool_builder::filter_tools_by_channel_permission(tools, max_perm);
+                if filtered.len() != before_count {
+                    info!(
+                        agent = %entry.name,
+                        channel = %ct,
+                        max_permission = ?max_perm,
+                        before = before_count,
+                        after = filtered.len(),
+                        "Tools filtered by channel permission"
+                    );
+                }
+                (filtered, None)
+            }
+        } else {
+            (tools, None)
         };
 
         // Apply model routing if configured (disabled in Stable mode)
@@ -947,7 +992,24 @@ impl CarrierKernel {
             );
         }
 
-        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, auto_matched_skill);
+        // Apply subagent's max_iterations override
+        if let Some(ref sa) = subagent_config {
+            manifest.autonomous.get_or_insert_with(Default::default).max_iterations = sa.max_iterations;
+            // Mark as subagent for simplified prompt
+            manifest.metadata.insert("is_subagent".to_string(), serde_json::json!(true));
+            info!(
+                agent = %entry.name,
+                subagent = %sa.name,
+                max_iterations = sa.max_iterations,
+                "Subagent overrides max_iterations"
+            );
+        }
+
+        // Combine skill and subagent auto-match for prompt injection
+        let prompt_auto_match = auto_matched_skill.or_else(|| {
+            auto_matched_subagent.map(|name| format!("**Auto-delegation: {}**\nThe user message matches the '{}' subagent. Call delegate_{} to handle this task.", name, name, name))
+        });
+        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match);
 
         // Model routing is handled by Brain
 

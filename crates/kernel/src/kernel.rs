@@ -880,6 +880,7 @@ mod tests {
             tool_blocklist: vec![],
             knowledge_files: vec![],
             plugins: vec![],
+            subagents: vec![],
         };
         manifest.capabilities.tools = vec!["file_read".to_string(), "web_search".to_string()];
         let caps = manifest_to_capabilities(&manifest);
@@ -917,6 +918,7 @@ mod tests {
             tool_blocklist: vec![],
             knowledge_files: vec![],
             plugins: vec![],
+            subagents: vec![],
         }
     }
 

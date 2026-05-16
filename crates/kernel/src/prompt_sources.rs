@@ -503,6 +503,65 @@ pub struct SkillMatch {
     pub max_iterations: Option<u32>,
 }
 
+/// Result of automatic subagent trigger matching against a user message.
+pub struct SubagentMatch {
+    /// Subagent name (forms the `delegate_{name}` tool).
+    pub name: String,
+    /// Description of the subagent.
+    pub description: String,
+    /// Tools the subagent is allowed to use.
+    pub allowed_tools: Vec<String>,
+    /// Max iterations for the subagent's agent loop.
+    pub max_iterations: u32,
+}
+
+/// Match a user message against subagent trigger keywords.
+///
+/// Uses the same keyword extraction as skill matching. Returns the best
+/// match (most keyword hits), or `None` if nothing matches.
+pub fn match_subagent_for_message(message: &str, subagents: &[types::agent::SubagentConfig]) -> Option<SubagentMatch> {
+    if subagents.is_empty() {
+        return None;
+    }
+
+    let msg_lower = message.to_lowercase();
+    let mut best: Option<(usize, &types::agent::SubagentConfig)> = None;
+
+    for sa in subagents {
+        let keywords = extract_keywords(&sa.trigger);
+        if keywords.is_empty() {
+            continue;
+        }
+
+        let match_count = keywords
+            .iter()
+            .filter(|kw| msg_lower.contains(&kw.to_lowercase()))
+            .count();
+
+        if match_count == 0 {
+            continue;
+        }
+
+        if best.as_ref().is_none_or(|(c, _)| match_count > *c) {
+            best = Some((match_count, sa));
+        }
+    }
+
+    best.map(|(count, sa)| {
+        tracing::info!(
+            subagent = %sa.name,
+            keyword_matches = count,
+            "Subagent trigger matched for message"
+        );
+        SubagentMatch {
+            name: sa.name.clone(),
+            description: sa.description.clone(),
+            allowed_tools: sa.allowed_tools.clone(),
+            max_iterations: sa.max_iterations,
+        }
+    })
+}
+
 /// Match a user message against available skills using keyword matching.
 ///
 /// Extracts keywords from each skill's `when_to_use` frontmatter field and

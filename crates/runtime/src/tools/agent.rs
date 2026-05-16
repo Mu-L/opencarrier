@@ -1016,6 +1016,53 @@ async fn tool_cron_cancel(
 // A2A outbound tools (cross-instance agent communication)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Subagent delegation tools (delegate_{name})
+// ---------------------------------------------------------------------------
+
+async fn tool_delegate_subagent(
+    subagent_name: &str,
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+    owner_id: Option<&str>,
+    sender_id: Option<&str>,
+) -> Result<String, String> {
+    let kh = require_kernel(kernel)?;
+    let message = input["message"]
+        .as_str()
+        .ok_or("Missing 'message' parameter")?;
+    let aid = caller_agent_id.ok_or("delegate_* requires caller_agent_id")?;
+
+    // Check + increment inter-agent call depth
+    let current_depth = crate::tool_runner::AGENT_CALL_DEPTH
+        .try_with(|d| d.get())
+        .unwrap_or(0);
+    if current_depth >= MAX_AGENT_CALL_DEPTH {
+        return Err(format!(
+            "Subagent delegation depth exceeded (max {}). The agent call chain is too deep.",
+            MAX_AGENT_CALL_DEPTH
+        ));
+    }
+
+    tracing::info!(
+        subagent = %subagent_name,
+        depth = current_depth + 1,
+        "Delegating to subagent"
+    );
+
+    // Route through kernel: send to self with channel_type hint for subagent
+    // The kernel will see the same agent_id and apply subagent tool filtering
+    let subagent_channel = format!("subagent:{}", subagent_name);
+
+    crate::tool_runner::AGENT_CALL_DEPTH
+        .scope(std::cell::Cell::new(current_depth + 1), async {
+            kh.send_to_agent(aid, message, sender_id, None, caller_agent_id, owner_id, Some(&subagent_channel))
+                .await
+        })
+        .await
+}
+
 /// Discover an external A2A agent by fetching its agent card.
 async fn tool_a2a_discover(input: &serde_json::Value) -> Result<String, String> {
     let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
@@ -1602,6 +1649,14 @@ impl ToolModule for AgentTools {
             "a2a_discover" => Some(tool_a2a_discover(input).await),
             "a2a_send" => Some(tool_a2a_send(input, kernel).await),
 
+            // Subagent delegation (delegate_{name})
+            name if name.starts_with("delegate_") => {
+                let subagent_name = &name["delegate_".len()..];
+                Some(tool_delegate_subagent(
+                    subagent_name, input, kernel, caller_agent_id, owner_id, sender_id,
+                ).await)
+            }
+
             _ => None,
         }
     }
@@ -1621,6 +1676,7 @@ impl ToolModule for AgentTools {
             | "cron_create" | "cron_cancel" => types::tool::PermissionLevel::Write,
             "agent_send" | "agent_spawn" | "agent_restart"
             | "a2a_send" => types::tool::PermissionLevel::Execute,
+            name if name.starts_with("delegate_") => types::tool::PermissionLevel::Execute,
             "agent_kill" => types::tool::PermissionLevel::Dangerous,
             _ => types::tool::PermissionLevel::Dangerous,
         }

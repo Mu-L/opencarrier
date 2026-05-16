@@ -354,6 +354,7 @@ mod tests {
                 clone_source: None,
                 knowledge_files: vec![],
                 plugins: vec![],
+                subagents: vec![],
             },
             state: AgentState::Created,
             mode: AgentMode::default(),

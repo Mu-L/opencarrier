@@ -934,6 +934,8 @@ async fn run_agent_loop_impl(
                         owner_id,
                         home_dir: home_dir_buf.as_deref(),
                         agent_name: Some(&manifest.name),
+                        subagent_configs: if manifest.subagents.is_empty() { None } else { Some(&manifest.subagents) },
+                        channel_type: None,
                     };
 
                     // Timeout-wrapped execution

@@ -5,6 +5,7 @@ use crate::llm_driver::Brain;
 use crate::mcp::McpConnection;
 use crate::process_manager::ProcessManager;
 use crate::web_search::WebToolsContext;
+use types::agent::SubagentConfig;
 use types::config::{DockerSandboxConfig, ExecPolicy};
 use dashmap::DashMap;
 use std::path::Path;
@@ -34,4 +35,6 @@ pub struct ToolContext<'a> {
     pub owner_id: Option<&'a str>,
     pub home_dir: Option<&'a Path>,
     pub agent_name: Option<&'a str>,
+    pub subagent_configs: Option<&'a [SubagentConfig]>,
+    pub channel_type: Option<&'a str>,
 }

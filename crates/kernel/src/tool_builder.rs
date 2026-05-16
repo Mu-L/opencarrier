@@ -61,7 +61,7 @@ const BUILTIN_TOOLSETS: &[&str] = &["filesystem", "shell", "knowledge", "media",
 /// These are foundational: the agent must always be able to remember/recall
 /// state and look up its own knowledge base. `tool_search` and `skill_load`
 /// are deliberately EXCLUDED so the LLM can't escape the skill-imposed scope.
-const ALWAYS_AVAILABLE_WITH_SKILL: &[&str] = &[
+pub(crate) const ALWAYS_AVAILABLE_WITH_SKILL: &[&str] = &[
     "memory_store",
     "memory_recall",
     "memory_list",
@@ -144,6 +144,9 @@ fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
         | "agent_send" | "agent_spawn" | "agent_restart"
         | "a2a_send" => PermissionLevel::Execute,
 
+        // Subagent delegation — delegate_* tools are Execute level
+        n if n.starts_with("delegate_") => PermissionLevel::Execute,
+
         // Dangerous — irreversible operations
         "shell_exec" | "process_kill" | "agent_kill" => PermissionLevel::Dangerous,
 
@@ -165,6 +168,31 @@ pub(crate) fn filter_tools_by_channel_permission(
     tools
         .into_iter()
         .filter(|t| tool_permission_level(&t.name) <= max_permission)
+        .collect()
+}
+
+/// Build tool definitions for delegate_{name} tools from subagent configs.
+/// Each subagent becomes a single tool the parent agent can call to delegate work.
+pub(crate) fn build_subagent_tool_definitions(subagents: &[SubagentConfig]) -> Vec<ToolDefinition> {
+    subagents
+        .iter()
+        .map(|sa| ToolDefinition {
+            name: format!("delegate_{}", sa.name),
+            description: format!(
+                "Delegate to the '{}' subagent. {} Use this tool when the task involves: {}",
+                sa.name, sa.description, sa.trigger
+            ),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": format!("The task or message to delegate to the {} subagent", sa.name)
+                    }
+                },
+                "required": ["message"]
+            }),
+        })
         .collect()
 }
 
@@ -309,6 +337,13 @@ impl CarrierKernel {
                         tools.push(def.clone());
                     }
                 }
+            }
+        }
+
+        // Add delegate_{name} tools for each subagent in the manifest
+        if let Some(ref e) = entry {
+            if !e.manifest.subagents.is_empty() {
+                tools.extend(build_subagent_tool_definitions(&e.manifest.subagents));
             }
         }
 

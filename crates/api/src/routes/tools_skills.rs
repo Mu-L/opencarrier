@@ -204,6 +204,8 @@ pub async fn mcp_http(
             owner_id: None,
             home_dir: None,
             agent_name: None,
+            subagent_configs: None,
+            channel_type: None,
         };
         let result = runtime::tool_runner::execute_tool(
             "mcp-http", tool_name, &arguments, &tool_ctx,

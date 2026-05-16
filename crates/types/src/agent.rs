@@ -424,6 +424,10 @@ pub struct AgentManifest {
     /// Required plugins — populated when agent is loaded from .agx template.
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub plugins: Vec<String>,
+
+    /// Declarative subagent definitions — each becomes a `delegate_{name}` tool.
+    #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
+    pub subagents: Vec<SubagentConfig>,
 }
 
 /// Metadata about the .agx template this agent was loaded from.
@@ -446,6 +450,33 @@ pub struct CloneSource {
     /// Whether to auto-upgrade when hub has a newer version. Default: false.
     #[serde(default)]
     pub auto_upgrade: bool,
+}
+
+/// Declarative subagent definition — configured as `[[subagents]]` in agent.toml.
+///
+/// Each subagent becomes a `delegate_{name}` tool on the parent agent.
+/// When a subagent's trigger keywords match the user message, the system
+/// auto-delegates to that subagent instead of the normal agent loop.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentConfig {
+    /// Subagent name (used to form the `delegate_{name}` tool).
+    pub name: String,
+    /// Description shown to the LLM in the delegate tool definition.
+    pub description: String,
+    /// Trigger keywords for auto-delegation (same format as skill's when_to_use).
+    /// Comma/顿号-separated keywords.
+    pub trigger: String,
+    /// Tools the subagent is allowed to use (same pattern as skill allowed_tools).
+    /// Supports exact names, wildcard suffixes (`mcp_wechat_*`), and `*` for all.
+    #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
+    pub allowed_tools: Vec<String>,
+    /// Maximum iterations for the subagent's agent loop.
+    #[serde(default = "default_subagent_max_iterations")]
+    pub max_iterations: u32,
+}
+
+fn default_subagent_max_iterations() -> u32 {
+    10
 }
 
 fn default_true() -> bool {
@@ -483,6 +514,7 @@ impl Default for AgentManifest {
             clone_source: None,
             knowledge_files: Vec::new(),
             plugins: Vec::new(),
+            subagents: Vec::new(),
         }
     }
 }
@@ -695,6 +727,7 @@ mod tests {
             clone_source: None,
             knowledge_files: Vec::new(),
             plugins: Vec::new(),
+                subagents: Vec::new(),
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let deserialized: AgentManifest = serde_json::from_str(&json).unwrap();
