@@ -95,14 +95,24 @@ impl CarrierKernel {
         // sends messages in quick succession. Different owners of the same agent run in
         // parallel — each has an independent lock. Messages for different agents are also
         // not blocked.
-        let lock_key = (agent_id, owner_id.clone());
-        let lock = self
-            .runtime
-            .agent_msg_locks
-            .entry(lock_key)
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone();
-        let _guard = lock.lock().await;
+        //
+        // Subagent delegation (channel_type starts with "subagent:") skips the lock because
+        // it's already running inside the parent's tool execution (which holds the lock).
+        let is_subagent_delegate = channel_type.as_ref().is_some_and(|ct| ct.starts_with("subagent:"));
+        let _lock_arc;
+        let _guard = if !is_subagent_delegate {
+            let lock_key = (agent_id, owner_id.clone());
+            _lock_arc = self
+                .runtime
+                .agent_msg_locks
+                .entry(lock_key)
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone();
+            Some(_lock_arc.lock().await)
+        } else {
+            _lock_arc = Arc::new(tokio::sync::Mutex::new(()));
+            None
+        };
 
         // Acquire concurrency permit — limits parallel LLM requests to protect the API.
         // This is held until the function returns (permit dropped with _permit).
