@@ -81,28 +81,28 @@ impl CarrierKernel {
             }
         }
 
-        // When auto_load_toolsets is empty but capabilities.tools is non-empty
-        // (legacy clones), auto-derive toolsets from declared tool names + mcp_servers
-        if combined.is_empty() {
-            if let Some(ref e) = entry {
-                let declared = &e.manifest.capabilities.tools;
-                if !declared.is_empty() && !declared.iter().any(|t| t == "*") {
-                    for tool_name in declared {
-                        if let Some(ts) = tool_to_toolset(tool_name) {
-                            let ts_str = ts.to_string();
-                            if !combined.contains(&ts_str) {
-                                combined.push(ts_str);
-                            }
+        // Auto-derive toolsets from capabilities.tools — always runs so that
+        // agents declaring tools in capabilities get them loaded regardless of
+        // auto_load_toolsets. Follows Claude's approach: with <50 tools, load
+        // everything upfront for better accuracy and no search round-trips.
+        if let Some(ref e) = entry {
+            let declared = &e.manifest.capabilities.tools;
+            if !declared.is_empty() && !declared.iter().any(|t| t == "*") {
+                for tool_name in declared {
+                    if let Some(ts) = tool_to_toolset(tool_name) {
+                        let ts_str = ts.to_string();
+                        if !combined.contains(&ts_str) {
+                            combined.push(ts_str);
                         }
-                        // MCP tool names: extract server and activate that toolset
-                        if let Some(server) = runtime::mcp::extract_mcp_server_from_known(
-                            tool_name,
-                            BUILTIN_TOOLSETS,
-                        ) {
-                            let ts_str = server.to_string();
-                            if !combined.contains(&ts_str) {
-                                combined.push(ts_str);
-                            }
+                    }
+                    // MCP tool names: extract server and activate that toolset
+                    if let Some(server) = runtime::mcp::extract_mcp_server_from_known(
+                        tool_name,
+                        BUILTIN_TOOLSETS,
+                    ) {
+                        let ts_str = server.to_string();
+                        if !combined.contains(&ts_str) {
+                            combined.push(ts_str);
                         }
                     }
                 }
@@ -270,7 +270,7 @@ impl CarrierKernel {
         }
 
         let mut summary = String::from(
-            "\n\n--- Toolsets ---\nYou can search for additional tools by calling tool_search(\"your query\").\n\n",
+            "\n\n--- Toolsets ---\nTools listed as ACTIVE are already in your tool list — use them directly.\nTools listed as available can be loaded by calling tool_search(\"query\").\n\n",
         );
 
         // Sort: builtins first, MCP servers last

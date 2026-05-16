@@ -13,7 +13,7 @@ impl ToolModule for ToolSearchTools {
     fn definitions(&self) -> Vec<ToolDefinition> {
         vec![ToolDefinition {
             name: "tool_search".to_string(),
-            description: "Search the tool catalog for tools matching a natural language query. Returns the most relevant tool names and descriptions. Use this when you need capabilities you don't currently have (e.g. browser control, messaging, file operations). Discovered tools are automatically loaded.".to_string(),
+            description: "Search the tool catalog for tools matching a natural language query. Only call this when you need a capability you do NOT currently have. Check your current tool list first — if a tool is already there, use it directly. Returns matching tool names and descriptions.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -82,12 +82,12 @@ impl ToolModule for ToolSearchTools {
             }
             out.push_str("\nThese tools will be available in your next response.");
         } else if !already.is_empty() && discovered.is_empty() {
-            out.push_str(&format!("All {} matching tool(s) for \"{}\" are already available:\n\n", already.len(), query));
+            out.push_str(&format!("All {} matching tool(s) for \"{}\" are already in your tool list:\n\n", already.len(), query));
             for line in &already {
                 out.push_str(line);
                 out.push('\n');
             }
-            out.push_str("\nNo new tools to load — you can use these right now.");
+            out.push_str("\nDo NOT call tool_search again for this. Use these tools directly.");
         } else {
             out.push_str(&format!("Found {} tool(s) matching \"{}\":\n\n", results.len(), query));
             if !already.is_empty() {
