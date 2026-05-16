@@ -125,6 +125,24 @@ impl CarrierKernel {
         } else if entry.manifest.module.starts_with("python:") {
             self.execute_python_agent(&entry, agent_id, message).await
         } else {
+            // Intent classifier: decide whether to continue the current session
+            // or open a new one. Skips for empty sessions and when disabled.
+            if entry.manifest.intent_classifier_enabled.unwrap_or(true) {
+                if let Err(e) = self
+                    .maybe_rotate_session_by_intent(agent_id, &entry, message)
+                    .await
+                {
+                    tracing::warn!(agent_id = %agent_id, error = %e, "Intent classifier failed; opening new session as fallback");
+                    // Fallback: open new session on classifier error.
+                    if let Ok(new_session) = self.memory.create_session(agent_id) {
+                        let _ = self.registry.update_session_id(agent_id, new_session.id);
+                    }
+                }
+            }
+            // Re-fetch entry — session_id may have changed
+            let entry = self.registry.get(agent_id).ok_or_else(|| {
+                KernelError::Carrier(CarrierError::AgentNotFound(agent_id.to_string()))
+            })?;
             // Default: LLM agent loop (builtin:chat or any unrecognized module)
             self.execute_llm_agent(
                 &entry,

@@ -454,6 +454,97 @@ impl CarrierKernel {
         Ok(msg)
     }
 
+    /// Run the intent classifier and switch the agent to a new session if the
+    /// new message is judged to start a new conversation.
+    ///
+    /// Returns Ok(()) on success (whether or not a rotation occurred). Returns
+    /// Err on infrastructure failure (DB, LLM, etc.); the caller is expected
+    /// to fall back gracefully.
+    pub async fn maybe_rotate_session_by_intent(
+        &self,
+        agent_id: AgentId,
+        entry: &AgentEntry,
+        new_user_msg: &str,
+    ) -> KernelResult<()> {
+        use runtime::intent_classifier::classify_intent;
+        use types::message::{MessageContent, Role};
+
+        // Load current session. If missing or empty, nothing to classify against.
+        let session = match self.memory.get_session(entry.session_id) {
+            Ok(Some(s)) if !s.messages.is_empty() => s,
+            _ => return Ok(()),
+        };
+
+        // Extract last assistant message text for classifier context.
+        let last_assistant: Option<String> = session
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == Role::Assistant)
+            .and_then(|m| match &m.content {
+                MessageContent::Text(t) => Some(t.clone()),
+                MessageContent::Blocks(blocks) => {
+                    let text: String = blocks
+                        .iter()
+                        .filter_map(|b| match b {
+                            types::message::ContentBlock::Text { text, .. } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if text.is_empty() { None } else { Some(text) }
+                }
+            });
+
+        // Prefer the "fast" modality for cheap/quick classification.
+        let modality = if self.brain_read().has_modality("fast") {
+            "fast"
+        } else {
+            &entry.manifest.model.modality
+        };
+        let model = self.brain_read().model_for(modality).to_string();
+        let driver = {
+            let brain = self.brain_read();
+            let endpoints = brain.endpoints_for(modality);
+            if let Some(ep) = endpoints.first() {
+                brain.driver_for_endpoint(&ep.id).ok_or_else(|| {
+                    KernelError::Carrier(CarrierError::LlmDriver(format!(
+                        "No driver for classifier modality '{modality}'"
+                    )))
+                })?
+            } else {
+                self.resolve_driver(&entry.manifest)?
+            }
+        };
+
+        let classification = classify_intent(driver, &model, last_assistant.as_deref(), new_user_msg)
+            .await
+            .map_err(|e| KernelError::Carrier(CarrierError::Internal(e)))?;
+
+        if classification.is_new {
+            tracing::info!(
+                agent_id = %agent_id,
+                reasoning = %classification.reasoning,
+                "Intent: new conversation — rotating session"
+            );
+            let new_session = self
+                .memory
+                .create_session(agent_id)
+                .map_err(KernelError::Carrier)?;
+            self.registry
+                .update_session_id(agent_id, new_session.id)
+                .map_err(KernelError::Carrier)?;
+        } else {
+            tracing::debug!(
+                agent_id = %agent_id,
+                reasoning = %classification.reasoning,
+                "Intent: continuing session"
+            );
+        }
+
+        Ok(())
+    }
+
     /// Generate a context window usage report for an agent.
     pub fn context_report(
         &self,

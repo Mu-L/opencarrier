@@ -23,6 +23,7 @@ pub mod embedding;
 pub mod graceful_shutdown;
 pub mod hooks;
 pub mod host_functions;
+pub mod intent_classifier;
 pub mod kernel_handle;
 pub mod link_understanding;
 pub mod llm_driver;

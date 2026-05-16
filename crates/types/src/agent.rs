@@ -383,6 +383,12 @@ pub struct AgentManifest {
     /// When non-empty, only core tools + listed toolsets are shown to the LLM.
     #[serde(default)]
     pub auto_load_toolsets: Vec<String>,
+    /// Run an LLM-based intent classifier on every inbound message to decide
+    /// whether to continue the existing session or open a new one. Defaults
+    /// to true (enabled). Set false to skip the classifier (saves an LLM
+    /// call per message; sessions never auto-rotate).
+    #[serde(default)]
+    pub intent_classifier_enabled: Option<bool>,
     /// Custom metadata.
     #[serde(default, deserialize_with = "crate::serde_compat::map_lenient")]
     pub metadata: HashMap<String, serde_json::Value>,
@@ -465,6 +471,7 @@ impl Default for AgentManifest {
             skills: Vec::new(),
             mcp_servers: Vec::new(),
             auto_load_toolsets: Vec::new(),
+            intent_classifier_enabled: None,
             metadata: HashMap::new(),
             tags: Vec::new(),
             autonomous: None,
@@ -676,6 +683,7 @@ mod tests {
             skills: vec![],
             mcp_servers: vec![],
             auto_load_toolsets: vec![],
+            intent_classifier_enabled: None,
             metadata: HashMap::new(),
             tags: vec!["test".to_string()],
             autonomous: None,

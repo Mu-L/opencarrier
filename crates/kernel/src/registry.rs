@@ -342,6 +342,7 @@ mod tests {
                 skills: vec![],
                 mcp_servers: vec![],
                 auto_load_toolsets: vec![],
+                intent_classifier_enabled: None,
                 metadata: HashMap::new(),
                 tags: vec![],
                 autonomous: None,
