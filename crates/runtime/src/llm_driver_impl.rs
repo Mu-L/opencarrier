@@ -873,7 +873,7 @@ fn temperature_must_be_one(model: &str) -> bool {
 
 fn needs_reasoning_content(model: &str, base_url: &str) -> bool {
     let m = model.to_lowercase();
-    base_url.contains("moonshot") || m.contains("kimi") || m.contains("reasoner")
+    base_url.contains("moonshot") || m.contains("kimi") || m.contains("reasoner") || m.contains("deepseek")
 }
 
 fn mime_to_audio_format(mime: &str) -> &str {
