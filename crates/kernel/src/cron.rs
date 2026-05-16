@@ -404,11 +404,14 @@ pub fn compute_next_run_after(
 
             match seven_field.parse::<cron::Schedule>() {
                 Ok(sched) => {
-                    // If a timezone is specified, compute the next fire time in
-                    // that timezone so DST and local offsets are respected, then
-                    // convert back to UTC for storage.
+                    // Compute the next fire time in the requested timezone so
+                    // DST and local offsets are respected, then convert back to
+                    // UTC for storage. Default is the server's local timezone
+                    // (so a user-friendly "0 8 * * *" means 8am server-local).
+                    // Pass `tz: "UTC"` explicitly to opt into UTC scheduling.
                     let next_utc = match tz.as_deref() {
-                        Some(tz_str) if !tz_str.is_empty() && tz_str != "UTC" => {
+                        Some("UTC") => sched.after(&base).next(),
+                        Some(tz_str) if !tz_str.is_empty() => {
                             match tz_str.parse::<chrono_tz::Tz>() {
                                 Ok(timezone) => {
                                     let base_local = base.with_timezone(&timezone);
@@ -419,14 +422,25 @@ pub fn compute_next_run_after(
                                 }
                                 Err(_) => {
                                     warn!(
-                                        "Invalid timezone '{}' in cron job, falling back to UTC",
+                                        "Invalid timezone '{}' in cron job, falling back to server local",
                                         tz_str
                                     );
-                                    sched.after(&base).next()
+                                    let base_local = base.with_timezone(&chrono::Local);
+                                    sched
+                                        .after(&base_local)
+                                        .next()
+                                        .map(|dt| dt.with_timezone(&Utc))
                                 }
                             }
                         }
-                        _ => sched.after(&base).next(),
+                        _ => {
+                            // Default: server local timezone
+                            let base_local = base.with_timezone(&chrono::Local);
+                            sched
+                                .after(&base_local)
+                                .next()
+                                .map(|dt| dt.with_timezone(&Utc))
+                        }
                     };
                     next_utc.unwrap_or_else(|| after + Duration::hours(1))
                 }
@@ -792,7 +806,7 @@ mod tests {
         let now = Utc::now();
         let schedule = CronSchedule::Cron {
             expr: "0 9 * * *".into(),
-            tz: None,
+            tz: Some("UTC".into()),
         };
         let next = compute_next_run(&schedule);
 
@@ -808,11 +822,11 @@ mod tests {
         let now = Utc::now();
         let schedule = CronSchedule::Cron {
             expr: "30 14 * * 1-5".into(),
-            tz: None,
+            tz: Some("UTC".into()),
         };
         let next = compute_next_run(&schedule);
 
-        // Should be within the next 7 days and at 14:30
+        // Should be within the next 7 days and at 14:30 UTC
         assert!(next > now);
         assert!(next <= now + Duration::days(7));
         assert_eq!(next.format("%H:%M").to_string(), "14:30");
@@ -839,7 +853,7 @@ mod tests {
         // not in the same minute (the bug from #55).
         let schedule = CronSchedule::Cron {
             expr: "0 */4 * * *".into(),
-            tz: None,
+            tz: Some("UTC".into()),
         };
         let now = Utc::now();
         let next = compute_next_run_after(&schedule, now);
@@ -913,24 +927,25 @@ mod tests {
     }
 
     #[test]
-    fn test_cron_tz_none_defaults_to_utc() {
-        // tz: None should behave identically to tz: Some("UTC").
-        let schedule_none = CronSchedule::Cron {
+    fn test_cron_tz_none_defaults_to_server_local() {
+        // tz: None should compute fire time in the server's local timezone.
+        // We verify by comparing with a manually-computed local conversion.
+        let schedule = CronSchedule::Cron {
             expr: "30 12 * * *".into(),
             tz: None,
         };
-        let schedule_utc = CronSchedule::Cron {
-            expr: "30 12 * * *".into(),
-            tz: Some("UTC".into()),
-        };
         let now = Utc::now();
-        let next_none = compute_next_run_after(&schedule_none, now);
-        let next_utc = compute_next_run_after(&schedule_utc, now);
-        assert_eq!(next_none, next_utc);
+        let next = compute_next_run_after(&schedule, now);
+
+        // Convert next back to Local — should land at 12:30
+        let next_local = next.with_timezone(&chrono::Local);
+        use chrono::Timelike;
+        assert_eq!(next_local.hour(), 12);
+        assert_eq!(next_local.minute(), 30);
     }
 
     #[test]
-    fn test_cron_tz_empty_string_defaults_to_utc() {
+    fn test_cron_tz_empty_string_defaults_to_server_local() {
         let schedule_empty = CronSchedule::Cron {
             expr: "30 12 * * *".into(),
             tz: Some(String::new()),
