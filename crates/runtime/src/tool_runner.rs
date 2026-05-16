@@ -107,7 +107,7 @@ pub async fn execute_tool(
             return match result {
                 Ok(content) => ToolResult {
                     tool_use_id: tool_use_id.to_string(),
-                    content,
+                    content: truncate_tool_result(tool_name, content),
                     is_error: false,
                 },
                 Err(err) => ToolResult {
@@ -214,7 +214,7 @@ pub async fn execute_tool(
     match result {
         Ok(content) => ToolResult {
             tool_use_id: tool_use_id.to_string(),
-            content,
+            content: truncate_tool_result(tool_name, content),
             is_error: false,
         },
         Err(err) => ToolResult {
@@ -223,6 +223,51 @@ pub async fn execute_tool(
             is_error: true,
         },
     }
+}
+
+/// Per-tool maximum result size in characters.
+/// Tools returning more than this will be truncated with a marker.
+/// None means no per-tool limit (dynamic context truncation still applies).
+fn tool_max_result_chars(name: &str) -> Option<usize> {
+    match name {
+        "web_fetch" => Some(20_000),
+        "web_search" => Some(10_000),
+        "file_read" => Some(50_000),
+        "shell_exec" => Some(10_000),
+        "knowledge_read" => Some(30_000),
+        "image_analyze" | "media_describe" | "media_transcribe" => Some(10_000),
+        _ => None,
+    }
+}
+
+/// Truncate a tool result if it exceeds the per-tool max size.
+/// Adds a `[truncated]` marker so the LLM knows content was cut.
+fn truncate_tool_result(tool_name: &str, content: String) -> String {
+    let max = match tool_max_result_chars(tool_name) {
+        Some(m) => m,
+        None => return content,
+    };
+    if content.len() <= max {
+        return content;
+    }
+    // Find a safe break point at a newline boundary near the max
+    let mut break_point = max;
+    while break_point > 0 && !content.is_char_boundary(break_point) {
+        break_point -= 1;
+    }
+    // Try to break at a newline within the last 200 chars before the limit
+    let search_start = break_point.saturating_sub(200);
+    if let Some(nl_pos) = content[search_start..break_point].rfind('\n') {
+        break_point = search_start + nl_pos;
+    }
+    let original_kb = content.len() / 1024;
+    let shown_kb = break_point / 1024;
+    format!(
+        "{}\n\n[truncated: {} KB → {} KB — use more specific queries to get targeted results]",
+        &content[..break_point],
+        original_kb.max(1),
+        shown_kb.max(1),
+    )
 }
 
 /// Get definitions for all built-in tools.

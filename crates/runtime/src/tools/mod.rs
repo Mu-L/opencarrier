@@ -43,6 +43,13 @@ pub trait ToolModule: Send + Sync {
     fn permission_level(&self, _tool_name: &str) -> PermissionLevel {
         PermissionLevel::Dangerous
     }
+
+    /// Return the maximum result size in chars for a tool in this module.
+    ///
+    /// Default: `None` (no per-tool limit — dynamic context truncation applies).
+    fn max_result_size_chars(&self, _tool_name: &str) -> Option<usize> {
+        None
+    }
 }
 
 /// All built-in tool modules in dispatch order.
