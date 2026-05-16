@@ -81,6 +81,58 @@ fn tool_input_hash(input: &serde_json::Value) -> u64 {
     hasher.finish()
 }
 
+/// Parse a YAML frontmatter list field (e.g. `allowed_tools: [...]`) from text.
+fn parse_frontmatter_list(content: &str, field: &str) -> Option<Vec<String>> {
+    let pattern = format!("{field}:");
+    let in_frontmatter = content.starts_with("---");
+    let mut found = false;
+    for line in content.lines() {
+        if !in_frontmatter { break; }
+        if line.trim() == "---" && found { break; }
+        if let Some(rest) = line.strip_prefix(&pattern) {
+            let rest = rest.trim();
+            if rest.starts_with('[') && rest.ends_with(']') {
+                let inner = &rest[1..rest.len()-1];
+                return Some(inner.split(',')
+                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect());
+            }
+        }
+        found = true;
+    }
+    None
+}
+
+/// Map a tool name to its toolset name (mirrors kernel::tool_builder::tool_to_toolset).
+fn tool_to_toolset_name(name: &str) -> Option<String> {
+    // Core tools don't belong to a toolset
+    match name {
+        "memory_store" | "memory_recall" | "memory_list"
+        | "session_summarize" | "tool_search"
+        | "skill_load" | "knowledge_read" | "knowledge_list"
+        | "cron_create" | "cron_list" | "cron_cancel" => return None,
+        _ => {}
+    }
+    if name.starts_with("file_") || name == "apply_patch" { return Some("filesystem".to_string()); }
+    if name == "shell_exec" { return Some("shell".to_string()); }
+    if name.starts_with("knowledge_") || name.starts_with("skill_") || name == "clone_evaluate" { return Some("knowledge".to_string()); }
+    if name.starts_with("media_") || name.starts_with("image_") || name == "text_to_speech" || name == "speech_to_text"
+        || name.starts_with("docker_exec") || name.starts_with("process_") { return Some("media".to_string()); }
+    if name.starts_with("web_") { return Some("web".to_string()); }
+    if name.starts_with("agent_") || name.starts_with("train_") { return Some("agent".to_string()); }
+    if name.starts_with("location_") || name.starts_with("system_") || name == "user_profile" { return Some("misc".to_string()); }
+    // MCP tools: extract server name from prefix like mcp_browser_*
+    if let Some(rest) = name.strip_prefix("mcp_") {
+        if let Some(pos) = rest.find('_') {
+            return Some(rest[..pos].to_string());
+        }
+    }
+    // Browser tools without mcp_ prefix
+    if name.starts_with("browser_") { return Some("browser".to_string()); }
+    Some("misc".to_string())
+}
+
 /// Detect a tool-use loop: returns the (name, input_hash) of the looping call
 /// if the last `window` entries are all the same (name, input_hash), else None.
 fn detect_tool_loop(recent: &[(String, u64)], window: usize) -> Option<(String, u64)> {
@@ -1000,34 +1052,66 @@ async fn run_agent_loop_impl(
                 let tools_may_have_changed = response.tool_calls.iter().any(|tc| {
                     matches!(
                         tc.name.as_str(),
-                        "train_write" | "file_write" | "tool_search"
+                        "train_write" | "file_write" | "tool_search" | "skill_load"
                     )
                 });
                 if tools_may_have_changed {
                     if let Some(ref kernel) = kernel {
                         let agent_id_str = session.agent_id.to_string();
-                        // Check for tool_search calls — search and activate matching toolsets
+
+                        // Collect toolsets to activate from skill_load and tool_search
+                        let mut toolsets_to_activate: Vec<String> = Vec::new();
+
+                        // --- skill_load: parse allowed_tools from the skill content ---
+                        let skill_load_results: Vec<(String, String)> = response.tool_calls.iter()
+                            .filter(|tc| tc.name == "skill_load")
+                            .filter_map(|tc| {
+                                let name = tc.input.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                                tool_result_blocks.iter().find_map(|block| {
+                                    if let types::message::ContentBlock::ToolResult { tool_use_id, content, .. } = block {
+                                        if tool_use_id == &tc.id {
+                                            Some((name.to_string(), content.clone()))
+                                        } else { None }
+                                    } else { None }
+                                })
+                            })
+                            .collect();
+
+                        for (skill_name, content) in &skill_load_results {
+                            // Parse allowed_tools from frontmatter
+                            if let Some(allowed) = parse_frontmatter_list(content, "allowed_tools") {
+                                for tool_name in &allowed {
+                                    if let Some(ts) = tool_to_toolset_name(tool_name) {
+                                        if !toolsets_to_activate.contains(&ts) {
+                                            toolsets_to_activate.push(ts);
+                                        }
+                                    }
+                                }
+                                info!(skill = skill_name, tools = ?allowed, "Skill loaded — activating toolsets");
+                            }
+                        }
+
+                        // --- tool_search: search and collect matching toolsets ---
                         let search_queries: Vec<&str> = response.tool_calls.iter()
                             .filter(|tc| tc.name == "tool_search")
                             .filter_map(|tc| tc.input.get("query").and_then(|v| v.as_str()))
                             .collect();
 
-                        let is_toolsearch_activation = !search_queries.is_empty();
-                        let new_tools = if is_toolsearch_activation {
-                            // Search for each query, collect unique toolset names, activate them
-                            let mut toolsets_to_activate: Vec<String> = Vec::new();
-                            for q in &search_queries {
-                                let results = kernel.search_tools(q, 5);
-                                for (ts_name, _) in results {
-                                    if !toolsets_to_activate.contains(&ts_name) {
-                                        toolsets_to_activate.push(ts_name);
-                                    }
+                        for q in &search_queries {
+                            let results = kernel.search_tools(q, 5);
+                            for (ts_name, _) in results {
+                                if !toolsets_to_activate.contains(&ts_name) {
+                                    toolsets_to_activate.push(ts_name);
                                 }
                             }
+                        }
+
+                        let is_dynamic_activation = !toolsets_to_activate.is_empty();
+                        let new_tools = if is_dynamic_activation {
                             let mut added_tools: Vec<types::tool::ToolDefinition> = Vec::new();
                             for ts_name in &toolsets_to_activate {
                                 if let Some(tools) = kernel.activate_toolset(&agent_id_str, ts_name) {
-                                    info!(toolset = ts_name, tools_count = tools.len(), "Toolset activated via tool_search");
+                                    info!(toolset = ts_name, tools_count = tools.len(), "Toolset activated");
                                     added_tools.extend(tools);
                                 }
                             }
@@ -1037,7 +1121,7 @@ async fn run_agent_loop_impl(
                         };
 
                         if let Some(new_tools) = new_tools {
-                            if is_toolsearch_activation {
+                            if is_dynamic_activation {
                                 // Append new toolset tools to existing list (按需加载)
                                 let existing_names: std::collections::HashSet<String> =
                                     available_tools.iter().map(|t| t.name.clone()).collect();
