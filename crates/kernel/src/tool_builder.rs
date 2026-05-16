@@ -57,6 +57,52 @@ pub(crate) fn tool_to_toolset(name: &str) -> Option<&'static str> {
 /// Builtin toolset names (used to distinguish from MCP toolsets).
 const BUILTIN_TOOLSETS: &[&str] = &["filesystem", "shell", "knowledge", "media", "web", "agent", "misc"];
 
+/// Tools that remain available even when a skill restricts the tool list.
+/// These are foundational: the agent must always be able to remember/recall
+/// state and look up its own knowledge base. `tool_search` and `skill_load`
+/// are deliberately EXCLUDED so the LLM can't escape the skill-imposed scope.
+const ALWAYS_AVAILABLE_WITH_SKILL: &[&str] = &[
+    "memory_store",
+    "memory_recall",
+    "memory_list",
+    "session_summarize",
+    "knowledge_read",
+    "knowledge_list",
+];
+
+/// Match a tool name against a skill `allowed_tools` pattern.
+/// Supports exact match (`file_write`) and suffix wildcard (`mcp_wechat_oa_*`).
+pub(crate) fn matches_skill_pattern(tool_name: &str, pattern: &str) -> bool {
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        tool_name.starts_with(prefix)
+    } else {
+        tool_name == pattern
+    }
+}
+
+/// Filter a tool list down to the union of:
+/// - tools matching any pattern in `allowed_patterns` (with `*` suffix wildcard)
+/// - the `ALWAYS_AVAILABLE_WITH_SKILL` foundation set
+///
+/// A pattern of `"*"` alone disables filtering (keeps all tools).
+pub(crate) fn filter_tools_by_skill_allowed(
+    tools: Vec<ToolDefinition>,
+    allowed_patterns: &[String],
+) -> Vec<ToolDefinition> {
+    if allowed_patterns.iter().any(|p| p == "*") {
+        return tools;
+    }
+    tools
+        .into_iter()
+        .filter(|t| {
+            ALWAYS_AVAILABLE_WITH_SKILL.contains(&t.name.as_str())
+                || allowed_patterns
+                    .iter()
+                    .any(|p| matches_skill_pattern(&t.name, p))
+        })
+        .collect()
+}
+
 impl CarrierKernel {
     /// Collect the tools available to an agent using toolset mode.
     ///
@@ -488,5 +534,106 @@ impl CarrierKernel {
         };
         manifest.model.system_prompt =
             runtime::prompt_builder::build_system_prompt(&prompt_ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn td(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: String::new(),
+            input_schema: serde_json::json!({}),
+        }
+    }
+
+    #[test]
+    fn skill_pattern_exact_match() {
+        assert!(matches_skill_pattern("file_write", "file_write"));
+        assert!(!matches_skill_pattern("file_write", "file_read"));
+        assert!(!matches_skill_pattern("file_writer", "file_write"));
+    }
+
+    #[test]
+    fn skill_pattern_suffix_wildcard() {
+        assert!(matches_skill_pattern("mcp_wechat_oa_publish", "mcp_wechat_oa_*"));
+        assert!(matches_skill_pattern("mcp_wechat_oa_", "mcp_wechat_oa_*"));
+        assert!(!matches_skill_pattern("mcp_feishu_publish", "mcp_wechat_oa_*"));
+        assert!(matches_skill_pattern("web_search", "web_*"));
+        assert!(matches_skill_pattern("web_fetch", "web_*"));
+    }
+
+    #[test]
+    fn filter_keeps_always_available() {
+        let tools = vec![td("memory_store"), td("memory_recall"), td("knowledge_read"), td("shell_exec")];
+        let allowed = vec!["web_search".to_string()]; // doesn't match any tool
+        let filtered = filter_tools_by_skill_allowed(tools, &allowed);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"memory_store"));
+        assert!(names.contains(&"memory_recall"));
+        assert!(names.contains(&"knowledge_read"));
+        assert!(!names.contains(&"shell_exec"));
+    }
+
+    #[test]
+    fn filter_keeps_allowed_tools() {
+        let tools = vec![
+            td("web_search"),
+            td("web_fetch"),
+            td("file_write"),
+            td("file_delete"),
+            td("shell_exec"),
+        ];
+        let allowed = vec!["web_search".to_string(), "web_fetch".to_string(), "file_write".to_string()];
+        let filtered = filter_tools_by_skill_allowed(tools, &allowed);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names.len(), 3);
+        assert!(names.contains(&"web_search"));
+        assert!(names.contains(&"web_fetch"));
+        assert!(names.contains(&"file_write"));
+        assert!(!names.contains(&"file_delete"));
+        assert!(!names.contains(&"shell_exec"));
+    }
+
+    #[test]
+    fn filter_keeps_wildcard_matches() {
+        let tools = vec![
+            td("mcp_wechat_oa_publish"),
+            td("mcp_wechat_oa_draft"),
+            td("mcp_feishu_send"),
+            td("file_write"),
+        ];
+        let allowed = vec!["mcp_wechat_oa_*".to_string(), "file_write".to_string()];
+        let filtered = filter_tools_by_skill_allowed(tools, &allowed);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names.len(), 3);
+        assert!(names.contains(&"mcp_wechat_oa_publish"));
+        assert!(names.contains(&"mcp_wechat_oa_draft"));
+        assert!(names.contains(&"file_write"));
+        assert!(!names.contains(&"mcp_feishu_send"));
+    }
+
+    #[test]
+    fn filter_star_disables_filtering() {
+        let tools = vec![td("shell_exec"), td("file_delete"), td("web_search")];
+        let allowed = vec!["*".to_string()];
+        let filtered = filter_tools_by_skill_allowed(tools, &allowed);
+        assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn filter_excludes_tool_search_when_skill_active() {
+        // Critical: tool_search and skill_load are NOT in ALWAYS_AVAILABLE_WITH_SKILL.
+        // When a skill is matched, the LLM must stay within its allowed_tools scope.
+        let tools = vec![td("tool_search"), td("skill_load"), td("memory_store"), td("web_search")];
+        let allowed = vec!["web_search".to_string()];
+        let filtered = filter_tools_by_skill_allowed(tools, &allowed);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(!names.contains(&"tool_search"));
+        assert!(!names.contains(&"skill_load"));
+        assert!(names.contains(&"memory_store"));
+        assert!(names.contains(&"web_search"));
     }
 }

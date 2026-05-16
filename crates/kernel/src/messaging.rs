@@ -18,7 +18,7 @@ use crate::capabilities::manifest_to_capabilities;
 use crate::error::{KernelError, KernelResult};
 use crate::kernel::CarrierKernel;
 use crate::prompt_sources::touch_user_profile;
-use crate::tool_builder::tool_to_toolset;
+use crate::tool_builder::{filter_tools_by_skill_allowed, tool_to_toolset};
 use crate::workspace::append_daily_memory_log;
 
 impl CarrierKernel {
@@ -846,11 +846,13 @@ impl CarrierKernel {
                         let active = session.active_toolsets.clone();
                         let new_tools = self.available_tools(agent_id, Some(&active));
                         let new_tools = entry.mode.filter_tools(new_tools);
+                        // Strict filter: only keep skill's allowed_tools + always-available core
+                        let new_tools = filter_tools_by_skill_allowed(new_tools, &allowed);
                         info!(
                             agent = %entry.name,
                             tool_count = new_tools.len(),
                             tool_names = ?new_tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
-                            "Tools after skill activation"
+                            "Tools after skill activation and strict filter"
                         );
                         (
                             new_tools,
@@ -863,6 +865,13 @@ impl CarrierKernel {
                             "Skill auto-matched (no new toolsets needed)"
                         );
                         let tools = entry.mode.filter_tools(tools);
+                        let tools = filter_tools_by_skill_allowed(tools, &allowed);
+                        info!(
+                            agent = %entry.name,
+                            tool_count = tools.len(),
+                            tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+                            "Tools after strict skill filter"
+                        );
                         (
                             tools,
                             Some(format!("**{}**\n{}", skill_name, skill_body)),
