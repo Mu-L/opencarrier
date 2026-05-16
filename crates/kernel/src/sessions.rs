@@ -535,7 +535,7 @@ impl CarrierKernel {
                 .update_session_id(agent_id, new_session.id)
                 .map_err(KernelError::Carrier)?;
         } else {
-            tracing::debug!(
+            tracing::info!(
                 agent_id = %agent_id,
                 reasoning = %classification.reasoning,
                 "Intent: continuing session"
