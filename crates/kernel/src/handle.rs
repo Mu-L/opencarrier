@@ -516,16 +516,32 @@ impl KernelHandle for CarrierKernel {
         let agent_id: types::agent::AgentId = agent_id_str.parse().ok()?;
         let entry = self.registry.get(agent_id)?;
 
+        // Resolve the registry key — try direct match first, then normalize-matching
+        // so `use_toolset("wechat_oa")` finds `wechat-oa` (LLMs derive toolset names
+        // from MCP tool prefixes which use normalized form).
+        let resolved_key = {
+            let registry = self.plugins.toolset_registry.read().ok()?;
+            if registry.contains_key(toolset_name) {
+                toolset_name.to_string()
+            } else {
+                let normalized = runtime::mcp::normalize_name(toolset_name);
+                registry
+                    .keys()
+                    .find(|k| runtime::mcp::normalize_name(k) == normalized)
+                    .cloned()?
+            }
+        };
+
         // Add toolset to session's active_toolsets and persist
         let mut session = self.memory.get_session(entry.session_id).ok()??;
-        if !session.active_toolsets.iter().any(|t| t == toolset_name) {
-            session.active_toolsets.push(toolset_name.to_string());
+        if !session.active_toolsets.iter().any(|t| t == &resolved_key) {
+            session.active_toolsets.push(resolved_key.clone());
             self.memory.save_session(&session).ok()?;
         }
 
         // Return ONLY the tools from the requested toolset (按需加载)
         let tools = if let Ok(registry) = self.plugins.toolset_registry.read() {
-            registry.get(toolset_name).cloned()
+            registry.get(&resolved_key).cloned()
         } else {
             None
         };
