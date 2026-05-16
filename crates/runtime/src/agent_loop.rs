@@ -785,40 +785,38 @@ async fn run_agent_loop_impl(
                     recent_tool_calls.drain(..drain_count);
                 }
 
-                // Detect loop: same (name, input_hash) repeated LOOP_DETECTION_WINDOW times
-                let looping_call = detect_tool_loop(&recent_tool_calls, LOOP_DETECTION_WINDOW);
-                if let Some((ref looping_name, _)) = looping_call {
+                // Detect loop: same (name, input_hash) repeated LOOP_DETECTION_WINDOW times.
+                // When detected, hard-break out of the agent loop — returning an error
+                // result to the LLM doesn't work because the LLM ignores it and retries
+                // the same call. We end the turn with a user-facing notice instead.
+                if let Some((looping_name, _)) = detect_tool_loop(&recent_tool_calls, LOOP_DETECTION_WINDOW) {
                     warn!(
                         agent = %manifest.name,
                         tool = %looping_name,
                         consecutive = LOOP_DETECTION_WINDOW,
-                        "Tool loop detected — blocking execution"
+                        iteration,
+                        "Tool loop detected — terminating agent loop"
                     );
+                    let notice = format!(
+                        "⚠️ 检测到工具循环：连续 {LOOP_DETECTION_WINDOW}+ 次调用 `{looping_name}` 都失败或返回相同结果，已中止本次任务。请换个思路或检查相关配置后重试。"
+                    );
+                    session.messages.push(Message::assistant(&notice));
+                    memory
+                        .save_session_async(session)
+                        .await
+                        .map_err(|e| CarrierError::Memory(e.to_string()))?;
+                    return Ok(AgentLoopResult {
+                        response: notice,
+                        total_usage,
+                        iterations: iteration + 1,
+                        silent: false,
+                        directives: Default::default(),
+                    });
                 }
 
-                // Execute each tool call with loop guard, timeout, and truncation
+                // Execute each tool call with timeout and truncation
                 let mut tool_result_blocks = Vec::new();
                 for tool_call in &response.tool_calls {
-                    // Block execution if this specific (name, input) call is in a detected loop
-                    let current_hash = tool_input_hash(&tool_call.input);
-                    if looping_call
-                        .as_ref()
-                        .is_some_and(|(n, h)| n == &tool_call.name && *h == current_hash)
-                    {
-                        tool_result_blocks.push(ContentBlock::ToolResult {
-                            tool_use_id: tool_call.id.clone(),
-                            tool_name: tool_call.name.clone(),
-                            content: format!(
-                                "[BLOCKED: You have called '{}' with the same input {}+ times consecutively. \
-                                 This is a tool-use loop. Execution is blocked. \
-                                 Respond to the user now with whatever information you have.]",
-                                tool_call.name, LOOP_DETECTION_WINDOW
-                            ),
-                            is_error: true,
-                        });
-                        continue;
-                    }
-
                     debug!(tool = %tool_call.name, id = %tool_call.id, "Executing tool");
 
                     // Notify phase: ToolUse
