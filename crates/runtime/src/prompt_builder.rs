@@ -80,6 +80,9 @@ pub struct PromptContext {
     pub clone_agents_md: Option<String>,
     /// EVOLUTION.md body text (rules only, frontmatter stripped).
     pub evolution_rules_md: Option<String>,
+    /// Auto-matched skill content — injected at high priority when the system
+    /// detects a skill matching the user's message before the LLM call.
+    pub auto_matched_skill: Option<String>,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -96,6 +99,18 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     // Detect clone mode: base_system_prompt is empty + clone files present
     let is_clone = ctx.base_system_prompt.is_empty()
         && (ctx.clone_system_prompt_md.is_some() || ctx.clone_skills_catalog.is_some());
+
+    // Section 1.05 — Auto-Matched Skill (highest priority, system-detected)
+    if let Some(ref skill) = ctx.auto_matched_skill {
+        if !skill.trim().is_empty() {
+            sections.push(format!(
+                "## Active Skill (auto-matched)\n\
+                 The user's message was matched to the following skill. \
+                 Follow these instructions exactly — do NOT call skill_load or tool_search for this.\n\n{}",
+                cap_str(skill, 4000)
+            ));
+        }
+    }
 
     // Section 1.1 — Clone Identity (分身四部分: 人格 → 行为指令 → 技能目录 → 知识索引)
     // Only for agents loaded from .agx with workspace identity files.

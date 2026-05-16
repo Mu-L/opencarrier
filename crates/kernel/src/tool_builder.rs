@@ -33,7 +33,7 @@ const CORE_TOOLS: &[&str] = &[
 ];
 
 /// Map a builtin tool name to its toolset. Returns None for core tools.
-fn tool_to_toolset(name: &str) -> Option<&'static str> {
+pub(crate) fn tool_to_toolset(name: &str) -> Option<&'static str> {
     match name {
         "memory_store" | "memory_recall" | "memory_list"
         | "session_summarize"
@@ -342,6 +342,7 @@ impl CarrierKernel {
 
     /// Build PromptContext and apply it to the manifest's system prompt.
     /// Shared between streaming and non-streaming message paths.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_and_apply_prompt(
         &self,
         agent_id: &AgentId,
@@ -350,6 +351,7 @@ impl CarrierKernel {
         sender_id: &Option<String>,
         sender_name: Option<String>,
         owner_id: &Option<String>,
+        auto_matched_skill: Option<String>,
     ) {
         // Read user_name from the agent's KV namespace (per-sender memory)
         let sid = sender_id.as_deref().unwrap_or("");
@@ -482,6 +484,7 @@ impl CarrierKernel {
                 .workspace
                 .as_ref()
                 .and_then(|w| read_evolution_rules(w)),
+            auto_matched_skill,
         };
         manifest.model.system_prompt =
             runtime::prompt_builder::build_system_prompt(&prompt_ctx);

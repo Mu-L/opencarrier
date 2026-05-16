@@ -18,6 +18,7 @@ use crate::capabilities::manifest_to_capabilities;
 use crate::error::{KernelError, KernelResult};
 use crate::kernel::CarrierKernel;
 use crate::prompt_sources::touch_user_profile;
+use crate::tool_builder::tool_to_toolset;
 use crate::workspace::append_daily_memory_log;
 
 impl CarrierKernel {
@@ -368,7 +369,7 @@ impl CarrierKernel {
 
         // Build the structured system prompt via prompt_builder
         {
-            self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id);
+            self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, None);
         }
 
         let memory = Arc::clone(&self.memory);
@@ -792,20 +793,110 @@ impl CarrierKernel {
             let active = session.active_toolsets.clone();
             self.available_tools(agent_id, Some(&active))
         };
-        let tools = entry.mode.filter_tools(tools);
 
-        info!(
-            agent = %entry.name,
-            agent_id = %agent_id,
-            tool_count = tools.len(),
-            tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
-            "Tools selected for LLM request"
-        );
+        // Auto-match skill based on user message (before tool filtering)
+        let (tools, auto_matched_skill) = if let Some(ref ws) = entry.manifest.workspace {
+            match crate::prompt_sources::match_skill_for_message(message, ws) {
+                Some(skill) => {
+                    let skill_name = skill.name.clone();
+                    let skill_body = skill.body.clone();
+                    let allowed = skill.allowed_tools.clone();
+
+                    // Derive toolsets from the skill's allowed_tools
+                    let known_servers: Vec<String> = self
+                        .plugins
+                        .mcp_connections
+                        .iter()
+                        .map(|e| e.value().name().to_string())
+                        .collect();
+                    let known_refs: Vec<&str> = known_servers.iter().map(|s| s.as_str()).collect();
+
+                    let mut new_toolsets: Vec<String> = Vec::new();
+                    for tool_name in &allowed {
+                        if let Some(ts) = tool_to_toolset(tool_name) {
+                            let ts_str = ts.to_string();
+                            if !session.active_toolsets.contains(&ts_str)
+                                && !new_toolsets.contains(&ts_str)
+                            {
+                                new_toolsets.push(ts_str);
+                            }
+                        }
+                        if let Some(server) =
+                            runtime::mcp::extract_mcp_server_from_known(tool_name, &known_refs)
+                        {
+                            let ts_str = server.to_string();
+                            if !session.active_toolsets.contains(&ts_str)
+                                && !new_toolsets.contains(&ts_str)
+                            {
+                                new_toolsets.push(ts_str);
+                            }
+                        }
+                    }
+
+                    if !new_toolsets.is_empty() {
+                        session.active_toolsets.extend(new_toolsets.clone());
+                        let _ = self.memory.save_session(&session);
+                        info!(
+                            agent = %entry.name,
+                            skill = %skill_name,
+                            toolsets = ?new_toolsets,
+                            "Skill auto-matched, toolsets activated"
+                        );
+                        // Re-compute tools with newly activated toolsets
+                        let active = session.active_toolsets.clone();
+                        let new_tools = self.available_tools(agent_id, Some(&active));
+                        let new_tools = entry.mode.filter_tools(new_tools);
+                        info!(
+                            agent = %entry.name,
+                            tool_count = new_tools.len(),
+                            tool_names = ?new_tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+                            "Tools after skill activation"
+                        );
+                        (
+                            new_tools,
+                            Some(format!("**{}**\n{}", skill_name, skill_body)),
+                        )
+                    } else {
+                        info!(
+                            agent = %entry.name,
+                            skill = %skill_name,
+                            "Skill auto-matched (no new toolsets needed)"
+                        );
+                        let tools = entry.mode.filter_tools(tools);
+                        (
+                            tools,
+                            Some(format!("**{}**\n{}", skill_name, skill_body)),
+                        )
+                    }
+                }
+                None => {
+                    let tools = entry.mode.filter_tools(tools);
+                    info!(
+                        agent = %entry.name,
+                        agent_id = %agent_id,
+                        tool_count = tools.len(),
+                        tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+                        "Tools selected for LLM request"
+                    );
+                    (tools, None)
+                }
+            }
+        } else {
+            let tools = entry.mode.filter_tools(tools);
+            info!(
+                agent = %entry.name,
+                agent_id = %agent_id,
+                tool_count = tools.len(),
+                tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+                "Tools selected for LLM request"
+            );
+            (tools, None)
+        };
 
         // Apply model routing if configured (disabled in Stable mode)
         let mut manifest = entry.manifest.clone();
 
-        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id);
+        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, auto_matched_skill);
 
         // Model routing is handled by Brain
 

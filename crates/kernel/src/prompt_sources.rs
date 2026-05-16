@@ -488,6 +488,154 @@ pub fn parse_skill_full(content: &str) -> (String, String, &str) {
     (String::new(), String::new(), content)
 }
 
+/// Result of automatic skill matching against a user message.
+pub struct SkillMatch {
+    /// Skill name.
+    pub name: String,
+    /// Full skill body (instructions after frontmatter).
+    pub body: String,
+    /// Tools declared in `allowed_tools` frontmatter.
+    pub allowed_tools: Vec<String>,
+}
+
+/// Match a user message against available skills using keyword matching.
+///
+/// Extracts keywords from each skill's `when_to_use` frontmatter field and
+/// checks if the user message contains them. Returns the best match (most
+/// keyword hits), or `None` if nothing matches.
+pub fn match_skill_for_message(message: &str, workspace: &Path) -> Option<SkillMatch> {
+    let skills_dir = workspace.join("skills");
+    if !skills_dir.is_dir() {
+        return None;
+    }
+
+    let msg_lower = message.to_lowercase();
+    let mut best: Option<(usize, SkillMatch)> = None;
+
+    for entry in std::fs::read_dir(&skills_dir).ok()? {
+        let entry = entry.ok()?;
+        let path = entry.path();
+
+        let skill_path = if path.is_dir() {
+            path.join("SKILL.md")
+        } else if path.extension().is_some_and(|ext| ext == "md") {
+            path
+        } else {
+            continue;
+        };
+
+        if !skill_path.exists() {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&skill_path).ok()?;
+        let trimmed = content.trim();
+
+        let when_to_use = extract_when_to_use(trimmed);
+        if when_to_use.is_empty() {
+            continue;
+        }
+
+        let keywords = extract_keywords(&when_to_use);
+        if keywords.is_empty() {
+            continue;
+        }
+
+        let match_count = keywords
+            .iter()
+            .filter(|kw| msg_lower.contains(&kw.to_lowercase()))
+            .count();
+
+        if match_count == 0 {
+            continue;
+        }
+
+        let (name, allowed_tools_str, body) = parse_skill_full(trimmed);
+        let allowed_tools = parse_allowed_tools_list(&allowed_tools_str);
+
+        if best.as_ref().is_none_or(|(c, _)| match_count > *c) {
+            best = Some((
+                match_count,
+                SkillMatch {
+                    name,
+                    body: body.to_string(),
+                    allowed_tools,
+                },
+            ));
+        }
+    }
+
+    if let Some((count, m)) = &best {
+        tracing::info!(
+            skill = %m.name,
+            keyword_matches = count,
+            keywords = ?extract_keywords(&extract_when_to_use(
+                &std::fs::read_to_string(
+                    workspace.join("skills").join(&m.name).join("SKILL.md")
+                ).unwrap_or_default()
+            )),
+            "Skill auto-matched for message"
+        );
+    }
+
+    best.map(|(_, m)| m)
+}
+
+/// Extract `when_to_use` value from YAML frontmatter.
+fn extract_when_to_use(content: &str) -> String {
+    if let Some(rest) = content.strip_prefix("---") {
+        if let Some(end) = rest.find("---") {
+            let frontmatter = &rest[..end];
+            for line in frontmatter.lines() {
+                let line = line.trim();
+                if let Some(val) = line.strip_prefix("when_to_use:") {
+                    return val.trim().trim_matches('"').trim_matches('\'').to_string();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+/// Split `when_to_use` into keywords by common delimiters, filtering stop words.
+fn extract_keywords(when_to_use: &str) -> Vec<String> {
+    const STOP_WORDS: &[&str] = &[
+        "用户", "要求", "使用", "时", "当", "想要", "需要", "请", "帮", "帮我", "你",
+        "可以", "时候", "以下", "情况",
+    ];
+
+    when_to_use
+        .split(&['、', '，', '；', ',', ';', ' ', '\t', '。'][..])
+        .map(|s| s.trim())
+        .filter(|s| s.len() >= 2 && !STOP_WORDS.contains(s) && !s.chars().all(|c| c.is_whitespace()))
+        .map(String::from)
+        .collect()
+}
+
+/// Parse a bracket-or-comma-delimited list of tool names.
+fn parse_allowed_tools_list(allowed_tools_str: &str) -> Vec<String> {
+    let trimmed = allowed_tools_str.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    // Handle bracket format: [tool1, tool2]
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        return trimmed[1..trimmed.len() - 1]
+            .split(',')
+            .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+
+    // Fallback: comma-separated
+    trimmed
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 /// Parse YAML frontmatter from a skill .md file to extract name and when_to_use.
 pub fn parse_skill_frontmatter(path: &Path) -> Option<(String, String)> {
     let content = std::fs::read_to_string(path).ok()?;
