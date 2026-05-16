@@ -795,12 +795,13 @@ impl CarrierKernel {
         };
 
         // Auto-match skill based on user message (before tool filtering)
-        let (tools, auto_matched_skill) = if let Some(ref ws) = entry.manifest.workspace {
+        let (tools, auto_matched_skill, skill_max_iterations) = if let Some(ref ws) = entry.manifest.workspace {
             match crate::prompt_sources::match_skill_for_message(message, ws) {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
                     let skill_body = skill.body.clone();
                     let allowed = skill.allowed_tools.clone();
+                    let skill_max_iter = skill.max_iterations;
 
                     // Derive toolsets from the skill's allowed_tools
                     let known_servers: Vec<String> = self
@@ -857,6 +858,7 @@ impl CarrierKernel {
                         (
                             new_tools,
                             Some(format!("**{}**\n{}", skill_name, skill_body)),
+                            skill_max_iter,
                         )
                     } else {
                         info!(
@@ -875,6 +877,7 @@ impl CarrierKernel {
                         (
                             tools,
                             Some(format!("**{}**\n{}", skill_name, skill_body)),
+                            skill_max_iter,
                         )
                     }
                 }
@@ -887,7 +890,7 @@ impl CarrierKernel {
                         tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
                         "Tools selected for LLM request"
                     );
-                    (tools, None)
+                    (tools, None, None)
                 }
             }
         } else {
@@ -899,11 +902,21 @@ impl CarrierKernel {
                 tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
                 "Tools selected for LLM request"
             );
-            (tools, None)
+            (tools, None, None)
         };
 
         // Apply model routing if configured (disabled in Stable mode)
         let mut manifest = entry.manifest.clone();
+
+        // Apply skill's max_iterations override to the manifest
+        if let Some(max_iter) = skill_max_iterations {
+            manifest.autonomous.get_or_insert_with(Default::default).max_iterations = max_iter;
+            info!(
+                agent = %entry.name,
+                max_iterations = max_iter,
+                "Skill overrides max_iterations"
+            );
+        }
 
         self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, auto_matched_skill);
 

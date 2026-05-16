@@ -447,7 +447,7 @@ pub fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
         }
 
         // Parse frontmatter
-        let (name, allowed_tools, body) = parse_skill_full(trimmed);
+        let (name, allowed_tools, _max_iterations, body) = parse_skill_full(trimmed);
         let mut section = format!("### {}\n", name);
         if !allowed_tools.is_empty() {
             section.push_str(&format!("可用工具: {}\n", allowed_tools));
@@ -463,10 +463,11 @@ pub fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
     }
 }
 
-/// Parse a skill .md file to extract name, allowed_tools, and body.
-pub fn parse_skill_full(content: &str) -> (String, String, &str) {
+/// Parse a skill .md file to extract name, allowed_tools, max_iterations, and body.
+pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, &str) {
     let mut name = String::new();
     let mut allowed_tools = String::new();
+    let mut max_iterations: Option<u32> = None;
 
     if let Some(rest) = content.strip_prefix("---") {
         if let Some(end) = rest.find("---") {
@@ -477,15 +478,17 @@ pub fn parse_skill_full(content: &str) -> (String, String, &str) {
                     name = val.trim().trim_matches('"').trim_matches('\'').to_string();
                 } else if let Some(val) = line.strip_prefix("allowed_tools:") {
                     allowed_tools = val.trim().to_string();
+                } else if let Some(val) = line.strip_prefix("max_iterations:") {
+                    max_iterations = val.trim().parse().ok();
                 }
             }
             let body = rest[end + 3..].trim();
-            return (name, allowed_tools, body);
+            return (name, allowed_tools, max_iterations, body);
         }
     }
 
     // No frontmatter
-    (String::new(), String::new(), content)
+    (String::new(), String::new(), None, content)
 }
 
 /// Result of automatic skill matching against a user message.
@@ -496,6 +499,8 @@ pub struct SkillMatch {
     pub body: String,
     /// Tools declared in `allowed_tools` frontmatter.
     pub allowed_tools: Vec<String>,
+    /// Override max_iterations for the agent loop (from skill frontmatter).
+    pub max_iterations: Option<u32>,
 }
 
 /// Match a user message against available skills using keyword matching.
@@ -550,7 +555,7 @@ pub fn match_skill_for_message(message: &str, workspace: &Path) -> Option<SkillM
             continue;
         }
 
-        let (name, allowed_tools_str, body) = parse_skill_full(trimmed);
+        let (name, allowed_tools_str, max_iterations, body) = parse_skill_full(trimmed);
         let allowed_tools = parse_allowed_tools_list(&allowed_tools_str);
 
         if best.as_ref().is_none_or(|(c, _)| match_count > *c) {
@@ -560,6 +565,7 @@ pub fn match_skill_for_message(message: &str, workspace: &Path) -> Option<SkillM
                     name,
                     body: body.to_string(),
                     allowed_tools,
+                    max_iterations,
                 },
             ));
         }

@@ -32,7 +32,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 /// Maximum iterations in the agent loop before giving up.
-const MAX_ITERATIONS: u32 = 50;
+const MAX_ITERATIONS: u32 = 15;
 
 /// Maximum retries for rate-limited or overloaded API calls.
 const MAX_RETRIES: u32 = 3;
@@ -1270,7 +1270,7 @@ mod tests {
 
     #[test]
     fn test_max_iterations_constant() {
-        assert_eq!(MAX_ITERATIONS, 50);
+        assert_eq!(MAX_ITERATIONS, 15);
     }
 
     #[test]

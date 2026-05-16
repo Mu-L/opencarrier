@@ -27,7 +27,7 @@ impl Default for AutonomousConfig {
     fn default() -> Self {
         Self {
             quiet_hours: None,
-            max_iterations: 50,
+            max_iterations: 15,
             max_restarts: 10,
             heartbeat_interval_secs: 30,
             heartbeat_channel: None,
@@ -647,7 +647,7 @@ mod tests {
     #[test]
     fn test_autonomous_config_defaults() {
         let cfg = AutonomousConfig::default();
-        assert_eq!(cfg.max_iterations, 50);
+        assert_eq!(cfg.max_iterations, 15);
         assert_eq!(cfg.max_restarts, 10);
         assert_eq!(cfg.heartbeat_interval_secs, 30);
         assert!(cfg.quiet_hours.is_none());
