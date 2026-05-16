@@ -193,6 +193,17 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
+    /// Search the tool catalog for tools matching a query.
+    /// Returns (toolset_name, ToolDefinition) pairs ranked by relevance.
+    fn search_tools(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Vec<(String, types::tool::ToolDefinition)> {
+        let _ = (query, limit);
+        Vec::new()
+    }
+
     /// Get the home directory path (~/.opencarrier/).
     fn home_dir(&self) -> Option<std::path::PathBuf> {
         None

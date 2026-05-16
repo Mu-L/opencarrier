@@ -379,7 +379,7 @@ pub struct AgentManifest {
     /// MCP server allowlist (empty = all connected MCP servers available).
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub mcp_servers: Vec<String>,
-    /// Toolsets that are active by default (no use_toolset call needed).
+    /// Toolsets that are active by default (no tool_search call needed).
     /// When non-empty, only core tools + listed toolsets are shown to the LLM.
     #[serde(default)]
     pub auto_load_toolsets: Vec<String>,

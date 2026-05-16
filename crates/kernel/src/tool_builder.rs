@@ -1,7 +1,7 @@
 //! Tool resolution and prompt building — available_tools, toolset registry, system prompt.
 //!
 //! Assembles the tool set for each agent request using the toolset model:
-//! - Core tools (always visible): memory_store, memory_recall, session_summarize, use_toolset
+//! - Core tools (always visible): memory_store, memory_recall, session_summarize, tool_search
 //! - Toolsets (on-demand): filesystem, shell, knowledge, media, misc, web, agent, + MCP servers
 //! - Toolset activation: auto_load_toolsets (manifest) + active_toolsets (session-level)
 
@@ -17,16 +17,16 @@ use types::tool::ToolDefinition;
 /// Tool names that are always visible (core tools). These bootstrap the agent:
 /// - memory_*: persistent state
 /// - session_summarize: explicit summarization
-/// - use_toolset: load other toolsets on-demand
+/// - tool_search: discover and load tools on-demand
 /// - skill_load: load workflow skills
 /// - knowledge_read / knowledge_list: read workflow docs and discover knowledge
 /// - cron_*: schedule tasks
 ///
-/// All other tools are loaded on-demand via use_toolset (active_toolsets).
+/// All other tools are loaded on-demand via tool_search (active_toolsets).
 const CORE_TOOLS: &[&str] = &[
     "memory_store", "memory_recall", "memory_list",
     "session_summarize",
-    "use_toolset",
+    "tool_search",
     "skill_load",
     "knowledge_read", "knowledge_list",
     "cron_create", "cron_list", "cron_cancel",
@@ -37,7 +37,7 @@ fn tool_to_toolset(name: &str) -> Option<&'static str> {
     match name {
         "memory_store" | "memory_recall" | "memory_list"
         | "session_summarize"
-        | "use_toolset"
+        | "tool_search"
         | "skill_load"
         | "knowledge_read" | "knowledge_list"
         | "cron_create" | "cron_list" | "cron_cancel" => None,
@@ -60,7 +60,7 @@ const BUILTIN_TOOLSETS: &[&str] = &["filesystem", "shell", "knowledge", "media",
 impl CarrierKernel {
     /// Collect the tools available to an agent using toolset mode.
     ///
-    /// Always shows core tools + use_toolset. Additional tools come from
+    /// Always shows core tools + tool_search. Additional tools come from
     /// auto_load_toolsets (manifest) + active_toolsets (session-level).
     pub(crate) fn available_tools(&self, agent_id: AgentId, active_toolsets: Option<&[String]>) -> Vec<ToolDefinition> {
         let all_builtins = runtime::tool_runner::builtin_tool_definitions();
@@ -270,7 +270,7 @@ impl CarrierKernel {
         }
 
         let mut summary = String::from(
-            "\n\n--- Toolsets ---\nYou can activate additional tools by calling use_toolset(\"name\").\n\n",
+            "\n\n--- Toolsets ---\nYou can search for additional tools by calling tool_search(\"your query\").\n\n",
         );
 
         // Sort: builtins first, MCP servers last

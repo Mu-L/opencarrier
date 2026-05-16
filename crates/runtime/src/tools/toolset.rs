@@ -1,4 +1,4 @@
-//! Toolset meta-tool — activates a group of tools by name.
+//! Tool search meta-tool — searches the tool catalog and returns matching tools.
 
 use crate::tool_context::ToolContext;
 use crate::tools::ToolModule;
@@ -6,23 +6,23 @@ use async_trait::async_trait;
 use serde_json::Value;
 use types::tool::ToolDefinition;
 
-pub struct ToolsetTools;
+pub struct ToolSearchTools;
 
 #[async_trait]
-impl ToolModule for ToolsetTools {
+impl ToolModule for ToolSearchTools {
     fn definitions(&self) -> Vec<ToolDefinition> {
         vec![ToolDefinition {
-            name: "use_toolset".to_string(),
-            description: "Activate a toolset to access its tools. Available toolsets are listed in your system prompt under Toolsets. Call this when you need tools from a specific category or MCP server that you don't currently have access to.".to_string(),
+            name: "tool_search".to_string(),
+            description: "Search the tool catalog for tools matching a natural language query. Returns the most relevant tool names and descriptions. Use this when you need capabilities you don't currently have (e.g. browser control, messaging, file operations). Discovered tools are automatically loaded.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "toolset": {
+                    "query": {
                         "type": "string",
-                        "description": "Name of the toolset to activate (e.g. feishu, browser, filesystem, knowledge)"
+                        "description": "What you want to do (e.g. 'send message', 'browse web', 'read file')"
                     }
                 },
-                "required": ["toolset"]
+                "required": ["query"]
             }),
         }]
     }
@@ -31,18 +31,82 @@ impl ToolModule for ToolsetTools {
         &self,
         name: &str,
         input: &Value,
-        _ctx: &ToolContext<'_>,
+        ctx: &ToolContext<'_>,
     ) -> Option<Result<String, String>> {
-        if name != "use_toolset" {
+        if name != "tool_search" {
             return None;
         }
-        let toolset_name = input
-            .get("toolset")
+        let query = input
+            .get("query")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        Some(Ok(format!(
-            "Activating toolset '{}'... The tools will be available in your next response.",
-            toolset_name
-        )))
+
+        let results = if let Some(kernel) = ctx.kernel {
+            kernel.search_tools(query, 5)
+        } else {
+            Vec::new()
+        };
+
+        if results.is_empty() {
+            return Some(Ok("No tools found matching your query. All available tools are already loaded.".to_string()));
+        }
+
+        let allowed: std::collections::HashSet<&str> = ctx
+            .allowed_tools
+            .map(|a| a.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+
+        let mut already = Vec::new();
+        let mut discovered = Vec::new();
+
+        for (ts_name, def) in &results {
+            let desc_preview = if def.description.len() > 120 {
+                format!("{}...", &def.description[..117])
+            } else {
+                def.description.clone()
+            };
+            let entry = format!("- {} (from {}): {}", def.name, ts_name, desc_preview);
+            if allowed.contains(def.name.as_str()) {
+                already.push(entry);
+            } else {
+                discovered.push(entry);
+            }
+        }
+
+        let mut out = String::new();
+        if already.is_empty() && !discovered.is_empty() {
+            out.push_str(&format!("Found {} new tool(s) matching \"{}\":\n\n", discovered.len(), query));
+            for line in &discovered {
+                out.push_str(line);
+                out.push('\n');
+            }
+            out.push_str("\nThese tools will be available in your next response.");
+        } else if !already.is_empty() && discovered.is_empty() {
+            out.push_str(&format!("All {} matching tool(s) for \"{}\" are already available:\n\n", already.len(), query));
+            for line in &already {
+                out.push_str(line);
+                out.push('\n');
+            }
+            out.push_str("\nNo new tools to load — you can use these right now.");
+        } else {
+            out.push_str(&format!("Found {} tool(s) matching \"{}\":\n\n", results.len(), query));
+            if !already.is_empty() {
+                out.push_str("Already available:\n");
+                for line in &already {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+                out.push('\n');
+            }
+            if !discovered.is_empty() {
+                out.push_str("Newly discovered (will be activated next turn):\n");
+                for line in &discovered {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
+        }
+
+        Some(Ok(out))
     }
 }

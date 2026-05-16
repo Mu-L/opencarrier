@@ -1000,25 +1000,34 @@ async fn run_agent_loop_impl(
                 let tools_may_have_changed = response.tool_calls.iter().any(|tc| {
                     matches!(
                         tc.name.as_str(),
-                        "train_write" | "file_write" | "use_toolset"
+                        "train_write" | "file_write" | "tool_search"
                     )
                 });
                 if tools_may_have_changed {
                     if let Some(ref kernel) = kernel {
                         let agent_id_str = session.agent_id.to_string();
-                        // Check for use_toolset calls — activate the toolset instead of simple refresh
-                        let toolset_calls: Vec<&str> = response.tool_calls.iter()
-                            .filter(|tc| tc.name == "use_toolset")
-                            .filter_map(|tc| tc.input.get("toolset").and_then(|v| v.as_str()))
+                        // Check for tool_search calls — search and activate matching toolsets
+                        let search_queries: Vec<&str> = response.tool_calls.iter()
+                            .filter(|tc| tc.name == "tool_search")
+                            .filter_map(|tc| tc.input.get("query").and_then(|v| v.as_str()))
                             .collect();
 
-                        let is_toolset_activation = !toolset_calls.is_empty();
-                        let new_tools = if is_toolset_activation {
-                            // Activate each requested toolset — returns only the new toolset's tools
+                        let is_toolsearch_activation = !search_queries.is_empty();
+                        let new_tools = if is_toolsearch_activation {
+                            // Search for each query, collect unique toolset names, activate them
+                            let mut toolsets_to_activate: Vec<String> = Vec::new();
+                            for q in &search_queries {
+                                let results = kernel.search_tools(q, 5);
+                                for (ts_name, _) in results {
+                                    if !toolsets_to_activate.contains(&ts_name) {
+                                        toolsets_to_activate.push(ts_name);
+                                    }
+                                }
+                            }
                             let mut added_tools: Vec<types::tool::ToolDefinition> = Vec::new();
-                            for ts_name in &toolset_calls {
+                            for ts_name in &toolsets_to_activate {
                                 if let Some(tools) = kernel.activate_toolset(&agent_id_str, ts_name) {
-                                    info!(toolset = ts_name, tools_count = tools.len(), "Toolset activated");
+                                    info!(toolset = ts_name, tools_count = tools.len(), "Toolset activated via tool_search");
                                     added_tools.extend(tools);
                                 }
                             }
@@ -1028,7 +1037,7 @@ async fn run_agent_loop_impl(
                         };
 
                         if let Some(new_tools) = new_tools {
-                            if is_toolset_activation {
+                            if is_toolsearch_activation {
                                 // Append new toolset tools to existing list (按需加载)
                                 let existing_names: std::collections::HashSet<String> =
                                     available_tools.iter().map(|t| t.name.clone()).collect();
@@ -1036,7 +1045,7 @@ async fn run_agent_loop_impl(
                                     .filter(|t| !existing_names.contains(&t.name))
                                     .collect();
                                 if !fresh.is_empty() {
-                                    info!(added = fresh.len(), total = available_tools.len() + fresh.len(), "Tools added from toolset");
+                                    info!(added = fresh.len(), total = available_tools.len() + fresh.len(), "Tools added from tool_search");
                                     tools_owned = available_tools.to_vec();
                                     tools_owned.extend(fresh);
                                     available_tools = &tools_owned;

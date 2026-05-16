@@ -22,7 +22,7 @@ pub struct Session {
     pub context_window_tokens: u64,
     /// Optional human-readable session label.
     pub label: Option<String>,
-    /// Toolsets activated in this session (populated by use_toolset calls).
+    /// Toolsets activated in this session (populated by tool_search calls).
     pub active_toolsets: Vec<String>,
 }
 

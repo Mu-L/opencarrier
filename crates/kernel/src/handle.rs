@@ -517,8 +517,7 @@ impl KernelHandle for CarrierKernel {
         let entry = self.registry.get(agent_id)?;
 
         // Resolve the registry key — try direct match first, then normalize-matching
-        // so `use_toolset("wechat_oa")` finds `wechat-oa` (LLMs derive toolset names
-        // from MCP tool prefixes which use normalized form).
+        // so toolset names like `wechat-oa` are found even if the LLM passes `wechat_oa`.
         let resolved_key = {
             let registry = self.plugins.toolset_registry.read().ok()?;
             if registry.contains_key(toolset_name) {
@@ -550,6 +549,44 @@ impl KernelHandle for CarrierKernel {
             Some(t) if t.is_empty() => None,
             other => other,
         }
+    }
+
+    fn search_tools(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Vec<(String, types::tool::ToolDefinition)> {
+        let registry = match self.plugins.toolset_registry.read() {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        let query_lower = query.to_lowercase();
+        let mut scored: Vec<(usize, String, types::tool::ToolDefinition)> = Vec::new();
+
+        for (ts_name, tools) in registry.iter() {
+            let ts_lower = ts_name.to_lowercase();
+            let ts_match = ts_lower.contains(&query_lower);
+            for tool in tools {
+                let name_lower = tool.name.to_lowercase();
+                let desc_lower = tool.description.to_lowercase();
+                let score = if name_lower == query_lower {
+                    10
+                } else if name_lower.contains(&query_lower) {
+                    5
+                } else if desc_lower.contains(&query_lower) {
+                    3
+                } else if ts_match {
+                    2
+                } else {
+                    continue;
+                };
+                scored.push((score, ts_name.clone(), tool.clone()));
+            }
+        }
+
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.truncate(limit);
+        scored.into_iter().map(|(_, ts, def)| (ts, def)).collect()
     }
 
 }

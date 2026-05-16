@@ -44,7 +44,7 @@ pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
         Box::new(filesystem::FilesystemTools),
         Box::new(shell::ShellTools),
         Box::new(misc::MiscTools),
-        Box::new(toolset::ToolsetTools),
+        Box::new(toolset::ToolSearchTools),
         Box::new(knowledge::KnowledgeTools),
         Box::new(media::MediaTools),
         Box::new(agent::AgentTools),
