@@ -838,6 +838,115 @@ impl CarrierKernel {
         info!(signer = %signed.signer_id, hash = %signed.content_hash, "Signed manifest verified");
         Ok(signed.manifest)
     }
+
+    /// Auto-update a skill's allowed_tools with successfully used tools.
+    ///
+    /// Reads the skill .md file, parses the frontmatter, appends new tool names
+    /// to the existing allowed_tools list (deduped), and writes back atomically.
+    /// Dangerous-level tools are never auto-added.
+    pub fn update_skill_allowed_tools(
+        workspace: &std::path::Path,
+        skill_name: &str,
+        tools_used: &[String],
+    ) -> Result<(), String> {
+        let skills_dir = workspace.join("skills");
+        let skill_path = {
+            // Try flat: skills/{name}.md, then directory: skills/{name}/SKILL.md, then fuzzy
+            let flat = skills_dir.join(format!("{skill_name}.md"));
+            let dir = skills_dir.join(skill_name).join("SKILL.md");
+            if flat.exists() {
+                flat
+            } else if dir.exists() {
+                dir
+            } else {
+                // Fuzzy: case-insensitive substring match
+                let mut found = None;
+                if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.to_lowercase().contains(&skill_name.to_lowercase()) {
+                            let p = entry.path();
+                            if p.extension().map(|e| e == "md").unwrap_or(false) {
+                                found = Some(p);
+                                break;
+                            }
+                            let sk = p.join("SKILL.md");
+                            if sk.exists() {
+                                found = Some(sk);
+                                break;
+                            }
+                        }
+                    }
+                }
+                found.ok_or_else(|| format!("Skill file not found: {skill_name}"))?
+            }
+        };
+
+        let content = std::fs::read_to_string(&skill_path)
+            .map_err(|e| format!("read failed: {e}"))?;
+
+        // Parse existing allowed_tools from frontmatter
+        let mut existing: Vec<String> = Vec::new();
+        let mut allowed_line: Option<String> = None;
+        if let Some(rest) = content.strip_prefix("---") {
+            if let Some(end) = rest.find("---") {
+                let fm = &rest[..end];
+                for line in fm.lines() {
+                    let trimmed = line.trim();
+                    if let Some(val) = trimmed.strip_prefix("allowed_tools:") {
+                        allowed_line = Some(val.trim().to_string());
+                        existing = crate::prompt_sources::parse_allowed_tools_list(val.trim());
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Filter: skip Dangerous tools and already-listed tools
+        let new_tools: Vec<String> = tools_used.iter()
+            .filter(|t| !existing.contains(t))
+            .filter(|t| crate::tool_builder::tool_permission_level(t) != types::tool::PermissionLevel::Dangerous)
+            .cloned()
+            .collect();
+
+        if new_tools.is_empty() {
+            return Ok(());
+        }
+
+        // Append to existing list
+        let mut updated = existing;
+        updated.extend(new_tools);
+
+        // Build new allowed_tools line
+        let new_line = format!("allowed_tools: {:?}", updated);
+
+        // Replace in content
+        let updated_content = if let Some(ref old_line) = allowed_line {
+            let old_full = format!("allowed_tools: {}", old_line);
+            content.replace(&old_full, &new_line)
+        } else {
+            // No allowed_tools line — add it after the name line
+            content.replacen(
+                &format!("name: {skill_name}"),
+                &format!("name: {skill_name}\n{new_line}"),
+                1,
+            )
+        };
+
+        // Atomic write: temp + rename
+        let tmp_path = skill_path.with_extension("md.tmp");
+        std::fs::write(&tmp_path, &updated_content)
+            .map_err(|e| format!("write temp failed: {e}"))?;
+        std::fs::rename(&tmp_path, &skill_path)
+            .map_err(|e| format!("rename failed: {e}"))?;
+
+        tracing::info!(
+            skill = %skill_name,
+            new_tools = ?updated,
+            "Skill allowed_tools auto-updated"
+        );
+        Ok(())
+    }
 }
 
 

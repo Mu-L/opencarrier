@@ -809,7 +809,7 @@ impl CarrierKernel {
         };
 
         // Auto-match skill based on user message (before tool filtering)
-        let (tools, auto_matched_skill, skill_max_iterations) = if let Some(ref ws) = entry.manifest.workspace {
+        let (tools, auto_matched_skill, skill_max_iterations, matched_skill_name) = if let Some(ref ws) = entry.manifest.workspace {
             match crate::prompt_sources::match_skill_for_message(message, ws) {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
@@ -873,6 +873,7 @@ impl CarrierKernel {
                             new_tools,
                             Some(format!("**{}**\n{}", skill_name, skill_body)),
                             skill_max_iter,
+                            Some(skill_name.clone()),
                         )
                     } else {
                         info!(
@@ -892,6 +893,7 @@ impl CarrierKernel {
                             tools,
                             Some(format!("**{}**\n{}", skill_name, skill_body)),
                             skill_max_iter,
+                            Some(skill_name.clone()),
                         )
                     }
                 }
@@ -904,7 +906,7 @@ impl CarrierKernel {
                         tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
                         "Tools selected for LLM request"
                     );
-                    (tools, None, None)
+                    (tools, None, None, None)
                 }
             }
         } else {
@@ -916,7 +918,7 @@ impl CarrierKernel {
                 tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
                 "Tools selected for LLM request"
             );
-            (tools, None, None)
+            (tools, None, None, None)
         };
 
         // Auto-match subagent trigger (only when no skill matched)
@@ -1107,6 +1109,17 @@ impl CarrierKernel {
 
         // Evolution hook — post-conversation auto-learning for clones
         self.maybe_run_evolution(&manifest, message, &result.response, owner_id.as_deref(), sender_id.as_deref());
+
+        // Skill auto-update: add successfully used tools to the matched skill's allowed_tools
+        if matched_skill_name.is_some() && !result.tools_used.is_empty() {
+            if let Some(ref workspace) = manifest.workspace {
+                if let Some(ref skill_name) = matched_skill_name {
+                    if let Err(e) = Self::update_skill_allowed_tools(workspace, skill_name, &result.tools_used) {
+                        tracing::warn!(skill = %skill_name, error = %e, "Failed to auto-update skill allowed_tools");
+                    }
+                }
+            }
+        }
 
         // Multi-tenancy: update user profile (touch last_seen, increment conversation_count)
         if let Some(ref sid) = sender_id {

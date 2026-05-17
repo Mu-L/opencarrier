@@ -678,7 +678,7 @@ fn extract_keywords(when_to_use: &str) -> Vec<String> {
 }
 
 /// Parse a bracket-or-comma-delimited list of tool names.
-fn parse_allowed_tools_list(allowed_tools_str: &str) -> Vec<String> {
+pub(crate) fn parse_allowed_tools_list(allowed_tools_str: &str) -> Vec<String> {
     let trimmed = allowed_tools_str.trim();
     if trimmed.is_empty() {
         return Vec::new();
