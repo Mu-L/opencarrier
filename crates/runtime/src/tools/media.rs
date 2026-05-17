@@ -6,10 +6,10 @@
 use super::ToolModule;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::config::ExecPolicy;
 use types::tool::ToolDefinition;
 use serde_json::Value;
 use std::path::Path;
-use tracing::warn;
 
 /// Media, Docker, process, and canvas tools.
 pub struct MediaTools;
@@ -96,18 +96,6 @@ impl ToolModule for MediaTools {
                         "language": { "type": "string", "description": "Optional ISO-639-1 language code (e.g., 'en', 'es', 'ja')" }
                     },
                     "required": ["path"]
-                }),
-            },
-            // --- Docker sandbox tool ---
-            ToolDefinition {
-                name: "docker_exec".to_string(),
-                description: "Execute a command inside a Docker container sandbox. Provides OS-level isolation with resource limits, network isolation, and capability dropping. Requires Docker to be installed and docker.enabled=true.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "command": { "type": "string", "description": "The command to execute inside the container" }
-                    },
-                    "required": ["command"]
                 }),
             },
             // --- Persistent process tools ---
@@ -212,20 +200,15 @@ impl ToolModule for MediaTools {
                 Some(tool_speech_to_text(input, ctx.brain, ctx.workspace_root).await)
             }
 
-            // Docker sandbox
-            "docker_exec" => Some(
-                tool_docker_exec(
-                    input,
-                    ctx.docker_config,
-                    ctx.workspace_root,
-                    ctx.caller_agent_id,
-                )
-                .await,
-            ),
-
             // Persistent process tools
             "process_start" => {
-                Some(tool_process_start(input, ctx.process_manager, ctx.caller_agent_id).await)
+                Some(tool_process_start(
+                    input,
+                    ctx.process_manager,
+                    ctx.caller_agent_id,
+                    ctx.exec_policy,
+                    ctx.allowed_env_vars,
+                ).await)
             }
             "process_poll" => {
                 Some(tool_process_poll(input, ctx.process_manager, ctx.caller_agent_id).await)
@@ -254,7 +237,7 @@ impl ToolModule for MediaTools {
             "image_analyze" | "media_describe" | "media_transcribe"
             | "speech_to_text" => types::tool::PermissionLevel::ReadOnly,
             "image_generate" | "text_to_speech" | "canvas_present" => types::tool::PermissionLevel::Write,
-            "docker_exec" | "process_start" | "process_poll"
+            "process_start" | "process_poll"
             | "process_write" | "process_list" => types::tool::PermissionLevel::Execute,
             "process_kill" => types::tool::PermissionLevel::Dangerous,
             _ => types::tool::PermissionLevel::Dangerous,
@@ -911,58 +894,6 @@ async fn tool_speech_to_text(
 // ---------------------------------------------------------------------------
 // Docker sandbox tool
 // ---------------------------------------------------------------------------
-
-async fn tool_docker_exec(
-    input: &serde_json::Value,
-    docker_config: Option<&types::config::DockerSandboxConfig>,
-    workspace_root: Option<&Path>,
-    caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let config = docker_config.ok_or("Docker sandbox not configured")?;
-
-    if !config.enabled {
-        return Err("Docker sandbox is disabled. Set docker.enabled=true in config.".into());
-    }
-
-    let command = input["command"]
-        .as_str()
-        .ok_or("Missing 'command' parameter")?;
-
-    let workspace = workspace_root.ok_or("Docker exec requires a workspace directory")?;
-    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
-
-    // Check Docker availability
-    if !crate::docker_sandbox::is_docker_available().await {
-        return Err(
-            "Docker is not available on this system. Install Docker to use docker_exec.".into(),
-        );
-    }
-
-    // Create sandbox container
-    let container = crate::docker_sandbox::create_sandbox(config, agent_id, workspace).await?;
-
-    // Execute command with timeout
-    let timeout = std::time::Duration::from_secs(config.timeout_secs);
-    let result = crate::docker_sandbox::exec_in_sandbox(&container, command, timeout).await;
-
-    // Always destroy the container after execution
-    if let Err(e) = crate::docker_sandbox::destroy_sandbox(&container).await {
-        warn!("Failed to destroy Docker sandbox: {e}");
-    }
-
-    let exec_result = result?;
-
-    let response = serde_json::json!({
-        "exit_code": exec_result.exit_code,
-        "stdout": exec_result.stdout,
-        "stderr": exec_result.stderr,
-        "container_id": container.container_id,
-    });
-
-    serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
-}
-
-// ---------------------------------------------------------------------------
 // Persistent process tools
 // ---------------------------------------------------------------------------
 
@@ -971,6 +902,8 @@ async fn tool_process_start(
     input: &serde_json::Value,
     pm: Option<&crate::process_manager::ProcessManager>,
     caller_agent_id: Option<&str>,
+    exec_policy: Option<&ExecPolicy>,
+    allowed_env_vars: Option<&[String]>,
 ) -> Result<String, String> {
     let pm = pm.ok_or("Process manager not available")?;
     let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
@@ -986,7 +919,9 @@ async fn tool_process_start(
         })
         .unwrap_or_default();
 
-    let proc_id = pm.start(agent_id, command, &args).await?;
+    let proc_id = pm
+        .start(agent_id, command, &args, exec_policy, allowed_env_vars)
+        .await?;
     Ok(serde_json::json!({
         "process_id": proc_id,
         "status": "started"

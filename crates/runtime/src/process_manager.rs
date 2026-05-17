@@ -69,6 +69,8 @@ impl ProcessManager {
         agent_id: &str,
         command: &str,
         args: &[String],
+        exec_policy: Option<&types::config::ExecPolicy>,
+        allowed_env_vars: Option<&[String]>,
     ) -> Result<ProcessId, String> {
         // Check per-agent limit
         let agent_count = self
@@ -84,11 +86,29 @@ impl ProcessManager {
             ));
         }
 
-        let mut child = tokio::process::Command::new(command)
-            .args(args)
+        // Validate command against exec policy
+        if let Some(policy) = exec_policy {
+            if let Err(reason) =
+                crate::subprocess_sandbox::validate_process_command(command, args, policy)
+            {
+                return Err(format!("Command rejected by exec policy: {reason}"));
+            }
+        }
+
+        let mut cmd = tokio::process::Command::new(command);
+        cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Sandbox: clear env, re-add only safe vars
+        crate::subprocess_sandbox::sandbox_command(&mut cmd, allowed_env_vars.unwrap_or(&[]));
+
+        // Process group isolation (for proper kill_process_tree)
+        #[cfg(unix)]
+        cmd.process_group(0);
+
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to start process '{}': {}", command, e))?;
 
@@ -275,7 +295,7 @@ mod tests {
             vec![]
         };
 
-        let id = pm.start("agent1", cmd, &args).await.unwrap();
+        let id = pm.start("agent1", cmd, &args, None, None).await.unwrap();
         assert!(id.starts_with("proc_"));
 
         let list = pm.list("agent1");
@@ -302,8 +322,8 @@ mod tests {
             vec![]
         };
 
-        let id1 = pm.start("agent1", cmd, &args).await.unwrap();
-        let result = pm.start("agent1", cmd, &args).await;
+        let id1 = pm.start("agent1", cmd, &args, None, None).await.unwrap();
+        let result = pm.start("agent1", cmd, &args, None, None).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("max: 1"));
 

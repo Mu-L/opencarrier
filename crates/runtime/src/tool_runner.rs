@@ -72,7 +72,6 @@ pub async fn execute_tool(
         workspace_root: _,
         brain: _,
         exec_policy: _,
-        docker_config: _,
         process_manager: _,
         sender_id: _,
         owner_id: _,
@@ -328,7 +327,6 @@ mod tests {
             workspace_root: None,
             brain: None,
             exec_policy: None,
-            docker_config: None,
             process_manager: None,
             sender_id: None,
             owner_id: None,
@@ -389,10 +387,9 @@ mod tests {
         assert!(names.contains(&"cron_create"));
         assert!(names.contains(&"cron_list"));
         assert!(names.contains(&"cron_cancel"));
-        // 3 voice/docker tools
+        // Voice tools
         assert!(names.contains(&"text_to_speech"));
         assert!(names.contains(&"speech_to_text"));
-        assert!(names.contains(&"docker_exec"));
         // Canvas tool
         assert!(names.contains(&"canvas_present"));
     }

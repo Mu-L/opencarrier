@@ -16,7 +16,7 @@ pub enum PermissionLevel {
     ReadOnly,
     /// Write within sandbox: file_write (workspace), system_kv_store (own ns).
     Write,
-    /// Cross-boundary writes: file_write (arbitrary), agent_send, docker_exec.
+    /// Cross-boundary writes: file_write (arbitrary), agent_send, process_start.
     Execute,
     /// Irreversible operations: shell_exec, file_delete, process_kill.
     Dangerous,

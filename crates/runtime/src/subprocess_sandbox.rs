@@ -67,6 +67,45 @@ pub fn sandbox_command(cmd: &mut tokio::process::Command, allowed_env_vars: &[St
 
 use types::config::{ExecPolicy, ExecSecurityMode};
 
+/// Detect actual brace expansion patterns like `{a,b}` or `{1..10}`.
+/// Single braces (e.g. in JSON arguments like `{"key":"val"}`) are NOT expansion.
+fn contains_brace_expansion(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let start = i + 1;
+            let mut depth = 1;
+            let mut j = start;
+            while j < bytes.len() && depth > 0 {
+                match bytes[j] {
+                    b'{' => depth += 1,
+                    b'}' => depth -= 1,
+                    _ => {}
+                }
+                j += 1;
+            }
+            if depth == 0 {
+                let inner = &s[start..j - 1];
+                // {1..10} or {a..z} — range expansion
+                if inner.contains("..") {
+                    return true;
+                }
+                // {a,b,c} — comma-separated simple items (no colons, no spaces)
+                if inner.contains(',') && !inner.contains(", ") && !inner.contains(':') {
+                    return true;
+                }
+                i = j;
+            } else {
+                i = start;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
 /// SECURITY: Check for shell metacharacters that enable command injection.
 ///
 /// Blocks ALL shell operators that can chain commands, redirect I/O,
@@ -107,7 +146,8 @@ pub fn contains_shell_metacharacters(command: &str) -> Option<String> {
 
     // ── Expansion and globbing ────────────────────────────────────────
     // Brace expansion: {cmd1,cmd2} or {1..10}
-    if command.contains('{') || command.contains('}') {
+    // Context-aware: single braces in JSON args like {"key":"val"} are NOT expansion.
+    if contains_brace_expansion(command) {
         return Some("brace expansion".to_string());
     }
 
@@ -216,6 +256,46 @@ pub fn validate_command_allowlist(command: &str, policy: &ExecPolicy) -> Result<
                 ));
             }
             Ok(())
+        }
+    }
+}
+
+/// Validate a process command (separate command + args) against the exec policy.
+///
+/// Unlike `validate_command_allowlist` which parses a shell command string,
+/// this validates a pre-split command and args — the form used by ProcessManager.
+pub fn validate_process_command(
+    command: &str,
+    args: &[String],
+    policy: &ExecPolicy,
+) -> Result<(), String> {
+    match policy.mode {
+        ExecSecurityMode::Deny => Err("Process execution is denied by policy".to_string()),
+        ExecSecurityMode::Full => Ok(()),
+        ExecSecurityMode::Allowlist => {
+            // Check for shell metacharacters in command + args
+            let full = if args.is_empty() {
+                command.to_string()
+            } else {
+                format!("{} {}", command, args.join(" "))
+            };
+            if let Some(reason) = contains_shell_metacharacters(&full) {
+                return Err(format!(
+                    "Command blocked: contains {reason}. Shell metacharacters are not allowed in Allowlist mode."
+                ));
+            }
+            // Check base command against allowlist
+            let base = extract_base_command(command);
+            if policy.safe_bins.iter().any(|sb| sb == base) {
+                return Ok(());
+            }
+            if policy.allowed_commands.iter().any(|ac| ac == base) {
+                return Ok(());
+            }
+            Err(format!(
+                "Command '{}' is not in the exec allowlist. Add it to exec_policy.allowed_commands or exec_policy.safe_bins.",
+                base
+            ))
         }
     }
 }
@@ -575,6 +655,30 @@ mod tests {
     fn test_metachar_brace_expansion_blocked() {
         assert!(contains_shell_metacharacters("echo {a,b,c}").is_some());
         assert!(contains_shell_metacharacters("touch file{1..10}").is_some());
+    }
+
+    #[test]
+    fn test_metachar_json_braces_allowed() {
+        // JSON arguments with braces should NOT be blocked
+        assert!(contains_shell_metacharacters(r#"echo '{"key":"val"}'"#).is_none());
+        assert!(contains_shell_metacharacters(r#"cat {"name":"test"}"#).is_none());
+        assert!(contains_shell_metacharacters(r#"echo {"a":1,"b":2}"#).is_none());
+    }
+
+    #[test]
+    fn test_contains_brace_expansion_cases() {
+        // Actual brace expansion patterns
+        assert!(contains_brace_expansion("{a,b,c}"));
+        assert!(contains_brace_expansion("file{1..10}"));
+        assert!(contains_brace_expansion("echo {a,b}"));
+        // NOT brace expansion — JSON with spaces after commas
+        assert!(!contains_brace_expansion(r#"{"key": "val"}"#));
+        assert!(!contains_brace_expansion(r#"{"a": 1, "b": 2}"#));
+        // NOT brace expansion — JSON with colons (key:value)
+        assert!(!contains_brace_expansion(r#"{"a":1,"b":2}"#));
+        // NOT brace expansion — single braces
+        assert!(!contains_brace_expansion("{hello}"));
+        assert!(!contains_brace_expansion("{}"));
     }
 
     #[test]

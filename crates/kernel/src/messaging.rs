@@ -457,11 +457,6 @@ impl CarrierKernel {
                 Some(&kernel_clone.services.web_ctx),
                 manifest.workspace.as_deref(),
                 Some(&phase_cb),
-                if kernel_clone.config.docker.enabled {
-                    Some(&kernel_clone.config.docker)
-                } else {
-                    None
-                },
                 Some(&kernel_clone.coordination.hooks),
                 ctx_window,
                 Some(&kernel_clone.coordination.process_manager),
@@ -1068,11 +1063,6 @@ impl CarrierKernel {
             Some(&self.services.web_ctx),
             manifest.workspace.as_deref(),
             None, // on_phase callback
-            if self.config.docker.enabled {
-                Some(&self.config.docker)
-            } else {
-                None
-            },
             Some(&self.coordination.hooks),
             ctx_window,
             Some(&self.coordination.process_manager),

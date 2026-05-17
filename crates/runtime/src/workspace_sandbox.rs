@@ -282,15 +282,21 @@ pub fn resolve_sandbox_path_for_read(
             .collect();
         if components.len() >= 2 {
             let path_sender = components[1];
-            if let Some(sid) = sender_id {
-                if path_sender != sid {
+            match sender_id {
+                Some(sid) if path_sender != sid => {
                     return Err(format!(
                         "Read denied: cannot read from sender '{}' directory (current sender: '{}')",
                         path_sender, sid
                     ));
                 }
+                None => {
+                    return Err(
+                        "Read denied: cannot read from senders/ directory without sender context"
+                            .to_string(),
+                    );
+                }
+                _ => {} // sender_id matches path_sender — allow
             }
-            // No sender_id but reading from senders/ — allow for admin/internal context
         }
     }
 

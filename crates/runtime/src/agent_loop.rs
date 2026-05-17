@@ -115,7 +115,7 @@ fn tool_to_toolset_name(name: &str) -> Option<String> {
     if name == "shell_exec" { return Some("shell".to_string()); }
     if name.starts_with("knowledge_") || name.starts_with("skill_") || name == "clone_evaluate" { return Some("knowledge".to_string()); }
     if name.starts_with("media_") || name.starts_with("image_") || name == "text_to_speech" || name == "speech_to_text"
-        || name.starts_with("docker_exec") || name.starts_with("process_") { return Some("media".to_string()); }
+        || name.starts_with("process_") { return Some("media".to_string()); }
     if name.starts_with("web_") { return Some("web".to_string()); }
     if name.starts_with("agent_") || name.starts_with("train_") { return Some("agent".to_string()); }
     if name.starts_with("location_") || name.starts_with("system_") || name == "user_profile" { return Some("misc".to_string()); }
@@ -201,7 +201,6 @@ pub async fn run_agent_loop(
     web_ctx: Option<&WebToolsContext>,
     workspace_root: Option<&Path>,
     on_phase: Option<&PhaseCallback>,
-    docker_config: Option<&types::config::DockerSandboxConfig>,
     hooks: Option<&crate::hooks::HookRegistry>,
     context_window_tokens: Option<usize>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
@@ -217,7 +216,7 @@ pub async fn run_agent_loop(
         run_agent_loop_impl(
             manifest, user_message, session, memory, driver, available_tools,
             kernel, stream_tx, mcp_connections, web_ctx, workspace_root,
-            on_phase, docker_config, hooks, context_window_tokens, process_manager,
+            on_phase, hooks, context_window_tokens, process_manager,
             user_content_blocks, brain, sender_id, owner_id, channel_type,
         ),
     )
@@ -443,7 +442,6 @@ async fn run_agent_loop_impl(
     web_ctx: Option<&WebToolsContext>,
     workspace_root: Option<&Path>,
     on_phase: Option<&PhaseCallback>,
-    docker_config: Option<&types::config::DockerSandboxConfig>,
     hooks: Option<&crate::hooks::HookRegistry>,
     context_window_tokens: Option<usize>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
@@ -915,7 +913,6 @@ async fn run_agent_loop_impl(
                         brain: brain.as_ref(),
                         exec_policy: effective_exec_policy,
 
-                        docker_config,
                         process_manager,
                         sender_id,
                         owner_id,
@@ -1228,7 +1225,6 @@ pub async fn run_agent_loop_streaming(
     web_ctx: Option<&WebToolsContext>,
     workspace_root: Option<&Path>,
     on_phase: Option<&PhaseCallback>,
-    docker_config: Option<&types::config::DockerSandboxConfig>,
     hooks: Option<&crate::hooks::HookRegistry>,
     context_window_tokens: Option<usize>,
     process_manager: Option<&crate::process_manager::ProcessManager>,
@@ -1241,7 +1237,7 @@ pub async fn run_agent_loop_streaming(
     run_agent_loop(
         manifest, user_message, session, memory, driver, available_tools,
         kernel, Some(stream_tx), mcp_connections, web_ctx, workspace_root,
-        on_phase, docker_config, hooks, context_window_tokens, process_manager,
+        on_phase, hooks, context_window_tokens, process_manager,
         user_content_blocks, brain, sender_id, owner_id, channel_type,
     ).await
 }
@@ -1521,7 +1517,6 @@ mod tests {
             None, // web_ctx
             None, // workspace_root
             None, // on_phase
-            None, // docker_config
             None, // hooks
             None, // context_window_tokens
             None, // process_manager
@@ -1575,7 +1570,6 @@ mod tests {
             None, // web_ctx
             None, // workspace_root
             None, // on_phase
-            None, // docker_config
             None, // hooks
             None, // context_window_tokens
             None, // process_manager
@@ -1631,7 +1625,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // docker_config
             None, // hooks
             None, // context_window_tokens
             None, // process_manager
@@ -1685,7 +1678,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // docker_config
             None, // hooks
             None, // context_window_tokens
             None, // process_manager
@@ -1731,7 +1723,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // docker_config
             None, // hooks
             None, // context_window_tokens
             None, // process_manager
@@ -1860,7 +1851,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             None, // context_window_tokens
             None, // process_manager
             None, // user_content_blocks
@@ -1903,7 +1893,6 @@ mod tests {
             &[],
             None,
             None, // stream_tx
-            None,
             None,
             None,
             None,
@@ -1962,7 +1951,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // docker_config
             None, // hooks
             None, // context_window_tokens
             None, // process_manager
@@ -2853,7 +2841,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // docker_config
             None, // hooks
             None, // context_window_tokens
             None, // process_manager
@@ -2924,7 +2911,6 @@ mod tests {
             None,
             None,
             None,
-            None,
             None, // user_content_blocks
             None, // brain
             None, // sender_id
@@ -2984,7 +2970,6 @@ mod tests {
             None,
             None,
             None, // on_phase
-            None, // docker_config
             None, // hooks
             None, // context_window_tokens
             None, // process_manager

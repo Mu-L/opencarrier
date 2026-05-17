@@ -191,11 +191,6 @@ pub async fn mcp_http(
             workspace_root: None,
             brain: None,
             exec_policy: Some(&state.kernel.config.exec_policy),
-            docker_config: if state.kernel.config.docker.enabled {
-                Some(&state.kernel.config.docker)
-            } else {
-                None
-            },
             process_manager: Some(&*state.kernel.coordination.process_manager),
             sender_id: None,
             owner_id: None,

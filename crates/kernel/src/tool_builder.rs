@@ -48,7 +48,7 @@ pub(crate) fn tool_to_toolset(name: &str) -> Option<&'static str> {
         n if n.starts_with("web_") => Some("web"),
         n if n.starts_with("agent_") || n.starts_with("train_") => Some("agent"),
         n if n.starts_with("location_") || n.starts_with("system_") || n == "user_profile" => Some("misc"),
-        n if n.starts_with("docker_exec") || n.starts_with("process_") => Some("media"),
+        n if n.starts_with("process_") => Some("media"),
         "apply_patch" => Some("filesystem"),
         _ => Some("misc"),
     }
@@ -137,7 +137,7 @@ fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
         | "memory_ingest" => PermissionLevel::Write, // legacy compat
 
         // Execute — cross-boundary writes
-        "docker_exec" | "process_start" | "process_poll"
+        "process_start" | "process_poll"
         | "process_write" | "process_list"
         | "agent_send" | "agent_spawn" | "agent_restart"
         | "a2a_send" => PermissionLevel::Execute,

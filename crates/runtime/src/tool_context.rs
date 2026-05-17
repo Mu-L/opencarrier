@@ -6,7 +6,7 @@ use crate::mcp::McpConnection;
 use crate::process_manager::ProcessManager;
 use crate::web_search::WebToolsContext;
 use types::agent::SubagentConfig;
-use types::config::{DockerSandboxConfig, ExecPolicy};
+use types::config::ExecPolicy;
 use dashmap::DashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -29,7 +29,6 @@ pub struct ToolContext<'a> {
     pub workspace_root: Option<&'a Path>,
     pub brain: Option<&'a Arc<dyn Brain>>,
     pub exec_policy: Option<&'a ExecPolicy>,
-    pub docker_config: Option<&'a DockerSandboxConfig>,
     pub process_manager: Option<&'a ProcessManager>,
     pub sender_id: Option<&'a str>,
     pub owner_id: Option<&'a str>,

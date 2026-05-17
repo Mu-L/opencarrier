@@ -656,8 +656,6 @@ pub fn tool_category(name: &str) -> &'static str {
 
         "image_describe" | "image_generate" | "audio_transcribe" | "tts_speak" => "Media",
 
-        "docker_exec" | "docker_build" | "docker_run" => "Docker",
-
         "cron_create" | "cron_list" | "cron_delete" => "Scheduling",
 
         "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list" => {
@@ -714,11 +712,6 @@ pub fn tool_hint(name: &str) -> &'static str {
         "image_generate" => "generate an image from a prompt",
         "audio_transcribe" => "transcribe audio to text",
         "tts_speak" => "convert text to speech",
-
-        // Docker
-        "docker_exec" => "run a command in a container",
-        "docker_build" => "build a Docker image",
-        "docker_run" => "start a Docker container",
 
         // Scheduling
         "cron_create" => "schedule a recurring task",
