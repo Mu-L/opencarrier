@@ -162,6 +162,7 @@ impl SetupWizard {
             skills: intent.skills.clone(),
             mcp_servers: vec![],
             auto_load_toolsets: vec![],
+            max_tool_level: types::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
             metadata: HashMap::new(),
             tags: vec![],

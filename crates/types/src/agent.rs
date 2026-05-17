@@ -380,6 +380,11 @@ pub struct AgentManifest {
     /// When non-empty, only core tools + listed toolsets are shown to the LLM.
     #[serde(default)]
     pub auto_load_toolsets: Vec<String>,
+    /// Maximum tool permission level. Tools above this level are hidden from
+    /// tool_search and skill discovery mode. Dangerous-level tools are never
+    /// discoverable via search regardless. Default: Write.
+    #[serde(default)]
+    pub max_tool_level: crate::tool::PermissionLevel,
     /// Run an LLM-based intent classifier on every inbound message to decide
     /// whether to continue the existing session or open a new one. Defaults
     /// to true (enabled). Set false to skip the classifier (saves an LLM
@@ -499,6 +504,7 @@ impl Default for AgentManifest {
             skills: Vec::new(),
             mcp_servers: Vec::new(),
             auto_load_toolsets: Vec::new(),
+            max_tool_level: crate::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
             metadata: HashMap::new(),
             tags: Vec::new(),
@@ -712,6 +718,7 @@ mod tests {
             skills: vec![],
             mcp_servers: vec![],
             auto_load_toolsets: vec![],
+            max_tool_level: crate::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
             metadata: HashMap::new(),
             tags: vec!["test".to_string()],

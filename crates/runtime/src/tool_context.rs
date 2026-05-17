@@ -7,6 +7,7 @@ use crate::process_manager::ProcessManager;
 use crate::web_search::WebToolsContext;
 use types::agent::SubagentConfig;
 use types::config::ExecPolicy;
+use types::tool::PermissionLevel;
 use dashmap::DashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -36,4 +37,5 @@ pub struct ToolContext<'a> {
     pub agent_name: Option<&'a str>,
     pub subagent_configs: Option<&'a [SubagentConfig]>,
     pub channel_type: Option<&'a str>,
+    pub max_tool_level: PermissionLevel,
 }

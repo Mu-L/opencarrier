@@ -79,6 +79,7 @@ pub async fn execute_tool(
         agent_name: _,
         subagent_configs: _,
         channel_type: _,
+        max_tool_level: _,
     } = *ctx;
 
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
@@ -334,6 +335,7 @@ mod tests {
             agent_name: None,
             subagent_configs: None,
             channel_type: None,
+            max_tool_level: types::tool::PermissionLevel::Write,
         }
     }
 

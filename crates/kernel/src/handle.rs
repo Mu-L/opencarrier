@@ -512,6 +512,7 @@ impl KernelHandle for CarrierKernel {
         &self,
         query: &str,
         limit: usize,
+        max_level: types::tool::PermissionLevel,
     ) -> Vec<(String, types::tool::ToolDefinition)> {
         let registry = match self.plugins.toolset_registry.read() {
             Ok(r) => r,
@@ -540,6 +541,13 @@ impl KernelHandle for CarrierKernel {
         }
 
         scored.sort_by(|a, b| b.0.cmp(&a.0));
+
+        // Filter by max_level + always exclude Dangerous
+        scored.retain(|(_, _, def)| {
+            let level = crate::tool_builder::tool_permission_level(&def.name);
+            level <= max_level && level != types::tool::PermissionLevel::Dangerous
+        });
+
         let count = scored.len();
         scored.truncate(limit);
         tracing::info!(

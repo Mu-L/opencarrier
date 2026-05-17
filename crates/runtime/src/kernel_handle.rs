@@ -174,8 +174,9 @@ pub trait KernelHandle: Send + Sync {
         &self,
         query: &str,
         limit: usize,
+        max_level: types::tool::PermissionLevel,
     ) -> Vec<(String, types::tool::ToolDefinition)> {
-        let _ = (query, limit);
+        let _ = (query, limit, max_level);
         Vec::new()
     }
 

@@ -66,6 +66,7 @@ pub(crate) const ALWAYS_AVAILABLE_WITH_SKILL: &[&str] = &[
     "knowledge_read",
     "knowledge_list",
     "memory_tree",
+    "tool_search",
 ];
 
 /// Match a tool name against a skill `allowed_tools` pattern.
@@ -83,11 +84,27 @@ pub(crate) fn matches_skill_pattern(tool_name: &str, pattern: &str) -> bool {
 /// - the `ALWAYS_AVAILABLE_WITH_SKILL` foundation set
 ///
 /// A pattern of `"*"` alone disables filtering (keeps all tools).
+/// When `allowed_patterns` is empty, uses discovery mode: only core tools +
+/// tools at or below `max_tool_level` (excluding Dangerous).
 pub(crate) fn filter_tools_by_skill_allowed(
     tools: Vec<ToolDefinition>,
     allowed_patterns: &[String],
+    max_tool_level: types::tool::PermissionLevel,
 ) -> Vec<ToolDefinition> {
-    if allowed_patterns.is_empty() || allowed_patterns.iter().any(|p| p == "*") {
+    if allowed_patterns.is_empty() {
+        // Discovery mode: core tools + tools within max_tool_level (excluding Dangerous)
+        return tools
+            .into_iter()
+            .filter(|t| {
+                if ALWAYS_AVAILABLE_WITH_SKILL.contains(&t.name.as_str()) {
+                    return true;
+                }
+                let level = tool_permission_level(&t.name);
+                level <= max_tool_level && level != types::tool::PermissionLevel::Dangerous
+            })
+            .collect();
+    }
+    if allowed_patterns.iter().any(|p| p == "*") {
         return tools;
     }
     tools
@@ -104,7 +121,7 @@ pub(crate) fn filter_tools_by_skill_allowed(
 /// Get the permission level for a tool by name.
 /// Uses the builtin module dispatch to look up each tool's declared level.
 /// Falls back to Dangerous for unknown tools (fail-safe).
-fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
+pub(crate) fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
     use types::tool::PermissionLevel;
     match name {
         // None — pure queries, no side effects
@@ -722,7 +739,7 @@ mod tests {
     fn filter_keeps_always_available() {
         let tools = vec![td("session_summarize"), td("knowledge_read"), td("knowledge_list"), td("shell_exec")];
         let allowed = vec!["web_search".to_string()]; // doesn't match any tool
-        let filtered = filter_tools_by_skill_allowed(tools, &allowed);
+        let filtered = filter_tools_by_skill_allowed(tools, &allowed, types::tool::PermissionLevel::Write);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"session_summarize"));
         assert!(names.contains(&"knowledge_read"));
@@ -740,7 +757,7 @@ mod tests {
             td("shell_exec"),
         ];
         let allowed = vec!["web_search".to_string(), "web_fetch".to_string(), "file_write".to_string()];
-        let filtered = filter_tools_by_skill_allowed(tools, &allowed);
+        let filtered = filter_tools_by_skill_allowed(tools, &allowed, types::tool::PermissionLevel::Write);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names.len(), 3);
         assert!(names.contains(&"web_search"));
@@ -759,7 +776,7 @@ mod tests {
             td("file_write"),
         ];
         let allowed = vec!["mcp_wechat_oa_*".to_string(), "file_write".to_string()];
-        let filtered = filter_tools_by_skill_allowed(tools, &allowed);
+        let filtered = filter_tools_by_skill_allowed(tools, &allowed, types::tool::PermissionLevel::Write);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names.len(), 3);
         assert!(names.contains(&"mcp_wechat_oa_publish"));
@@ -772,21 +789,42 @@ mod tests {
     fn filter_star_disables_filtering() {
         let tools = vec![td("shell_exec"), td("file_delete"), td("web_search")];
         let allowed = vec!["*".to_string()];
-        let filtered = filter_tools_by_skill_allowed(tools, &allowed);
+        let filtered = filter_tools_by_skill_allowed(tools, &allowed, types::tool::PermissionLevel::Write);
         assert_eq!(filtered.len(), 3);
     }
 
     #[test]
-    fn filter_excludes_tool_search_when_skill_active() {
-        // Critical: tool_search and skill_load are NOT in ALWAYS_AVAILABLE_WITH_SKILL.
-        // When a skill is matched, the LLM must stay within its allowed_tools scope.
+    fn filter_tool_search_available_in_skill() {
+        // tool_search IS in ALWAYS_AVAILABLE_WITH_SKILL so agents can discover tools.
+        // skill_load is NOT — it stays within allowed_tools scope.
         let tools = vec![td("tool_search"), td("skill_load"), td("session_summarize"), td("web_search")];
         let allowed = vec!["web_search".to_string()];
-        let filtered = filter_tools_by_skill_allowed(tools, &allowed);
+        let filtered = filter_tools_by_skill_allowed(tools, &allowed, types::tool::PermissionLevel::Write);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
-        assert!(!names.contains(&"tool_search"));
+        assert!(names.contains(&"tool_search"));
         assert!(!names.contains(&"skill_load"));
         assert!(names.contains(&"session_summarize"));
         assert!(names.contains(&"web_search"));
+    }
+
+    #[test]
+    fn discovery_mode_filters_by_level() {
+        let tools = vec![
+            td("session_summarize"),   // None — always available
+            td("tool_search"),          // None — always available
+            td("file_read"),            // ReadOnly — within Write
+            td("file_write"),           // Write — within Write
+            td("process_start"),        // Execute — above Write
+            td("shell_exec"),           // Dangerous — always excluded
+        ];
+        let allowed: Vec<String> = vec![];  // empty = discovery mode
+        let filtered = filter_tools_by_skill_allowed(tools, &allowed, types::tool::PermissionLevel::Write);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"session_summarize"));
+        assert!(names.contains(&"tool_search"));
+        assert!(names.contains(&"file_read"));
+        assert!(names.contains(&"file_write"));
+        assert!(!names.contains(&"process_start"));
+        assert!(!names.contains(&"shell_exec"));
     }
 }

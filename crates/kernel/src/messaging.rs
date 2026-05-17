@@ -860,7 +860,7 @@ impl CarrierKernel {
                         let new_tools = self.available_tools(agent_id, Some(&active));
                         let new_tools = entry.mode.filter_tools(new_tools);
                         // Strict filter: only keep skill's allowed_tools + always-available core
-                        let new_tools = filter_tools_by_skill_allowed(new_tools, &allowed);
+                        let new_tools = filter_tools_by_skill_allowed(new_tools, &allowed, entry.manifest.max_tool_level);
                         info!(
                             agent = %entry.name,
                             tool_count = new_tools.len(),
@@ -879,7 +879,7 @@ impl CarrierKernel {
                             "Skill auto-matched (no new toolsets needed)"
                         );
                         let tools = entry.mode.filter_tools(tools);
-                        let tools = filter_tools_by_skill_allowed(tools, &allowed);
+                        let tools = filter_tools_by_skill_allowed(tools, &allowed, entry.manifest.max_tool_level);
                         info!(
                             agent = %entry.name,
                             tool_count = tools.len(),
@@ -949,7 +949,7 @@ impl CarrierKernel {
                 // Subagent delegation: filter tools by the subagent's allowed_tools
                 let sa_config = entry.manifest.subagents.iter().find(|s| s.name == sa_name).cloned();
                 if let Some(ref sa) = sa_config {
-                    let filtered = crate::tool_builder::filter_tools_by_skill_allowed(tools, &sa.allowed_tools);
+                    let filtered = crate::tool_builder::filter_tools_by_skill_allowed(tools, &sa.allowed_tools, entry.manifest.max_tool_level);
                     info!(
                         agent = %entry.name,
                         subagent = %sa_name,

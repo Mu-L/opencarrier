@@ -920,6 +920,7 @@ async fn run_agent_loop_impl(
                         agent_name: Some(&manifest.name),
                         subagent_configs: if manifest.subagents.is_empty() { None } else { Some(&manifest.subagents) },
                         channel_type,
+                        max_tool_level: manifest.max_tool_level,
                     };
 
                     // Timeout-wrapped execution
@@ -1084,7 +1085,7 @@ async fn run_agent_loop_impl(
                             .collect();
 
                         for q in &search_queries {
-                            let results = kernel.search_tools(q, 5);
+                            let results = kernel.search_tools(q, 5, manifest.max_tool_level);
                             for (ts_name, _) in results {
                                 if !toolsets_to_activate.contains(&ts_name) {
                                     toolsets_to_activate.push(ts_name);
