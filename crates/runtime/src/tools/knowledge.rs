@@ -204,13 +204,11 @@ impl ToolModule for KnowledgeTools {
             "knowledge_list" | "knowledge_read" | "session_summarize"
             | "skill_load" | "clone_evaluate" => types::tool::PermissionLevel::None,
             "knowledge_lint" | "knowledge_index" | "knowledge_extract"
-            | "train_read" | "train_list" | "train_knowledge_list"
-            | "train_knowledge_read" | "train_evaluate" | "user_profile" => types::tool::PermissionLevel::ReadOnly,
+            | "train_read" | "train_list"
+            | "train_evaluate" | "user_profile" => types::tool::PermissionLevel::ReadOnly,
             "knowledge_add" | "knowledge_remove" | "knowledge_import"
             | "knowledge_heal" | "skill_create" | "skill_update"
-            | "apply_patch" | "train_write" | "train_knowledge_add"
-            | "train_knowledge_import" | "train_knowledge_lint"
-            | "train_knowledge_heal" => types::tool::PermissionLevel::Write,
+            | "apply_patch" | "train_write" => types::tool::PermissionLevel::Write,
             _ => types::tool::PermissionLevel::Dangerous,
         }
     }
@@ -623,7 +621,7 @@ async fn tool_session_summarize(
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let key = format!("session_summary:{date}");
 
-    kh.memory_store(
+    kh.system_kv_store(
         agent_id,
         sid,
         sid,

@@ -4,6 +4,15 @@
 //! Replaces the scattered `push_str` prompt injection throughout the codebase
 //! with a single, testable, ordered prompt builder.
 
+/// A hit from the tree memory system for prompt injection.
+#[derive(Debug, Clone)]
+pub struct TreeMemoryHit {
+    pub scope: String,
+    pub kind: String,
+    pub content: String,
+    pub time_range: String,
+}
+
 /// All the context needed to build a system prompt for an agent.
 #[derive(Debug, Clone, Default)]
 pub struct PromptContext {
@@ -17,6 +26,8 @@ pub struct PromptContext {
     pub granted_tools: Vec<String>,
     /// Recalled memories as (key, content) pairs.
     pub recalled_memories: Vec<(String, String)>,
+    /// Tree memory hits from hierarchical memory (source + global trees).
+    pub tree_memories: Vec<TreeMemoryHit>,
     /// Skill summary text (from kernel.build_skill_summary()).
     pub skill_summary: String,
     /// Prompt context from prompt-only skills.
@@ -209,7 +220,7 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     }
 
     // Section 4 — Memory Protocol (always present)
-    let mem_section = build_memory_section(&ctx.recalled_memories);
+    let mem_section = build_memory_section(&ctx.recalled_memories, &ctx.tree_memories);
     sections.push(mem_section);
 
     // Section 5 — Skills (only if skills available)
@@ -405,20 +416,22 @@ pub fn build_tools_section(granted_tools: &[String]) -> String {
 /// Build the memory section (Section 4).
 ///
 /// Also used by `agent_loop.rs` to append recalled memories after DB lookup.
-pub fn build_memory_section(memories: &[(String, String)]) -> String {
+pub fn build_memory_section(memories: &[(String, String)], tree_hits: &[TreeMemoryHit]) -> String {
     let mut out = String::from("## Memory\n");
-    if memories.is_empty() {
-        out.push_str(
-            "- When the user asks about something from a previous conversation, use memory_recall first.\n\
-             - Store important preferences, decisions, and context with memory_store for future use.",
-        );
-    } else {
-        out.push_str(
-            "- Use the recalled memories below to inform your responses.\n\
-             - Only call memory_recall if you need information not already shown here.\n\
-             - Store important preferences, decisions, and context with memory_store for future use.",
-        );
-        out.push_str("\n\nRecalled memories:\n");
+
+    // Tree memory hits (hierarchical memory)
+    if !tree_hits.is_empty() {
+        out.push_str("Relevant memories from your hierarchical memory:\n");
+        for hit in tree_hits.iter().take(5) {
+            let capped = cap_str(&hit.content, 300);
+            out.push_str(&format!("- [{}/{}] {} ({})\n", hit.kind, hit.scope, capped, hit.time_range));
+        }
+        out.push_str("\nUse memory_recall(query=...) to search, memory_drill_down(node_id=...) for details.\n");
+    }
+
+    // Legacy flat memories (if any)
+    if !memories.is_empty() {
+        out.push_str("\nRecalled memories:\n");
         for (key, content) in memories.iter().take(5) {
             let capped = cap_str(content, 500);
             if key.is_empty() {
@@ -428,6 +441,12 @@ pub fn build_memory_section(memories: &[(String, String)]) -> String {
             }
         }
     }
+
+    if tree_hits.is_empty() && memories.is_empty() {
+        // No memories at all — still show tool instructions
+        out.push_str("Use memory_recall(query=...) to search your conversation history.\n");
+    }
+
     out
 }
 
@@ -507,8 +526,7 @@ fn build_user_section(user_name: Option<&str>) -> String {
         None => "## User Profile\n\
              You don't know the user's name yet. On your FIRST reply in this conversation, \
              warmly introduce yourself by your agent name and ask what they'd like to be called. \
-             Once they tell you, immediately use the `memory_store` tool with \
-             key \"user_name\" and their name as the value so you remember it for future sessions. \
+             Remember their name for future sessions. \
              Keep the introduction brief — don't let it overshadow their actual request."
             .to_string(),
     }
@@ -627,8 +645,6 @@ pub fn tool_category(name: &str) -> &'static str {
 
         "shell_exec" | "shell_background" => "Shell",
 
-        "memory_store" | "memory_recall" | "memory_delete" | "memory_list" => "Memory",
-
         "agent_send" | "agent_spawn" | "agent_list" | "agent_kill" => "Agents",
 
         "image_describe" | "image_generate" | "audio_transcribe" | "tts_speak" => "Media",
@@ -679,12 +695,6 @@ pub fn tool_hint(name: &str) -> &'static str {
         // Shell
         "shell_exec" => "execute a shell command",
         "shell_background" => "run a command in the background",
-
-        // Memory
-        "memory_store" => "save a key-value pair to memory",
-        "memory_recall" => "search memory for relevant context",
-        "memory_delete" => "delete a memory entry",
-        "memory_list" => "list stored memory keys",
 
         // Agents
         "agent_send" => "send a message to another agent",
@@ -796,8 +806,6 @@ mod tests {
                 "web_fetch".to_string(),
                 "file_read".to_string(),
                 "file_write".to_string(),
-                "memory_store".to_string(),
-                "memory_recall".to_string(),
             ],
             ..Default::default()
         }
@@ -876,7 +884,6 @@ mod tests {
         assert_eq!(tool_category("web_search"), "Web");
         assert_eq!(tool_category("browser_navigate"), "Browser");
         assert_eq!(tool_category("shell_exec"), "Shell");
-        assert_eq!(tool_category("memory_store"), "Memory");
         assert_eq!(tool_category("agent_send"), "Agents");
         assert_eq!(tool_category("mcp_github_search"), "MCP");
         assert_eq!(tool_category("unknown_tool"), "Other");
@@ -892,9 +899,8 @@ mod tests {
 
     #[test]
     fn test_memory_section_empty() {
-        let section = build_memory_section(&[]);
+        let section = build_memory_section(&[], &[]);
         assert!(section.contains("## Memory"));
-        assert!(section.contains("use memory_recall first"));
         assert!(!section.contains("Recalled memories"));
     }
 
@@ -904,12 +910,11 @@ mod tests {
             ("pref".to_string(), "User likes dark mode".to_string()),
             ("ctx".to_string(), "Working on Rust project".to_string()),
         ];
-        let section = build_memory_section(&memories);
+        let section = build_memory_section(&memories, &[]);
         assert!(section.contains("Recalled memories"));
         assert!(section.contains("[pref] User likes dark mode"));
         assert!(section.contains("[ctx] Working on Rust project"));
-        assert!(section.contains("Use the recalled memories below"));
-        assert!(!section.contains("use memory_recall first"));
+        assert!(!section.contains("memory_store"));
     }
 
     #[test]
@@ -917,7 +922,7 @@ mod tests {
         let memories: Vec<(String, String)> = (0..10)
             .map(|i| (format!("k{i}"), format!("value {i}")))
             .collect();
-        let section = build_memory_section(&memories);
+        let section = build_memory_section(&memories, &[]);
         assert!(section.contains("[k0]"));
         assert!(section.contains("[k4]"));
         assert!(!section.contains("[k5]"));
@@ -927,7 +932,7 @@ mod tests {
     fn test_memory_content_capped() {
         let long_content = "x".repeat(1000);
         let memories = vec![("k".to_string(), long_content)];
-        let section = build_memory_section(&memories);
+        let section = build_memory_section(&memories, &[]);
         // Should be capped at 500 + "..."
         assert!(section.contains("..."));
         assert!(section.len() < 1200);
@@ -1093,7 +1098,7 @@ mod tests {
             clone_system_prompt_md: Some("处理客户问题，按步骤操作。".to_string()),
             clone_skills_catalog: Some("1. **handle-refund** — 用户要求退货时激活\n2. **handle-complaint** — 用户投诉时激活".to_string()),
             memory_md: Some("## 退货政策\n- [refund-policy](knowledge/refund.md)".to_string()),
-            granted_tools: vec!["web_fetch".to_string(), "memory_store".to_string()],
+            granted_tools: vec!["web_fetch".to_string()],
             ..Default::default()
         };
         let prompt = build_system_prompt(&ctx);

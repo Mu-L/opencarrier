@@ -50,8 +50,6 @@ pub fn build_manifest_from_workspace(
         "file_read",
         "file_write",
         "file_list",
-        "memory_store",
-        "memory_recall",
         "user_profile",
     ];
     for tool in evolution_tools {
@@ -277,7 +275,7 @@ fn collect_knowledge_recursive(base: &Path, current: &Path, files: &mut Vec<Stri
 /// Map a tool name to its toolset. Returns None for core tools (always visible).
 fn tool_to_toolset(name: &str) -> Option<&'static str> {
     match name {
-        "memory_store" | "memory_recall" | "session_summarize" | "tool_search" => None,
+        "session_summarize" | "tool_search" => None,
         n if n.starts_with("file_") || n == "apply_patch" => Some("filesystem"),
         "shell_exec" => Some("shell"),
         n if n.starts_with("knowledge_") || n.starts_with("skill_") || n == "clone_evaluate" => Some("knowledge"),

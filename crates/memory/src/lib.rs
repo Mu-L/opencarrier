@@ -1,26 +1,19 @@
 //! Memory substrate for the Carrier Agent Operating System.
 //!
-//! Provides a unified memory API over three storage backends:
-//! - **Structured store** (SQLite): Key-value pairs, sessions, agent state
-//! - **Semantic store**: Text-based search (Phase 1: LIKE matching, Phase 2: Qdrant vectors)
-//! - **Knowledge graph** (SQLite): Entities and relations
-//!
-//! Agents interact with a single `Memory` trait that abstracts over all three stores.
+//! Provides tree-based hierarchical memory with Obsidian-compatible content storage,
+//! plus system infrastructure (agent registry, sessions, invites, cron delivery).
 
 pub mod acp_session;
-pub mod consolidation;
 pub mod cron_delivery;
 pub mod invites;
-pub mod knowledge;
 pub mod migration;
-pub mod semantic;
 pub mod session;
-pub mod structured;
+pub mod system_kv;
+pub mod tree;
 pub mod usage;
 
 mod substrate;
 pub use cron_delivery::CronDeliveryStore;
 pub use invites::InviteStore;
-pub use semantic::SemanticStore;
 pub use session::SessionStore;
 pub use substrate::MemorySubstrate;

@@ -71,8 +71,8 @@ pub fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
          - Act first, narrate second. Use tools to accomplish tasks rather than describing what you'd do.\n\
          - Batch tool calls when possible \u{2014} don't output reasoning between each call.\n\
          - When a task is ambiguous, ask ONE clarifying question, not five.\n\
-         - Store important context in memory (memory_store) proactively.\n\
-         - Search memory (memory_recall) before asking the user for context they may have given before.\n\n\
+         - Store important context proactively using system_kv_store.\n\
+         - Search stored context with system_kv_recall before asking the user for information they may have given before.\n\n\
          ## Tool Usage Protocols\n\
          - file_read BEFORE file_write \u{2014} always understand what exists.\n\
          - web_search for current info, web_fetch for specific URLs.\n\
@@ -89,7 +89,7 @@ pub fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
          On your FIRST conversation with a new user, follow this protocol:\n\n\
          1. **Greet** \u{2014} Introduce yourself as {name} with a one-line summary of your specialty.\n\
          2. **Discover** \u{2014} Ask the user's name and one key preference relevant to your domain.\n\
-         3. **Store** \u{2014} Use memory_store to save: user_name, their preference, and today's date as first_interaction.\n\
+         3. **Store** \u{2014} Use system_kv_store to save: user_name, their preference, and today's date as first_interaction.\n\
          4. **Orient** \u{2014} Briefly explain what you can help with (2-3 bullet points, not a wall of text).\n\
          5. **Serve** \u{2014} If the user included a request in their first message, handle it immediately after steps 1-3.\n\n\
          After bootstrap, this protocol is complete. Focus entirely on the user's needs.\n",

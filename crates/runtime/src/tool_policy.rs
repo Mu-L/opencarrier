@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn test_preserves_non_denied() {
-        let tools: Vec<String> = vec!["web_search", "file_read", "shell_exec", "memory_store"]
+        let tools: Vec<String> = vec!["web_search", "file_read", "shell_exec", "agent_list"]
             .into_iter()
             .map(String::from)
             .collect();

@@ -59,8 +59,8 @@ pub trait KernelHandle: Send + Sync {
     /// Restart an agent by ID (reset state, re-read manifest from workspace).
     fn restart_agent(&self, agent_id: &str) -> Result<(), String>;
 
-    /// Store a key-value pair in the agent's per-owner per-user memory namespace.
-    fn memory_store(
+    /// Store a key-value pair in the system KV store (for schedules, config, etc.).
+    fn system_kv_store(
         &self,
         agent_id: &str,
         owner_id: &str,
@@ -69,22 +69,14 @@ pub trait KernelHandle: Send + Sync {
         value: serde_json::Value,
     ) -> Result<(), String>;
 
-    /// Recall a value from the agent's per-owner per-user memory namespace.
-    fn memory_recall(
+    /// Recall a value from the system KV store.
+    fn system_kv_recall(
         &self,
         agent_id: &str,
         owner_id: &str,
         user_id: &str,
         key: &str,
     ) -> Result<Option<serde_json::Value>, String>;
-
-    /// List all keys in the agent's per-owner per-user memory namespace.
-    fn memory_list(
-        &self,
-        agent_id: &str,
-        owner_id: &str,
-        user_id: &str,
-    ) -> Result<Vec<(String, serde_json::Value)>, String>;
 
     /// Find agents by query (matches on name substring, tag, or tool name; case-insensitive).
     fn find_agents(&self, query: &str) -> Vec<AgentInfo>;
@@ -113,24 +105,6 @@ pub trait KernelHandle: Send + Sync {
         event_type: &str,
         payload: serde_json::Value,
     ) -> Result<(), String>;
-
-    /// Add an entity to the knowledge graph.
-    async fn knowledge_add_entity(
-        &self,
-        entity: types::memory::Entity,
-    ) -> Result<String, String>;
-
-    /// Add a relation to the knowledge graph.
-    async fn knowledge_add_relation(
-        &self,
-        relation: types::memory::Relation,
-    ) -> Result<String, String>;
-
-    /// Query the knowledge graph with a pattern.
-    async fn knowledge_query(
-        &self,
-        pattern: types::memory::GraphPattern,
-    ) -> Result<Vec<types::memory::GraphMatch>, String>;
 
     /// Create a cron job for the calling agent.
     async fn cron_create(
@@ -208,6 +182,84 @@ pub trait KernelHandle: Send + Sync {
     /// Get the home directory path (~/.opencarrier/).
     fn home_dir(&self) -> Option<std::path::PathBuf> {
         None
+    }
+
+    // -----------------------------------------------------------------
+    // Tree memory operations
+    // -----------------------------------------------------------------
+
+    /// Ingest messages into the tree memory system.
+    async fn tree_ingest(
+        &self,
+        req: types::memory_tree::IngestRequest,
+    ) -> Result<types::memory_tree::IngestResult, String> {
+        let _ = req;
+        Err("Tree memory not available".to_string())
+    }
+
+    /// Query source tree summaries.
+    async fn tree_query_source(
+        &self,
+        req: types::memory_tree::SourceQuery<'_>,
+    ) -> Result<types::memory_tree::QueryResponse, String> {
+        let _ = req;
+        Err("Tree memory not available".to_string())
+    }
+
+    /// Query global tree summaries.
+    async fn tree_query_global(
+        &self,
+        req: types::memory_tree::GlobalQuery<'_>,
+    ) -> Result<types::memory_tree::QueryResponse, String> {
+        let _ = req;
+        Err("Tree memory not available".to_string())
+    }
+
+    /// Query topic tree by entity.
+    async fn tree_query_topic(
+        &self,
+        req: types::memory_tree::TopicQuery<'_>,
+    ) -> Result<types::memory_tree::QueryResponse, String> {
+        let _ = req;
+        Err("Tree memory not available".to_string())
+    }
+
+    /// Search entities by substring.
+    async fn tree_search_entities(
+        &self,
+        req: types::memory_tree::EntitySearch<'_>,
+    ) -> Result<Vec<types::memory_tree::EntityMatch>, String> {
+        let _ = req;
+        Err("Tree memory not available".to_string())
+    }
+
+    /// Drill down from a summary to its children.
+    async fn tree_drill_down(
+        &self,
+        req: types::memory_tree::DrillDownQuery<'_>,
+    ) -> Result<types::memory_tree::QueryResponse, String> {
+        let _ = req;
+        Err("Tree memory not available".to_string())
+    }
+
+    /// Fetch all leaf chunks under a summary.
+    async fn tree_fetch_leaves(
+        &self,
+        req: types::memory_tree::FetchLeavesQuery<'_>,
+    ) -> Result<types::memory_tree::QueryResponse, String> {
+        let _ = req;
+        Err("Tree memory not available".to_string())
+    }
+
+    /// List all source trees for an owner.
+    async fn tree_list_sources(
+        &self,
+        owner_id: &str,
+        source_kind: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<types::memory_tree::TreeSummary>, String> {
+        let _ = (owner_id, source_kind, limit);
+        Err("Tree memory not available".to_string())
     }
 
     /// Spawn an agent with capability inheritance enforcement.

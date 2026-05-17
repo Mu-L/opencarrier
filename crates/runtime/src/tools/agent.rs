@@ -1,5 +1,5 @@
-//! Agent, collaboration, scheduling, memory, training, clone, cron, A2A, and
-//! knowledge-graph tool module.
+//! Agent, collaboration, scheduling, training, cron, A2A, and delegation tool
+//! module.
 //!
 //! Groups together all tools that require kernel access and/or inter-agent
 //! coordination. Extracted from `tool_runner.rs` as part of the modular
@@ -271,74 +271,6 @@ async fn tool_train_list(
     Ok(files.join("\n"))
 }
 
-async fn tool_train_knowledge_add(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
-    let title = input["title"].as_str().ok_or("Missing 'title' parameter")?;
-    let content = input["content"]
-        .as_str()
-        .ok_or("Missing 'content' parameter")?;
-    let filename =
-        crate::tools::knowledge::knowledge_add_core(&target_root, title, content, "train").await?;
-    Ok(format!("Knowledge added to target: {filename}.md"))
-}
-
-async fn tool_train_knowledge_import(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
-    let data = input["data"].as_str().ok_or("Missing 'data' parameter")?;
-    let data_type = input["data_type"].as_str().unwrap_or("auto");
-    let (saved, quality) =
-        crate::tools::knowledge::knowledge_import_core(&target_root, data, data_type).await?;
-    Ok(format!(
-        "Imported {} entries to target. Quality: {:?}",
-        saved.len(),
-        quality
-    ))
-}
-
-async fn tool_train_knowledge_list(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
-    crate::tools::knowledge::tool_knowledge_list(Some(&target_root)).await
-}
-
-async fn tool_train_knowledge_read(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
-    crate::tools::knowledge::tool_knowledge_read(input, Some(&target_root)).await
-}
-
-async fn tool_train_knowledge_lint(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
-    crate::tools::knowledge::tool_knowledge_lint(Some(&target_root)).await
-}
-
-async fn tool_train_knowledge_heal(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let target_root = resolve_target_workspace(input, kernel)?;
-    crate::tools::knowledge::tool_knowledge_heal(Some(&target_root)).await
-}
-
 async fn tool_train_evaluate(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
@@ -543,73 +475,6 @@ fn tool_agent_restart(
 }
 
 // ---------------------------------------------------------------------------
-// Shared memory tools
-// ---------------------------------------------------------------------------
-
-fn tool_memory_store(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
-    owner_id: Option<&str>,
-    sender_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = require_kernel(kernel)?;
-    let aid = caller_agent_id.ok_or("No agent context for memory_store")?;
-    let oid = owner_id.unwrap_or("");
-    let uid = sender_id.unwrap_or("");
-    let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
-    let value = input.get("value").ok_or("Missing 'value' parameter")?;
-    tracing::info!(agent_id = %aid, owner_id = %oid, user_id = %uid, key = %key, "memory_store");
-    kh.memory_store(aid, oid, uid, key, value.clone())?;
-    Ok(format!("Stored value under key '{key}'."))
-}
-
-fn tool_memory_recall(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
-    owner_id: Option<&str>,
-    sender_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = require_kernel(kernel)?;
-    let aid = caller_agent_id.ok_or("No agent context for memory_recall")?;
-    let oid = owner_id.unwrap_or("");
-    let uid = sender_id.unwrap_or("");
-    let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
-    tracing::info!(agent_id = %aid, owner_id = %oid, user_id = %uid, key = %key, "memory_recall");
-    match kh.memory_recall(aid, oid, uid, key)? {
-        Some(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())),
-        None => Ok(format!("No value found for key '{key}'.")),
-    }
-}
-
-fn tool_memory_list(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    caller_agent_id: Option<&str>,
-    owner_id: Option<&str>,
-    sender_id: Option<&str>,
-) -> Result<String, String> {
-    let _ = input; // no parameters needed
-    let kh = require_kernel(kernel)?;
-    let aid = caller_agent_id.ok_or("No agent context for memory_list")?;
-    let oid = owner_id.unwrap_or("");
-    let uid = sender_id.unwrap_or("");
-    let pairs = kh.memory_list(aid, oid, uid)?;
-    if pairs.is_empty() {
-        return Ok("No keys stored.".to_string());
-    }
-    let lines: Vec<String> = pairs
-        .iter()
-        .map(|(k, v)| {
-            let val_str = serde_json::to_string(v).unwrap_or_else(|_| v.to_string());
-            format!("- {}: {}", k, val_str)
-        })
-        .collect();
-    Ok(lines.join("\n"))
-}
-
-// ---------------------------------------------------------------------------
 // Collaboration tools
 // ---------------------------------------------------------------------------
 
@@ -720,146 +585,6 @@ async fn tool_event_publish(
 }
 
 // ---------------------------------------------------------------------------
-// Knowledge graph tools
-// ---------------------------------------------------------------------------
-
-fn parse_entity_type(s: &str) -> types::memory::EntityType {
-    use types::memory::EntityType;
-    match s.to_lowercase().as_str() {
-        "person" => EntityType::Person,
-        "organization" | "org" => EntityType::Organization,
-        "project" => EntityType::Project,
-        "concept" => EntityType::Concept,
-        "event" => EntityType::Event,
-        "location" => EntityType::Location,
-        "document" | "doc" => EntityType::Document,
-        "tool" => EntityType::Tool,
-        other => EntityType::Custom(other.to_string()),
-    }
-}
-
-fn parse_relation_type(s: &str) -> types::memory::RelationType {
-    use types::memory::RelationType;
-    match s.to_lowercase().as_str() {
-        "works_at" | "worksat" => RelationType::WorksAt,
-        "knows_about" | "knowsabout" | "knows" => RelationType::KnowsAbout,
-        "related_to" | "relatedto" | "related" => RelationType::RelatedTo,
-        "depends_on" | "dependson" | "depends" => RelationType::DependsOn,
-        "owned_by" | "ownedby" => RelationType::OwnedBy,
-        "created_by" | "createdby" => RelationType::CreatedBy,
-        "located_in" | "locatedin" => RelationType::LocatedIn,
-        "part_of" | "partof" => RelationType::PartOf,
-        "uses" => RelationType::Uses,
-        "produces" => RelationType::Produces,
-        other => RelationType::Custom(other.to_string()),
-    }
-}
-
-async fn tool_knowledge_add_entity(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = require_kernel(kernel)?;
-    let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
-    let entity_type_str = input["entity_type"]
-        .as_str()
-        .ok_or("Missing 'entity_type' parameter")?;
-    let properties = input
-        .get("properties")
-        .and_then(|v| v.as_object())
-        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-        .unwrap_or_default();
-
-    let entity = types::memory::Entity {
-        id: String::new(), // kernel/store assigns a real ID
-        entity_type: parse_entity_type(entity_type_str),
-        name: name.to_string(),
-        properties,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-    };
-
-    let id = kh.knowledge_add_entity(entity).await?;
-    Ok(format!("Entity '{name}' added with ID: {id}"))
-}
-
-async fn tool_knowledge_add_relation(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = require_kernel(kernel)?;
-    let source = input["source"]
-        .as_str()
-        .ok_or("Missing 'source' parameter")?;
-    let relation_str = input["relation"]
-        .as_str()
-        .ok_or("Missing 'relation' parameter")?;
-    let target = input["target"]
-        .as_str()
-        .ok_or("Missing 'target' parameter")?;
-    let confidence = input["confidence"].as_f64().unwrap_or(1.0) as f32;
-    let properties = input
-        .get("properties")
-        .and_then(|v| v.as_object())
-        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-        .unwrap_or_default();
-
-    let relation = types::memory::Relation {
-        source: source.to_string(),
-        relation: parse_relation_type(relation_str),
-        target: target.to_string(),
-        properties,
-        confidence,
-        created_at: chrono::Utc::now(),
-    };
-
-    let id = kh.knowledge_add_relation(relation).await?;
-    Ok(format!(
-        "Relation '{source}' --[{relation_str}]--> '{target}' added with ID: {id}"
-    ))
-}
-
-async fn tool_knowledge_query(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = require_kernel(kernel)?;
-    let source = input["source"].as_str().map(|s| s.to_string());
-    let target = input["target"].as_str().map(|s| s.to_string());
-    let relation = input["relation"].as_str().map(parse_relation_type);
-    let max_depth = input["max_depth"].as_u64().unwrap_or(1) as u32;
-
-    let pattern = types::memory::GraphPattern {
-        source,
-        relation,
-        target,
-        max_depth,
-    };
-
-    let matches = kh.knowledge_query(pattern).await?;
-    if matches.is_empty() {
-        return Ok("No matching knowledge graph entries found.".to_string());
-    }
-
-    let mut output = format!("Found {} match(es):\n", matches.len());
-    for m in &matches {
-        output.push_str(&format!(
-            "\n  {} ({:?}) --[{:?} ({:.0}%)]--> {} ({:?})",
-            m.source.name,
-            m.source.entity_type,
-            m.relation.relation,
-            m.relation.confidence * 100.0,
-            m.target.name,
-            m.target.entity_type,
-        ));
-    }
-    Ok(output)
-}
-
-// ---------------------------------------------------------------------------
 // Scheduling tools
 // ---------------------------------------------------------------------------
 
@@ -892,13 +617,13 @@ async fn tool_schedule_create(
     });
 
     // Load existing schedules from agent's memory
-    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, "", "", SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match kh.system_kv_recall(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
 
     schedules.push(entry);
-    kh.memory_store(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    kh.system_kv_store(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
 
     Ok(format!(
         "Schedule created:\n  ID: {schedule_id}\n  Description: {description}\n  Cron: {cron_expr}\n  Original: {schedule_str}"
@@ -912,7 +637,7 @@ async fn tool_schedule_list(
     let kh = require_kernel(kernel)?;
     let aid = caller_agent_id.ok_or("No agent context for schedule_list")?;
 
-    let schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, "", "", SCHEDULES_KEY)? {
+    let schedules: Vec<serde_json::Value> = match kh.system_kv_recall(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -947,7 +672,7 @@ async fn tool_schedule_delete(
     let aid = caller_agent_id.ok_or("No agent context for schedule_delete")?;
     let id = input["id"].as_str().ok_or("Missing 'id' parameter")?;
 
-    let mut schedules: Vec<serde_json::Value> = match kh.memory_recall(aid, "", "", SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match kh.system_kv_recall(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -959,7 +684,7 @@ async fn tool_schedule_delete(
         return Err(format!("Schedule '{id}' not found."));
     }
 
-    kh.memory_store(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    kh.system_kv_store(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
     Ok(format!("Schedule '{id}' deleted."))
 }
 
@@ -1113,8 +838,7 @@ async fn tool_a2a_send(
 // ToolModule implementation
 // ---------------------------------------------------------------------------
 
-/// Agent, collaboration, scheduling, memory, training, clone, cron, A2A, and
-/// knowledge-graph tools.
+/// Agent, collaboration, scheduling, training, cron, A2A, and delegation tools.
 pub struct AgentTools;
 
 #[async_trait]
@@ -1155,77 +879,6 @@ impl ToolModule for AgentTools {
                     "properties": {
                         "target": {"type": "string", "description": "Name of the target clone"},
                         "path": {"type": "string", "description": "Directory path relative to the target clone's workspace root (default: '.')"},
-                    },
-                    "required": ["target"],
-                }),
-            },
-            ToolDefinition {
-                name: "train_knowledge_add".to_string(),
-                description: "Add a knowledge entry to a target clone's knowledge base. The LLM trainer should process and structure the content before calling this.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "target": {"type": "string", "description": "Name of the target clone"},
-                        "title": {"type": "string", "description": "Knowledge entry title"},
-                        "content": {"type": "string", "description": "Knowledge content (structured, processed by LLM)"},
-                    },
-                    "required": ["target", "title", "content"],
-                }),
-            },
-            ToolDefinition {
-                name: "train_knowledge_import".to_string(),
-                description: "Import bulk data into a target clone's knowledge base. Supports FAQ, chat logs, and document text.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "target": {"type": "string", "description": "Name of the target clone"},
-                        "data": {"type": "string", "description": "Raw data content to import"},
-                        "data_type": {"type": "string", "description": "Data format: 'faq', 'chat', 'document', or 'auto' (default: auto)"},
-                    },
-                    "required": ["target", "data"],
-                }),
-            },
-            ToolDefinition {
-                name: "train_knowledge_list".to_string(),
-                description: "List knowledge files in a target clone's knowledge base.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "target": {"type": "string", "description": "Name of the target clone"},
-                    },
-                    "required": ["target"],
-                }),
-            },
-            ToolDefinition {
-                name: "train_knowledge_read".to_string(),
-                description: "Read a specific knowledge file from a target clone's knowledge base.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "target": {"type": "string", "description": "Name of the target clone"},
-                        "filename": {"type": "string", "description": "Knowledge file name (e.g. 'rust-basics.md')"},
-                    },
-                    "required": ["target", "filename"],
-                }),
-            },
-            ToolDefinition {
-                name: "train_knowledge_lint".to_string(),
-                description: "Check the knowledge base health of a target clone.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "target": {"type": "string", "description": "Name of the target clone"},
-                    },
-                    "required": ["target"],
-                }),
-            },
-            ToolDefinition {
-                name: "train_knowledge_heal".to_string(),
-                description: "Auto-fix knowledge base issues in a target clone.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "target": {"type": "string", "description": "Name of the target clone"},
                     },
                     "required": ["target"],
                 }),
@@ -1309,38 +962,6 @@ impl ToolModule for AgentTools {
                         "agent_id": { "type": "string", "description": "The target agent's UUID or name" }
                     },
                     "required": ["agent_id"]
-                }),
-            },
-            // --- Memory tools (per-agent namespace) ---
-            ToolDefinition {
-                name: "memory_store".to_string(),
-                description: "Store a key-value pair in your own memory. Data persists across conversations.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "key": { "type": "string", "description": "The storage key" },
-                        "value": { "type": "string", "description": "The value to store (JSON-encode objects/arrays, or pass a plain string)" }
-                    },
-                    "required": ["key", "value"]
-                }),
-            },
-            ToolDefinition {
-                name: "memory_recall".to_string(),
-                description: "Recall a value from your memory by key. Use memory_list first if you're unsure what keys exist.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "key": { "type": "string", "description": "The storage key to recall" }
-                    },
-                    "required": ["key"]
-                }),
-            },
-            ToolDefinition {
-                name: "memory_list".to_string(),
-                description: "List all keys and values stored in your memory. Use this before memory_recall to see what's available.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {}
                 }),
             },
             // --- Collaboration tools ---
@@ -1443,48 +1064,6 @@ impl ToolModule for AgentTools {
                     "required": ["id"]
                 }),
             },
-            // --- Knowledge graph tools ---
-            ToolDefinition {
-                name: "knowledge_add_entity".to_string(),
-                description: "Add an entity to the knowledge graph. Entities represent people, organizations, projects, concepts, locations, tools, etc.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "name": { "type": "string", "description": "Display name of the entity" },
-                        "entity_type": { "type": "string", "description": "Type: person, organization, project, concept, event, location, document, tool, or a custom type" },
-                        "properties": { "type": "object", "description": "Arbitrary key-value properties (optional)" }
-                    },
-                    "required": ["name", "entity_type"]
-                }),
-            },
-            ToolDefinition {
-                name: "knowledge_add_relation".to_string(),
-                description: "Add a relation between two entities in the knowledge graph.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "source": { "type": "string", "description": "Source entity ID or name" },
-                        "relation": { "type": "string", "description": "Relation type: works_at, knows_about, related_to, depends_on, owned_by, created_by, located_in, part_of, uses, produces, or a custom type" },
-                        "target": { "type": "string", "description": "Target entity ID or name" },
-                        "confidence": { "type": "number", "description": "Confidence score 0.0-1.0 (default: 1.0)" },
-                        "properties": { "type": "object", "description": "Arbitrary key-value properties (optional)" }
-                    },
-                    "required": ["source", "relation", "target"]
-                }),
-            },
-            ToolDefinition {
-                name: "knowledge_query".to_string(),
-                description: "Query the knowledge graph. Filter by source entity, relation type, and/or target entity. Returns matching entity-relation-entity triples.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "source": { "type": "string", "description": "Filter by source entity name or ID (optional)" },
-                        "relation": { "type": "string", "description": "Filter by relation type (optional)" },
-                        "target": { "type": "string", "description": "Filter by target entity name or ID (optional)" },
-                        "max_depth": { "type": "integer", "description": "Maximum traversal depth (default: 1)" }
-                    }
-                }),
-            },
             // --- Cron scheduling tools ---
             ToolDefinition {
                 name: "cron_create".to_string(),
@@ -1575,24 +1154,6 @@ impl ToolModule for AgentTools {
             "train_read" => Some(tool_train_read(input, kernel, caller_agent_id).await),
             "train_write" => Some(tool_train_write(input, kernel, caller_agent_id).await),
             "train_list" => Some(tool_train_list(input, kernel, caller_agent_id).await),
-            "train_knowledge_add" => {
-                Some(tool_train_knowledge_add(input, kernel, caller_agent_id).await)
-            }
-            "train_knowledge_import" => {
-                Some(tool_train_knowledge_import(input, kernel, caller_agent_id).await)
-            }
-            "train_knowledge_list" => {
-                Some(tool_train_knowledge_list(input, kernel, caller_agent_id).await)
-            }
-            "train_knowledge_read" => {
-                Some(tool_train_knowledge_read(input, kernel, caller_agent_id).await)
-            }
-            "train_knowledge_lint" => {
-                Some(tool_train_knowledge_lint(input, kernel, caller_agent_id).await)
-            }
-            "train_knowledge_heal" => {
-                Some(tool_train_knowledge_heal(input, kernel, caller_agent_id).await)
-            }
             "train_evaluate" => Some(tool_train_evaluate(input, kernel, caller_agent_id).await),
 
             // User profile
@@ -1607,17 +1168,6 @@ impl ToolModule for AgentTools {
             "agent_kill" => Some(tool_agent_kill(input, kernel, caller_agent_id)),
             "agent_restart" => Some(tool_agent_restart(input, kernel, caller_agent_id)),
 
-            // Memory tools (scoped to caller's agent + owner/user namespace)
-            "memory_store" => Some(tool_memory_store(input, kernel, caller_agent_id, owner_id, sender_id)),
-            "memory_recall" => Some(tool_memory_recall(
-                input,
-                kernel,
-                caller_agent_id,
-                owner_id,
-                sender_id,
-            )),
-            "memory_list" => Some(tool_memory_list(input, kernel, caller_agent_id, owner_id, sender_id)),
-
             // Collaboration tools
             "agent_find" => Some(tool_agent_find(input, kernel, caller_agent_id)),
             "task_post" => Some(tool_task_post(input, kernel, caller_agent_id).await),
@@ -1630,15 +1180,6 @@ impl ToolModule for AgentTools {
             "schedule_create" => Some(tool_schedule_create(input, kernel, caller_agent_id).await),
             "schedule_list" => Some(tool_schedule_list(kernel, caller_agent_id).await),
             "schedule_delete" => Some(tool_schedule_delete(input, kernel, caller_agent_id).await),
-
-            // Knowledge graph tools
-            "knowledge_add_entity" => {
-                Some(tool_knowledge_add_entity(input, kernel, caller_agent_id).await)
-            }
-            "knowledge_add_relation" => {
-                Some(tool_knowledge_add_relation(input, kernel, caller_agent_id).await)
-            }
-            "knowledge_query" => Some(tool_knowledge_query(input, kernel, caller_agent_id).await),
 
             // Cron scheduling tools
             "cron_create" => Some(tool_cron_create(input, kernel, caller_agent_id, owner_id).await),
@@ -1663,16 +1204,14 @@ impl ToolModule for AgentTools {
 
     fn permission_level(&self, tool_name: &str) -> types::tool::PermissionLevel {
         match tool_name {
-            "memory_recall" | "memory_list" | "agent_find" | "agent_list"
-            | "train_read" | "train_list" | "train_knowledge_list"
-            | "train_knowledge_read" | "train_evaluate" | "user_profile"
+            "agent_find" | "agent_list"
+            | "train_read" | "train_list"
+            | "train_evaluate" | "user_profile"
             | "task_list" | "schedule_list" | "cron_list"
-            | "a2a_discover" | "knowledge_query" => types::tool::PermissionLevel::None,
-            "memory_store" | "task_post" | "task_claim" | "task_complete"
+            | "a2a_discover" => types::tool::PermissionLevel::None,
+            "task_post" | "task_claim" | "task_complete"
             | "event_publish" | "schedule_create" | "schedule_delete"
-            | "knowledge_add_entity" | "knowledge_add_relation"
-            | "train_write" | "train_knowledge_add" | "train_knowledge_import"
-            | "train_knowledge_lint" | "train_knowledge_heal"
+            | "train_write"
             | "cron_create" | "cron_cancel" => types::tool::PermissionLevel::Write,
             "agent_send" | "agent_spawn" | "agent_restart"
             | "a2a_send" => types::tool::PermissionLevel::Execute,

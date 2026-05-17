@@ -1,46 +1,43 @@
-//! MemorySubstrate: unified implementation of the `Memory` trait.
+//! MemorySubstrate: unified memory substrate built around the tree memory system.
 //!
-//! Composes the structured store, semantic store, knowledge store,
-//! session store, and consolidation engine behind a single async API.
+//! Composes the system KV store, session store, invite store, cron delivery store,
+//! and tree memory behind a single API.
 
-use crate::consolidation::ConsolidationEngine;
 use crate::cron_delivery::CronDeliveryStore;
 use crate::invites::InviteStore;
-use crate::knowledge::KnowledgeStore;
 use crate::migration::run_migrations;
-use crate::semantic::SemanticStore;
 use crate::session::{Session, SessionStore};
-use crate::structured::StructuredStore;
+use crate::system_kv::SystemKV;
+use crate::tree::ingest::IngestPipeline;
+use crate::tree::retrieval;
+use crate::tree::types::SourceKind;
 use crate::usage::UsageStore;
 
-use async_trait::async_trait;
 use types::agent::{AgentEntry, AgentId, SessionId};
 use types::error::{CarrierError, CarrierResult};
-use types::memory::{
-    ConsolidationReport, Entity, ExportFormat, GraphMatch, GraphPattern, ImportReport, Memory,
-    MemoryFilter, MemoryFragment, MemoryId, MemorySource, Relation,
+use types::memory_tree::{
+    EntityMatch, IngestRequest, IngestResult, QueryResponse, TreeSummary,
+    DrillDownQuery, EntitySearch, FetchLeavesQuery, GlobalQuery, SourceQuery, TopicQuery,
 };
+
 use rusqlite::Connection;
-use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// The unified memory substrate. Implements the `Memory` trait by delegating
-/// to specialized stores backed by a shared SQLite connection.
+/// The unified memory substrate. Tree memory is the primary memory interface;
+/// system_kv, sessions, invites, and cron_delivery are infrastructure stores.
 pub struct MemorySubstrate {
     conn: Arc<Mutex<Connection>>,
-    structured: StructuredStore,
-    semantic: SemanticStore,
-    knowledge: KnowledgeStore,
+    system_kv: SystemKV,
     sessions: SessionStore,
-    consolidation: ConsolidationEngine,
     invites: InviteStore,
     cron_delivery: CronDeliveryStore,
+    content_root: PathBuf,
 }
 
 impl MemorySubstrate {
     /// Open or create a memory substrate at the given database path.
-    pub fn open(db_path: &Path, decay_rate: f32) -> CarrierResult<Self> {
+    pub fn open(db_path: &Path) -> CarrierResult<Self> {
         let conn = Connection::open(db_path).map_err(|e| CarrierError::Memory(e.to_string()))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;",
@@ -49,33 +46,35 @@ impl MemorySubstrate {
         run_migrations(&conn).map_err(|e| CarrierError::Memory(e.to_string()))?;
         let shared = Arc::new(Mutex::new(conn));
 
+        // Default content root: sibling to the db file
+        let content_root = db_path.parent()
+            .unwrap_or(Path::new("."))
+            .join("memory_tree")
+            .join("content");
+
         Ok(Self {
             conn: Arc::clone(&shared),
-            structured: StructuredStore::new(Arc::clone(&shared)),
-            semantic: SemanticStore::new(Arc::clone(&shared)),
-            knowledge: KnowledgeStore::new(Arc::clone(&shared)),
+            system_kv: SystemKV::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
-            consolidation: ConsolidationEngine::new(Arc::clone(&shared), decay_rate),
             invites: InviteStore::new(Arc::clone(&shared)),
             cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
+            content_root,
         })
     }
 
     /// Create an in-memory substrate (for testing).
-    pub fn open_in_memory(decay_rate: f32) -> CarrierResult<Self> {
+    pub fn open_in_memory() -> CarrierResult<Self> {
         let conn = Connection::open_in_memory().map_err(|e| CarrierError::Memory(e.to_string()))?;
         run_migrations(&conn).map_err(|e| CarrierError::Memory(e.to_string()))?;
         let shared = Arc::new(Mutex::new(conn));
 
         Ok(Self {
             conn: Arc::clone(&shared),
-            structured: StructuredStore::new(Arc::clone(&shared)),
-            semantic: SemanticStore::new(Arc::clone(&shared)),
-            knowledge: KnowledgeStore::new(Arc::clone(&shared)),
+            system_kv: SystemKV::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
-            consolidation: ConsolidationEngine::new(Arc::clone(&shared), decay_rate),
             invites: InviteStore::new(Arc::clone(&shared)),
             cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
+            content_root: PathBuf::from("/tmp/opencarrier_tree_content"),
         })
     }
 
@@ -99,42 +98,57 @@ impl MemorySubstrate {
         Arc::clone(&self.conn)
     }
 
+    // -----------------------------------------------------------------
+    // System KV operations (agent entries, schedules, config)
+    // -----------------------------------------------------------------
+
     /// Save an agent entry to persistent storage.
     pub fn save_agent(&self, entry: &AgentEntry) -> CarrierResult<()> {
-        self.structured.save_agent(entry)
+        self.system_kv.save_agent(entry)
     }
 
     /// Load an agent entry from persistent storage.
     pub fn load_agent(&self, agent_id: AgentId) -> CarrierResult<Option<AgentEntry>> {
-        self.structured.load_agent(agent_id)
+        self.system_kv.load_agent(agent_id)
     }
 
     /// Remove an agent from persistent storage and cascade-delete sessions.
     pub fn remove_agent(&self, agent_id: AgentId) -> CarrierResult<()> {
-        // Delete associated sessions first
         let _ = self.sessions.delete_agent_sessions(agent_id);
-        self.structured.remove_agent(agent_id)
+        self.system_kv.remove_agent(agent_id)
     }
 
     /// Load all agent entries from persistent storage.
     pub fn load_all_agents(&self) -> CarrierResult<Vec<AgentEntry>> {
-        self.structured.load_all_agents()
+        self.system_kv.load_all_agents()
     }
 
     /// List all saved agents.
     pub fn list_agents(&self) -> CarrierResult<Vec<(String, String, String)>> {
-        self.structured.list_agents()
+        self.system_kv.list_agents()
     }
 
-    /// Synchronous get from the structured store (for kernel handle use).
-    pub fn structured_get(
+    /// Synchronous get from the system KV store.
+    pub fn system_kv_get(
         &self,
         agent_id: AgentId,
         owner_id: &str,
         user_id: &str,
         key: &str,
     ) -> CarrierResult<Option<serde_json::Value>> {
-        self.structured.get(agent_id, owner_id, user_id, key)
+        self.system_kv.get(agent_id, owner_id, user_id, key)
+    }
+
+    /// Synchronous set in the system KV store.
+    pub fn system_kv_set(
+        &self,
+        agent_id: AgentId,
+        owner_id: &str,
+        user_id: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> CarrierResult<()> {
+        self.system_kv.set(agent_id, owner_id, user_id, key, value)
     }
 
     /// List all KV pairs for an agent (per-user).
@@ -144,31 +158,23 @@ impl MemorySubstrate {
         owner_id: &str,
         user_id: &str,
     ) -> CarrierResult<Vec<(String, serde_json::Value)>> {
-        self.structured.list_kv(agent_id, owner_id, user_id)
+        self.system_kv.list_kv(agent_id, owner_id, user_id)
     }
 
     /// Delete a KV entry for an agent (per-user).
-    pub fn structured_delete(
+    pub fn system_kv_delete(
         &self,
         agent_id: AgentId,
         owner_id: &str,
         user_id: &str,
         key: &str,
     ) -> CarrierResult<()> {
-        self.structured.delete(agent_id, owner_id, user_id, key)
+        self.system_kv.delete(agent_id, owner_id, user_id, key)
     }
 
-    /// Synchronous set in the structured store (for kernel handle use).
-    pub fn structured_set(
-        &self,
-        agent_id: AgentId,
-        owner_id: &str,
-        user_id: &str,
-        key: &str,
-        value: serde_json::Value,
-    ) -> CarrierResult<()> {
-        self.structured.set(agent_id, owner_id, user_id, key, value)
-    }
+    // -----------------------------------------------------------------
+    // Session operations
+    // -----------------------------------------------------------------
 
     /// Get a session by ID.
     pub fn get_session(&self, session_id: SessionId) -> CarrierResult<Option<Session>> {
@@ -243,9 +249,6 @@ impl MemorySubstrate {
     }
 
     /// Write a human-readable JSONL mirror of a session to disk.
-    ///
-    /// Best-effort — errors are returned but should be logged,
-    /// never affecting the primary SQLite store.
     pub fn write_jsonl_mirror(
         &self,
         session: &Session,
@@ -260,84 +263,120 @@ impl MemorySubstrate {
     }
 
     // -----------------------------------------------------------------
-    // Embedding-aware memory operations
+    // Tree memory operations
     // -----------------------------------------------------------------
 
-    /// Store a memory with an embedding vector.
-    pub fn remember_with_embedding(
-        &self,
-        agent_id: AgentId,
-        content: &str,
-        source: MemorySource,
-        scope: &str,
-        metadata: HashMap<String, serde_json::Value>,
-        embedding: Option<&[f32]>,
-    ) -> CarrierResult<MemoryId> {
-        self.semantic
-            .remember_with_embedding(agent_id, content, source, scope, metadata, embedding)
+    /// Ingest messages into the tree memory system.
+    pub fn tree_ingest(&self, req: &IngestRequest) -> CarrierResult<IngestResult> {
+        let pipeline = IngestPipeline::new(Arc::clone(&self.conn), self.content_root.clone());
+        pipeline.ingest(req)
     }
 
-    /// Recall memories using vector similarity when a query embedding is provided.
-    pub fn recall_with_embedding(
-        &self,
-        query: &str,
-        limit: usize,
-        filter: Option<MemoryFilter>,
-        query_embedding: Option<&[f32]>,
-    ) -> CarrierResult<Vec<MemoryFragment>> {
-        self.semantic
-            .recall_with_embedding(query, limit, filter, query_embedding)
-    }
-
-    /// Update the embedding for an existing memory.
-    pub fn update_embedding(&self, id: MemoryId, embedding: &[f32]) -> CarrierResult<()> {
-        self.semantic.update_embedding(id, embedding)
-    }
-
-    /// Async wrapper for `recall_with_embedding` — runs in a blocking thread.
-    pub async fn recall_with_embedding_async(
-        &self,
-        query: &str,
-        limit: usize,
-        filter: Option<MemoryFilter>,
-        query_embedding: Option<&[f32]>,
-    ) -> CarrierResult<Vec<MemoryFragment>> {
-        let store = self.semantic.clone();
-        let query = query.to_string();
-        let embedding_owned = query_embedding.map(|e| e.to_vec());
+    /// Async wrapper for tree_ingest (runs in blocking thread).
+    pub async fn tree_ingest_async(&self, req: IngestRequest) -> CarrierResult<IngestResult> {
+        let conn = Arc::clone(&self.conn);
+        let content_root = self.content_root.clone();
         tokio::task::spawn_blocking(move || {
-            store.recall_with_embedding(&query, limit, filter, embedding_owned.as_deref())
+            let pipeline = IngestPipeline::new(conn, content_root);
+            pipeline.ingest(&req)
         })
         .await
         .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
 
-    /// Async wrapper for `remember_with_embedding` — runs in a blocking thread.
-    pub async fn remember_with_embedding_async(
-        &self,
-        agent_id: AgentId,
-        content: &str,
-        source: MemorySource,
-        scope: &str,
-        metadata: HashMap<String, serde_json::Value>,
-        embedding: Option<&[f32]>,
-    ) -> CarrierResult<MemoryId> {
-        let store = self.semantic.clone();
-        let content = content.to_string();
-        let scope = scope.to_string();
-        let embedding_owned = embedding.map(|e| e.to_vec());
-        tokio::task::spawn_blocking(move || {
-            store.remember_with_embedding(
-                agent_id,
-                &content,
-                source,
-                &scope,
-                metadata,
-                embedding_owned.as_deref(),
-            )
+    /// Query source tree summaries.
+    pub fn tree_query_source(&self, req: &SourceQuery<'_>) -> CarrierResult<QueryResponse> {
+        let source_kind = req.source_kind.and_then(|k| match k {
+            "chat" => Some(SourceKind::Chat),
+            "email" => Some(SourceKind::Email),
+            "document" => Some(SourceKind::Document),
+            _ => None,
+        });
+        retrieval::source::query_source(
+            &self.conn,
+            req.owner_id,
+            req.source_id,
+            source_kind,
+            req.time_window_days,
+            req.limit,
+        )
+    }
+
+    /// Query global tree summaries.
+    pub fn tree_query_global(&self, req: &GlobalQuery<'_>) -> CarrierResult<QueryResponse> {
+        retrieval::global::query_global(
+            &self.conn,
+            req.owner_id,
+            req.time_window_days,
+            req.limit,
+        )
+    }
+
+    /// Query topic tree by entity.
+    pub fn tree_query_topic(&self, req: &TopicQuery<'_>) -> CarrierResult<QueryResponse> {
+        retrieval::topic::query_topic(
+            &self.conn,
+            req.owner_id,
+            req.entity_id,
+            req.time_window_days,
+            req.limit,
+        )
+    }
+
+    /// Search entities by substring.
+    pub fn tree_search_entities(&self, req: &EntitySearch<'_>) -> CarrierResult<Vec<EntityMatch>> {
+        let kind = req.kind.map(crate::tree::entity_store::EntityStore::parse_entity_kind);
+        retrieval::search::search_entities(
+            &self.conn,
+            req.owner_id,
+            req.query,
+            kind,
+            req.limit,
+        )
+    }
+
+    /// Drill down from a summary node to its children.
+    pub fn tree_drill_down(&self, req: &DrillDownQuery<'_>) -> CarrierResult<QueryResponse> {
+        let hits = retrieval::drill_down::drill_down(
+            &self.conn,
+            req.owner_id,
+            req.node_id,
+            2, // default depth
+            Some(req.limit),
+        )?;
+        let total = hits.len();
+        let truncated = total > req.limit;
+        Ok(QueryResponse {
+            hits,
+            total,
+            truncated,
         })
-        .await
-        .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Fetch all leaf chunks under a summary node.
+    pub fn tree_fetch_leaves(&self, req: &FetchLeavesQuery<'_>) -> CarrierResult<QueryResponse> {
+        retrieval::fetch::fetch_leaves(
+            &self.conn,
+            req.owner_id,
+            req.node_id,
+            req.limit,
+        )
+    }
+
+    /// List all source trees for an owner.
+    pub fn tree_list_sources(
+        &self,
+        owner_id: &str,
+        source_kind: Option<&str>,
+        limit: usize,
+    ) -> CarrierResult<Vec<TreeSummary>> {
+        use types::memory_tree::TreeKind;
+        let tree_store = crate::tree::tree_store::TreeTreeStore::new(Arc::clone(&self.conn));
+        let mut trees = tree_store.list_trees(owner_id, Some(TreeKind::Source), limit)?;
+        if let Some(sk) = source_kind {
+            trees.retain(|t| t.scope.starts_with(&format!("{sk}:")));
+        }
+        Ok(trees)
     }
 
     // -----------------------------------------------------------------
@@ -403,7 +442,6 @@ impl MemorySubstrate {
 
             match result {
                 Ok((id, title, description, assigned, created_by, created_at)) => {
-                    // Update status to in_progress
                     db.execute(
                         "UPDATE task_queue SET status = 'in_progress', assigned_to = ?2 WHERE id = ?1",
                         rusqlite::params![id, agent_id],
@@ -494,169 +532,32 @@ impl MemorySubstrate {
     }
 }
 
-#[async_trait]
-impl Memory for MemorySubstrate {
-    async fn get(
-        &self,
-        agent_id: AgentId,
-        owner_id: &str,
-        user_id: &str,
-        key: &str,
-    ) -> CarrierResult<Option<serde_json::Value>> {
-        let store = self.structured.clone();
-        let owner_id = owner_id.to_string();
-        let user_id = user_id.to_string();
-        let key = key.to_string();
-        tokio::task::spawn_blocking(move || store.get(agent_id, &owner_id, &user_id, &key))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    async fn set(
-        &self,
-        agent_id: AgentId,
-        owner_id: &str,
-        user_id: &str,
-        key: &str,
-        value: serde_json::Value,
-    ) -> CarrierResult<()> {
-        let store = self.structured.clone();
-        let owner_id = owner_id.to_string();
-        let user_id = user_id.to_string();
-        let key = key.to_string();
-        tokio::task::spawn_blocking(move || store.set(agent_id, &owner_id, &user_id, &key, value))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    async fn delete(&self, agent_id: AgentId, owner_id: &str, user_id: &str, key: &str) -> CarrierResult<()> {
-        let store = self.structured.clone();
-        let owner_id = owner_id.to_string();
-        let user_id = user_id.to_string();
-        let key = key.to_string();
-        tokio::task::spawn_blocking(move || store.delete(agent_id, &owner_id, &user_id, &key))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    async fn remember(
-        &self,
-        agent_id: AgentId,
-        content: &str,
-        source: MemorySource,
-        scope: &str,
-        metadata: HashMap<String, serde_json::Value>,
-    ) -> CarrierResult<MemoryId> {
-        let store = self.semantic.clone();
-        let content = content.to_string();
-        let scope = scope.to_string();
-        tokio::task::spawn_blocking(move || {
-            store.remember(agent_id, &content, source, &scope, metadata)
-        })
-        .await
-        .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    async fn recall(
-        &self,
-        query: &str,
-        limit: usize,
-        filter: Option<MemoryFilter>,
-    ) -> CarrierResult<Vec<MemoryFragment>> {
-        let store = self.semantic.clone();
-        let query = query.to_string();
-        tokio::task::spawn_blocking(move || store.recall(&query, limit, filter))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    async fn forget(&self, id: MemoryId) -> CarrierResult<()> {
-        let store = self.semantic.clone();
-        tokio::task::spawn_blocking(move || store.forget(id))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    async fn add_entity(&self, entity: Entity) -> CarrierResult<String> {
-        let store = self.knowledge.clone();
-        tokio::task::spawn_blocking(move || store.add_entity(entity))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    async fn add_relation(&self, relation: Relation) -> CarrierResult<String> {
-        let store = self.knowledge.clone();
-        tokio::task::spawn_blocking(move || store.add_relation(relation))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    async fn query_graph(&self, pattern: GraphPattern) -> CarrierResult<Vec<GraphMatch>> {
-        let store = self.knowledge.clone();
-        tokio::task::spawn_blocking(move || store.query_graph(pattern))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    async fn consolidate(&self) -> CarrierResult<ConsolidationReport> {
-        let engine = self.consolidation.clone();
-        tokio::task::spawn_blocking(move || engine.consolidate())
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    async fn export(&self, format: ExportFormat) -> CarrierResult<Vec<u8>> {
-        let _ = format;
-        Ok(Vec::new())
-    }
-
-    async fn import(&self, _data: &[u8], _format: ExportFormat) -> CarrierResult<ImportReport> {
-        Ok(ImportReport {
-            entities_imported: 0,
-            relations_imported: 0,
-            memories_imported: 0,
-            errors: vec!["Import not yet implemented in Phase 1".to_string()],
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_substrate_kv() {
-        let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
+    #[test]
+    fn test_system_kv_set_get() {
+        let substrate = MemorySubstrate::open_in_memory().unwrap();
         let agent_id = AgentId::new();
         substrate
-            .set(agent_id, "user1", "user1", "key", serde_json::json!("value"))
-            .await
-            .unwrap();
-        let val = substrate.get(agent_id, "user1", "user1", "key").await.unwrap();
-        assert_eq!(val, Some(serde_json::json!("value")));
-    }
-
-    #[tokio::test]
-    async fn test_substrate_remember_recall() {
-        let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
-        let agent_id = AgentId::new();
-        substrate
-            .remember(
+            .system_kv_set(
                 agent_id,
-                "Rust is a great language",
-                MemorySource::Conversation,
-                "episodic",
-                HashMap::new(),
+                "user1",
+                "user1",
+                "test_key",
+                serde_json::json!("test_value"),
             )
-            .await
             .unwrap();
-        let results = substrate.recall("Rust", 10, None).await.unwrap();
-        assert_eq!(results.len(), 1);
+        let val = substrate
+            .system_kv_get(agent_id, "user1", "user1", "test_key")
+            .unwrap();
+        assert_eq!(val, Some(serde_json::json!("test_value")));
     }
 
     #[tokio::test]
     async fn test_task_post_and_list() {
-        let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
+        let substrate = MemorySubstrate::open_in_memory().unwrap();
         let id = substrate
             .task_post(
                 "Review code",
@@ -677,7 +578,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_task_claim_and_complete() {
-        let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
+        let substrate = MemorySubstrate::open_in_memory().unwrap();
         let task_id = substrate
             .task_post(
                 "Audit endpoint",
@@ -688,20 +589,17 @@ mod tests {
             .await
             .unwrap();
 
-        // Claim the task
         let claimed = substrate.task_claim("auditor").await.unwrap();
         assert!(claimed.is_some());
         let claimed = claimed.unwrap();
         assert_eq!(claimed["id"], task_id);
         assert_eq!(claimed["status"], "in_progress");
 
-        // Complete the task
         substrate
             .task_complete(&task_id, "No vulnerabilities found")
             .await
             .unwrap();
 
-        // Verify it shows as completed
         let tasks = substrate.task_list(Some("completed")).await.unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0]["result"], "No vulnerabilities found");
@@ -709,7 +607,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_task_claim_empty() {
-        let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
+        let substrate = MemorySubstrate::open_in_memory().unwrap();
         let claimed = substrate.task_claim("nobody").await.unwrap();
         assert!(claimed.is_none());
     }

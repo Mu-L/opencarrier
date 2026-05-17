@@ -24,7 +24,7 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse
             "default_model": default_model,
         },
         "memory": {
-            "decay_rate": config.memory.decay_rate,
+            "sqlite_path": config.memory.sqlite_path,
         },
     }))
 }
@@ -111,7 +111,7 @@ pub async fn config_schema(State(state): State<Arc<AppState>>) -> impl IntoRespo
             },
             "memory": {
                 "fields": {
-                    "decay_rate": "number",
+                    "sqlite_path": "string",
                     "vector_dims": "number"
                 }
             },

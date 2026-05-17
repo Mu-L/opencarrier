@@ -21,10 +21,8 @@ use memory::session::Session;
 use memory::MemorySubstrate;
 use types::agent::AgentManifest;
 use types::error::{CarrierError, CarrierResult};
-use types::memory::{Memory, MemoryFilter, MemorySource};
 use types::message::{ContentBlock, Message, MessageContent, Role, StopReason, TokenUsage};
 use types::tool::ToolDefinition;
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -108,8 +106,7 @@ fn parse_frontmatter_list(content: &str, field: &str) -> Option<Vec<String>> {
 fn tool_to_toolset_name(name: &str) -> Option<String> {
     // Core tools don't belong to a toolset
     match name {
-        "memory_store" | "memory_recall" | "memory_list"
-        | "session_summarize" | "tool_search"
+        "session_summarize" | "tool_search"
         | "skill_load" | "knowledge_read" | "knowledge_list"
         | "cron_create" | "cron_list" | "cron_cancel" => return None,
         _ => {}
@@ -212,6 +209,7 @@ pub async fn run_agent_loop(
     brain: Option<Arc<dyn Brain>>,
     sender_id: Option<&str>,
     owner_id: Option<&str>,
+    channel_type: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     let timeout = std::time::Duration::from_secs(AGENT_LOOP_TIMEOUT_SECS);
     match tokio::time::timeout(
@@ -220,7 +218,7 @@ pub async fn run_agent_loop(
             manifest, user_message, session, memory, driver, available_tools,
             kernel, stream_tx, mcp_connections, web_ctx, workspace_root,
             on_phase, docker_config, hooks, context_window_tokens, process_manager,
-            user_content_blocks, brain, sender_id, owner_id,
+            user_content_blocks, brain, sender_id, owner_id, channel_type,
         ),
     )
     .await
@@ -453,6 +451,7 @@ async fn run_agent_loop_impl(
     brain: Option<Arc<dyn Brain>>,
     sender_id: Option<&str>,
     owner_id: Option<&str>,
+    channel_type: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
 
@@ -463,19 +462,7 @@ async fn run_agent_loop_impl(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    // Recall relevant memories via text search
-    let memories = memory
-        .recall(
-            user_message,
-            5,
-            Some(MemoryFilter {
-                agent_id: Some(session.agent_id),
-                ..Default::default()
-            }),
-        )
-        .await
-        .unwrap_or_default();
-
+    // TODO(Phase 13): Tree memory recall will be restored here.
     // Fire BeforePromptBuild hook
     let agent_id_str = session.agent_id.0.to_string();
     if let Some(hook_reg) = hooks {
@@ -491,17 +478,8 @@ async fn run_agent_loop_impl(
         let _ = hook_reg.fire(&ctx);
     }
 
-    // Build the system prompt — base prompt comes from kernel (prompt_builder),
-    // we append recalled memories here since they are resolved at loop time.
-    let mut system_prompt = manifest.model.system_prompt.clone();
-    if !memories.is_empty() {
-        let mem_pairs: Vec<(String, String)> = memories
-            .iter()
-            .map(|m| (String::new(), m.content.clone()))
-            .collect();
-        system_prompt.push_str("\n\n");
-        system_prompt.push_str(&crate::prompt_builder::build_memory_section(&mem_pairs));
-    }
+    // Build the system prompt — base prompt comes from kernel (prompt_builder).
+    let system_prompt = manifest.model.system_prompt.clone();
 
     // Add the user message to session history.
     // When content blocks are provided (e.g. text + image from a channel),
@@ -758,20 +736,29 @@ async fn run_agent_loop_impl(
                     .await
                     .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
-                // Remember this interaction
-                let interaction_text = format!(
-                    "User asked: {}\nI responded: {}",
-                    user_message, final_response
-                );
-                let _ = memory
-                    .remember(
-                        session.agent_id,
-                        &interaction_text,
-                        MemorySource::Conversation,
-                        "episodic",
-                        HashMap::new(),
-                    )
-                    .await;
+                // TODO(Phase 13): Tree memory remember will be restored here.
+
+                // Fire-and-forget tree ingestion
+                if let Some(kh) = kernel.as_ref() {
+                    let req = types::memory_tree::IngestRequest {
+                        owner_id: owner_id.unwrap_or("default").to_string(),
+                        agent_id: session.agent_id.to_string(),
+                        source_kind: "chat".to_string(),
+                        source_id: format!("{}:{}",
+                            channel_type.unwrap_or("api"),
+                            sender_id.unwrap_or("unknown")),
+                        messages: vec![types::memory_tree::IngestMessage {
+                            sender: sender_id.unwrap_or("user").to_string(),
+                            content: user_message.to_string(),
+                            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                        }],
+                        tags: vec![channel_type.unwrap_or("api").to_string()],
+                    };
+                    let kh = Arc::clone(kh);
+                    tokio::spawn(async move {
+                        let _ = kh.tree_ingest(req).await;
+                    });
+                }
 
                 // Notify phase: Done
                 if let Some(cb) = on_phase {
@@ -935,7 +922,7 @@ async fn run_agent_loop_impl(
                         home_dir: home_dir_buf.as_deref(),
                         agent_name: Some(&manifest.name),
                         subagent_configs: if manifest.subagents.is_empty() { None } else { Some(&manifest.subagents) },
-                        channel_type: None,
+                        channel_type,
                     };
 
                     // Timeout-wrapped execution
@@ -1249,12 +1236,13 @@ pub async fn run_agent_loop_streaming(
     brain: Option<Arc<dyn Brain>>,
     sender_id: Option<&str>,
     owner_id: Option<&str>,
+    channel_type: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     run_agent_loop(
         manifest, user_message, session, memory, driver, available_tools,
         kernel, Some(stream_tx), mcp_connections, web_ctx, workspace_root,
         on_phase, docker_config, hooks, context_window_tokens, process_manager,
-        user_content_blocks, brain, sender_id, owner_id,
+        user_content_blocks, brain, sender_id, owner_id, channel_type,
     ).await
 }
 
@@ -1507,7 +1495,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_response_after_tool_use_returns_fallback() {
-        let memory = memory::MemorySubstrate::open_in_memory(0.01).unwrap();
+        let memory = memory::MemorySubstrate::open_in_memory().unwrap();
         let agent_id = types::agent::AgentId::new();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
@@ -1541,6 +1529,7 @@ mod tests {
             None, // brain
             None, // sender_id
             None, // owner_id
+            None, // channel_type
         )
         .await
         .expect("Loop should complete without error");
@@ -1560,7 +1549,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_error_injects_no_fabrication_guidance() {
-        let memory = memory::MemorySubstrate::open_in_memory(0.01).unwrap();
+        let memory = memory::MemorySubstrate::open_in_memory().unwrap();
         let agent_id = types::agent::AgentId::new();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
@@ -1594,6 +1583,7 @@ mod tests {
             None, // brain
             None, // sender_id
             None, // owner_id
+            None, // channel_type
         )
         .await
         .expect("Loop should complete without error");
@@ -1615,7 +1605,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_response_max_tokens_returns_fallback() {
-        let memory = memory::MemorySubstrate::open_in_memory(0.01).unwrap();
+        let memory = memory::MemorySubstrate::open_in_memory().unwrap();
         let agent_id = types::agent::AgentId::new();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
@@ -1649,6 +1639,7 @@ mod tests {
             None, // brain
             None, // sender_id
             None, // owner_id
+            None, // channel_type
         )
         .await
         .expect("Loop should complete without error");
@@ -1668,7 +1659,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_normal_response_not_replaced_by_fallback() {
-        let memory = memory::MemorySubstrate::open_in_memory(0.01).unwrap();
+        let memory = memory::MemorySubstrate::open_in_memory().unwrap();
         let agent_id = types::agent::AgentId::new();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
@@ -1702,6 +1693,7 @@ mod tests {
             None, // brain
             None, // sender_id
             None, // owner_id
+            None, // channel_type
         )
         .await
         .expect("Loop should complete without error");
@@ -1712,7 +1704,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_streaming_empty_response_after_tool_use_returns_fallback() {
-        let memory = memory::MemorySubstrate::open_in_memory(0.01).unwrap();
+        let memory = memory::MemorySubstrate::open_in_memory().unwrap();
         let agent_id = types::agent::AgentId::new();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
@@ -1747,6 +1739,7 @@ mod tests {
             None, // brain
             None, // sender_id
             None, // owner_id
+            None, // channel_type
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -1840,7 +1833,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_first_response_retries_and_recovers() {
-        let memory = memory::MemorySubstrate::open_in_memory(0.01).unwrap();
+        let memory = memory::MemorySubstrate::open_in_memory().unwrap();
         let agent_id = types::agent::AgentId::new();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
@@ -1874,6 +1867,7 @@ mod tests {
             None, // brain
             None, // sender_id
             None, // owner_id
+            None, // channel_type
         )
         .await
         .expect("Loop should recover via retry");
@@ -1887,7 +1881,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_empty_first_response_fallback_when_retry_also_empty() {
-        let memory = memory::MemorySubstrate::open_in_memory(0.01).unwrap();
+        let memory = memory::MemorySubstrate::open_in_memory().unwrap();
         let agent_id = types::agent::AgentId::new();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
@@ -1921,6 +1915,7 @@ mod tests {
             None, // brain
             None, // sender_id
             None, // owner_id
+            None, // channel_type
         )
         .await
         .expect("Loop should complete with fallback");
@@ -1940,7 +1935,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_streaming_empty_response_max_tokens_returns_fallback() {
-        let memory = memory::MemorySubstrate::open_in_memory(0.01).unwrap();
+        let memory = memory::MemorySubstrate::open_in_memory().unwrap();
         let agent_id = types::agent::AgentId::new();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
@@ -1975,6 +1970,7 @@ mod tests {
             None, // brain
             None, // sender_id
             None, // owner_id
+            None, // channel_type
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -2819,7 +2815,7 @@ mod tests {
         // This is THE critical test: a model outputs a tool call as text,
         // the recovery code detects it, promotes it to ToolUse, executes the tool,
         // and the agent loop continues to produce a final response.
-        let memory = memory::MemorySubstrate::open_in_memory(0.01).unwrap();
+        let memory = memory::MemorySubstrate::open_in_memory().unwrap();
         let agent_id = types::agent::AgentId::new();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
@@ -2865,6 +2861,7 @@ mod tests {
             None, // brain
             None, // sender_id
             None, // owner_id
+            None, // channel_type
         )
         .await
         .expect("Agent loop should complete");
@@ -2892,7 +2889,7 @@ mod tests {
     /// Verifies recovery does NOT interfere with normal flow.
     #[tokio::test]
     async fn test_normal_flow_unaffected_by_recovery() {
-        let memory = memory::MemorySubstrate::open_in_memory(0.01).unwrap();
+        let memory = memory::MemorySubstrate::open_in_memory().unwrap();
         let agent_id = types::agent::AgentId::new();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
@@ -2932,6 +2929,7 @@ mod tests {
             None, // brain
             None, // sender_id
             None, // owner_id
+            None, // channel_type
         )
         .await
         .expect("Normal loop should complete");
@@ -2947,7 +2945,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_text_tool_call_recovery_streaming_e2e() {
-        let memory = memory::MemorySubstrate::open_in_memory(0.01).unwrap();
+        let memory = memory::MemorySubstrate::open_in_memory().unwrap();
         let agent_id = types::agent::AgentId::new();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
@@ -2994,6 +2992,7 @@ mod tests {
             None, // brain
             None, // sender_id
             None, // owner_id
+            None, // channel_type
         )
         .await
         .expect("Streaming loop should complete");

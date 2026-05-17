@@ -21,7 +21,7 @@ pub async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
         ]));
         memory
-            .structured_get(shared_id, "", "", "__health_check__")
+            .system_kv_get(shared_id, "", "", "__health_check__")
             .is_ok()
     })
     .await
@@ -44,7 +44,7 @@ pub async fn health_detail(State(state): State<Arc<AppState>>) -> impl IntoRespo
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
         ]));
         memory
-            .structured_get(shared_id, "", "", "__health_check__")
+            .system_kv_get(shared_id, "", "", "__health_check__")
             .is_ok()
     })
     .await

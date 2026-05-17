@@ -7,6 +7,7 @@ pub mod agent;
 pub mod filesystem;
 pub mod knowledge;
 pub mod media;
+pub mod memory;
 pub mod misc;
 pub mod shell;
 pub mod toolset;
@@ -61,6 +62,7 @@ pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
         Box::new(toolset::ToolSearchTools),
         Box::new(knowledge::KnowledgeTools),
         Box::new(media::MediaTools),
+        Box::new(memory::MemoryTools),
         Box::new(agent::AgentTools),
     ]
 }

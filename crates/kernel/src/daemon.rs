@@ -4,7 +4,6 @@
 
 use types::agent::{AgentId, AgentState, ScheduleMode};
 use types::event::*;
-use types::memory::Memory;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
@@ -420,42 +419,6 @@ impl CarrierKernel {
                     }
                 }
             });
-        }
-
-        // Periodic memory consolidation
-        {
-            let interval_hours = self.config.memory.consolidation_interval_hours;
-            if interval_hours > 0 {
-                let kernel = Arc::clone(self);
-                tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(
-                        interval_hours * 3600,
-                    ));
-                    interval.tick().await;
-                    loop {
-                        interval.tick().await;
-                        if kernel.runtime.supervisor.is_shutting_down() {
-                            break;
-                        }
-                        match kernel.memory.consolidate().await {
-                            Ok(report) => {
-                                if report.memories_decayed > 0 || report.memories_merged > 0 {
-                                    info!(
-                                        merged = report.memories_merged,
-                                        decayed = report.memories_decayed,
-                                        duration_ms = report.duration_ms,
-                                        "Memory consolidation completed"
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                warn!("Memory consolidation failed: {e}");
-                            }
-                        }
-                    }
-                });
-                info!("Memory consolidation scheduled every {interval_hours} hour(s)");
-            }
         }
 
         // Connect to configured + extension MCP servers

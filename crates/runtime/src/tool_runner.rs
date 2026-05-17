@@ -343,8 +343,8 @@ mod tests {
     fn test_builtin_tool_definitions() {
         let tools = builtin_tool_definitions();
         assert!(
-            tools.len() >= 39,
-            "Expected at least 39 tools, got {}",
+            tools.len() >= 25,
+            "Expected at least 25 tools, got {}",
             tools.len()
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -356,10 +356,6 @@ mod tests {
         );
         assert!(names.contains(&"train_write"), "Missing train_write");
         assert!(names.contains(&"train_list"), "Missing train_list");
-        assert!(
-            names.contains(&"train_knowledge_add"),
-            "Missing train_knowledge_add"
-        );
         assert!(names.contains(&"train_evaluate"), "Missing train_evaluate");
         // Original 12
         assert!(names.contains(&"file_read"));
@@ -368,8 +364,8 @@ mod tests {
         assert!(names.contains(&"agent_spawn"));
         assert!(names.contains(&"agent_list"));
         assert!(names.contains(&"agent_kill"));
-        assert!(names.contains(&"memory_store"));
-        assert!(names.contains(&"memory_recall"));
+        assert!(names.contains(&"agent_send"));
+        assert!(names.contains(&"agent_list"));
         // 6 collaboration tools
         assert!(names.contains(&"agent_find"));
         assert!(names.contains(&"task_post"));

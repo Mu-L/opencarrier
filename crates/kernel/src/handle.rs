@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use runtime::kernel_handle::{self, KernelHandle};
 use types::agent::{AgentId, AgentManifest};
 use types::event::*;
-use types::memory::Memory;
 use std::sync::Arc;
 
 use crate::capabilities::manifest_to_capabilities;
@@ -185,7 +184,7 @@ impl KernelHandle for CarrierKernel {
         Ok(())
     }
 
-    fn memory_store(
+    fn system_kv_store(
         &self,
         agent_id: &str,
         owner_id: &str,
@@ -193,41 +192,27 @@ impl KernelHandle for CarrierKernel {
         key: &str,
         value: serde_json::Value,
     ) -> Result<(), String> {
-        let aid: AgentId = agent_id
-            .parse()
-            .map_err(|_| "Invalid agent ID".to_string())?;
-        self.memory
-            .structured_set(aid, owner_id, user_id, key, value)
-            .map_err(|e| format!("Memory store failed: {e}"))
+        let agent_id = match uuid::Uuid::parse_str(agent_id) {
+            Ok(id) => types::agent::AgentId(id),
+            Err(_) => return Err("Invalid agent ID".to_string()),
+        };
+        self.memory.system_kv_set(agent_id, owner_id, user_id, key, value)
+            .map_err(|e| e.to_string())
     }
 
-    fn memory_recall(
+    fn system_kv_recall(
         &self,
         agent_id: &str,
         owner_id: &str,
         user_id: &str,
         key: &str,
     ) -> Result<Option<serde_json::Value>, String> {
-        let aid: AgentId = agent_id
-            .parse()
-            .map_err(|_| "Invalid agent ID".to_string())?;
-        self.memory
-            .structured_get(aid, owner_id, user_id, key)
-            .map_err(|e| format!("Memory recall failed: {e}"))
-    }
-
-    fn memory_list(
-        &self,
-        agent_id: &str,
-        owner_id: &str,
-        user_id: &str,
-    ) -> Result<Vec<(String, serde_json::Value)>, String> {
-        let aid: AgentId = agent_id
-            .parse()
-            .map_err(|_| "Invalid agent ID".to_string())?;
-        self.memory
-            .list_kv(aid, owner_id, user_id)
-            .map_err(|e| format!("Memory list failed: {e}"))
+        let agent_id = match uuid::Uuid::parse_str(agent_id) {
+            Ok(id) => types::agent::AgentId(id),
+            Err(_) => return Err("Invalid agent ID".to_string()),
+        };
+        self.memory.system_kv_get(agent_id, owner_id, user_id, key)
+            .map_err(|e| e.to_string())
     }
 
     fn find_agents(&self, query: &str) -> Vec<kernel_handle::AgentInfo> {
@@ -313,36 +298,6 @@ impl KernelHandle for CarrierKernel {
         );
         CarrierKernel::publish_event(self, event).await;
         Ok(())
-    }
-
-    async fn knowledge_add_entity(
-        &self,
-        entity: types::memory::Entity,
-    ) -> Result<String, String> {
-        self.memory
-            .add_entity(entity)
-            .await
-            .map_err(|e| format!("Knowledge add entity failed: {e}"))
-    }
-
-    async fn knowledge_add_relation(
-        &self,
-        relation: types::memory::Relation,
-    ) -> Result<String, String> {
-        self.memory
-            .add_relation(relation)
-            .await
-            .map_err(|e| format!("Knowledge add relation failed: {e}"))
-    }
-
-    async fn knowledge_query(
-        &self,
-        pattern: types::memory::GraphPattern,
-    ) -> Result<Vec<types::memory::GraphMatch>, String> {
-        self.memory
-            .query_graph(pattern)
-            .await
-            .map_err(|e| format!("Knowledge query failed: {e}"))
     }
 
     async fn cron_create(
@@ -594,6 +549,140 @@ impl KernelHandle for CarrierKernel {
             "tool_search executed"
         );
         scored.into_iter().map(|(_, ts, def)| (ts, def)).collect()
+    }
+
+    // -----------------------------------------------------------------
+    // Tree memory operations
+    // -----------------------------------------------------------------
+
+    async fn tree_ingest(
+        &self,
+        req: types::memory_tree::IngestRequest,
+    ) -> Result<types::memory_tree::IngestResult, String> {
+        self.memory.tree_ingest_async(req)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn tree_query_source(
+        &self,
+        req: types::memory_tree::SourceQuery<'_>,
+    ) -> Result<types::memory_tree::QueryResponse, String> {
+        let conn = self.memory.usage_conn();
+        let owner_id = req.owner_id.to_string();
+        let source_id = req.source_id.map(|s| s.to_string());
+        let source_kind_str = req.source_kind.map(|s| s.to_string());
+        let time_window_days = req.time_window_days;
+        let limit = req.limit;
+        tokio::task::spawn_blocking(move || {
+            let source_kind = source_kind_str.as_deref().and_then(|k| match k {
+                "chat" => Some(memory::tree::types::SourceKind::Chat),
+                "email" => Some(memory::tree::types::SourceKind::Email),
+                "document" => Some(memory::tree::types::SourceKind::Document),
+                _ => None,
+            });
+            memory::tree::retrieval::source::query_source(
+                &conn, &owner_id, source_id.as_deref(), source_kind, time_window_days, limit,
+            )
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?
+        .map_err(|e| e.to_string())
+    }
+
+    async fn tree_query_global(
+        &self,
+        req: types::memory_tree::GlobalQuery<'_>,
+    ) -> Result<types::memory_tree::QueryResponse, String> {
+        let conn = self.memory.usage_conn();
+        let owner_id = req.owner_id.to_string();
+        let time_window_days = req.time_window_days;
+        let limit = req.limit;
+        tokio::task::spawn_blocking(move || {
+            memory::tree::retrieval::global::query_global(&conn, &owner_id, time_window_days, limit)
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?
+        .map_err(|e| e.to_string())
+    }
+
+    async fn tree_query_topic(
+        &self,
+        req: types::memory_tree::TopicQuery<'_>,
+    ) -> Result<types::memory_tree::QueryResponse, String> {
+        let conn = self.memory.usage_conn();
+        let owner_id = req.owner_id.to_string();
+        let entity_id = req.entity_id.to_string();
+        let time_window_days = req.time_window_days;
+        let limit = req.limit;
+        tokio::task::spawn_blocking(move || {
+            memory::tree::retrieval::topic::query_topic(&conn, &owner_id, &entity_id, time_window_days, limit)
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?
+        .map_err(|e| e.to_string())
+    }
+
+    async fn tree_search_entities(
+        &self,
+        req: types::memory_tree::EntitySearch<'_>,
+    ) -> Result<Vec<types::memory_tree::EntityMatch>, String> {
+        let conn = self.memory.usage_conn();
+        let owner_id = req.owner_id.to_string();
+        let query = req.query.to_string();
+        let kind = req.kind.map(memory::tree::entity_store::EntityStore::parse_entity_kind);
+        let limit = req.limit;
+        tokio::task::spawn_blocking(move || {
+            memory::tree::retrieval::search::search_entities(&conn, &owner_id, &query, kind, limit)
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?
+        .map_err(|e| e.to_string())
+    }
+
+    async fn tree_drill_down(
+        &self,
+        req: types::memory_tree::DrillDownQuery<'_>,
+    ) -> Result<types::memory_tree::QueryResponse, String> {
+        let conn = self.memory.usage_conn();
+        let owner_id = req.owner_id.to_string();
+        let node_id = req.node_id.to_string();
+        let limit = req.limit;
+        tokio::task::spawn_blocking(move || {
+            let hits = memory::tree::retrieval::drill_down::drill_down(&conn, &owner_id, &node_id, 2, Some(limit))?;
+            let total = hits.len();
+            let truncated = total > limit;
+            Ok::<_, types::error::CarrierError>(types::memory_tree::QueryResponse { hits, total, truncated })
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?
+        .map_err(|e| e.to_string())
+    }
+
+    async fn tree_fetch_leaves(
+        &self,
+        req: types::memory_tree::FetchLeavesQuery<'_>,
+    ) -> Result<types::memory_tree::QueryResponse, String> {
+        let conn = self.memory.usage_conn();
+        let owner_id = req.owner_id.to_string();
+        let node_id = req.node_id.to_string();
+        let limit = req.limit;
+        tokio::task::spawn_blocking(move || {
+            memory::tree::retrieval::fetch::fetch_leaves(&conn, &owner_id, &node_id, limit)
+        })
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?
+        .map_err(|e| e.to_string())
+    }
+
+    async fn tree_list_sources(
+        &self,
+        owner_id: &str,
+        source_kind: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<types::memory_tree::TreeSummary>, String> {
+        self.memory.tree_list_sources(owner_id, source_kind, limit)
+            .map_err(|e| e.to_string())
     }
 
 }

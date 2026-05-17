@@ -28,6 +28,7 @@ const CORE_TOOLS: &[&str] = &[
     "skill_load",
     "knowledge_read", "knowledge_list",
     "cron_create", "cron_list", "cron_cancel",
+    "memory_recall", "memory_list", "memory_search_entities",
 ];
 
 /// Map a builtin tool name to its toolset. Returns None for core tools.
@@ -37,10 +38,12 @@ pub(crate) fn tool_to_toolset(name: &str) -> Option<&'static str> {
         | "tool_search"
         | "skill_load"
         | "knowledge_read" | "knowledge_list"
-        | "cron_create" | "cron_list" | "cron_cancel" => None,
+        | "cron_create" | "cron_list" | "cron_cancel"
+        | "memory_recall" | "memory_list" | "memory_search_entities" => None,
         n if n.starts_with("file_") => Some("filesystem"),
         "shell_exec" => Some("shell"),
         n if n.starts_with("knowledge_") || n.starts_with("skill_") || n == "clone_evaluate" => Some("knowledge"),
+        n if n.starts_with("memory_") => Some("memory"),
         n if n.starts_with("media_") || n.starts_with("image_") || n == "text_to_speech" || n == "speech_to_text" => Some("media"),
         n if n.starts_with("web_") => Some("web"),
         n if n.starts_with("agent_") || n.starts_with("train_") => Some("agent"),
@@ -52,7 +55,7 @@ pub(crate) fn tool_to_toolset(name: &str) -> Option<&'static str> {
 }
 
 /// Builtin toolset names (used to distinguish from MCP toolsets).
-const BUILTIN_TOOLSETS: &[&str] = &["filesystem", "shell", "knowledge", "media", "web", "agent", "misc"];
+const BUILTIN_TOOLSETS: &[&str] = &["filesystem", "shell", "knowledge", "memory", "media", "web", "agent", "misc"];
 
 /// Tools that remain available even when a skill restricts the tool list.
 /// These are foundational: the agent must always be able to summarize
@@ -62,6 +65,8 @@ pub(crate) const ALWAYS_AVAILABLE_WITH_SKILL: &[&str] = &[
     "session_summarize",
     "knowledge_read",
     "knowledge_list",
+    "memory_recall",
+    "memory_search_entities",
 ];
 
 /// Match a tool name against a skill `allowed_tools` pattern.
@@ -112,7 +117,10 @@ fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
         | "task_list" | "schedule_list" | "cron_list"
         | "a2a_discover" | "clone_evaluate"
         | "knowledge_lint" | "knowledge_index" | "knowledge_extract"
-        | "train_knowledge_lint" => PermissionLevel::None,
+        | "train_knowledge_lint"
+        | "memory_recall" | "memory_list" | "memory_query_topic"
+        | "memory_search_entities" | "memory_drill_down"
+        | "memory_fetch_leaves" => PermissionLevel::None,
 
         // ReadOnly — reads from external sources
         "file_read" | "file_list" | "file_convert"
@@ -128,7 +136,8 @@ fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
         | "image_generate" | "text_to_speech" | "canvas_present"
         | "task_post" | "task_claim" | "task_complete"
         | "event_publish" | "schedule_create" | "schedule_delete"
-        | "cron_create" | "cron_cancel" => PermissionLevel::Write,
+        | "cron_create" | "cron_cancel"
+        | "memory_ingest" => PermissionLevel::Write,
 
         // Execute — cross-boundary writes
         "docker_exec" | "process_start" | "process_poll"
@@ -531,6 +540,7 @@ impl CarrierKernel {
             base_system_prompt: manifest.model.system_prompt.clone(),
             granted_tools: tools.iter().map(|t| t.name.clone()).collect(),
             recalled_memories: vec![],
+            tree_memories: vec![],
             skill_summary: String::new(),
             skill_prompt_context: String::new(),
             mcp_summary: self.build_toolset_summary(

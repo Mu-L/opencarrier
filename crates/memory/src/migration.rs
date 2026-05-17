@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 16;
+const SCHEMA_VERSION: u32 = 17;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -73,6 +73,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 16 {
         migrate_v16(conn)?;
+    }
+
+    if current_version < 17 {
+        migrate_v17(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -644,6 +648,196 @@ fn migrate_v16(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![16, "Cron delivery: sender_channels + pending_notifications"],
+    )?;
+    Ok(())
+}
+
+fn migrate_v17(conn: &Connection) -> Result<(), rusqlite::Error> {
+    // Tree memory system: 9 new tables for hierarchical memory with multi-tenancy.
+    // Every table includes owner_id as the leading partition key.
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS mem_tree_chunks (
+            id                     TEXT PRIMARY KEY,
+            owner_id               TEXT NOT NULL,
+            agent_id               TEXT NOT NULL,
+            source_kind            TEXT NOT NULL,
+            source_id              TEXT NOT NULL,
+            source_ref             TEXT,
+            timestamp_ms           INTEGER NOT NULL,
+            time_range_start_ms    INTEGER NOT NULL,
+            time_range_end_ms      INTEGER NOT NULL,
+            tags_json              TEXT NOT NULL DEFAULT '[]',
+            content                TEXT NOT NULL,
+            token_count            INTEGER NOT NULL,
+            seq_in_source          INTEGER NOT NULL,
+            partial_message        INTEGER NOT NULL DEFAULT 0,
+            lifecycle_status       TEXT NOT NULL DEFAULT 'admitted',
+            created_at_ms          INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_chunks_owner
+            ON mem_tree_chunks(owner_id);
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_chunks_owner_source
+            ON mem_tree_chunks(owner_id, source_kind, source_id);
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_chunks_owner_timestamp
+            ON mem_tree_chunks(owner_id, timestamp_ms);
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_chunks_owner_lifecycle
+            ON mem_tree_chunks(owner_id, lifecycle_status);
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_chunks_source_seq
+            ON mem_tree_chunks(owner_id, source_kind, source_id, seq_in_source);
+
+        CREATE TABLE IF NOT EXISTS mem_tree_score (
+            chunk_id               TEXT PRIMARY KEY,
+            owner_id               TEXT NOT NULL,
+            total                  REAL NOT NULL,
+            token_count_signal     REAL NOT NULL,
+            unique_words_signal    REAL NOT NULL,
+            metadata_weight        REAL NOT NULL,
+            source_weight          REAL NOT NULL,
+            interaction_weight     REAL NOT NULL,
+            entity_density         REAL NOT NULL,
+            llm_importance         REAL NOT NULL DEFAULT 0.0,
+            llm_importance_reason  TEXT,
+            dropped                INTEGER NOT NULL DEFAULT 0,
+            reason                 TEXT,
+            computed_at_ms         INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_score_owner_total
+            ON mem_tree_score(owner_id, total);
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_score_owner_dropped
+            ON mem_tree_score(owner_id, dropped);
+
+        CREATE TABLE IF NOT EXISTS mem_tree_entity_index (
+            entity_id              TEXT NOT NULL,
+            node_id                TEXT NOT NULL,
+            node_kind              TEXT NOT NULL,
+            owner_id               TEXT NOT NULL,
+            entity_kind            TEXT NOT NULL,
+            surface                TEXT NOT NULL,
+            score                  REAL NOT NULL,
+            timestamp_ms           INTEGER NOT NULL,
+            tree_id                TEXT,
+            PRIMARY KEY (owner_id, entity_id, node_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_entity_index_owner_entity
+            ON mem_tree_entity_index(owner_id, entity_id);
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_entity_index_owner_node
+            ON mem_tree_entity_index(owner_id, node_id);
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_entity_index_owner_timestamp
+            ON mem_tree_entity_index(owner_id, timestamp_ms);
+
+        CREATE TABLE IF NOT EXISTS mem_tree_trees (
+            id                     TEXT PRIMARY KEY,
+            owner_id               TEXT NOT NULL,
+            kind                   TEXT NOT NULL,
+            scope                  TEXT NOT NULL,
+            root_id                TEXT,
+            max_level              INTEGER NOT NULL DEFAULT 0,
+            status                 TEXT NOT NULL DEFAULT 'active',
+            created_at_ms          INTEGER NOT NULL,
+            last_sealed_at_ms      INTEGER
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mem_tree_trees_owner_kind_scope
+            ON mem_tree_trees(owner_id, kind, scope);
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_trees_owner_status
+            ON mem_tree_trees(owner_id, status);
+
+        CREATE TABLE IF NOT EXISTS mem_tree_summaries (
+            id                     TEXT PRIMARY KEY,
+            owner_id               TEXT NOT NULL,
+            tree_id                TEXT NOT NULL,
+            tree_kind              TEXT NOT NULL,
+            level                  INTEGER NOT NULL,
+            parent_id              TEXT,
+            child_ids_json         TEXT NOT NULL DEFAULT '[]',
+            content                TEXT NOT NULL,
+            token_count            INTEGER NOT NULL,
+            entities_json          TEXT NOT NULL DEFAULT '[]',
+            topics_json            TEXT NOT NULL DEFAULT '[]',
+            time_range_start_ms    INTEGER NOT NULL,
+            time_range_end_ms      INTEGER NOT NULL,
+            score                  REAL NOT NULL DEFAULT 0.0,
+            sealed_at_ms           INTEGER NOT NULL,
+            deleted                INTEGER NOT NULL DEFAULT 0,
+            embedding              BLOB DEFAULT NULL,
+            FOREIGN KEY (tree_id) REFERENCES mem_tree_trees(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_summaries_owner_tree_level
+            ON mem_tree_summaries(owner_id, tree_id, level);
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_summaries_owner_parent
+            ON mem_tree_summaries(owner_id, parent_id);
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_summaries_owner_sealed_at
+            ON mem_tree_summaries(owner_id, sealed_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_summaries_owner_deleted
+            ON mem_tree_summaries(owner_id, deleted);
+
+        CREATE TABLE IF NOT EXISTS mem_tree_buffers (
+            tree_id                TEXT NOT NULL,
+            level                  INTEGER NOT NULL,
+            owner_id               TEXT NOT NULL,
+            item_ids_json          TEXT NOT NULL DEFAULT '[]',
+            token_sum              INTEGER NOT NULL DEFAULT 0,
+            oldest_at_ms           INTEGER,
+            updated_at_ms          INTEGER NOT NULL,
+            PRIMARY KEY (tree_id, level),
+            FOREIGN KEY (tree_id) REFERENCES mem_tree_trees(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_buffers_owner_oldest
+            ON mem_tree_buffers(owner_id, oldest_at_ms);
+
+        CREATE TABLE IF NOT EXISTS mem_tree_entity_hotness (
+            entity_id              TEXT NOT NULL,
+            owner_id               TEXT NOT NULL,
+            mention_count_30d      INTEGER NOT NULL DEFAULT 0,
+            distinct_sources       INTEGER NOT NULL DEFAULT 0,
+            last_seen_ms           INTEGER,
+            query_hits_30d         INTEGER NOT NULL DEFAULT 0,
+            graph_centrality       REAL,
+            ingests_since_check    INTEGER NOT NULL DEFAULT 0,
+            last_hotness           REAL,
+            last_updated_ms        INTEGER NOT NULL,
+            PRIMARY KEY (owner_id, entity_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_entity_hotness_owner_score
+            ON mem_tree_entity_hotness(owner_id, last_hotness);
+
+        CREATE TABLE IF NOT EXISTS mem_tree_jobs (
+            id                     TEXT PRIMARY KEY,
+            owner_id               TEXT NOT NULL,
+            kind                   TEXT NOT NULL,
+            payload_json           TEXT NOT NULL,
+            dedupe_key             TEXT,
+            status                 TEXT NOT NULL DEFAULT 'ready',
+            attempts               INTEGER NOT NULL DEFAULT 0,
+            max_attempts           INTEGER NOT NULL DEFAULT 5,
+            available_at_ms        INTEGER NOT NULL,
+            locked_until_ms        INTEGER,
+            last_error             TEXT,
+            created_at_ms          INTEGER NOT NULL,
+            started_at_ms          INTEGER,
+            completed_at_ms        INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_jobs_owner_ready
+            ON mem_tree_jobs(owner_id, status, available_at_ms);
+        CREATE INDEX IF NOT EXISTS idx_mem_tree_jobs_owner_kind
+            ON mem_tree_jobs(owner_id, kind);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_mem_tree_jobs_owner_dedupe_active
+            ON mem_tree_jobs(owner_id, dedupe_key)
+            WHERE dedupe_key IS NOT NULL AND status IN ('ready', 'running');
+
+        CREATE TABLE IF NOT EXISTS mem_tree_ingested_sources (
+            source_kind            TEXT NOT NULL,
+            source_id              TEXT NOT NULL,
+            owner_id               TEXT NOT NULL,
+            ingested_at_ms         INTEGER NOT NULL,
+            PRIMARY KEY (owner_id, source_kind, source_id)
+        );
+        ",
+    )?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![17, "Tree memory: 9 tables for hierarchical memory with owner_id partitioning"],
     )?;
     Ok(())
 }

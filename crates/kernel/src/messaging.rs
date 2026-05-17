@@ -469,6 +469,7 @@ impl CarrierKernel {
                 brain_ref.clone(), // Brain for modality-based routing
                 sender_id.as_deref(),
                 owner_id.as_deref(),
+                None, // channel_type not yet available in streaming path
             )
             .await;
 
@@ -1079,6 +1080,7 @@ impl CarrierKernel {
             brain_ref, // Brain for modality-based routing
             sender_id.as_deref(),
             owner_id.as_deref(),
+            channel_type.as_deref(),
         )
         .await
         .map_err(KernelError::Carrier)?;

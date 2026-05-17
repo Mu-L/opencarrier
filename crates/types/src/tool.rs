@@ -9,12 +9,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionLevel {
-    /// Pure queries with no side effects: memory_recall, knowledge_read, etc.
+    /// Pure queries with no side effects: knowledge_read, etc.
     #[default]
     None,
     /// Read from external sources: web_fetch, file_read, web_search.
     ReadOnly,
-    /// Write within sandbox: file_write (workspace), memory_store (own ns).
+    /// Write within sandbox: file_write (workspace), system_kv_store (own ns).
     Write,
     /// Cross-boundary writes: file_write (arbitrary), agent_send, docker_exec.
     Execute,

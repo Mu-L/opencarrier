@@ -186,7 +186,7 @@ mod tests {
     use memory::MemorySubstrate;
 
     fn setup(budget: BudgetConfig) -> MeteringEngine {
-        let substrate = MemorySubstrate::open_in_memory(0.1).unwrap();
+        let substrate = MemorySubstrate::open_in_memory().unwrap();
         let store = Arc::new(UsageStore::new(substrate.usage_conn()));
         MeteringEngine::new(store, budget)
     }

@@ -17,6 +17,7 @@ pub mod manifest_signing;
 pub mod mcp_manifest;
 pub mod media;
 pub mod memory;
+pub mod memory_tree;
 pub mod message;
 pub mod model_catalog;
 pub mod plugin;

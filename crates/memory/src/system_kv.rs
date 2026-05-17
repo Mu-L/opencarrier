@@ -1,4 +1,4 @@
-//! SQLite structured store for key-value pairs and agent persistence.
+//! SQLite system KV store for agent persistence and system key-value pairs.
 
 use types::agent::{AgentEntry, AgentId};
 use types::error::{CarrierError, CarrierResult};
@@ -6,14 +6,14 @@ use chrono::Utc;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
 
-/// Structured store backed by SQLite for key-value operations and agent storage.
+/// System KV store backed by SQLite for agent entries and system key-value storage.
 #[derive(Clone)]
-pub struct StructuredStore {
+pub struct SystemKV {
     conn: Arc<Mutex<Connection>>,
 }
 
-impl StructuredStore {
-    /// Create a new structured store wrapping the given connection.
+impl SystemKV {
+    /// Create a new system KV store wrapping the given connection.
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
         Self { conn }
     }
@@ -610,10 +610,10 @@ mod tests {
     use super::*;
     use crate::migration::run_migrations;
 
-    fn setup() -> StructuredStore {
+    fn setup() -> SystemKV {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
-        StructuredStore::new(Arc::new(Mutex::new(conn)))
+        SystemKV::new(Arc::new(Mutex::new(conn)))
     }
 
     #[test]

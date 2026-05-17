@@ -447,14 +447,6 @@ enum SecurityCommands {
 
 #[derive(Subcommand)]
 enum MemoryCommands {
-    /// List KV pairs for an agent.
-    List {
-        /// Agent name or ID.
-        agent: String,
-        /// Output as JSON for scripting.
-        #[arg(long)]
-        json: bool,
-    },
     /// Get a specific KV value.
     Get {
         /// Agent name or ID.
@@ -597,7 +589,6 @@ fn main() {
             SecurityCommands::Verify => cmd_security_verify(),
         },
         Commands::Memory(sub) => match sub {
-            MemoryCommands::List { agent, json } => cmd_memory_list(&agent, json),
             MemoryCommands::Get { agent, key, json } => cmd_memory_get(&agent, &key, json),
             MemoryCommands::Set { agent, key, value } => cmd_memory_set(&agent, &key, &value),
             MemoryCommands::Delete { agent, key } => cmd_memory_delete(&agent, &key),
@@ -3546,42 +3537,6 @@ fn cmd_security_verify() {
             ui::hint(msg);
         }
         std::process::exit(1);
-    }
-}
-
-fn cmd_memory_list(agent: &str, json: bool) {
-    let base = require_daemon("memory list");
-    let client = daemon_client();
-    let body = daemon_json(
-        client
-            .get(format!("{base}/api/memory/agents/{agent}/kv"))
-            .send(),
-    );
-    if json {
-        print_json(&body);
-        return;
-    }
-    if let Some(arr) = body.as_array() {
-        if arr.is_empty() {
-            println!("No memory entries for agent '{agent}'.");
-            return;
-        }
-        println!("{:<30} VALUE", "KEY");
-        println!("{}", "-".repeat(60));
-        for kv in arr {
-            println!(
-                "{:<30} {}",
-                kv["key"].as_str().unwrap_or("?"),
-                kv["value"]
-                    .as_str()
-                    .unwrap_or("")
-                    .chars()
-                    .take(50)
-                    .collect::<String>(),
-            );
-        }
-    } else {
-        print_json(&body);
     }
 }
 

@@ -132,7 +132,7 @@ pub enum AgentState {
 pub enum AgentMode {
     /// Read-only: agent can observe but cannot call any tools.
     Observe,
-    /// Restricted: agent can only call read-only tools (file_read, file_list, memory_recall, web_fetch, web_search).
+    /// Restricted: agent can only call read-only tools (file_read, file_list, web_fetch, web_search).
     Assist,
     /// Unrestricted: agent can use all granted tools.
     #[default]
@@ -148,7 +148,6 @@ impl AgentMode {
                 let read_only = [
                     "file_read",
                     "file_list",
-                    "memory_recall",
                     "web_fetch",
                     "web_search",
                     "agent_list",
@@ -254,7 +253,7 @@ impl ToolProfile {
                 "web_fetch",
             ],
             Self::Research => vec!["web_fetch", "web_search", "file_read", "file_write"],
-            Self::Messaging => vec!["agent_send", "agent_list", "memory_store", "memory_recall"],
+            Self::Messaging => vec!["agent_send", "agent_list"],
             Self::Automation => vec![
                 "file_read",
                 "file_write",
@@ -264,8 +263,6 @@ impl ToolProfile {
                 "web_search",
                 "agent_send",
                 "agent_list",
-                "memory_store",
-                "memory_recall",
             ],
             Self::Full | Self::Custom => vec!["*"],
         }
@@ -280,7 +277,7 @@ impl ToolProfile {
         let has_net = tools.iter().any(|t| t.starts_with("web_") || t == "*");
         let has_shell = tools.iter().any(|t| t == "shell_exec" || t == "*");
         let has_agent = tools.iter().any(|t| t.starts_with("agent_") || t == "*");
-        let has_memory = tools.iter().any(|t| t.starts_with("memory_") || t == "*");
+        let has_memory = tools.iter().any(|t| t.starts_with("system_kv_") || t == "*");
         ManifestCapabilities {
             tools,
             network: if has_net { vec!["*".into()] } else { vec![] },
@@ -764,14 +761,13 @@ mod tests {
     fn test_tool_profile_messaging() {
         let tools = ToolProfile::Messaging.tools();
         assert!(tools.contains(&"agent_send".to_string()));
-        assert!(tools.contains(&"memory_recall".to_string()));
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 2);
     }
 
     #[test]
     fn test_tool_profile_automation() {
         let tools = ToolProfile::Automation.tools();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 8);
     }
 
     #[test]
@@ -796,7 +792,7 @@ mod tests {
         assert!(caps.shell.is_empty());
         assert!(caps.agent_spawn);
         assert!(caps.agent_message.contains(&"*".to_string()));
-        assert!(caps.memory_read.contains(&"*".to_string()));
+        assert!(caps.memory_read.contains(&"self.*".to_string()));
     }
 
     #[test]
@@ -866,7 +862,7 @@ mod tests {
                 input_schema: serde_json::Value::Null,
             },
             ToolDefinition {
-                name: "memory_recall".into(),
+                name: "web_search".into(),
                 description: String::new(),
                 input_schema: serde_json::Value::Null,
             },
@@ -876,7 +872,6 @@ mod tests {
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"file_read"));
         assert!(names.contains(&"web_fetch"));
-        assert!(names.contains(&"memory_recall"));
         assert!(!names.contains(&"file_write"));
         assert!(!names.contains(&"shell_exec"));
     }

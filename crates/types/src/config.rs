@@ -1295,8 +1295,6 @@ pub struct MemoryConfig {
     pub embedding_model: String,
     /// Maximum memories before consolidation is triggered.
     pub consolidation_threshold: u64,
-    /// Memory decay rate (0.0 = no decay, 1.0 = aggressive decay).
-    pub decay_rate: f32,
     /// Embedding provider (e.g., "openai", "ollama"). None = auto-detect.
     #[serde(default)]
     pub embedding_provider: Option<String>,
@@ -1306,6 +1304,71 @@ pub struct MemoryConfig {
     /// How often to run memory consolidation (hours). 0 = disabled.
     #[serde(default = "default_consolidation_interval")]
     pub consolidation_interval_hours: u64,
+    /// Tree memory configuration (hierarchical memory system).
+    #[serde(default)]
+    pub tree: TreeMemoryConfig,
+}
+
+/// Configuration for the hierarchical tree memory system.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreeMemoryConfig {
+    /// Root directory for tree memory content files (Obsidian-compatible .md).
+    /// Default: {data_dir}/memory_tree/content
+    #[serde(default)]
+    pub content_root: Option<String>,
+    /// Number of background worker tasks for tree jobs.
+    #[serde(default = "default_tree_worker_count")]
+    pub worker_count: usize,
+    /// Poll interval in seconds for the job queue.
+    #[serde(default = "default_tree_poll_interval")]
+    pub poll_interval_secs: u64,
+    /// Token budget for L0 buffer before sealing.
+    #[serde(default = "default_tree_input_token_budget")]
+    pub input_token_budget: u32,
+    /// Number of summaries to fan-out at each level.
+    #[serde(default = "default_tree_summary_fanout")]
+    pub summary_fanout: u32,
+    /// Age in seconds after which stale buffers are force-sealed.
+    #[serde(default = "default_tree_flush_age")]
+    pub flush_age_secs: i64,
+    /// Score threshold below which chunks are dropped.
+    #[serde(default = "default_tree_drop_threshold")]
+    pub drop_threshold: f32,
+    /// Maximum tokens per chunk.
+    #[serde(default = "default_tree_chunk_max_tokens")]
+    pub chunk_max_tokens: u32,
+    /// LLM model for summarisation. Empty = inert (concat-only).
+    #[serde(default)]
+    pub summariser_model: Option<String>,
+    /// Hotness threshold for entity topic tree materialisation.
+    #[serde(default = "default_tree_topic_hotness")]
+    pub topic_hotness_threshold: f32,
+}
+
+fn default_tree_worker_count() -> usize { 4 }
+fn default_tree_poll_interval() -> u64 { 5 }
+fn default_tree_input_token_budget() -> u32 { 50_000 }
+fn default_tree_summary_fanout() -> u32 { 10 }
+fn default_tree_flush_age() -> i64 { 604_800 }
+fn default_tree_drop_threshold() -> f32 { 0.3 }
+fn default_tree_chunk_max_tokens() -> u32 { 3_000 }
+fn default_tree_topic_hotness() -> f32 { 3.0 }
+
+impl Default for TreeMemoryConfig {
+    fn default() -> Self {
+        Self {
+            content_root: None,
+            worker_count: default_tree_worker_count(),
+            poll_interval_secs: default_tree_poll_interval(),
+            input_token_budget: default_tree_input_token_budget(),
+            summary_fanout: default_tree_summary_fanout(),
+            flush_age_secs: default_tree_flush_age(),
+            drop_threshold: default_tree_drop_threshold(),
+            chunk_max_tokens: default_tree_chunk_max_tokens(),
+            summariser_model: None,
+            topic_hotness_threshold: default_tree_topic_hotness(),
+        }
+    }
 }
 
 fn default_consolidation_interval() -> u64 {
@@ -1318,10 +1381,10 @@ impl Default for MemoryConfig {
             sqlite_path: None,
             embedding_model: "all-MiniLM-L6-v2".to_string(),
             consolidation_threshold: 10_000,
-            decay_rate: 0.1,
             embedding_provider: None,
             embedding_api_key_env: None,
             consolidation_interval_hours: default_consolidation_interval(),
+            tree: TreeMemoryConfig::default(),
         }
     }
 }
