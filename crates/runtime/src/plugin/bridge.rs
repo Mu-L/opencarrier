@@ -36,7 +36,7 @@ pub struct PluginBridgeManager {
     /// Cron delivery: last-channel tracking + buffered notifications.
     cron_delivery: Option<Arc<memory::CronDeliveryStore>>,
     /// route_key of users currently in the "naming" flow (waiting for agent name).
-    pending_naming: DashMap<String, String>,
+    pending_naming: Arc<DashMap<String, String>>,
 }
 
 impl PluginBridgeManager {
@@ -47,7 +47,7 @@ impl PluginBridgeManager {
             channel_send_fn: None,
             sender_router: None,
             cron_delivery: None,
-            pending_naming: DashMap::new(),
+            pending_naming: Arc::new(DashMap::new()),
         }
     }
 
