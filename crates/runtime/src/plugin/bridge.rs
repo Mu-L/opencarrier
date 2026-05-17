@@ -169,6 +169,7 @@ impl PluginBridgeManager {
         }
 
         // 1. Check if route is in naming flow
+        info!(route_key = %rk, pending_naming = self.pending_naming.len(), "Checking pending_naming");
         if let Some((_, agent_id)) = self.pending_naming.remove(&rk) {
             let name = text.trim().to_string();
             info!(route_key = %rk, name = %name, "Naming flow: user provided name");
@@ -248,6 +249,7 @@ impl PluginBridgeManager {
             if router.needs_naming(&rk) {
                 info!(route_key = %rk, agent = %agent_id, "Agent needs naming, entering naming flow");
                 self.pending_naming.insert(rk.clone(), agent_id.clone());
+                info!(route_key = %rk, pending_naming = self.pending_naming.len(), "Inserted into pending_naming");
                 self.send_response(&msg, "请给我取个名字吧！以后叫这个名字我就会出来。").await;
                 return;
             }
