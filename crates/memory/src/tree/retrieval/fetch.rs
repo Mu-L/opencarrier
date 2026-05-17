@@ -1,6 +1,5 @@
-//! Batch chunk hydration — fetch all leaf chunks under a summary node.
+//! Batch chunk hydration — fetch leaf chunks by their IDs directly.
 
-use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
@@ -8,75 +7,39 @@ use types::error::CarrierResult;
 use types::memory_tree::{NodeKind, QueryResponse, RetrievalHit, TreeKind};
 
 use crate::tree::store::ChunkStore;
-use crate::tree::tree_store::TreeTreeStore;
+use crate::tree::score_store::ScoreStore;
 
+/// Maximum number of chunk IDs that can be fetched in one call.
+const MAX_FETCH_BATCH: usize = 20;
 const DEFAULT_LIMIT: usize = 20;
 
-/// Fetch all leaf (chunk) nodes under a summary, using BFS to collect child_ids.
+/// Fetch leaf chunks by their IDs directly (no BFS traversal).
+///
+/// Missing IDs are silently skipped (best-effort). Results are sorted
+/// oldest-first by `time_range_start_ms`.
 pub fn fetch_leaves(
     conn: &Arc<Mutex<Connection>>,
     owner_id: &str,
-    node_id: &str,
+    chunk_ids: &[String],
     limit: usize,
 ) -> CarrierResult<QueryResponse> {
     let limit = if limit == 0 { DEFAULT_LIMIT } else { limit };
-    let tree_store = TreeTreeStore::new(conn.clone());
+    let cap = limit.min(MAX_FETCH_BATCH);
     let chunk_store = ChunkStore::new(conn.clone());
+    let score_store = ScoreStore::new(conn.clone());
 
-    // If the node itself is a leaf chunk, return it directly.
-    if let Some(chunk) = chunk_store.get_chunk(owner_id, node_id)? {
-        let hit = RetrievalHit {
-            node_id: chunk.id,
-            node_kind: NodeKind::Leaf,
-            tree_id: String::new(),
-            tree_kind: TreeKind::Source,
-            tree_scope: chunk.source_id.clone(),
-            level: 0,
-            content: chunk.content,
-            entities: Vec::new(),
-            topics: Vec::new(),
-            time_range_start_ms: chunk.time_range_start_ms,
-            time_range_end_ms: chunk.time_range_end_ms,
-            score: 0.0,
-            child_ids: Vec::new(),
-            source_ref: chunk.source_ref,
-        };
-        return Ok(QueryResponse {
-            hits: vec![hit],
-            total: 1,
-            truncated: false,
-        });
-    }
-
-    // Otherwise, BFS from the summary node, collecting leaf chunks.
-    let root = tree_store.get_summary(owner_id, node_id)?;
-    let start_children: Vec<String> = match &root {
-        Some(s) => s.child_ids.clone(),
-        None => return Ok(QueryResponse {
-            hits: Vec::new(),
-            total: 0,
-            truncated: false,
-        }),
-    };
-
+    let requested = chunk_ids.len();
     let mut hits: Vec<RetrievalHit> = Vec::new();
-    let mut frontier: VecDeque<String> = start_children.into_iter().collect();
 
-    while let Some(id) = frontier.pop_front() {
-        if hits.len() >= limit {
-            break;
-        }
+    for id in chunk_ids.iter().take(cap) {
+        if let Some(chunk) = chunk_store.get_chunk(owner_id, id)? {
+            let score = score_store
+                .get_score(owner_id, id)
+                .ok()
+                .flatten()
+                .map(|s| s.total)
+                .unwrap_or(0.0);
 
-        // Try as summary — enqueue its children.
-        if let Some(node) = tree_store.get_summary(owner_id, &id)? {
-            for child in &node.child_ids {
-                frontier.push_back(child.clone());
-            }
-            continue;
-        }
-
-        // Try as chunk (leaf).
-        if let Some(chunk) = chunk_store.get_chunk(owner_id, &id)? {
             hits.push(RetrievalHit {
                 node_id: chunk.id,
                 node_kind: NodeKind::Leaf,
@@ -89,23 +52,20 @@ pub fn fetch_leaves(
                 topics: Vec::new(),
                 time_range_start_ms: chunk.time_range_start_ms,
                 time_range_end_ms: chunk.time_range_end_ms,
-                score: 0.0,
+                score,
                 child_ids: Vec::new(),
                 source_ref: chunk.source_ref,
             });
         }
+        // Missing chunk: skip silently (best-effort)
     }
 
-    let total = hits.len();
-    let truncated = total > limit;
-    hits.truncate(limit);
-
-    // Sort oldest-first (by time_range_start_ms) for chronological reading.
+    let truncated = requested > cap;
     hits.sort_by_key(|h| h.time_range_start_ms);
 
     Ok(QueryResponse {
         hits,
-        total,
+        total: requested,
         truncated,
     })
 }
@@ -114,10 +74,7 @@ pub fn fetch_leaves(
 mod tests {
     use super::*;
     use crate::migration::run_migrations;
-    use crate::tree::bucket_seal::BucketSealEngine;
-    use crate::tree::summariser::inert::InertSummariser;
     use crate::tree::types::{Chunk, SourceKind};
-    use crate::tree::store::ChunkStore;
     use tempfile::TempDir;
 
     fn setup() -> (Arc<Mutex<Connection>>, TempDir) {
@@ -127,89 +84,102 @@ mod tests {
         (Arc::new(Mutex::new(conn)), dir)
     }
 
+    fn insert_chunk(conn: &Arc<Mutex<Connection>>, owner_id: &str, id: &str, seq: u32, content: &str) {
+        let store = ChunkStore::new(conn.clone());
+        let chunk = Chunk {
+            id: id.to_string(),
+            owner_id: owner_id.to_string(),
+            agent_id: "agent_1".to_string(),
+            source_kind: SourceKind::Chat,
+            source_id: "wechat:test:sender".to_string(),
+            source_ref: None,
+            timestamp_ms: 1_700_000_000_000 + seq as i64 * 1000,
+            time_range_start_ms: 1_700_000_000_000 + seq as i64 * 1000,
+            time_range_end_ms: 1_700_000_000_000 + seq as i64 * 1000,
+            tags_json: "[]".to_string(),
+            content: content.to_string(),
+            token_count: 10,
+            seq_in_source: seq,
+            partial_message: false,
+            lifecycle_status: "admitted".to_string(),
+            created_at_ms: 1_700_000_000_000,
+        };
+        store.upsert_chunks(&[chunk]).unwrap();
+    }
+
     #[test]
-    fn test_unknown_node_returns_empty() -> CarrierResult<()> {
+    fn test_empty_ids_returns_empty() -> CarrierResult<()> {
         let (conn, _dir) = setup();
-        let resp = fetch_leaves(&conn, "owner_1", "nonexistent", 10)?;
+        let resp = fetch_leaves(&conn, "owner_1", &[], 10)?;
         assert!(resp.hits.is_empty());
         Ok(())
     }
 
     #[test]
-    fn test_direct_chunk_returns_itself() -> CarrierResult<()> {
+    fn test_missing_ids_skipped() -> CarrierResult<()> {
         let (conn, _dir) = setup();
-        let chunk_store = ChunkStore::new(conn.clone());
-
-        let chunk = Chunk {
-            id: "chunk_fl_1".to_string(),
-            owner_id: "owner_1".to_string(),
-            agent_id: "agent_1".to_string(),
-            source_kind: SourceKind::Chat,
-            source_id: "wechat:test:sender".to_string(),
-            source_ref: Some("ref:123".to_string()),
-            timestamp_ms: 1_700_000_000_000,
-            time_range_start_ms: 1_700_000_000_000,
-            time_range_end_ms: 1_700_000_000_000,
-            tags_json: "[]".to_string(),
-            content: "direct leaf content".to_string(),
-            token_count: 5,
-            seq_in_source: 0,
-            partial_message: false,
-            lifecycle_status: "admitted".to_string(),
-            created_at_ms: 1_700_000_000_000,
-        };
-        chunk_store.upsert_chunks(&[chunk])?;
-
-        let resp = fetch_leaves(&conn, "owner_1", "chunk_fl_1", 10)?;
-        assert_eq!(resp.hits.len(), 1);
-        assert_eq!(resp.hits[0].node_kind, NodeKind::Leaf);
-        assert_eq!(resp.hits[0].content, "direct leaf content");
-        assert_eq!(resp.hits[0].source_ref.as_deref(), Some("ref:123"));
+        let resp = fetch_leaves(&conn, "owner_1", &["nonexistent".to_string()], 10)?;
+        assert!(resp.hits.is_empty());
         Ok(())
     }
 
     #[test]
-    fn test_fetch_from_sealed_tree() -> CarrierResult<()> {
+    fn test_direct_chunk_lookup() -> CarrierResult<()> {
         let (conn, _dir) = setup();
-        let tree_store = TreeTreeStore::new(conn.clone());
-        let chunk_store = ChunkStore::new(conn.clone());
+        insert_chunk(&conn, "owner_1", "chunk_1", 0, "hello world");
 
-        let tree = tree_store.get_or_create_tree("owner_1", TreeKind::Source, "wechat:test:sender")?;
-
-        for i in 0..10 {
-            let chunk = Chunk {
-                id: format!("chunk_fl_seal_{i}"),
-                owner_id: "owner_1".to_string(),
-                agent_id: "agent_1".to_string(),
-                source_kind: SourceKind::Chat,
-                source_id: "wechat:test:sender".to_string(),
-                source_ref: None,
-                timestamp_ms: 1_700_000_000_000 + i as i64 * 1000,
-                time_range_start_ms: 1_700_000_000_000 + i as i64 * 1000,
-                time_range_end_ms: 1_700_000_000_000 + i as i64 * 1000,
-                tags_json: "[]".to_string(),
-                content: format!("leaf content {i}"),
-                token_count: 6000,
-                seq_in_source: i,
-                partial_message: false,
-                lifecycle_status: "admitted".to_string(),
-                created_at_ms: 1_700_000_000_000,
-            };
-            chunk_store.upsert_chunks(&[chunk])?;
-        }
-
-        let seal_engine = BucketSealEngine::new(conn.clone(), _dir.path().to_path_buf(), Arc::new(InertSummariser));
-        for i in 0..10 {
-            seal_engine.append_to_buffer("owner_1", &tree.id, 0, &format!("chunk_fl_seal_{i}"), 6000, 1_700_000_000_000)?;
-        }
-        seal_engine.cascade_seals("owner_1", &tree, 0, false)?;
-
-        let refreshed = tree_store.get_tree("owner_1", &tree.id)?.unwrap();
-        let root_id = refreshed.root_id.unwrap();
-
-        let resp = fetch_leaves(&conn, "owner_1", &root_id, 100)?;
-        assert!(!resp.hits.is_empty(), "fetch_leaves from sealed root should return leaf chunks");
+        let resp = fetch_leaves(&conn, "owner_1", &["chunk_1".to_string()], 10)?;
+        assert_eq!(resp.hits.len(), 1);
         assert_eq!(resp.hits[0].node_kind, NodeKind::Leaf);
+        assert_eq!(resp.hits[0].content, "hello world");
+        Ok(())
+    }
+
+    #[test]
+    fn test_batch_lookup_sorted_oldest_first() -> CarrierResult<()> {
+        let (conn, _dir) = setup();
+        insert_chunk(&conn, "owner_1", "chunk_b", 1, "second");
+        insert_chunk(&conn, "owner_1", "chunk_a", 0, "first");
+
+        let resp = fetch_leaves(
+            &conn,
+            "owner_1",
+            &["chunk_b".to_string(), "chunk_a".to_string()],
+            10,
+        )?;
+        assert_eq!(resp.hits.len(), 2);
+        assert_eq!(resp.hits[0].content, "first");
+        assert_eq!(resp.hits[1].content, "second");
+        Ok(())
+    }
+
+    #[test]
+    fn test_batch_cap_and_truncation() -> CarrierResult<()> {
+        let (conn, _dir) = setup();
+        let ids: Vec<String> = (0..25).map(|i| format!("chunk_cap_{i}")).collect();
+        for i in 0..25 {
+            insert_chunk(&conn, "owner_1", &format!("chunk_cap_{i}"), i, "content");
+        }
+
+        let resp = fetch_leaves(&conn, "owner_1", &ids, 100)?;
+        assert!(resp.hits.len() <= MAX_FETCH_BATCH);
+        assert!(resp.truncated);
+        Ok(())
+    }
+
+    #[test]
+    fn test_mixed_found_and_missing() -> CarrierResult<()> {
+        let (conn, _dir) = setup();
+        insert_chunk(&conn, "owner_1", "chunk_exists", 0, "found");
+
+        let resp = fetch_leaves(
+            &conn,
+            "owner_1",
+            &["chunk_exists".to_string(), "missing".to_string()],
+            10,
+        )?;
+        assert_eq!(resp.hits.len(), 1);
+        assert_eq!(resp.hits[0].content, "found");
         Ok(())
     }
 }

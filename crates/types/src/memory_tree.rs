@@ -212,13 +212,14 @@ pub struct EntitySearch<'a> {
 pub struct DrillDownQuery<'a> {
     pub owner_id: &'a str,
     pub node_id: &'a str,
+    pub max_depth: u32,
     pub limit: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct FetchLeavesQuery<'a> {
     pub owner_id: &'a str,
-    pub node_id: &'a str,
+    pub chunk_ids: Vec<String>,
     pub limit: usize,
 }
 

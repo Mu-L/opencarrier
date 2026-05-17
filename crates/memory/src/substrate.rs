@@ -341,7 +341,7 @@ impl MemorySubstrate {
             &self.conn,
             req.owner_id,
             req.node_id,
-            2, // default depth
+            req.max_depth.clamp(1, 3),
             Some(req.limit),
         )?;
         let total = hits.len();
@@ -353,12 +353,12 @@ impl MemorySubstrate {
         })
     }
 
-    /// Fetch all leaf chunks under a summary node.
+    /// Fetch leaf chunks by their IDs directly.
     pub fn tree_fetch_leaves(&self, req: &FetchLeavesQuery<'_>) -> CarrierResult<QueryResponse> {
         retrieval::fetch::fetch_leaves(
             &self.conn,
             req.owner_id,
-            req.node_id,
+            &req.chunk_ids,
             req.limit,
         )
     }

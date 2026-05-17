@@ -419,15 +419,27 @@ pub fn build_tools_section(granted_tools: &[String]) -> String {
 pub fn build_memory_section(memories: &[(String, String)], tree_hits: &[TreeMemoryHit]) -> String {
     let mut out = String::from("## Memory\n");
 
-    // Tree memory hits (hierarchical memory)
+    // Tree memory hits (hierarchical memory) — prefetched context
     if !tree_hits.is_empty() {
-        out.push_str("Relevant memories from your hierarchical memory:\n");
+        out.push_str("[Recent context from memory tree]\n");
         for hit in tree_hits.iter().take(5) {
-            let capped = cap_str(&hit.content, 300);
+            let capped = cap_str(&hit.content, 500);
             out.push_str(&format!("- [{}/{}] {} ({})\n", hit.kind, hit.scope, capped, hit.time_range));
         }
-        out.push_str("\nUse memory_recall(query=...) to search, memory_drill_down(node_id=...) for details.\n");
+        out.push('\n');
     }
+
+    // Tool usage guide
+    out.push_str("`memory_tree` queries the user's already-ingested conversation, email, and document history.\n");
+    out.push_str("It is a retrospective index, NOT a live API for connected services.\n\n");
+    out.push_str("Modes:\n");
+    out.push_str("- `mode: \"search_entities\"` — resolve a name to a canonical entity_id. Call this first when the user mentions someone by name.\n");
+    out.push_str("- `mode: \"query_topic\"` — all cross-source mentions of an entity_id.\n");
+    out.push_str("- `mode: \"query_source\"` — filter by source_kind + time_window_days. Use for \"in my email last week...\" intents.\n");
+    out.push_str("- `mode: \"query_global\"` — cross-source daily digest.\n");
+    out.push_str("- `mode: \"drill_down\"` — expand a coarse summary node_id one level. Returns child nodes with their IDs.\n");
+    out.push_str("- `mode: \"fetch_leaves\"` — pull raw chunks by chunk_ids for citation.\n\n");
+    out.push_str("Start cheap (query_* summaries), only drill_down/fetch_leaves when you need verbatim content.\n");
 
     // Legacy flat memories (if any)
     if !memories.is_empty() {
@@ -440,11 +452,6 @@ pub fn build_memory_section(memories: &[(String, String)], tree_hits: &[TreeMemo
                 out.push_str(&format!("- [{key}] {capped}\n"));
             }
         }
-    }
-
-    if tree_hits.is_empty() && memories.is_empty() {
-        // No memories at all — still show tool instructions
-        out.push_str("Use memory_recall(query=...) to search your conversation history.\n");
     }
 
     out
@@ -935,7 +942,7 @@ mod tests {
         let section = build_memory_section(&memories, &[]);
         // Should be capped at 500 + "..."
         assert!(section.contains("..."));
-        assert!(section.len() < 1200);
+        assert!(section.len() < 1600);
     }
 
     #[test]

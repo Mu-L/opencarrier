@@ -647,9 +647,10 @@ impl KernelHandle for CarrierKernel {
         let conn = self.memory.usage_conn();
         let owner_id = req.owner_id.to_string();
         let node_id = req.node_id.to_string();
+        let max_depth = req.max_depth.clamp(1, 3);
         let limit = req.limit;
         tokio::task::spawn_blocking(move || {
-            let hits = memory::tree::retrieval::drill_down::drill_down(&conn, &owner_id, &node_id, 2, Some(limit))?;
+            let hits = memory::tree::retrieval::drill_down::drill_down(&conn, &owner_id, &node_id, max_depth, Some(limit))?;
             let total = hits.len();
             let truncated = total > limit;
             Ok::<_, types::error::CarrierError>(types::memory_tree::QueryResponse { hits, total, truncated })
@@ -665,10 +666,10 @@ impl KernelHandle for CarrierKernel {
     ) -> Result<types::memory_tree::QueryResponse, String> {
         let conn = self.memory.usage_conn();
         let owner_id = req.owner_id.to_string();
-        let node_id = req.node_id.to_string();
+        let chunk_ids = req.chunk_ids.clone();
         let limit = req.limit;
         tokio::task::spawn_blocking(move || {
-            memory::tree::retrieval::fetch::fetch_leaves(&conn, &owner_id, &node_id, limit)
+            memory::tree::retrieval::fetch::fetch_leaves(&conn, &owner_id, &chunk_ids, limit)
         })
         .await
         .map_err(|e| format!("Task join error: {e}"))?

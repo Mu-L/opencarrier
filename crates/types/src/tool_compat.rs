@@ -31,6 +31,11 @@ pub fn map_tool_name(name: &str) -> Option<&'static str> {
             Some("shell_exec")
         }
 
+        // Legacy memory tool names → consolidated memory_tree
+        "memory_recall" | "memory_list" | "memory_query_topic"
+        | "memory_search_entities" | "memory_drill_down"
+        | "memory_fetch_leaves" | "memory_ingest" => Some("memory_tree"),
+
         _ => None,
     }
 }
@@ -73,6 +78,7 @@ pub fn is_known_carrier_tool(name: &str) -> bool {
             | "schedule_delete"
             | "image_analyze"
             | "location_get"
+            | "memory_tree"
     )
 }
 

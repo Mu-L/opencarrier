@@ -28,7 +28,7 @@ const CORE_TOOLS: &[&str] = &[
     "skill_load",
     "knowledge_read", "knowledge_list",
     "cron_create", "cron_list", "cron_cancel",
-    "memory_recall", "memory_list", "memory_search_entities",
+    "memory_tree",
 ];
 
 /// Map a builtin tool name to its toolset. Returns None for core tools.
@@ -39,7 +39,7 @@ pub(crate) fn tool_to_toolset(name: &str) -> Option<&'static str> {
         | "skill_load"
         | "knowledge_read" | "knowledge_list"
         | "cron_create" | "cron_list" | "cron_cancel"
-        | "memory_recall" | "memory_list" | "memory_search_entities" => None,
+        | "memory_tree" => None,
         n if n.starts_with("file_") => Some("filesystem"),
         "shell_exec" => Some("shell"),
         n if n.starts_with("knowledge_") || n.starts_with("skill_") || n == "clone_evaluate" => Some("knowledge"),
@@ -65,8 +65,7 @@ pub(crate) const ALWAYS_AVAILABLE_WITH_SKILL: &[&str] = &[
     "session_summarize",
     "knowledge_read",
     "knowledge_list",
-    "memory_recall",
-    "memory_search_entities",
+    "memory_tree",
 ];
 
 /// Match a tool name against a skill `allowed_tools` pattern.
@@ -118,9 +117,7 @@ fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
         | "a2a_discover" | "clone_evaluate"
         | "knowledge_lint" | "knowledge_index" | "knowledge_extract"
         | "train_knowledge_lint"
-        | "memory_recall" | "memory_list" | "memory_query_topic"
-        | "memory_search_entities" | "memory_drill_down"
-        | "memory_fetch_leaves" => PermissionLevel::None,
+        | "memory_tree" => PermissionLevel::None,
 
         // ReadOnly — reads from external sources
         "file_read" | "file_list" | "file_convert"
@@ -137,7 +134,7 @@ fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
         | "task_post" | "task_claim" | "task_complete"
         | "event_publish" | "schedule_create" | "schedule_delete"
         | "cron_create" | "cron_cancel"
-        | "memory_ingest" => PermissionLevel::Write,
+        | "memory_ingest" => PermissionLevel::Write, // legacy compat
 
         // Execute — cross-boundary writes
         "docker_exec" | "process_start" | "process_poll"
@@ -490,6 +487,47 @@ impl CarrierKernel {
     /// Build PromptContext and apply it to the manifest's system prompt.
     /// Shared between streaming and non-streaming message paths.
     #[allow(clippy::too_many_arguments)]
+    /// Format a millisecond timestamp for display in memory hits.
+    fn format_time_ms(ms: i64) -> String {
+        chrono::DateTime::from_timestamp_millis(ms)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| ms.to_string())
+    }
+
+    /// Prefetch 7-day global digest for prompt injection.
+    ///
+    /// Queries the global tree for recent summaries and formats them
+    /// as TreeMemoryHit entries for the prompt builder. Non-fatal on failure.
+    fn prefetch_tree_memories(&self, owner_id: &str) -> Vec<runtime::prompt_builder::TreeMemoryHit> {
+        use types::memory_tree::GlobalQuery;
+
+        let req = GlobalQuery {
+            owner_id,
+            time_window_days: Some(7),
+            query: None,
+            limit: 3,
+        };
+
+        match self.memory.tree_query_global(&req) {
+            Ok(resp) => resp
+                .hits
+                .iter()
+                .take(3)
+                .map(|h| runtime::prompt_builder::TreeMemoryHit {
+                    scope: h.tree_scope.clone(),
+                    kind: h.tree_kind.to_string(),
+                    content: h.content.chars().take(500).collect(),
+                    time_range: format!("{} — {}", Self::format_time_ms(h.time_range_start_ms), Self::format_time_ms(h.time_range_end_ms)),
+                })
+                .collect(),
+            Err(e) => {
+                tracing::debug!("Tree memory prefetch failed (non-fatal): {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_and_apply_prompt(
         &self,
         agent_id: &AgentId,
@@ -540,7 +578,7 @@ impl CarrierKernel {
             base_system_prompt: manifest.model.system_prompt.clone(),
             granted_tools: tools.iter().map(|t| t.name.clone()).collect(),
             recalled_memories: vec![],
-            tree_memories: vec![],
+            tree_memories: self.prefetch_tree_memories(oid),
             skill_summary: String::new(),
             skill_prompt_context: String::new(),
             mcp_summary: self.build_toolset_summary(
