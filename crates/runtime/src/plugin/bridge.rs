@@ -137,6 +137,14 @@ impl PluginBridgeManager {
         };
 
         let rk = self.route_key(&msg);
+        info!(
+            channel = %msg.channel_type,
+            bot = %msg.bot_id,
+            route_key = %rk,
+            text_len = text.len(),
+            pending_naming = self.pending_naming.len(),
+            "Bridge handling inbound message"
+        );
 
         // Record the channel this sender last used (for cron delivery routing).
         if let Some(ref cron_delivery) = self.cron_delivery {
@@ -163,6 +171,7 @@ impl PluginBridgeManager {
         // 1. Check if route is in naming flow
         if let Some((_, agent_id)) = self.pending_naming.remove(&rk) {
             let name = text.trim().to_string();
+            info!(route_key = %rk, name = %name, "Naming flow: user provided name");
             if !name.is_empty() {
                 if let Some(ref router) = self.sender_router {
                     router.set_alias(&rk, &name, &agent_id);
@@ -237,6 +246,7 @@ impl PluginBridgeManager {
         // 5. Check if this agent needs a name
         if let Some(ref router) = self.sender_router {
             if router.needs_naming(&rk) {
+                info!(route_key = %rk, agent = %agent_id, "Agent needs naming, entering naming flow");
                 self.pending_naming.insert(rk.clone(), agent_id.clone());
                 self.send_response(&msg, "请给我取个名字吧！以后叫这个名字我就会出来。").await;
                 return;
@@ -440,6 +450,14 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     async fn send_response(&self, original: &PluginMessage, response: &str) {
+        info!(
+            channel = %original.channel_type,
+            bot = %original.bot_id,
+            sender = %original.sender_id,
+            text_len = response.len(),
+            text_preview = %response.chars().take(50).collect::<String>(),
+            "Bridge sending response"
+        );
         if let Some(ref send_fn) = self.channel_send_fn {
             let send_fn = send_fn.clone();
             let channel_type = original.channel_type.clone();
