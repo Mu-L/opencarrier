@@ -37,7 +37,8 @@ pub async fn install_hub_template(
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let _ = body;
+    let sender_id = body.get("sender_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+    let alias = body.get("alias").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
     let hub_url = state.kernel.config.hub.url.clone();
     let hub_api_key = match clone::hub::read_api_key(&state.kernel.config.hub.api_key_env) {
         Ok(k) => k,
@@ -64,7 +65,21 @@ pub async fn install_hub_template(
     };
 
     match state.kernel.clone_install(&name, &agx_bytes).await {
-        Ok((agent_id, agent_name)) => {
+        Ok((agent_id, agent_name, display_name)) => {
+            // Bind to sender if sender_id provided
+            if let Some(ref sid) = sender_id {
+                if let Some(ref pm_arc) = state.channel_manager {
+                    let pm = pm_arc.lock().await;
+                    pm.set_sender_route(sid, &agent_id);
+                    let effective_alias = alias.as_deref().or_else(|| {
+                        if !display_name.is_empty() { Some(&display_name) } else { None }
+                    });
+                    if let Some(alias_name) = effective_alias {
+                        pm.set_sender_alias(sid, alias_name, &agent_id);
+                    }
+                    tracing::info!(sender = %sid, agent = %agent_id, "Bound installed clone to sender");
+                }
+            }
             let serial = allocate_serial_number(&state.kernel.config.data_dir);
             (
                 StatusCode::CREATED,

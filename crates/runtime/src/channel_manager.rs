@@ -218,6 +218,13 @@ impl ChannelManager {
         }
     }
 
+    /// Set an alias for an agent under a sender's namespace.
+    pub fn set_sender_alias(&self, sender_id: &str, name: &str, agent_id: &str) {
+        if let Some(ref router) = self.sender_router {
+            router.set_alias(sender_id, name, agent_id);
+        }
+    }
+
     /// Get a sender's current route (no auto-assign).
     pub fn get_sender_route(&self, sender_id: &str) -> Option<String> {
         self.sender_router.as_ref()?.get_route(sender_id)

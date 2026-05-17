@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Try to auto-install a Hub template when the agent is not found locally.
-/// Returns the agent_id on success, or None if install fails.
-async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<String> {
+/// Returns (agent_id, display_name) on success, or None if install fails.
+async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<(String, String)> {
     let hub_url = state.kernel.config.hub.url.trim_end_matches('/').to_string();
     if hub_url.is_empty() {
         return None;
@@ -37,9 +37,9 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<Strin
     };
 
     match state.kernel.clone_install(name, &agx_bytes).await {
-        Ok((agent_id, agent_name)) => {
+        Ok((agent_id, agent_name, display_name)) => {
             tracing::info!(%agent_id, %agent_name, "Hub template auto-installed for QR binding");
-            Some(agent_id)
+            Some((agent_id, display_name))
         }
         Err(e) => {
             tracing::warn!(error = %e, "Hub template install failed");
@@ -218,13 +218,16 @@ pub async fn weixin_qrcode_status(
 
         // Resolve agent_name early so both rebind and new-user paths can use it
         let agent_name_param = params.get("agent_name").map(|s| s.as_str()).unwrap_or("");
-        let resolved_agent = if !agent_name_param.is_empty() {
+        let resolved_agent: Option<(String, String)> = if !agent_name_param.is_empty() {
             if uuid::Uuid::parse_str(agent_name_param).is_ok() {
-                Some(agent_name_param.to_string())
+                Some((agent_name_param.to_string(), String::new()))
             } else {
                 let agents = state.kernel.list_agents();
                 if let Some(agent) = agents.iter().find(|a| a.name == agent_name_param) {
-                    Some(agent.id.clone())
+                    let display = state.kernel.registry.find_by_name(agent_name_param)
+                        .map(|e| e.manifest.display_name.clone())
+                        .unwrap_or_default();
+                    Some((agent.id.clone(), display))
                 } else {
                     try_install_from_hub(&state, agent_name_param).await
                 }
@@ -272,12 +275,12 @@ pub async fn weixin_qrcode_status(
 
                             let effective_agent = resolved_agent
                                 .as_ref()
-                                .or(existing_bind.as_ref())
-                                .filter(|a| !a.is_empty() && uuid::Uuid::parse_str(a).is_ok())
-                                .cloned();
+                                .map(|(id, _)| id.clone())
+                                .or(existing_bind.clone())
+                                .filter(|a| !a.is_empty() && uuid::Uuid::parse_str(a).is_ok());
 
-                            if let Some(ref new_agent) = resolved_agent {
-                                tf["bind_agent"] = serde_json::Value::String(new_agent.clone());
+                            if let Some((ref new_agent_id, _)) = resolved_agent {
+                                tf["bind_agent"] = serde_json::Value::String(new_agent_id.clone());
                             }
 
                             if let Ok(json) = serde_json::to_string_pretty(&tf) {
@@ -289,6 +292,12 @@ pub async fn weixin_qrcode_status(
                                 if let Some(ref pm_arc) = state.channel_manager {
                                     let pm = pm_arc.lock().await;
                                     pm.set_sender_route(uid, agent_id);
+                                    // Auto-set alias from display_name
+                                    if let Some((_, ref display_name)) = resolved_agent {
+                                        if !display_name.is_empty() {
+                                            pm.set_sender_alias(uid, display_name, agent_id);
+                                        }
+                                    }
                                     if let Err(e) = pm.start_sender("weixin", uid) {
                                         tracing::warn!(sender_id = %uid, error = %e, "start_sender failed for weixin rebind");
                                     }
@@ -336,7 +345,7 @@ pub async fn weixin_qrcode_status(
             "ilink_bot_id": ilink_bot_id,
             "user_id": ilink_user_id,
             "expires_at": now + 86400,
-            "bind_agent": resolved_agent.as_deref().unwrap_or(""),
+            "bind_agent": resolved_agent.as_ref().map(|(id, _)| id.as_str()).unwrap_or(""),
         });
 
         let sender_id = ilink_user_id.unwrap_or(bot);
@@ -348,13 +357,16 @@ pub async fn weixin_qrcode_status(
         }
 
         // Register dynamic binding + start sender
-        if let Some(ref agent_id) = resolved_agent {
+        if let Some((ref agent_id, ref display_name)) = resolved_agent {
             if uuid::Uuid::parse_str(agent_id).is_ok() {
                 if let Some(ref pm_arc) = state.channel_manager {
                     let pm = pm_arc.lock().await;
                     if let Some(uid) = ilink_user_id {
                         if !uid.is_empty() {
                             pm.set_sender_route(uid, agent_id);
+                            if !display_name.is_empty() {
+                                pm.set_sender_alias(uid, display_name, agent_id);
+                            }
                             if let Err(e) = pm.start_sender("weixin", uid) {
                                 tracing::warn!(sender_id = %uid, error = %e, "start_sender failed for weixin new user");
                             }
@@ -368,7 +380,7 @@ pub async fn weixin_qrcode_status(
             bot,
             ilink_bot_id,
             user_id = ?ilink_user_id,
-            agent = ?resolved_agent,
+            agent = ?resolved_agent.as_ref().map(|(id, _)| id),
             "WeChat iLink QR scan confirmed — new user, token saved"
         );
 
@@ -383,7 +395,7 @@ pub async fn weixin_qrcode_status(
                 "ilink_user_id": ilink_user_id,
                 "bot_token": bot_token,
                 "baseurl": baseurl,
-                "bind_agent": resolved_agent,
+                "bind_agent": resolved_agent.map(|(id, _)| id),
                 "data": data,
             })),
         );

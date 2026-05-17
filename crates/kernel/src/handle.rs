@@ -757,7 +757,7 @@ impl CarrierKernel {
         score
     }
 
-    pub async fn clone_install(&self, name: &str, agx_data: &[u8]) -> Result<(String, String), String> {
+    pub async fn clone_install(&self, name: &str, agx_data: &[u8]) -> Result<(String, String, String), String> {
         use clone::{build_manifest_from_workspace, extract_agx};
 
         if name.is_empty()
@@ -814,6 +814,7 @@ impl CarrierKernel {
 
         // Spawn the agent
         let agent_name = manifest.name.clone();
+        let display_name = manifest.display_name.clone();
         let id = self
             .spawn_agent(manifest)
             .map_err(|e| format!("Spawn failed: {e}"))?;
@@ -837,6 +838,6 @@ impl CarrierKernel {
             "Clone installed (v3 extract flow)"
         );
 
-        Ok((id.to_string(), agent_name))
+        Ok((id.to_string(), agent_name, display_name))
     }
 }

@@ -13,6 +13,12 @@ use std::sync::Arc;
 pub struct InstallCloneRequest {
     /// Base64-encoded .agx file bytes.
     pub data: String,
+    /// Optional sender_id to bind the installed clone to.
+    #[serde(default)]
+    pub sender_id: Option<String>,
+    /// Optional alias name for the clone under the sender.
+    #[serde(default)]
+    pub alias: Option<String>,
 }
 
 impl InstallCloneRequest {
@@ -156,6 +162,24 @@ pub async fn install_clone(
 
     match state.kernel.spawn_agent(manifest) {
         Ok(id) => {
+            // Bind to sender if sender_id provided
+            if let Some(ref sid) = req.sender_id {
+                if let Some(ref pm_arc) = state.channel_manager {
+                    let pm = pm_arc.lock().await;
+                    let agent_id_str = id.to_string();
+                    pm.set_sender_route(sid, &agent_id_str);
+                    let display_name = state.kernel.registry.find_by_name(&name)
+                        .map(|e| e.manifest.display_name.clone())
+                        .unwrap_or_default();
+                    let effective_alias = req.alias.as_deref().or_else(|| {
+                        if !display_name.is_empty() { Some(&display_name) } else { None }
+                    });
+                    if let Some(alias_name) = effective_alias {
+                        pm.set_sender_alias(sid, alias_name, &agent_id_str);
+                    }
+                    tracing::info!(sender = %sid, agent = %agent_id_str, "Bound installed clone to sender");
+                }
+            }
             tracing::info!("Clone '{}' installed and spawned: {}", name, id);
             (
                 StatusCode::CREATED,
