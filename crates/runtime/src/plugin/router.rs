@@ -369,21 +369,23 @@ impl SenderRouter {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let mut clones_map = self
-            .clones
-            .entry(sender_id.to_string())
-            .or_default();
-        if let Some(entry) = clones_map.get_mut(agent_id) {
-            entry.alias = name.to_string();
-        } else {
-            clones_map.insert(
-                agent_id.to_string(),
-                CloneEntry {
-                    alias: name.to_string(),
-                    installed_at: now,
-                },
-            );
-        }
+        {
+            let mut clones_map = self
+                .clones
+                .entry(sender_id.to_string())
+                .or_default();
+            if let Some(entry) = clones_map.get_mut(agent_id) {
+                entry.alias = name.to_string();
+            } else {
+                clones_map.insert(
+                    agent_id.to_string(),
+                    CloneEntry {
+                        alias: name.to_string(),
+                        installed_at: now,
+                    },
+                );
+            }
+        } // Drop guard before persist_config to avoid RwLock deadlock
 
         // Persist to disk
         self.persist_config(sender_id);
