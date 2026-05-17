@@ -1,7 +1,7 @@
 //! Tool resolution and prompt building — available_tools, toolset registry, system prompt.
 //!
 //! Assembles the tool set for each agent request using the toolset model:
-//! - Core tools (always visible): memory_store, memory_recall, session_summarize, tool_search
+//! - Core tools (always visible): session_summarize, tool_search
 //! - Toolsets (on-demand): filesystem, shell, knowledge, media, misc, web, agent, + MCP servers
 //! - Toolset activation: auto_load_toolsets (manifest) + active_toolsets (session-level)
 
@@ -15,7 +15,6 @@ use types::agent::*;
 use types::tool::ToolDefinition;
 
 /// Tool names that are always visible (core tools). These bootstrap the agent:
-/// - memory_*: persistent state
 /// - session_summarize: explicit summarization
 /// - tool_search: discover and load tools on-demand
 /// - skill_load: load workflow skills
@@ -24,7 +23,6 @@ use types::tool::ToolDefinition;
 ///
 /// All other tools are loaded on-demand via tool_search (active_toolsets).
 const CORE_TOOLS: &[&str] = &[
-    "memory_store", "memory_recall", "memory_list",
     "session_summarize",
     "tool_search",
     "skill_load",
@@ -35,8 +33,7 @@ const CORE_TOOLS: &[&str] = &[
 /// Map a builtin tool name to its toolset. Returns None for core tools.
 pub(crate) fn tool_to_toolset(name: &str) -> Option<&'static str> {
     match name {
-        "memory_store" | "memory_recall" | "memory_list"
-        | "session_summarize"
+        "session_summarize"
         | "tool_search"
         | "skill_load"
         | "knowledge_read" | "knowledge_list"
@@ -58,13 +55,10 @@ pub(crate) fn tool_to_toolset(name: &str) -> Option<&'static str> {
 const BUILTIN_TOOLSETS: &[&str] = &["filesystem", "shell", "knowledge", "media", "web", "agent", "misc"];
 
 /// Tools that remain available even when a skill restricts the tool list.
-/// These are foundational: the agent must always be able to remember/recall
+/// These are foundational: the agent must always be able to summarize
 /// state and look up its own knowledge base. `tool_search` and `skill_load`
 /// are deliberately EXCLUDED so the LLM can't escape the skill-imposed scope.
 pub(crate) const ALWAYS_AVAILABLE_WITH_SKILL: &[&str] = &[
-    "memory_store",
-    "memory_recall",
-    "memory_list",
     "session_summarize",
     "knowledge_read",
     "knowledge_list",
@@ -89,7 +83,7 @@ pub(crate) fn filter_tools_by_skill_allowed(
     tools: Vec<ToolDefinition>,
     allowed_patterns: &[String],
 ) -> Vec<ToolDefinition> {
-    if allowed_patterns.iter().any(|p| p == "*") {
+    if allowed_patterns.is_empty() || allowed_patterns.iter().any(|p| p == "*") {
         return tools;
     }
     tools
@@ -110,13 +104,13 @@ fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
     use types::tool::PermissionLevel;
     match name {
         // None — pure queries, no side effects
-        "memory_recall" | "memory_list" | "session_summarize"
+        "session_summarize"
         | "knowledge_list" | "knowledge_read" | "skill_load"
         | "tool_search" | "agent_find" | "agent_list"
         | "train_read" | "train_list" | "train_knowledge_list"
         | "train_knowledge_read" | "train_evaluate" | "user_profile"
         | "task_list" | "schedule_list" | "cron_list"
-        | "a2a_discover" | "knowledge_query" | "clone_evaluate"
+        | "a2a_discover" | "clone_evaluate"
         | "knowledge_lint" | "knowledge_index" | "knowledge_extract"
         | "train_knowledge_lint" => PermissionLevel::None,
 
@@ -127,15 +121,13 @@ fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
         | "speech_to_text" | "location_get" | "system_time" => PermissionLevel::ReadOnly,
 
         // Write — writes within sandbox
-        "file_write" | "memory_store"
+        "file_write"
         | "knowledge_add" | "knowledge_remove" | "knowledge_import"
         | "knowledge_heal" | "skill_create" | "skill_update"
-        | "apply_patch" | "train_write" | "train_knowledge_add"
-        | "train_knowledge_import" | "train_knowledge_heal"
+        | "apply_patch" | "train_write"
         | "image_generate" | "text_to_speech" | "canvas_present"
         | "task_post" | "task_claim" | "task_complete"
         | "event_publish" | "schedule_create" | "schedule_delete"
-        | "knowledge_add_entity" | "knowledge_add_relation"
         | "cron_create" | "cron_cancel" => PermissionLevel::Write,
 
         // Execute — cross-boundary writes
@@ -504,7 +496,7 @@ impl CarrierKernel {
         let oid = owner_id.as_deref().unwrap_or(sid);
         let user_name = self
             .memory
-            .structured_get(*agent_id, sid, sid, "user_name")
+            .system_kv_get(*agent_id, sid, sid, "user_name")
             .ok()
             .flatten()
             .and_then(|v| v.as_str().map(String::from))
@@ -667,13 +659,13 @@ mod tests {
 
     #[test]
     fn filter_keeps_always_available() {
-        let tools = vec![td("memory_store"), td("memory_recall"), td("knowledge_read"), td("shell_exec")];
+        let tools = vec![td("session_summarize"), td("knowledge_read"), td("knowledge_list"), td("shell_exec")];
         let allowed = vec!["web_search".to_string()]; // doesn't match any tool
         let filtered = filter_tools_by_skill_allowed(tools, &allowed);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"memory_store"));
-        assert!(names.contains(&"memory_recall"));
+        assert!(names.contains(&"session_summarize"));
         assert!(names.contains(&"knowledge_read"));
+        assert!(names.contains(&"knowledge_list"));
         assert!(!names.contains(&"shell_exec"));
     }
 
@@ -727,13 +719,13 @@ mod tests {
     fn filter_excludes_tool_search_when_skill_active() {
         // Critical: tool_search and skill_load are NOT in ALWAYS_AVAILABLE_WITH_SKILL.
         // When a skill is matched, the LLM must stay within its allowed_tools scope.
-        let tools = vec![td("tool_search"), td("skill_load"), td("memory_store"), td("web_search")];
+        let tools = vec![td("tool_search"), td("skill_load"), td("session_summarize"), td("web_search")];
         let allowed = vec!["web_search".to_string()];
         let filtered = filter_tools_by_skill_allowed(tools, &allowed);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         assert!(!names.contains(&"tool_search"));
         assert!(!names.contains(&"skill_load"));
-        assert!(names.contains(&"memory_store"));
+        assert!(names.contains(&"session_summarize"));
         assert!(names.contains(&"web_search"));
     }
 }
