@@ -178,6 +178,8 @@ pub struct AgentLoopResult {
     pub silent: bool,
     /// Reply directives extracted from the agent's response.
     pub directives: types::message::ReplyDirectives,
+    /// Tool names that were successfully called during this loop.
+    pub tools_used: Vec<String>,
 }
 
 /// Run the agent execution loop for a single user message.
@@ -542,6 +544,9 @@ async fn run_agent_loop_impl(
     // Track recent (tool_name, input_hash) for loop detection
     let mut recent_tool_calls: Vec<(String, u64)> = Vec::new();
 
+    // Track successfully used tools for skill auto-update
+    let mut tools_used: Vec<String> = Vec::new();
+
     // Shadow with an owned Vec so we can refresh mid-loop when skills are installed
     let mut tools_owned: Vec<ToolDefinition> = available_tools.to_vec();
     let mut available_tools: &[ToolDefinition] = &tools_owned;
@@ -676,6 +681,7 @@ async fn run_agent_loop_impl(
                             current_thread: parsed_directives_s.current_thread,
                             silent: true,
                         },
+                        tools_used: tools_used.clone(),
                     });
                 }
 
@@ -788,9 +794,9 @@ async fn run_agent_loop_impl(
                     response: final_response,
                     total_usage,
                     iterations: iteration + 1,
-
                     silent: false,
                     directives: Default::default(),
+                    tools_used: tools_used.clone(),
                 });
             }
             StopReason::ToolUse => {
@@ -848,6 +854,7 @@ async fn run_agent_loop_impl(
                         iterations: iteration + 1,
                         silent: false,
                         directives: Default::default(),
+                        tools_used: tools_used.clone(),
                     });
                 }
 
@@ -962,6 +969,11 @@ async fn run_agent_loop_impl(
                             }),
                         };
                         let _ = hook_reg.fire(&ctx);
+                    }
+
+                    // Track successful tool use for skill auto-update
+                    if !result.is_error && !tools_used.contains(&tool_call.name) {
+                        tools_used.push(tool_call.name.clone());
                     }
 
                     // Dynamic truncation based on context budget (replaces flat MAX_TOOL_RESULT_CHARS)
@@ -1175,6 +1187,7 @@ async fn run_agent_loop_impl(
                         iterations: iteration + 1,
                         silent: false,
                         directives: Default::default(),
+                        tools_used: tools_used.clone(),
                     });
                 }
                 let text = response.text();

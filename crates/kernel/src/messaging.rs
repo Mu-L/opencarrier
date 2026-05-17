@@ -653,6 +653,7 @@ impl CarrierKernel {
             iterations: 1,
             silent: false,
             directives: Default::default(),
+            tools_used: Vec::new(),
         })
     }
 
@@ -712,6 +713,7 @@ impl CarrierKernel {
             iterations: 1,
             silent: false,
             directives: Default::default(),
+            tools_used: Vec::new(),
         })
     }
 
