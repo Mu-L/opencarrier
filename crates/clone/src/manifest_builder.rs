@@ -283,7 +283,7 @@ fn tool_to_toolset(name: &str) -> Option<&'static str> {
         n if n.starts_with("web_") => Some("web"),
         n if n.starts_with("agent_") || n.starts_with("train_") => Some("agent"),
         n if n.starts_with("location_") || n.starts_with("system_") || n == "user_profile" => Some("misc"),
-        n if n.starts_with("process_") => Some("media"),
+        n if n.starts_with("process_") => Some("process"),
         _ => Some("misc"),
     }
 }

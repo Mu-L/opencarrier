@@ -48,14 +48,14 @@ pub(crate) fn tool_to_toolset(name: &str) -> Option<&'static str> {
         n if n.starts_with("web_") => Some("web"),
         n if n.starts_with("agent_") || n.starts_with("train_") => Some("agent"),
         n if n.starts_with("location_") || n.starts_with("system_") || n == "user_profile" => Some("misc"),
-        n if n.starts_with("process_") => Some("media"),
+        n if n.starts_with("process_") => Some("process"),
         "apply_patch" => Some("filesystem"),
         _ => Some("misc"),
     }
 }
 
 /// Builtin toolset names (used to distinguish from MCP toolsets).
-const BUILTIN_TOOLSETS: &[&str] = &["filesystem", "shell", "knowledge", "memory", "media", "web", "agent", "misc"];
+const BUILTIN_TOOLSETS: &[&str] = &["filesystem", "shell", "knowledge", "memory", "media", "process", "web", "agent", "misc"];
 
 /// Tools that remain available even when a skill restricts the tool list.
 /// These are foundational: the agent must always be able to summarize
