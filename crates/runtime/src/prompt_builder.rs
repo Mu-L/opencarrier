@@ -380,6 +380,23 @@ without sharing what you found.
 execute it via the appropriate tool call (shell_exec, file_write, etc.). Never output commands as \
 code blocks — always call the tool instead.";
 
+/// Tools that have been removed and should not be used.
+/// If conversation history references these, the agent must NOT attempt to call them.
+const REMOVED_TOOLS: &[&str] = &[
+    "docker_exec",
+    "process_start",
+    "process_poll",
+    "process_write",
+    "process_kill",
+    "process_list",
+    "memory_store",
+    "memory_recall",
+    "memory_list",
+    "knowledge_add_entity",
+    "knowledge_add_relation",
+    "knowledge_query",
+];
+
 /// Build the grouped tools section (Section 3).
 pub fn build_tools_section(granted_tools: &[String]) -> String {
     if granted_tools.is_empty() {
@@ -410,6 +427,18 @@ pub fn build_tools_section(granted_tools: &[String]) -> String {
             .collect();
         out.push_str(&descs.join(", "));
     }
+
+    // Warn about removed tools that the agent might reference from old session history
+    let removed: Vec<&&str> = REMOVED_TOOLS
+        .iter()
+        .filter(|t| !granted_tools.iter().any(|g| g == **t))
+        .collect();
+    if !removed.is_empty() {
+        out.push_str("\n\n**Removed tools** (do NOT attempt to call these): ");
+        out.push_str(&removed.iter().map(|t| t.as_ref()).collect::<Vec<_>>().join(", "));
+        out.push('.');
+    }
+
     out
 }
 

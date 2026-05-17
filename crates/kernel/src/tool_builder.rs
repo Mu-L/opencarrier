@@ -218,6 +218,19 @@ impl CarrierKernel {
             }
         }
 
+        // Auto-activate toolsets for MCP servers declared in mcp_servers
+        if let Some(ref e) = entry {
+            for server in &e.manifest.mcp_servers {
+                let normalized = runtime::mcp::normalize_name(server);
+                if !combined
+                    .iter()
+                    .any(|c| runtime::mcp::normalize_name(c) == normalized)
+                {
+                    combined.push(server.clone());
+                }
+            }
+        }
+
         // Auto-derive toolsets from capabilities.tools — always runs so that
         // agents declaring tools in capabilities get them loaded regardless of
         // auto_load_toolsets. Follows Claude's approach: with <50 tools, load
