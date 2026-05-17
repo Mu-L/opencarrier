@@ -65,16 +65,13 @@ pub async fn install_hub_template(
     };
 
     match state.kernel.clone_install(&name, &agx_bytes).await {
-        Ok((agent_id, agent_name, display_name)) => {
+        Ok((agent_id, agent_name, _display_name)) => {
             // Bind to sender if sender_id provided
             if let Some(ref sid) = sender_id {
                 if let Some(ref pm_arc) = state.channel_manager {
                     let pm = pm_arc.lock().await;
                     pm.set_sender_route(sid, &agent_id);
-                    let effective_alias = alias.as_deref().or_else(|| {
-                        if !display_name.is_empty() { Some(&display_name) } else { None }
-                    });
-                    if let Some(alias_name) = effective_alias {
+                    if let Some(ref alias_name) = alias {
                         pm.set_sender_alias(sid, alias_name, &agent_id);
                     }
                     tracing::info!(sender = %sid, agent = %agent_id, "Bound installed clone to sender");

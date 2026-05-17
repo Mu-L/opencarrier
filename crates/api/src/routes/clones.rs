@@ -168,13 +168,7 @@ pub async fn install_clone(
                     let pm = pm_arc.lock().await;
                     let agent_id_str = id.to_string();
                     pm.set_sender_route(sid, &agent_id_str);
-                    let display_name = state.kernel.registry.find_by_name(&name)
-                        .map(|e| e.manifest.display_name.clone())
-                        .unwrap_or_default();
-                    let effective_alias = req.alias.as_deref().or_else(|| {
-                        if !display_name.is_empty() { Some(&display_name) } else { None }
-                    });
-                    if let Some(alias_name) = effective_alias {
+                    if let Some(ref alias_name) = req.alias {
                         pm.set_sender_alias(sid, alias_name, &agent_id_str);
                     }
                     tracing::info!(sender = %sid, agent = %agent_id_str, "Bound installed clone to sender");

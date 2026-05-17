@@ -292,12 +292,6 @@ pub async fn weixin_qrcode_status(
                                 if let Some(ref pm_arc) = state.channel_manager {
                                     let pm = pm_arc.lock().await;
                                     pm.set_sender_route(uid, agent_id);
-                                    // Auto-set alias from display_name
-                                    if let Some((_, ref display_name)) = resolved_agent {
-                                        if !display_name.is_empty() {
-                                            pm.set_sender_alias(uid, display_name, agent_id);
-                                        }
-                                    }
                                     if let Err(e) = pm.start_sender("weixin", uid) {
                                         tracing::warn!(sender_id = %uid, error = %e, "start_sender failed for weixin rebind");
                                     }
@@ -357,16 +351,13 @@ pub async fn weixin_qrcode_status(
         }
 
         // Register dynamic binding + start sender
-        if let Some((ref agent_id, ref display_name)) = resolved_agent {
+        if let Some((ref agent_id, _)) = resolved_agent {
             if uuid::Uuid::parse_str(agent_id).is_ok() {
                 if let Some(ref pm_arc) = state.channel_manager {
                     let pm = pm_arc.lock().await;
                     if let Some(uid) = ilink_user_id {
                         if !uid.is_empty() {
                             pm.set_sender_route(uid, agent_id);
-                            if !display_name.is_empty() {
-                                pm.set_sender_alias(uid, display_name, agent_id);
-                            }
                             if let Err(e) = pm.start_sender("weixin", uid) {
                                 tracing::warn!(sender_id = %uid, error = %e, "start_sender failed for weixin new user");
                             }
