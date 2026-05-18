@@ -243,7 +243,7 @@ fn tool_max_result_chars(name: &str) -> Option<usize> {
 }
 
 /// Truncate a tool result if it exceeds the per-tool max size.
-/// Adds a `[truncated]` marker so the LLM knows content was cut.
+/// Two-stage compression: collapse duplicate lines, then keep head + tail.
 fn truncate_tool_result(tool_name: &str, content: String) -> String {
     let max = match tool_max_result_chars(tool_name) {
         Some(m) => m,
@@ -252,26 +252,85 @@ fn truncate_tool_result(tool_name: &str, content: String) -> String {
     if content.len() <= max {
         return content;
     }
-    // Find a safe break point at a newline boundary near the max
-    let mut break_point = max;
-    while break_point > 0 && !content.is_char_boundary(break_point) {
-        break_point -= 1;
+
+    let original_len = content.len();
+
+    // Stage 1: collapse consecutive duplicate lines (3+ → keep first + marker)
+    let deduped = dedup_lines(&content);
+    if deduped.len() <= max {
+        let saved = original_len.saturating_sub(deduped.len());
+        if saved > 0 {
+            return format!("{deduped}\n\n[compressed: {:.1} KB → {:.1} KB]",
+                original_len as f64 / 1024.0, deduped.len() as f64 / 1024.0);
+        }
+        return deduped;
     }
-    // Try to break at a newline within the last 200 chars before the limit
-    let mut search_start = break_point.saturating_sub(200);
-    while search_start > 0 && !content.is_char_boundary(search_start) {
-        search_start -= 1;
+
+    // Stage 2: keep head + tail lines
+    let result = smart_truncate(&deduped, max);
+    format!("{result}\n\n[compressed: {:.1} KB → {:.1} KB]",
+        original_len as f64 / 1024.0, result.len() as f64 / 1024.0,
+    )
+}
+
+/// Collapse consecutive duplicate lines. Runs of 3+ identical lines keep only
+/// the first occurrence. Runs of 2 are preserved as-is.
+fn dedup_lines(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() < 5 {
+        return content.to_string();
     }
-    if let Some(nl_pos) = content[search_start..break_point].rfind('\n') {
-        break_point = search_start + nl_pos;
+    let mut out = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let mut run = 1;
+        while i + run < lines.len() && lines[i + run] == line {
+            run += 1;
+        }
+        out.push(line.to_string());
+        if run >= 3 {
+            out.push(format!("  ... ({} duplicate lines)", run - 1));
+        } else if run == 2 {
+            out.push(line.to_string());
+        }
+        i += run;
     }
-    let original_kb = content.len() / 1024;
-    let shown_kb = break_point / 1024;
+    out.join("\n")
+}
+
+/// Keep HEAD_LINES from the top and TAIL_LINES from the bottom, drop the middle.
+/// Falls back to char-boundary truncation for content too short for head/tail.
+fn smart_truncate(content: &str, max_chars: usize) -> String {
+    const HEAD_LINES: usize = 120;
+    const TAIL_LINES: usize = 60;
+
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() <= HEAD_LINES + TAIL_LINES + 10 {
+        if content.len() <= max_chars {
+            return content.to_string();
+        }
+        let mut bp = max_chars.min(content.len());
+        while bp > 0 && !content.is_char_boundary(bp) {
+            bp -= 1;
+        }
+        let mut search_start = bp.saturating_sub(200);
+        while search_start > 0 && !content.is_char_boundary(search_start) {
+            search_start -= 1;
+        }
+        if let Some(nl_pos) = content[search_start..bp].rfind('\n') {
+            bp = search_start + nl_pos;
+        }
+        return content[..bp].to_string();
+    }
+
+    let head: Vec<&str> = lines.iter().take(HEAD_LINES).copied().collect();
+    let tail: Vec<&str> = lines.iter().rev().take(TAIL_LINES).copied().rev().collect();
+    let cut = lines.len() - head.len() - tail.len();
     format!(
-        "{}\n\n[truncated: {} KB → {} KB — use more specific queries to get targeted results]",
-        &content[..break_point],
-        original_kb.max(1),
-        shown_kb.max(1),
+        "{}\n\n... +{cut} lines\n\n{}",
+        head.join("\n"),
+        tail.join("\n"),
     )
 }
 
@@ -657,5 +716,64 @@ mod tests {
         .await;
         assert!(result.is_error);
         assert!(result.content.contains("Kernel handle not available"));
+    }
+
+    // ------------------------------------------------------------------
+    // dedup_lines
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_dedup_lines_collapses_long_runs() {
+        let input = "line1\nline1\nline1\nline2\nline3\nline3\nline3\nline3";
+        let out = dedup_lines(input);
+        assert!(out.contains("... (2 duplicate lines)"));
+        assert!(out.contains("... (3 duplicate lines)"));
+        // line2 preserved
+        assert!(out.contains("\nline2\n"));
+    }
+
+    #[test]
+    fn test_dedup_lines_preserves_pairs() {
+        let input = "a\na\nb\nb";
+        let out = dedup_lines(input);
+        assert!(!out.contains("duplicate"));
+        assert_eq!(out.matches('\n').count(), input.matches('\n').count());
+    }
+
+    #[test]
+    fn test_dedup_lines_skips_short_content() {
+        let input = "one\ntwo";
+        let out = dedup_lines(input);
+        assert_eq!(out, input);
+    }
+
+    // ------------------------------------------------------------------
+    // smart_truncate
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_smart_truncate_keeps_head_and_tail() {
+        let mut lines: Vec<String> = Vec::new();
+        for i in 0..300 {
+            lines.push(format!("line {i}"));
+        }
+        let content = lines.join("\n");
+        let out = smart_truncate(&content, 4096);
+        // Should contain early lines
+        assert!(out.contains("line 0"));
+        assert!(out.contains("line 10"));
+        // Should contain late lines
+        assert!(out.contains("line 299"));
+        assert!(out.contains("line 290"));
+        // Should have truncation marker
+        assert!(out.contains("... +"));
+        assert!(out.contains("lines"));
+    }
+
+    #[test]
+    fn test_smart_truncate_short_content_unchanged() {
+        let content = "line1\nline2\nline3";
+        let out = smart_truncate(content, 4096);
+        assert_eq!(out, content);
     }
 }
