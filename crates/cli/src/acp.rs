@@ -421,6 +421,7 @@ fn acp_session_prompt(
                 None,
                 None,
                 None,
+                None,
             ) {
                 Ok(r) => r,
                 Err(e) => return Err(format!("Failed to start streaming: {e}")),

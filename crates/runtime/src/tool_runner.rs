@@ -86,6 +86,7 @@ pub async fn execute_tool(
 
     // Permission enforcement: reject tools above max_tool_level or Dangerous
     let modules = crate::tools::builtin_modules();
+    let mut permission_checked = false;
     for module in &modules {
         if module.definitions().iter().any(|d| d.name == tool_name) {
             let level = module.permission_level(tool_name);
@@ -100,7 +101,25 @@ pub async fn execute_tool(
                     is_error: true,
                 };
             }
+            permission_checked = true;
             break;
+        }
+    }
+
+    // For tools not in any builtin module (e.g. MCP tools), use the
+    // centralized PermissionLevel::for_tool() for permission checks.
+    if !permission_checked {
+        let level = types::tool::PermissionLevel::for_tool(tool_name);
+        if level > max_tool_level {
+            warn!(tool_name, ?level, ?max_tool_level, "Permission denied: non-builtin tool exceeds max level");
+            return ToolResult {
+                tool_use_id: tool_use_id.to_string(),
+                content: format!(
+                    "Permission denied: tool '{tool_name}' requires {:?} level but agent is limited to {:?}",
+                    level, max_tool_level
+                ),
+                is_error: true,
+            };
         }
     }
 
@@ -555,7 +574,9 @@ mod tests {
         )
         .await;
         assert!(result.is_error);
-        assert!(result.content.contains("Unknown tool"));
+        // Unknown tools are rejected by permission check (for_tool defaults to Dangerous)
+        // before reaching the "Unknown tool" error path. Both outcomes are correct.
+        assert!(result.content.contains("Permission denied") || result.content.contains("Unknown tool"));
     }
 
     #[tokio::test]

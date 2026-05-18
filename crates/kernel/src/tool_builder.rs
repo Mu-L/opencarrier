@@ -89,58 +89,9 @@ pub(crate) fn filter_tools_by_skill_allowed(
 }
 
 /// Get the permission level for a tool by name.
-/// Uses the builtin module dispatch to look up each tool's declared level.
-/// Falls back to Dangerous for unknown tools (fail-safe).
+/// Delegates to the centralized `PermissionLevel::for_tool()`.
 pub(crate) fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
-    use types::tool::PermissionLevel;
-    match name {
-        // None — pure queries, no side effects
-        "session_summarize"
-        | "knowledge_list" | "knowledge_read" | "skill_load"
-        | "tool_search" | "agent_find" | "agent_list"
-        | "train_read" | "train_list" | "train_knowledge_list"
-        | "train_knowledge_read" | "train_evaluate" | "user_profile"
-        | "task_list" | "schedule_list" | "cron_list"
-        | "a2a_discover" | "clone_evaluate"
-        | "knowledge_lint" | "knowledge_index" | "knowledge_extract"
-        | "train_knowledge_lint"
-        | "memory_tree" => PermissionLevel::None,
-
-        // ReadOnly — reads from external sources
-        "file_read" | "file_list" | "file_convert"
-        | "web_fetch" | "web_search"
-        | "image_analyze" | "media_describe" | "media_transcribe"
-        | "speech_to_text" | "location_get" | "system_time" => PermissionLevel::ReadOnly,
-
-        // Write — writes within sandbox
-        "file_write"
-        | "knowledge_add" | "knowledge_remove" | "knowledge_import"
-        | "knowledge_heal" | "skill_create" | "skill_update"
-        | "apply_patch" | "train_write"
-        | "image_generate" | "text_to_speech" | "canvas_present"
-        | "task_post" | "task_claim" | "task_complete"
-        | "event_publish" | "schedule_create" | "schedule_delete"
-        | "cron_create" | "cron_cancel"
-        | "memory_ingest" => PermissionLevel::Write, // legacy compat
-
-        // Execute — cross-boundary writes
-        "process_start" | "process_poll"
-        | "process_write" | "process_list"
-        | "agent_send" | "agent_spawn" | "agent_restart"
-        | "a2a_send" => PermissionLevel::Execute,
-
-        // Subagent delegation — delegate_* tools are Execute level
-        n if n.starts_with("delegate_") => PermissionLevel::Execute,
-
-        // Dangerous — irreversible operations
-        "shell_exec" | "process_kill" | "agent_kill" => PermissionLevel::Dangerous,
-
-        // MCP tools default to Write (user-configured, trusted by default)
-        n if n.starts_with("mcp_") => PermissionLevel::Write,
-
-        // Unknown tools default to Dangerous (fail-safe)
-        _ => PermissionLevel::Dangerous,
-    }
+    types::tool::PermissionLevel::for_tool(name)
 }
 
 /// Filter tools by a channel's maximum permission level.
@@ -237,6 +188,16 @@ impl CarrierKernel {
         if exec_blocks_shell {
             tools.retain(|t| t.name != "shell_exec");
         }
+
+        // Filter by agent's max_tool_level — remove tools above the allowed level
+        let max_level = entry
+            .as_ref()
+            .map(|e| e.manifest.max_tool_level)
+            .unwrap_or(types::tool::PermissionLevel::Write);
+        tools.retain(|t| {
+            let level = types::tool::PermissionLevel::for_tool(&t.name);
+            level <= max_level
+        });
 
         // Add delegate_{name} tools for each subagent in the manifest
         if let Some(ref e) = entry {

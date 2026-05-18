@@ -229,6 +229,7 @@ pub async fn send_message_stream(
         req.sender_id,
         req.sender_name,
         None,
+        None,
     ) {
         Ok(pair) => pair,
         Err(e) => {

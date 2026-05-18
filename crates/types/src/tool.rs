@@ -10,11 +10,11 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum PermissionLevel {
     /// Pure queries with no side effects: knowledge_read, etc.
-    #[default]
     None,
     /// Read from external sources: web_fetch, file_read, web_search.
     ReadOnly,
     /// Write within sandbox: file_write (workspace), system_kv_store (own ns).
+    #[default]
     Write,
     /// Cross-boundary writes: file_write (arbitrary), agent_send, process_start.
     Execute,
@@ -26,6 +26,62 @@ impl PermissionLevel {
     /// Serde default for max_tool_level: agents default to Write, not None.
     pub const fn default_max_tool_level() -> Self {
         Self::Write
+    }
+
+    /// Get the permission level for a tool by name.
+    ///
+    /// Uses a centralized mapping of tool names to levels. Falls back to
+    /// Dangerous for unknown tools (fail-safe). MCP tools (mcp_*) default
+    /// to Write since they are user-configured and trusted by default.
+    pub fn for_tool(name: &str) -> Self {
+        match name {
+            // None — pure queries, no side effects
+            "session_summarize"
+            | "knowledge_list" | "knowledge_read" | "skill_load"
+            | "tool_search" | "agent_find" | "agent_list"
+            | "train_read" | "train_list" | "train_knowledge_list"
+            | "train_knowledge_read" | "train_evaluate" | "user_profile"
+            | "task_list" | "schedule_list" | "cron_list"
+            | "a2a_discover" | "clone_evaluate"
+            | "knowledge_lint" | "knowledge_index" | "knowledge_extract"
+            | "train_knowledge_lint"
+            | "memory_tree" => Self::None,
+
+            // ReadOnly — reads from external sources
+            "file_read" | "file_list" | "file_convert"
+            | "web_fetch" | "web_search"
+            | "image_analyze" | "media_describe" | "media_transcribe"
+            | "speech_to_text" | "location_get" | "system_time" => Self::ReadOnly,
+
+            // Write — writes within sandbox
+            "file_write"
+            | "knowledge_add" | "knowledge_remove" | "knowledge_import"
+            | "knowledge_heal" | "skill_create" | "skill_update"
+            | "apply_patch" | "train_write"
+            | "image_generate" | "text_to_speech" | "canvas_present"
+            | "task_post" | "task_claim" | "task_complete"
+            | "event_publish" | "schedule_create" | "schedule_delete"
+            | "cron_create" | "cron_cancel"
+            | "memory_ingest" => Self::Write,
+
+            // Execute — cross-boundary writes
+            "process_start" | "process_poll"
+            | "process_write" | "process_list"
+            | "agent_send" | "agent_spawn" | "agent_restart"
+            | "a2a_send" => Self::Execute,
+
+            // Subagent delegation
+            n if n.starts_with("delegate_") => Self::Execute,
+
+            // Dangerous — irreversible operations
+            "shell_exec" | "process_kill" | "agent_kill" => Self::Dangerous,
+
+            // MCP tools default to Write (user-configured, trusted by default)
+            n if n.starts_with("mcp_") => Self::Write,
+
+            // Unknown tools default to Dangerous (fail-safe)
+            _ => Self::Dangerous,
+        }
     }
 }
 
