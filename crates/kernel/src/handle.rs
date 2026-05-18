@@ -656,17 +656,6 @@ impl KernelHandle for CarrierKernel {
                     &query_lower, &keywords,
                     &name_lower, &desc_lower, &ts_lower,
                 );
-                if ts_lower.contains("wechat") && query_lower.contains("wechat") {
-                    tracing::info!(
-                        query = %query_lower,
-                        tool = %name_lower,
-                        desc_len = desc_lower.len(),
-                        desc_preview = %desc_lower.chars().take(80).collect::<String>(),
-                        ts = %ts_lower,
-                        score,
-                        "score_tool result for wechat"
-                    );
-                }
                 if score > 0 {
                     scored.push((score, ts_name.clone(), tool.clone()));
                 }
