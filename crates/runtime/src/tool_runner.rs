@@ -52,9 +52,8 @@ pub(crate) const MAX_AGENT_CALL_DEPTH: u32 = 5;
 /// The optional `kernel` handle enables inter-agent tools. If `None`,
 /// agent tools will return an error indicating the kernel is not available.
 ///
-/// `allowed_tools` enforces capability-based security: if provided, only
-/// tools in the list may execute. This prevents an LLM from hallucinating
-/// tool names outside the agent's capability grants.
+/// `max_tool_level` enforces permission-based security: tools above the
+/// agent's maximum permission level are not available.
 pub async fn execute_tool(
     tool_use_id: &str,
     tool_name: &str,
@@ -64,7 +63,6 @@ pub async fn execute_tool(
     // Unpack context into local bindings matching the old parameter names.
     let ToolContext {
         kernel: _,
-        allowed_tools,
         caller_agent_id: _,
         mcp_connections,
         web_ctx,
@@ -79,24 +77,30 @@ pub async fn execute_tool(
         agent_name: _,
         subagent_configs: _,
         channel_type: _,
-        max_tool_level: _,
+        max_tool_level,
     } = *ctx;
 
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
     // (e.g. "fs-write" → "file_write") resolve to the canonical Carrier name.
     let tool_name = normalize_tool_name(tool_name);
 
-    // Capability enforcement: reject tools not in the allowed list
-    if let Some(allowed) = ctx.allowed_tools {
-        if !allowed.iter().any(|t| t == tool_name) {
-            warn!(tool_name, "Capability denied: tool not in allowed list");
-            return ToolResult {
-                tool_use_id: tool_use_id.to_string(),
-                content: format!(
-                    "Permission denied: agent does not have capability to use tool '{tool_name}'"
-                ),
-                is_error: true,
-            };
+    // Permission enforcement: reject tools above max_tool_level or Dangerous
+    let modules = crate::tools::builtin_modules();
+    for module in &modules {
+        if module.definitions().iter().any(|d| d.name == tool_name) {
+            let level = module.permission_level(tool_name);
+            if level > max_tool_level {
+                warn!(tool_name, ?level, ?max_tool_level, "Permission denied: tool exceeds max level");
+                return ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!(
+                        "Permission denied: tool '{tool_name}' requires {:?} level but agent is limited to {:?}",
+                        level, max_tool_level
+                    ),
+                    is_error: true,
+                };
+            }
+            break;
         }
     }
 
@@ -157,29 +161,8 @@ pub async fn execute_tool(
         // Browser automation tools are now handled by browser-mcp (standalone MCP server)
         other => {
             // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
+            // Permission already enforced by max_tool_level check above
             if mcp::is_mcp_tool(other) {
-                // Depth restriction: subagents (depth > 0) need explicit MCP tool
-                // permission via allowed_tools. Top-level agents are unrestricted.
-                let current_depth = AGENT_CALL_DEPTH.try_with(|d| d.get()).unwrap_or(0);
-                if current_depth > 0 {
-                    let explicitly_allowed = allowed_tools
-                        .map(|a| a.iter().any(|t| t == other))
-                        .unwrap_or(false);
-                    if !explicitly_allowed {
-                        warn!(
-                            tool = other,
-                            depth = current_depth,
-                            "MCP tool denied for subagent: not in explicit allow list"
-                        );
-                        return ToolResult {
-                            tool_use_id: tool_use_id.to_string(),
-                            content: format!(
-                                "Permission denied: MCP tool '{other}' not available at subagent depth {current_depth}"
-                            ),
-                            is_error: true,
-                        };
-                    }
-                }
                 if let Some(mcp_conns) = mcp_connections {
                     // Collect known server keys from DashMap for name resolution
                     let known_keys: Vec<String> =
@@ -382,7 +365,6 @@ mod tests {
     fn noop_ctx() -> ToolContext<'static> {
         ToolContext {
             kernel: None,
-            allowed_tools: None,
             caller_agent_id: None,
             mcp_connections: None,
             web_ctx: None,
@@ -585,17 +567,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_capability_enforcement_denied() {
-        let allowed = vec!["file_read".to_string(), "file_list".to_string()];
-        let ctx = ToolContext {
-            allowed_tools: Some(&allowed),
-            ..noop_ctx()
-        };
+    async fn test_permission_level_denied() {
+        // shell_exec is Dangerous level, noop_ctx has Write level — should be denied
         let result = execute_tool(
             "test-id",
             "shell_exec",
             &serde_json::json!({"command": "ls"}),
-            &ctx,
+            &noop_ctx(),
         )
         .await;
         assert!(result.is_error);
@@ -603,23 +581,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_capability_enforcement_allowed() {
-        let allowed = vec!["file_read".to_string()];
-        // Use a relative nonexistent path — workspace_root is None so validate_path
-        // will check for traversal/absolute, and this relative path passes that check,
-        // then fails at the actual read (file-not-found).
-        let ctx = ToolContext {
-            allowed_tools: Some(&allowed),
-            ..noop_ctx()
-        };
+    async fn test_permission_level_allowed() {
+        // file_read is ReadOnly level, noop_ctx has Write level — should pass permission check
         let result = execute_tool(
             "test-id",
             "file_read",
             &serde_json::json!({"path": "carrier_test_nonexistent_12345/file.txt"}),
-            &ctx,
+            &noop_ctx(),
         )
         .await;
-        // Should fail for file-not-found, NOT for permission denied
         assert!(
             result.is_error,
             "Expected error but got: {}",
@@ -631,58 +601,6 @@ mod tests {
                 || result.content.contains("No such file"),
             "Unexpected error: {}",
             result.content
-        );
-    }
-
-    #[tokio::test]
-    async fn test_capability_enforcement_aliased_tool_name() {
-        // Agent has "file_write" in allowed tools, but LLM calls "fs-write".
-        // After normalization, this should pass the capability check.
-        let allowed = vec![
-            "file_read".to_string(),
-            "file_write".to_string(),
-            "file_list".to_string(),
-            "shell_exec".to_string(),
-        ];
-        let ctx = ToolContext {
-            allowed_tools: Some(&allowed),
-            ..noop_ctx()
-        };
-        let result = execute_tool(
-            "test-id",
-            "fs-write", // LLM-hallucinated alias
-            &serde_json::json!({"path": "/nonexistent/file.txt", "content": "hello"}),
-            &ctx,
-        )
-        .await;
-        // Should NOT be "Permission denied" — it should normalize to file_write
-        // and pass the capability check. It will fail for other reasons (path validation).
-        assert!(
-            !result.content.contains("Permission denied"),
-            "fs-write should normalize to file_write and pass capability check, got: {}",
-            result.content
-        );
-    }
-
-    #[tokio::test]
-    async fn test_capability_enforcement_aliased_denied() {
-        // Agent does NOT have file_write, and LLM calls "fs-write" — should be denied.
-        let allowed = vec!["file_read".to_string()];
-        let ctx = ToolContext {
-            allowed_tools: Some(&allowed),
-            ..noop_ctx()
-        };
-        let result = execute_tool(
-            "test-id",
-            "fs-write",
-            &serde_json::json!({"path": "/tmp/test.txt", "content": "hello"}),
-            &ctx,
-        )
-        .await;
-        assert!(result.is_error);
-        assert!(
-            result.content.contains("Permission denied"),
-            "fs-write should normalize to file_write which is not in allowed list"
         );
     }
 

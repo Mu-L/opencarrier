@@ -86,6 +86,7 @@ pub fn inject_attachments_into_session(
             context_window_tokens: 0,
             label: None,
             active_toolsets: vec![],
+            active_skill_name: None,
         },
     };
 

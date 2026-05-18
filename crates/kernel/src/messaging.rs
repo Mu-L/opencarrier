@@ -18,7 +18,6 @@ use crate::capabilities::manifest_to_capabilities;
 use crate::error::{KernelError, KernelResult};
 use crate::kernel::CarrierKernel;
 use crate::prompt_sources::touch_user_profile;
-use crate::tool_builder::{filter_tools_by_skill_allowed, tool_to_toolset};
 use crate::workspace::append_daily_memory_log;
 
 impl CarrierKernel {
@@ -325,6 +324,7 @@ impl CarrierKernel {
                     context_window_tokens: 0,
                     label: None,
                     active_toolsets: vec![],
+                    active_skill_name: None,
                 })
         };
 
@@ -653,7 +653,6 @@ impl CarrierKernel {
             iterations: 1,
             silent: false,
             directives: Default::default(),
-            tools_used: Vec::new(),
         })
     }
 
@@ -713,7 +712,6 @@ impl CarrierKernel {
             iterations: 1,
             silent: false,
             directives: Default::default(),
-            tools_used: Vec::new(),
         })
     }
 
@@ -762,6 +760,7 @@ impl CarrierKernel {
                     context_window_tokens: 0,
                     label: None,
                     active_toolsets: vec![],
+                    active_skill_name: None,
                 })
         };
 
@@ -808,94 +807,56 @@ impl CarrierKernel {
             self.available_tools(agent_id, Some(&active))
         };
 
-        // Auto-match skill based on user message (before tool filtering)
-        let (tools, auto_matched_skill, skill_max_iterations, matched_skill_name) = if let Some(ref ws) = entry.manifest.workspace {
+        // Auto-match skill based on user message → activate skill.toolsets
+        let (tools, auto_matched_skill, skill_max_iterations) = if let Some(ref ws) = entry.manifest.workspace {
             match crate::prompt_sources::match_skill_for_message(message, ws) {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
                     let skill_body = skill.body.clone();
-                    let allowed = skill.allowed_tools.clone();
                     let skill_max_iter = skill.max_iterations;
+                    let skill_toolsets = skill.toolsets.clone();
 
-                    // Derive toolsets from the skill's allowed_tools
-                    let known_servers: Vec<String> = self
-                        .plugins
-                        .mcp_connections
-                        .iter()
-                        .map(|e| e.value().name().to_string())
-                        .collect();
-                    let known_refs: Vec<&str> = known_servers.iter().map(|s| s.as_str()).collect();
+                    info!(
+                        agent = %entry.name,
+                        skill = %skill_name,
+                        toolsets = ?skill_toolsets,
+                        "Skill auto-matched"
+                    );
 
-                    let mut new_toolsets: Vec<String> = Vec::new();
-                    for tool_name in &allowed {
-                        if let Some(ts) = tool_to_toolset(tool_name) {
-                            let ts_str = ts.to_string();
-                            if !session.active_toolsets.contains(&ts_str)
-                                && !new_toolsets.contains(&ts_str)
-                            {
-                                new_toolsets.push(ts_str);
-                            }
-                        }
-                        if let Some(server) =
-                            runtime::mcp::extract_mcp_server_from_known(tool_name, &known_refs)
-                        {
-                            let ts_str = server.to_string();
-                            if !session.active_toolsets.contains(&ts_str)
-                                && !new_toolsets.contains(&ts_str)
-                            {
-                                new_toolsets.push(ts_str);
+                    // Activate skill-declared toolsets into the session
+                    for ts_name in &skill_toolsets {
+                        if !session.active_toolsets.contains(ts_name) {
+                            if let Some(activated) = self.activate_toolset(&agent_id.to_string(), ts_name) {
+                                info!(toolset = %ts_name, tools_count = activated.len(), "Skill toolset activated");
                             }
                         }
                     }
+                    // Set active_skill_name for write-back tracking
+                    session.active_skill_name = Some(skill_name.clone());
+                    let _ = self.memory.save_session(&session);
 
-                    if !new_toolsets.is_empty() {
-                        session.active_toolsets.extend(new_toolsets.clone());
-                        let _ = self.memory.save_session(&session);
-                        info!(
-                            agent = %entry.name,
-                            skill = %skill_name,
-                            toolsets = ?new_toolsets,
-                            "Skill auto-matched, toolsets activated"
-                        );
-                        // Re-compute tools with newly activated toolsets
+                    // Reload session from DB (activate_toolset writes active_toolsets via handle)
+                    if let Ok(Some(reloaded)) = self.memory.get_session(entry.session_id) {
+                        session = reloaded;
+                    }
+
+                    let tools = {
                         let active = session.active_toolsets.clone();
-                        let new_tools = self.available_tools(agent_id, Some(&active));
-                        let new_tools = entry.mode.filter_tools(new_tools);
-                        // Strict filter: only keep skill's allowed_tools + always-available core
-                        let new_tools = filter_tools_by_skill_allowed(new_tools, &allowed, entry.manifest.max_tool_level);
-                        info!(
-                            agent = %entry.name,
-                            tool_count = new_tools.len(),
-                            tool_names = ?new_tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
-                            "Tools after skill activation and strict filter"
-                        );
-                        (
-                            new_tools,
-                            Some(format!("**{}**\n{}", skill_name, skill_body)),
-                            skill_max_iter,
-                            Some(skill_name.clone()),
-                        )
-                    } else {
-                        info!(
-                            agent = %entry.name,
-                            skill = %skill_name,
-                            "Skill auto-matched (no new toolsets needed)"
-                        );
-                        let tools = entry.mode.filter_tools(tools);
-                        let tools = filter_tools_by_skill_allowed(tools, &allowed, entry.manifest.max_tool_level);
-                        info!(
-                            agent = %entry.name,
-                            tool_count = tools.len(),
-                            tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
-                            "Tools after strict skill filter"
-                        );
-                        (
-                            tools,
-                            Some(format!("**{}**\n{}", skill_name, skill_body)),
-                            skill_max_iter,
-                            Some(skill_name.clone()),
-                        )
-                    }
+                        self.available_tools(agent_id, Some(&active))
+                    };
+                    let tools = entry.mode.filter_tools(tools);
+
+                    info!(
+                        agent = %entry.name,
+                        tool_count = tools.len(),
+                        tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+                        "Tools after skill toolset activation"
+                    );
+                    (
+                        tools,
+                        Some(format!("**{}**\n{}", skill_name, skill_body)),
+                        skill_max_iter,
+                    )
                 }
                 None => {
                     let tools = entry.mode.filter_tools(tools);
@@ -906,7 +867,7 @@ impl CarrierKernel {
                         tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
                         "Tools selected for LLM request"
                     );
-                    (tools, None, None, None)
+                    (tools, None, None)
                 }
             }
         } else {
@@ -918,7 +879,7 @@ impl CarrierKernel {
                 tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
                 "Tools selected for LLM request"
             );
-            (tools, None, None, None)
+            (tools, None, None)
         };
 
         // Auto-match subagent trigger (only when no skill matched)
@@ -950,10 +911,10 @@ impl CarrierKernel {
         // Also handle subagent delegation (channel_type starts with "subagent:")
         let (tools, subagent_config) = if let Some(ref ct) = channel_type {
             if let Some(sa_name) = ct.strip_prefix("subagent:") {
-                // Subagent delegation: filter tools by the subagent's allowed_tools
+                // Subagent delegation: filter tools by max_tool_level
                 let sa_config = entry.manifest.subagents.iter().find(|s| s.name == sa_name).cloned();
                 if let Some(ref sa) = sa_config {
-                    let filtered = crate::tool_builder::filter_tools_by_skill_allowed(tools, &sa.allowed_tools, entry.manifest.max_tool_level);
+                    let filtered = crate::tool_builder::filter_tools_by_skill_allowed(tools, entry.manifest.max_tool_level);
                     info!(
                         agent = %entry.name,
                         subagent = %sa_name,
@@ -1109,17 +1070,6 @@ impl CarrierKernel {
 
         // Evolution hook — post-conversation auto-learning for clones
         self.maybe_run_evolution(&manifest, message, &result.response, owner_id.as_deref(), sender_id.as_deref());
-
-        // Skill auto-update: add successfully used tools to the matched skill's allowed_tools
-        if matched_skill_name.is_some() && !result.tools_used.is_empty() {
-            if let Some(ref workspace) = manifest.workspace {
-                if let Some(ref skill_name) = matched_skill_name {
-                    if let Err(e) = Self::update_skill_allowed_tools(workspace, skill_name, &result.tools_used) {
-                        tracing::warn!(skill = %skill_name, error = %e, "Failed to auto-update skill allowed_tools");
-                    }
-                }
-            }
-        }
 
         // Multi-tenancy: update user profile (touch last_seen, increment conversation_count)
         if let Some(ref sid) = sender_id {

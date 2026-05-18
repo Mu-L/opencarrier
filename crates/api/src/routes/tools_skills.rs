@@ -183,7 +183,6 @@ pub async fn mcp_http(
             state.kernel.clone() as Arc<dyn runtime::kernel_handle::KernelHandle>;
         let tool_ctx = ToolContext {
             kernel: Some(&kernel_handle),
-            allowed_tools: None,
             caller_agent_id: None,
             mcp_connections: Some(&state.kernel.plugins.mcp_connections),
             web_ctx: Some(&state.kernel.services.web_ctx),

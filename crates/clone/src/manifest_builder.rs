@@ -29,13 +29,13 @@ pub fn build_manifest_from_workspace(
     let description = read_profile_description(workspace);
 
     // 3. Scan skills/ directory
-    let (skill_names, all_tools) = scan_skills(workspace);
+    let skill_names = scan_skills(workspace);
 
     // 4. Collect knowledge file names
     let knowledge_files = collect_knowledge_files(workspace);
 
     // 5. Build tools list with evolution tools
-    let mut tools = all_tools;
+    let mut tools = Vec::new();
     let evolution_tools: &[&str] = &[
         "knowledge_add",
         "knowledge_list",
@@ -186,18 +186,17 @@ fn read_profile_description(workspace: &Path) -> String {
     String::new()
 }
 
-/// Scan workspace/skills/ to collect skill names and union of allowed_tools.
-fn scan_skills(workspace: &Path) -> (Vec<String>, Vec<String>) {
+/// Scan workspace/skills/ to collect skill names.
+fn scan_skills(workspace: &Path) -> Vec<String> {
     let skills_dir = workspace.join("skills");
     if !skills_dir.is_dir() {
-        return (Vec::new(), Vec::new());
+        return Vec::new();
     }
 
     let mut skill_names = Vec::new();
-    let mut all_tools = Vec::new();
 
     let Ok(entries) = std::fs::read_dir(&skills_dir) else {
-        return (skill_names, all_tools);
+        return skill_names;
     };
 
     for entry in entries.flatten() {
@@ -212,35 +211,30 @@ fn scan_skills(workspace: &Path) -> (Vec<String>, Vec<String>) {
         }
 
         if let Ok(content) = std::fs::read_to_string(&skill_md) {
-            let (name, allowed_tools) = parse_skill_frontmatter_simple(&content);
-            skill_names.push(name);
-            all_tools.extend(allowed_tools);
-        }
-    }
-
-    (skill_names, all_tools)
-}
-
-/// Parse skill frontmatter to extract name and allowed_tools.
-fn parse_skill_frontmatter_simple(content: &str) -> (String, Vec<String>) {
-    let mut name = String::new();
-    let mut allowed_tools = Vec::new();
-
-    if let Some(rest) = content.strip_prefix("---") {
-        if let Some(end) = rest.find("---") {
-            let frontmatter = &rest[..end];
-            for line in frontmatter.lines() {
-                let line = line.trim();
-                if let Some(val) = line.strip_prefix("name:") {
-                    name = val.trim().trim_matches('"').trim_matches('\'').to_string();
-                } else if let Some(val) = line.strip_prefix("allowed_tools:") {
-                    allowed_tools = crate::loader::parse_string_array(val.trim());
-                }
+            if let Some(name) = parse_skill_name(&content) {
+                skill_names.push(name);
             }
         }
     }
 
-    (name, allowed_tools)
+    skill_names
+}
+
+/// Parse skill frontmatter to extract name.
+fn parse_skill_name(content: &str) -> Option<String> {
+    let rest = content.strip_prefix("---")?;
+    let end = rest.find("---")?;
+    let frontmatter = &rest[..end];
+    for line in frontmatter.lines() {
+        let line = line.trim();
+        if let Some(val) = line.strip_prefix("name:") {
+            let name = val.trim().trim_matches('"').trim_matches('\'').to_string();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
+    None
 }
 
 /// Collect knowledge file names from workspace/knowledge/.

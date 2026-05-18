@@ -81,7 +81,7 @@ pub struct PromptContext {
     /// Clone's style samples — extracted speaking patterns from chat history.
     /// Scanned from workspace/style/ at prompt build time.
     pub clone_style_md: Option<String>,
-    /// Clone's full skill prompts — workspace skill body + allowed_tools.
+    /// Clone's full skill prompts — workspace skill body.
     /// Injected alongside the catalog so the LLM knows HOW to execute each skill.
     pub clone_skills_prompts: Option<String>,
     /// Clone's knowledge content — compiled truth from knowledge/*.md files.

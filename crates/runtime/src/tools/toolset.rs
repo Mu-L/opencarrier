@@ -51,61 +51,22 @@ impl ToolModule for ToolSearchTools {
             return Some(Ok("No tools found matching your query. All available tools are already loaded.".to_string()));
         }
 
-        let allowed: std::collections::HashSet<&str> = ctx
-            .allowed_tools
-            .map(|a| a.iter().map(|s| s.as_str()).collect())
-            .unwrap_or_default();
-
-        let mut already = Vec::new();
-        let mut discovered = Vec::new();
-
+        let mut entries = Vec::new();
         for (ts_name, def) in &results {
             let desc_preview = if def.description.len() > 120 {
                 format!("{}...", &def.description[..117])
             } else {
                 def.description.clone()
             };
-            let entry = format!("- {} (from {}): {}", def.name, ts_name, desc_preview);
-            if allowed.contains(def.name.as_str()) {
-                already.push(entry);
-            } else {
-                discovered.push(entry);
-            }
+            entries.push(format!("- {} (from {}): {}", def.name, ts_name, desc_preview));
         }
 
-        let mut out = String::new();
-        if already.is_empty() && !discovered.is_empty() {
-            out.push_str(&format!("Found {} new tool(s) matching \"{}\":\n\n", discovered.len(), query));
-            for line in &discovered {
-                out.push_str(line);
-                out.push('\n');
-            }
-            out.push_str("\nThese tools will be available in your next response.");
-        } else if !already.is_empty() && discovered.is_empty() {
-            out.push_str(&format!("All {} matching tool(s) for \"{}\" are already in your tool list:\n\n", already.len(), query));
-            for line in &already {
-                out.push_str(line);
-                out.push('\n');
-            }
-            out.push_str("\nDo NOT call tool_search again for this. Use these tools directly.");
-        } else {
-            out.push_str(&format!("Found {} tool(s) matching \"{}\":\n\n", results.len(), query));
-            if !already.is_empty() {
-                out.push_str("Already available:\n");
-                for line in &already {
-                    out.push_str(line);
-                    out.push('\n');
-                }
-                out.push('\n');
-            }
-            if !discovered.is_empty() {
-                out.push_str("Newly discovered (will be activated next turn):\n");
-                for line in &discovered {
-                    out.push_str(line);
-                    out.push('\n');
-                }
-            }
+        let mut out = format!("Found {} tool(s) matching \"{}\":\n\n", entries.len(), query);
+        for line in &entries {
+            out.push_str(line);
+            out.push('\n');
         }
+        out.push_str("\nThese tools will be available in your next response.");
 
         Some(Ok(out))
     }

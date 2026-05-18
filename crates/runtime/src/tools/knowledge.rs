@@ -128,15 +128,19 @@ impl ToolModule for KnowledgeTools {
                     "properties": {
                         "name": {"type": "string", "description": "Skill name (used as filename)"},
                         "when_to_use": {"type": "string", "description": "Brief description of when to activate this skill"},
+                        "toolsets": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Toolset names this skill needs (e.g. [\"web\", \"filesystem\"]). Tools from these toolsets will be auto-activated when the skill matches."
+                        },
                         "body": {"type": "string", "description": "The skill content: workflow steps, instructions, and examples (markdown)"},
-                        "allowed_tools": {"type": "string", "description": "Comma-separated list of tools this skill needs (optional)"},
                     },
                     "required": ["name", "body"],
                 }),
             },
             ToolDefinition {
                 name: "skill_update".to_string(),
-                description: "Update the body of an existing skill. Preserves the skill's frontmatter (name, when_to_use, allowed_tools).".to_string(),
+                description: "Update the body of an existing skill. Preserves the skill's frontmatter (name, when_to_use).".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -475,7 +479,10 @@ async fn tool_skill_create(
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
     let when_to_use = input["when_to_use"].as_str().unwrap_or("");
     let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
-    let allowed_tools = input["allowed_tools"].as_str().unwrap_or("");
+    let toolsets: Vec<String> = input["toolsets"]
+        .as_array()
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
 
     let skills_dir = root.join("skills");
     tokio::fs::create_dir_all(&skills_dir)
@@ -495,8 +502,9 @@ async fn tool_skill_create(
     if !when_to_use.is_empty() {
         frontmatter.push_str(&format!("when_to_use: {when_to_use}\n"));
     }
-    if !allowed_tools.is_empty() {
-        frontmatter.push_str(&format!("allowed_tools: {allowed_tools}\n"));
+    if !toolsets.is_empty() {
+        let ts_str = toolsets.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", ");
+        frontmatter.push_str(&format!("toolsets: [{ts_str}]\n"));
     }
     frontmatter.push_str("---\n");
 
@@ -746,4 +754,139 @@ fn find_knowledge_file(knowledge_dir: &Path, query: &str) -> Result<PathBuf, Str
     }
 
     Err(format!("No knowledge file matching '{}' found", query))
+}
+
+/// Write the toolsets field to a skill .md file's frontmatter.
+///
+/// If a `toolsets:` line already exists in the frontmatter, it is replaced.
+/// Otherwise, a new line is inserted after `name:`.
+/// Uses atomic write (tmp + rename) for safety.
+pub fn write_skill_toolsets(workspace: &Path, skill_name: &str, toolsets: &[String]) -> Result<(), String> {
+    let skills_dir = workspace.join("skills");
+    let filename = lifecycle::evolution::sanitize_filename(skill_name);
+    let flat_path = skills_dir.join(format!("{filename}.md"));
+    let dir_path = skills_dir.join(&filename).join("SKILL.md");
+
+    let target = if flat_path.exists() {
+        flat_path
+    } else if dir_path.exists() {
+        dir_path
+    } else {
+        return Err(format!("Skill '{skill_name}' not found"));
+    };
+
+    let content = std::fs::read_to_string(&target)
+        .map_err(|e| format!("Failed to read skill: {e}"))?;
+
+    let new_ts_line = if toolsets.is_empty() {
+        return Ok(()); // Nothing to write
+    } else {
+        let ts_str = toolsets.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", ");
+        format!("toolsets: [{ts_str}]")
+    };
+
+    let updated = if let Some(rest) = content.strip_prefix("---") {
+        if let Some(end) = rest.find("---") {
+            let fm = &rest[..end];
+            let after_fm = &rest[end + 3..]; // skip closing ---
+
+            if fm.contains("toolsets:") {
+                // Replace existing toolsets line
+                let new_fm: String = fm.lines().map(|line| {
+                    if line.trim().starts_with("toolsets:") {
+                        new_ts_line.clone()
+                    } else {
+                        line.to_string()
+                    }
+                }).collect::<Vec<_>>().join("\n");
+                format!("---\n{new_fm}---{after_fm}")
+            } else {
+                // Insert after name: line
+                let mut new_fm = String::new();
+                let mut inserted = false;
+                for line in fm.lines() {
+                    new_fm.push_str(line);
+                    new_fm.push('\n');
+                    if !inserted && line.trim().starts_with("name:") {
+                        new_fm.push_str(&new_ts_line);
+                        new_fm.push('\n');
+                        inserted = true;
+                    }
+                }
+                if !inserted {
+                    new_fm.push_str(&new_ts_line);
+                    new_fm.push('\n');
+                }
+                format!("---\n{new_fm}---{after_fm}")
+            }
+        } else {
+            return Err("Invalid frontmatter: no closing ---".to_string());
+        }
+    } else {
+        return Err("No frontmatter found in skill file".to_string());
+    };
+
+    // Atomic write
+    let tmp_path = target.with_extension("tmp");
+    std::fs::write(&tmp_path, &updated)
+        .map_err(|e| format!("Failed to write temp file: {e}"))?;
+    std::fs::rename(&tmp_path, &target)
+        .map_err(|e| format!("Failed to rename temp file: {e}"))?;
+
+    Ok(())
+}
+
+/// Read the toolsets field from a skill .md file's frontmatter.
+/// Returns an empty Vec if the skill doesn't exist or has no toolsets.
+pub fn read_skill_toolsets(workspace: &Path, skill_name: &str) -> Vec<String> {
+    let skills_dir = workspace.join("skills");
+    let filename = lifecycle::evolution::sanitize_filename(skill_name);
+    let flat_path = skills_dir.join(format!("{filename}.md"));
+    let dir_path = skills_dir.join(&filename).join("SKILL.md");
+
+    let target = if flat_path.exists() {
+        flat_path
+    } else if dir_path.exists() {
+        dir_path
+    } else {
+        return Vec::new();
+    };
+
+    let content = match std::fs::read_to_string(&target) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    // Parse frontmatter
+    let rest = match content.strip_prefix("---") {
+        Some(r) => r,
+        None => return Vec::new(),
+    };
+    let end = match rest.find("---") {
+        Some(e) => e,
+        None => return Vec::new(),
+    };
+    let fm = &rest[..end];
+
+    // Find toolsets line
+    for line in fm.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("toolsets:") {
+            let val = value.trim();
+            if !val.starts_with('[') || !val.ends_with(']') {
+                continue;
+            }
+            let inner = &val[1..val.len() - 1];
+            if inner.is_empty() {
+                continue;
+            }
+            return inner
+                .split(',')
+                .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+
+    Vec::new()
 }

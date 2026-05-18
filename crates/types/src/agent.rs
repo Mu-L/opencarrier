@@ -468,10 +468,6 @@ pub struct SubagentConfig {
     /// Trigger keywords for auto-delegation (same format as skill's when_to_use).
     /// Comma/顿号-separated keywords.
     pub trigger: String,
-    /// Tools the subagent is allowed to use (same pattern as skill allowed_tools).
-    /// Supports exact names, wildcard suffixes (`mcp_wechat_*`), and `*` for all.
-    #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
-    pub allowed_tools: Vec<String>,
     /// Maximum iterations for the subagent's agent loop.
     #[serde(default = "default_subagent_max_iterations")]
     pub max_iterations: u32,

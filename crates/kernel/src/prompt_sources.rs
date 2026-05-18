@@ -411,7 +411,7 @@ pub fn read_agents_directory(workspace: &Path) -> Option<String> {
 }
 
 /// Read full skill prompts from workspace/skills/ directory.
-/// Returns formatted skill body + allowed_tools for each skill.
+/// Returns formatted skill body for each skill.
 pub fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
     let skills_dir = workspace.join("skills");
     if !skills_dir.is_dir() {
@@ -447,12 +447,8 @@ pub fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
         }
 
         // Parse frontmatter
-        let (name, allowed_tools, _max_iterations, body) = parse_skill_full(trimmed);
-        let mut section = format!("### {}\n", name);
-        if !allowed_tools.is_empty() {
-            section.push_str(&format!("可用工具: {}\n", allowed_tools));
-        }
-        section.push_str(body);
+        let (name, _, _, body) = parse_skill_full(trimmed);
+        let section = format!("### {}\n{}", name, body);
         parts.push(section);
     }
 
@@ -463,11 +459,28 @@ pub fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
     }
 }
 
-/// Parse a skill .md file to extract name, allowed_tools, max_iterations, and body.
-pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, &str) {
+/// Parse a YAML-style string array value like `["web", "filesystem"]`.
+fn parse_yaml_string_list(val: &str) -> Vec<String> {
+    let val = val.trim();
+    if !val.starts_with('[') || !val.ends_with(']') {
+        return Vec::new();
+    }
+    let inner = &val[1..val.len() - 1];
+    if inner.is_empty() {
+        return Vec::new();
+    }
+    inner
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Parse a skill .md file to extract name, max_iterations, toolsets, and body.
+pub fn parse_skill_full(content: &str) -> (String, Option<u32>, Vec<String>, &str) {
     let mut name = String::new();
-    let mut allowed_tools = String::new();
     let mut max_iterations: Option<u32> = None;
+    let mut toolsets: Vec<String> = Vec::new();
 
     if let Some(rest) = content.strip_prefix("---") {
         if let Some(end) = rest.find("---") {
@@ -476,19 +489,19 @@ pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, &str) {
                 let line = line.trim();
                 if let Some(val) = line.strip_prefix("name:") {
                     name = val.trim().trim_matches('"').trim_matches('\'').to_string();
-                } else if let Some(val) = line.strip_prefix("allowed_tools:") {
-                    allowed_tools = val.trim().to_string();
                 } else if let Some(val) = line.strip_prefix("max_iterations:") {
                     max_iterations = val.trim().parse().ok();
+                } else if let Some(val) = line.strip_prefix("toolsets:") {
+                    toolsets = parse_yaml_string_list(val.trim());
                 }
             }
             let body = rest[end + 3..].trim();
-            return (name, allowed_tools, max_iterations, body);
+            return (name, max_iterations, toolsets, body);
         }
     }
 
     // No frontmatter
-    (String::new(), String::new(), None, content)
+    (String::new(), None, Vec::new(), content)
 }
 
 /// Result of automatic skill matching against a user message.
@@ -497,10 +510,10 @@ pub struct SkillMatch {
     pub name: String,
     /// Full skill body (instructions after frontmatter).
     pub body: String,
-    /// Tools declared in `allowed_tools` frontmatter.
-    pub allowed_tools: Vec<String>,
     /// Override max_iterations for the agent loop (from skill frontmatter).
     pub max_iterations: Option<u32>,
+    /// Toolsets this skill declares (e.g. ["web", "filesystem"]).
+    pub toolsets: Vec<String>,
 }
 
 /// Result of automatic subagent trigger matching against a user message.
@@ -509,8 +522,6 @@ pub struct SubagentMatch {
     pub name: String,
     /// Description of the subagent.
     pub description: String,
-    /// Tools the subagent is allowed to use.
-    pub allowed_tools: Vec<String>,
     /// Max iterations for the subagent's agent loop.
     pub max_iterations: u32,
 }
@@ -556,7 +567,6 @@ pub fn match_subagent_for_message(message: &str, subagents: &[types::agent::Suba
         SubagentMatch {
             name: sa.name.clone(),
             description: sa.description.clone(),
-            allowed_tools: sa.allowed_tools.clone(),
             max_iterations: sa.max_iterations,
         }
     })
@@ -614,8 +624,7 @@ pub fn match_skill_for_message(message: &str, workspace: &Path) -> Option<SkillM
             continue;
         }
 
-        let (name, allowed_tools_str, max_iterations, body) = parse_skill_full(trimmed);
-        let allowed_tools = parse_allowed_tools_list(&allowed_tools_str);
+        let (name, max_iterations, toolsets, body) = parse_skill_full(trimmed);
 
         if best.as_ref().is_none_or(|(c, _)| match_count > *c) {
             best = Some((
@@ -623,8 +632,8 @@ pub fn match_skill_for_message(message: &str, workspace: &Path) -> Option<SkillM
                 SkillMatch {
                     name,
                     body: body.to_string(),
-                    allowed_tools,
                     max_iterations,
+                    toolsets,
                 },
             ));
         }
@@ -674,30 +683,6 @@ fn extract_keywords(when_to_use: &str) -> Vec<String> {
         .map(|s| s.trim())
         .filter(|s| s.len() >= 2 && !STOP_WORDS.contains(s) && !s.chars().all(|c| c.is_whitespace()))
         .map(String::from)
-        .collect()
-}
-
-/// Parse a bracket-or-comma-delimited list of tool names.
-pub(crate) fn parse_allowed_tools_list(allowed_tools_str: &str) -> Vec<String> {
-    let trimmed = allowed_tools_str.trim();
-    if trimmed.is_empty() {
-        return Vec::new();
-    }
-
-    // Handle bracket format: [tool1, tool2]
-    if trimmed.starts_with('[') && trimmed.ends_with(']') {
-        return trimmed[1..trimmed.len() - 1]
-            .split(',')
-            .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-    }
-
-    // Fallback: comma-separated
-    trimmed
-        .split(',')
-        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
-        .filter(|s| !s.is_empty())
         .collect()
 }
 

@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 17;
+const SCHEMA_VERSION: u32 = 18;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -77,6 +77,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 17 {
         migrate_v17(conn)?;
+    }
+
+    if current_version < 18 {
+        migrate_v18(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -838,6 +842,21 @@ fn migrate_v17(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![17, "Tree memory: 9 tables for hierarchical memory with owner_id partitioning"],
+    )?;
+    Ok(())
+}
+
+/// Version 18: Add active_skill_name column to sessions.
+fn migrate_v18(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "sessions", "active_skill_name") {
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN active_skill_name TEXT DEFAULT NULL",
+        )?;
+    }
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![18, "Session: add active_skill_name for skill write-back tracking"],
     )?;
     Ok(())
 }

@@ -15,6 +15,7 @@ use crate::llm_errors;
 use crate::mcp::McpConnection;
 use crate::tool_context::ToolContext;
 use crate::tool_runner;
+use crate::tools::knowledge::write_skill_toolsets;
 use crate::web_search::WebToolsContext;
 use crate::text_tool_recovery::recover_text_tool_calls;
 use memory::session::Session;
@@ -79,57 +80,6 @@ fn tool_input_hash(input: &serde_json::Value) -> u64 {
     hasher.finish()
 }
 
-/// Parse a YAML frontmatter list field (e.g. `allowed_tools: [...]`) from text.
-fn parse_frontmatter_list(content: &str, field: &str) -> Option<Vec<String>> {
-    let pattern = format!("{field}:");
-    let in_frontmatter = content.starts_with("---");
-    let mut found = false;
-    for line in content.lines() {
-        if !in_frontmatter { break; }
-        if line.trim() == "---" && found { break; }
-        if let Some(rest) = line.strip_prefix(&pattern) {
-            let rest = rest.trim();
-            if rest.starts_with('[') && rest.ends_with(']') {
-                let inner = &rest[1..rest.len()-1];
-                return Some(inner.split(',')
-                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect());
-            }
-        }
-        found = true;
-    }
-    None
-}
-
-/// Map a tool name to its toolset name (mirrors kernel::tool_builder::tool_to_toolset).
-fn tool_to_toolset_name(name: &str) -> Option<String> {
-    // Core tools don't belong to a toolset
-    match name {
-        "session_summarize" | "tool_search"
-        | "skill_load" | "knowledge_read" | "knowledge_list"
-        | "cron_create" | "cron_list" | "cron_cancel" => return None,
-        _ => {}
-    }
-    if name.starts_with("file_") || name == "apply_patch" { return Some("filesystem".to_string()); }
-    if name == "shell_exec" { return Some("shell".to_string()); }
-    if name.starts_with("knowledge_") || name.starts_with("skill_") || name == "clone_evaluate" { return Some("knowledge".to_string()); }
-    if name.starts_with("media_") || name.starts_with("image_") || name == "text_to_speech" || name == "speech_to_text"
-        || name.starts_with("process_") { return Some("media".to_string()); }
-    if name.starts_with("web_") { return Some("web".to_string()); }
-    if name.starts_with("agent_") || name.starts_with("train_") { return Some("agent".to_string()); }
-    if name.starts_with("location_") || name.starts_with("system_") || name == "user_profile" { return Some("misc".to_string()); }
-    // MCP tools: extract server name from prefix like mcp_browser_*
-    if let Some(rest) = name.strip_prefix("mcp_") {
-        if let Some(pos) = rest.find('_') {
-            return Some(rest[..pos].to_string());
-        }
-    }
-    // Browser tools without mcp_ prefix
-    if name.starts_with("browser_") { return Some("browser".to_string()); }
-    Some("misc".to_string())
-}
-
 /// Detect a tool-use loop: returns the (name, input_hash) of the looping call
 /// if the last `window` entries are all the same (name, input_hash), else None.
 fn detect_tool_loop(recent: &[(String, u64)], window: usize) -> Option<(String, u64)> {
@@ -178,8 +128,6 @@ pub struct AgentLoopResult {
     pub silent: bool,
     /// Reply directives extracted from the agent's response.
     pub directives: types::message::ReplyDirectives,
-    /// Tool names that were successfully called during this loop.
-    pub tools_used: Vec<String>,
 }
 
 /// Run the agent execution loop for a single user message.
@@ -544,8 +492,10 @@ async fn run_agent_loop_impl(
     // Track recent (tool_name, input_hash) for loop detection
     let mut recent_tool_calls: Vec<(String, u64)> = Vec::new();
 
-    // Track successfully used tools for skill auto-update
-    let mut tools_used: Vec<String> = Vec::new();
+    // Write-back tracking: toolsets activated by tool_search this turn
+    let mut search_activated_toolsets: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Current skill name (from session.active_skill_name)
+    let current_skill_name = session.active_skill_name.clone();
 
     // Shadow with an owned Vec so we can refresh mid-loop when skills are installed
     let mut tools_owned: Vec<ToolDefinition> = available_tools.to_vec();
@@ -681,7 +631,6 @@ async fn run_agent_loop_impl(
                             current_thread: parsed_directives_s.current_thread,
                             silent: true,
                         },
-                        tools_used: tools_used.clone(),
                     });
                 }
 
@@ -796,7 +745,6 @@ async fn run_agent_loop_impl(
                     iterations: iteration + 1,
                     silent: false,
                     directives: Default::default(),
-                    tools_used: tools_used.clone(),
                 });
             }
             StopReason::ToolUse => {
@@ -815,8 +763,6 @@ async fn run_agent_loop_impl(
                     content: MessageContent::Blocks(assistant_blocks),
                 });
 
-                let allowed_tool_names: Vec<String> =
-                    available_tools.iter().map(|t| t.name.clone()).collect();
                 let caller_id_str = session.agent_id.to_string();
 
                 // Track tool calls for loop detection BEFORE execution
@@ -854,7 +800,6 @@ async fn run_agent_loop_impl(
                         iterations: iteration + 1,
                         silent: false,
                         directives: Default::default(),
-                        tools_used: tools_used.clone(),
                     });
                 }
 
@@ -907,7 +852,6 @@ async fn run_agent_loop_impl(
                     let home_dir_buf = kernel.as_ref().and_then(|k| k.home_dir());
                     let tool_ctx = ToolContext {
                         kernel: kernel.as_ref(),
-                        allowed_tools: Some(&allowed_tool_names),
                         caller_agent_id: Some(&caller_id_str),
                         mcp_connections,
                         web_ctx,
@@ -971,11 +915,6 @@ async fn run_agent_loop_impl(
                         let _ = hook_reg.fire(&ctx);
                     }
 
-                    // Track successful tool use for skill auto-update
-                    if !result.is_error && !tools_used.contains(&tool_call.name) {
-                        tools_used.push(tool_call.name.clone());
-                    }
-
                     // Dynamic truncation based on context budget (replaces flat MAX_TOOL_RESULT_CHARS)
                     let final_content = truncate_tool_result_dynamic(&result.content, &context_budget);
 
@@ -1002,6 +941,38 @@ async fn run_agent_loop_impl(
                         content: final_content,
                         is_error: result.is_error,
                     });
+
+                    // Write-back: if tool executed successfully and toolsets were
+                    // activated by tool_search this turn, write them to the skill file.
+                    // This ensures next time the same skill matches, the toolsets are
+                    // pre-declared and don't need another search round-trip.
+                    if !result.is_error && !search_activated_toolsets.is_empty() {
+                        if let Some(ref skill_name) = current_skill_name {
+                            if let Some(ref ws) = manifest.workspace {
+                                let mut existing_toolsets = crate::tools::knowledge::read_skill_toolsets(ws, skill_name);
+                                let mut added = Vec::new();
+                                for ts_name in &search_activated_toolsets {
+                                    if !existing_toolsets.contains(ts_name) {
+                                        existing_toolsets.push(ts_name.clone());
+                                        added.push(ts_name.clone());
+                                    }
+                                }
+                                if !added.is_empty() {
+                                    info!(
+                                        skill = %skill_name,
+                                        toolsets = ?added,
+                                        tool = %tool_call.name,
+                                        "Tool from search-activated toolset executed successfully, writing back to skill"
+                                    );
+                                    if let Err(e) = write_skill_toolsets(ws, skill_name, &existing_toolsets) {
+                                        warn!(skill = %skill_name, error = %e, "Failed to write skill toolsets");
+                                    }
+                                    // Clear to avoid duplicate writes
+                                    search_activated_toolsets.clear();
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Detect tool errors and inject guidance to prevent fabrication
@@ -1058,36 +1029,15 @@ async fn run_agent_loop_impl(
                     if let Some(ref kernel) = kernel {
                         let agent_id_str = session.agent_id.to_string();
 
-                        // Collect toolsets to activate from skill_load and tool_search
+                        // Collect toolsets to activate from tool_search
                         let mut toolsets_to_activate: Vec<String> = Vec::new();
 
-                        // --- skill_load: parse allowed_tools from the skill content ---
-                        let skill_load_results: Vec<(String, String)> = response.tool_calls.iter()
+                        // Log skill_load calls (no allowed_tools parsing needed)
+                        let skill_load_count = response.tool_calls.iter()
                             .filter(|tc| tc.name == "skill_load")
-                            .filter_map(|tc| {
-                                let name = tc.input.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                                tool_result_blocks.iter().find_map(|block| {
-                                    if let types::message::ContentBlock::ToolResult { tool_use_id, content, .. } = block {
-                                        if tool_use_id == &tc.id {
-                                            Some((name.to_string(), content.clone()))
-                                        } else { None }
-                                    } else { None }
-                                })
-                            })
-                            .collect();
-
-                        for (skill_name, content) in &skill_load_results {
-                            // Parse allowed_tools from frontmatter
-                            if let Some(allowed) = parse_frontmatter_list(content, "allowed_tools") {
-                                for tool_name in &allowed {
-                                    if let Some(ts) = tool_to_toolset_name(tool_name) {
-                                        if !toolsets_to_activate.contains(&ts) {
-                                            toolsets_to_activate.push(ts);
-                                        }
-                                    }
-                                }
-                                info!(skill = skill_name, tools = ?allowed, "Skill loaded — activating toolsets");
-                            }
+                            .count();
+                        if skill_load_count > 0 {
+                            info!(count = skill_load_count, "Skill(s) loaded");
                         }
 
                         // --- tool_search: search and collect matching toolsets ---
@@ -1100,6 +1050,7 @@ async fn run_agent_loop_impl(
                             let results = kernel.search_tools(q, 5, manifest.max_tool_level);
                             for (ts_name, _) in results {
                                 if !toolsets_to_activate.contains(&ts_name) {
+                                    search_activated_toolsets.insert(ts_name.clone());
                                     toolsets_to_activate.push(ts_name);
                                 }
                             }
@@ -1187,7 +1138,6 @@ async fn run_agent_loop_impl(
                         iterations: iteration + 1,
                         silent: false,
                         directives: Default::default(),
-                        tools_used: tools_used.clone(),
                     });
                 }
                 let text = response.text();
@@ -1513,7 +1463,8 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            active_toolsets: vec![],
+active_toolsets: vec![],
+            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyAfterToolUseDriver::new());
@@ -1566,7 +1517,8 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            active_toolsets: vec![],
+active_toolsets: vec![],
+            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyAfterToolUseDriver::new());
@@ -1621,7 +1573,8 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            active_toolsets: vec![],
+active_toolsets: vec![],
+            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyMaxTokensDriver);
@@ -1674,7 +1627,8 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            active_toolsets: vec![],
+active_toolsets: vec![],
+            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(NormalDriver);
@@ -1718,7 +1672,8 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            active_toolsets: vec![],
+active_toolsets: vec![],
+            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyAfterToolUseDriver::new());
@@ -1846,7 +1801,8 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            active_toolsets: vec![],
+active_toolsets: vec![],
+            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyThenNormalDriver::new());
@@ -1893,7 +1849,8 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            active_toolsets: vec![],
+active_toolsets: vec![],
+            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(AlwaysEmptyDriver);
@@ -1946,7 +1903,8 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            active_toolsets: vec![],
+active_toolsets: vec![],
+            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyMaxTokensDriver);
@@ -2825,7 +2783,8 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            active_toolsets: vec![],
+active_toolsets: vec![],
+            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(TextToolCallDriver::new());
@@ -2898,7 +2857,8 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            active_toolsets: vec![],
+active_toolsets: vec![],
+            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(NormalDriver);
@@ -2953,7 +2913,8 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-            active_toolsets: vec![],
+active_toolsets: vec![],
+            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(TextToolCallDriver::new());

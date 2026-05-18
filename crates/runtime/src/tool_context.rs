@@ -22,7 +22,6 @@ use std::sync::Arc;
 #[derive(Copy, Clone)]
 pub struct ToolContext<'a> {
     pub kernel: Option<&'a Arc<dyn KernelHandle>>,
-    pub allowed_tools: Option<&'a [String]>,
     pub caller_agent_id: Option<&'a str>,
     pub mcp_connections: Option<&'a DashMap<String, McpConnection>>,
     pub web_ctx: Option<&'a WebToolsContext>,

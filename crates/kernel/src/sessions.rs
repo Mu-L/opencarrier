@@ -373,6 +373,7 @@ impl CarrierKernel {
                 context_window_tokens: 0,
                 label: None,
                 active_toolsets: vec![],
+                active_skill_name: None,
             });
 
         let config = CompactionConfig::default();
@@ -567,6 +568,7 @@ impl CarrierKernel {
                 context_window_tokens: 0,
                 label: None,
                 active_toolsets: vec![],
+                active_skill_name: None,
             });
 
         let system_prompt = &entry.manifest.model.system_prompt;

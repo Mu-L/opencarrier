@@ -1,9 +1,9 @@
 //! Tool resolution and prompt building — available_tools, toolset registry, system prompt.
 //!
 //! Assembles the tool set for each agent request using the toolset model:
-//! - Core tools (always visible): session_summarize, tool_search
+//! - Core tools (always visible): session_summarize, tool_search, etc.
 //! - Toolsets (on-demand): filesystem, shell, knowledge, media, misc, web, agent, + MCP servers
-//! - Toolset activation: auto_load_toolsets (manifest) + active_toolsets (session-level)
+//! - Toolset activation: skill-declared toolsets + tool_search on-demand (both → session.active_toolsets)
 
 use crate::kernel::CarrierKernel;
 use crate::prompt_sources::{
@@ -59,8 +59,8 @@ const BUILTIN_TOOLSETS: &[&str] = &["filesystem", "shell", "knowledge", "memory"
 
 /// Tools that remain available even when a skill restricts the tool list.
 /// These are foundational: the agent must always be able to summarize
-/// state and look up its own knowledge base. `tool_search` and `skill_load`
-/// are deliberately EXCLUDED so the LLM can't escape the skill-imposed scope.
+/// state and look up its own knowledge base. `skill_load` is deliberately
+/// EXCLUDED so the LLM can't escape the skill-imposed scope.
 pub(crate) const ALWAYS_AVAILABLE_WITH_SKILL: &[&str] = &[
     "session_summarize",
     "knowledge_read",
@@ -69,51 +69,21 @@ pub(crate) const ALWAYS_AVAILABLE_WITH_SKILL: &[&str] = &[
     "tool_search",
 ];
 
-/// Match a tool name against a skill `allowed_tools` pattern.
-/// Supports exact match (`file_write`) and suffix wildcard (`mcp_wechat_oa_*`).
-pub(crate) fn matches_skill_pattern(tool_name: &str, pattern: &str) -> bool {
-    if let Some(prefix) = pattern.strip_suffix('*') {
-        tool_name.starts_with(prefix)
-    } else {
-        tool_name == pattern
-    }
-}
-
-/// Filter a tool list down to the union of:
-/// - tools matching any pattern in `allowed_patterns` (with `*` suffix wildcard)
-/// - the `ALWAYS_AVAILABLE_WITH_SKILL` foundation set
-///
-/// A pattern of `"*"` alone disables filtering (keeps all tools).
-/// When `allowed_patterns` is empty, uses discovery mode: only core tools +
-/// tools at or below `max_tool_level` (excluding Dangerous).
+/// Filter a tool list by `max_tool_level` (discovery mode).
+/// Keeps ALWAYS_AVAILABLE_WITH_SKILL tools + tools at or below `max_tool_level`
+/// (excluding Dangerous-level tools, which are never allowed through this path).
 pub(crate) fn filter_tools_by_skill_allowed(
     tools: Vec<ToolDefinition>,
-    allowed_patterns: &[String],
     max_tool_level: types::tool::PermissionLevel,
 ) -> Vec<ToolDefinition> {
-    if allowed_patterns.is_empty() {
-        // Discovery mode: core tools + tools within max_tool_level (excluding Dangerous)
-        return tools
-            .into_iter()
-            .filter(|t| {
-                if ALWAYS_AVAILABLE_WITH_SKILL.contains(&t.name.as_str()) {
-                    return true;
-                }
-                let level = tool_permission_level(&t.name);
-                level <= max_tool_level && level != types::tool::PermissionLevel::Dangerous
-            })
-            .collect();
-    }
-    if allowed_patterns.iter().any(|p| p == "*") {
-        return tools;
-    }
     tools
         .into_iter()
         .filter(|t| {
-            ALWAYS_AVAILABLE_WITH_SKILL.contains(&t.name.as_str())
-                || allowed_patterns
-                    .iter()
-                    .any(|p| matches_skill_pattern(&t.name, p))
+            if ALWAYS_AVAILABLE_WITH_SKILL.contains(&t.name.as_str()) {
+                return true;
+            }
+            let level = tool_permission_level(&t.name);
+            level <= max_tool_level && level != types::tool::PermissionLevel::Dangerous
         })
         .collect()
 }
@@ -214,94 +184,17 @@ pub(crate) fn build_subagent_tool_definitions(subagents: &[SubagentConfig]) -> V
 impl CarrierKernel {
     /// Collect the tools available to an agent using toolset mode.
     ///
-    /// Always shows core tools + tool_search. Additional tools come from
-    /// auto_load_toolsets (manifest) + active_toolsets (session-level).
+    /// Always shows core tools + tool_search. Additional tools come ONLY from
+    /// session.active_toolsets (populated by skill auto-match + tool_search on-demand).
+    /// No auto-loading from manifest fields — skills declare toolsets, tool_search discovers the rest.
     pub(crate) fn available_tools(&self, agent_id: AgentId, active_toolsets: Option<&[String]>) -> Vec<ToolDefinition> {
         let all_builtins = runtime::tool_runner::builtin_tool_definitions();
         let entry = self.registry.get(agent_id);
 
-        // Merge auto_load + active toolsets
-        let auto_load = entry
-            .as_ref()
-            .map(|e| e.manifest.auto_load_toolsets.clone())
-            .unwrap_or_default();
-        let active: Vec<String> = active_toolsets
+        // Only use session-level active_toolsets (from skill match + tool_search)
+        let combined: Vec<String> = active_toolsets
             .map(|s| s.to_vec())
             .unwrap_or_default();
-        let mut combined = auto_load;
-        for ts in &active {
-            if !combined.contains(ts) {
-                combined.push(ts.clone());
-            }
-        }
-
-        // Auto-activate toolsets for MCP servers declared in mcp_servers
-        if let Some(ref e) = entry {
-            for server in &e.manifest.mcp_servers {
-                let normalized = runtime::mcp::normalize_name(server);
-                if !combined
-                    .iter()
-                    .any(|c| runtime::mcp::normalize_name(c) == normalized)
-                {
-                    combined.push(server.clone());
-                }
-            }
-        }
-
-        // Auto-derive toolsets from capabilities.tools — always runs so that
-        // agents declaring tools in capabilities get them loaded regardless of
-        // auto_load_toolsets. Follows Claude's approach: with <50 tools, load
-        // everything upfront for better accuracy and no search round-trips.
-        if let Some(ref e) = entry {
-            let declared = &e.manifest.capabilities.tools;
-            if !declared.is_empty() && !declared.iter().any(|t| t == "*") {
-                for tool_name in declared {
-                    if let Some(ts) = tool_to_toolset(tool_name) {
-                        let ts_str = ts.to_string();
-                        if !combined.contains(&ts_str) {
-                            combined.push(ts_str);
-                        }
-                    }
-                    // MCP tool names: extract server and activate that toolset
-                    if let Some(server) = runtime::mcp::extract_mcp_server_from_known(
-                        tool_name,
-                        BUILTIN_TOOLSETS,
-                    ) {
-                        let ts_str = server.to_string();
-                        if !combined.contains(&ts_str) {
-                            combined.push(ts_str);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Auto-activate toolsets for tools in whitelist_tools
-        let whitelist = &self.config.whitelist_tools;
-        if !whitelist.is_empty() {
-            for tool_name in whitelist {
-                if let Some(ts) = tool_to_toolset(tool_name) {
-                    if !combined.contains(&ts.to_string()) {
-                        combined.push(ts.to_string());
-                    }
-                }
-                // MCP whitelist tools: extract server name and activate that toolset
-                if let Some(server) = runtime::mcp::extract_mcp_server_from_known(
-                    tool_name,
-                    BUILTIN_TOOLSETS,
-                ) {
-                    let ts_name = server.to_string();
-                    if !combined.contains(&ts_name) {
-                        combined.push(ts_name);
-                    }
-                }
-            }
-        }
-
-        // All agents need knowledge toolset to read their own knowledge base
-        if !combined.contains(&"knowledge".to_string()) {
-            combined.push("knowledge".to_string());
-        }
 
         // Core tools always visible
         let mut tools: Vec<ToolDefinition> = all_builtins
@@ -310,7 +203,7 @@ impl CarrierKernel {
             .cloned()
             .collect();
 
-        // Add tools from each active/auto toolset
+        // Add tools from each active toolset
         if let Ok(registry) = self.plugins.toolset_registry.read() {
             for ts_name in &combined {
                 if let Some(toolset_tools) = registry.get(ts_name) {
@@ -340,32 +233,6 @@ impl CarrierKernel {
         });
         if exec_blocks_shell {
             tools.retain(|t| t.name != "shell_exec");
-        }
-
-        // Add whitelist tools that aren't already included (covers edge cases
-        // like MCP whitelist tools whose server toolset isn't auto-activated)
-        if !whitelist.is_empty() {
-            let existing_names: std::collections::HashSet<String> =
-                tools.iter().map(|t| t.name.clone()).collect();
-            // Check builtins
-            let all_defs = runtime::tool_runner::builtin_tool_definitions();
-            for def in &all_defs {
-                if whitelist.iter().any(|w| w == &def.name)
-                    && !existing_names.contains(&def.name)
-                {
-                    tools.push(def.clone());
-                }
-            }
-            // Check MCP tools
-            if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
-                for def in mcp_tools.iter() {
-                    if whitelist.iter().any(|w| w == &def.name)
-                        && !existing_names.contains(&def.name)
-                    {
-                        tools.push(def.clone());
-                    }
-                }
-            }
         }
 
         // Add delegate_{name} tools for each subagent in the manifest
@@ -432,8 +299,6 @@ impl CarrierKernel {
     fn build_toolset_summary(
         &self,
         active_toolsets: &[String],
-        auto_load_toolsets: &[String],
-        mcp_allowlist: &[String],
     ) -> String {
         let registry = match self.plugins.toolset_registry.read() {
             Ok(r) => r.clone(),
@@ -458,19 +323,7 @@ impl CarrierKernel {
         });
 
         for (name, tools) in &entries {
-            // Filter by mcp_allowlist for MCP toolsets
-            let is_builtin = BUILTIN_TOOLSETS.contains(&name.as_str());
-            if !is_builtin && !mcp_allowlist.is_empty() {
-                let normalized = runtime::mcp::normalize_name(name);
-                if !mcp_allowlist
-                    .iter()
-                    .any(|a| runtime::mcp::normalize_name(a) == normalized)
-                {
-                    continue;
-                }
-            }
-
-            let is_active = active_toolsets.contains(name) || auto_load_toolsets.contains(name);
+            let is_active = active_toolsets.contains(name);
             let status = if is_active { "ACTIVE" } else { "available" };
 
             let examples: Vec<&str> = tools
@@ -613,8 +466,6 @@ impl CarrierKernel {
             skill_prompt_context: String::new(),
             mcp_summary: self.build_toolset_summary(
                 &active,
-                &manifest.auto_load_toolsets,
-                &manifest.mcp_servers,
             ),
             workspace_path: manifest.workspace.as_ref().map(|p| p.display().to_string()),
             soul_md: manifest
@@ -720,26 +571,9 @@ mod tests {
     }
 
     #[test]
-    fn skill_pattern_exact_match() {
-        assert!(matches_skill_pattern("file_write", "file_write"));
-        assert!(!matches_skill_pattern("file_write", "file_read"));
-        assert!(!matches_skill_pattern("file_writer", "file_write"));
-    }
-
-    #[test]
-    fn skill_pattern_suffix_wildcard() {
-        assert!(matches_skill_pattern("mcp_wechat_oa_publish", "mcp_wechat_oa_*"));
-        assert!(matches_skill_pattern("mcp_wechat_oa_", "mcp_wechat_oa_*"));
-        assert!(!matches_skill_pattern("mcp_feishu_publish", "mcp_wechat_oa_*"));
-        assert!(matches_skill_pattern("web_search", "web_*"));
-        assert!(matches_skill_pattern("web_fetch", "web_*"));
-    }
-
-    #[test]
     fn filter_keeps_always_available() {
         let tools = vec![td("session_summarize"), td("knowledge_read"), td("knowledge_list"), td("shell_exec")];
-        let allowed = vec!["web_search".to_string()]; // doesn't match any tool
-        let filtered = filter_tools_by_skill_allowed(tools, &allowed, types::tool::PermissionLevel::Write);
+        let filtered = filter_tools_by_skill_allowed(tools, types::tool::PermissionLevel::Write);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"session_summarize"));
         assert!(names.contains(&"knowledge_read"));
@@ -748,77 +582,27 @@ mod tests {
     }
 
     #[test]
-    fn filter_keeps_allowed_tools() {
-        let tools = vec![
-            td("web_search"),
-            td("web_fetch"),
-            td("file_write"),
-            td("file_delete"),
-            td("shell_exec"),
-        ];
-        let allowed = vec!["web_search".to_string(), "web_fetch".to_string(), "file_write".to_string()];
-        let filtered = filter_tools_by_skill_allowed(tools, &allowed, types::tool::PermissionLevel::Write);
-        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names.len(), 3);
-        assert!(names.contains(&"web_search"));
-        assert!(names.contains(&"web_fetch"));
-        assert!(names.contains(&"file_write"));
-        assert!(!names.contains(&"file_delete"));
-        assert!(!names.contains(&"shell_exec"));
-    }
-
-    #[test]
-    fn filter_keeps_wildcard_matches() {
-        let tools = vec![
-            td("mcp_wechat_oa_publish"),
-            td("mcp_wechat_oa_draft"),
-            td("mcp_feishu_send"),
-            td("file_write"),
-        ];
-        let allowed = vec!["mcp_wechat_oa_*".to_string(), "file_write".to_string()];
-        let filtered = filter_tools_by_skill_allowed(tools, &allowed, types::tool::PermissionLevel::Write);
-        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names.len(), 3);
-        assert!(names.contains(&"mcp_wechat_oa_publish"));
-        assert!(names.contains(&"mcp_wechat_oa_draft"));
-        assert!(names.contains(&"file_write"));
-        assert!(!names.contains(&"mcp_feishu_send"));
-    }
-
-    #[test]
-    fn filter_star_disables_filtering() {
-        let tools = vec![td("shell_exec"), td("file_delete"), td("web_search")];
-        let allowed = vec!["*".to_string()];
-        let filtered = filter_tools_by_skill_allowed(tools, &allowed, types::tool::PermissionLevel::Write);
-        assert_eq!(filtered.len(), 3);
-    }
-
-    #[test]
-    fn filter_tool_search_available_in_skill() {
-        // tool_search IS in ALWAYS_AVAILABLE_WITH_SKILL so agents can discover tools.
-        // skill_load is NOT — it stays within allowed_tools scope.
+    fn filter_all_none_level_tools_pass() {
         let tools = vec![td("tool_search"), td("skill_load"), td("session_summarize"), td("web_search")];
-        let allowed = vec!["web_search".to_string()];
-        let filtered = filter_tools_by_skill_allowed(tools, &allowed, types::tool::PermissionLevel::Write);
+        let filtered = filter_tools_by_skill_allowed(tools, types::tool::PermissionLevel::Write);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"tool_search"));
-        assert!(!names.contains(&"skill_load"));
+        assert!(names.contains(&"skill_load"));
         assert!(names.contains(&"session_summarize"));
         assert!(names.contains(&"web_search"));
     }
 
     #[test]
-    fn discovery_mode_filters_by_level() {
+    fn filter_by_level_write() {
         let tools = vec![
-            td("session_summarize"),   // None — always available
-            td("tool_search"),          // None — always available
-            td("file_read"),            // ReadOnly — within Write
-            td("file_write"),           // Write — within Write
-            td("process_start"),        // Execute — above Write
-            td("shell_exec"),           // Dangerous — always excluded
+            td("session_summarize"),
+            td("tool_search"),
+            td("file_read"),
+            td("file_write"),
+            td("process_start"),
+            td("shell_exec"),
         ];
-        let allowed: Vec<String> = vec![];  // empty = discovery mode
-        let filtered = filter_tools_by_skill_allowed(tools, &allowed, types::tool::PermissionLevel::Write);
+        let filtered = filter_tools_by_skill_allowed(tools, types::tool::PermissionLevel::Write);
         let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"session_summarize"));
         assert!(names.contains(&"tool_search"));
@@ -826,5 +610,22 @@ mod tests {
         assert!(names.contains(&"file_write"));
         assert!(!names.contains(&"process_start"));
         assert!(!names.contains(&"shell_exec"));
+    }
+
+    #[test]
+    fn filter_by_level_execute() {
+        let tools = vec![td("file_write"), td("process_start"), td("shell_exec")];
+        let filtered = filter_tools_by_skill_allowed(tools, types::tool::PermissionLevel::Execute);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"file_write"));
+        assert!(names.contains(&"process_start"));
+        assert!(!names.contains(&"shell_exec"));
+    }
+
+    #[test]
+    fn dangerous_never_passes() {
+        let tools = vec![td("shell_exec"), td("process_kill"), td("agent_kill")];
+        let filtered = filter_tools_by_skill_allowed(tools, types::tool::PermissionLevel::Dangerous);
+        assert!(filtered.is_empty());
     }
 }

@@ -24,6 +24,9 @@ pub struct Session {
     pub label: Option<String>,
     /// Toolsets activated in this session (populated by tool_search calls).
     pub active_toolsets: Vec<String>,
+    /// Skill name from the most recent auto-match, used for write-back
+    /// after successful tool execution.
+    pub active_skill_name: Option<String>,
 }
 
 /// Session store backed by SQLite.
@@ -45,7 +48,7 @@ impl SessionStore {
             .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         let mut stmt = conn
-            .prepare("SELECT agent_id, messages, context_window_tokens, label, active_toolsets FROM sessions WHERE id = ?1")
+            .prepare("SELECT agent_id, messages, context_window_tokens, label, active_toolsets, active_skill_name FROM sessions WHERE id = ?1")
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let result = stmt.query_row(rusqlite::params![session_id.0.to_string()], |row| {
@@ -55,11 +58,12 @@ impl SessionStore {
             let label: Option<String> = row.get(3).unwrap_or(None);
             let active_toolsets_json: String = row.get(4).unwrap_or_else(|_| "[]".to_string());
             let active_toolsets: Vec<String> = serde_json::from_str(&active_toolsets_json).unwrap_or_default();
-            Ok((agent_str, messages_blob, tokens, label, active_toolsets))
+            let active_skill_name: Option<String> = row.get(5).unwrap_or(None);
+            Ok((agent_str, messages_blob, tokens, label, active_toolsets, active_skill_name))
         });
 
         match result {
-            Ok((agent_str, messages_blob, tokens, label, active_toolsets)) => {
+            Ok((agent_str, messages_blob, tokens, label, active_toolsets, active_skill_name)) => {
                 let agent_id = uuid::Uuid::parse_str(&agent_str)
                     .map(AgentId)
                     .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -72,6 +76,7 @@ impl SessionStore {
                     context_window_tokens: tokens as u64,
                     label,
                     active_toolsets,
+                    active_skill_name,
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -89,9 +94,9 @@ impl SessionStore {
             .map_err(|e| CarrierError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO sessions (id, agent_id, messages, context_window_tokens, label, active_toolsets, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
-             ON CONFLICT(id) DO UPDATE SET messages = ?3, context_window_tokens = ?4, label = ?5, active_toolsets = ?6, updated_at = ?7",
+            "INSERT INTO sessions (id, agent_id, messages, context_window_tokens, label, active_toolsets, active_skill_name, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+             ON CONFLICT(id) DO UPDATE SET messages = ?3, context_window_tokens = ?4, label = ?5, active_toolsets = ?6, active_skill_name = ?7, updated_at = ?8",
             rusqlite::params![
                 session.id.0.to_string(),
                 session.agent_id.0.to_string(),
@@ -99,6 +104,7 @@ impl SessionStore {
                 session.context_window_tokens as i64,
                 session.label.as_deref(),
                 serde_json::to_string(&session.active_toolsets).unwrap_or_else(|_| "[]".to_string()),
+                session.active_skill_name.as_deref(),
                 now,
             ],
         )
@@ -186,6 +192,7 @@ impl SessionStore {
             context_window_tokens: 0,
             label: None,
             active_toolsets: vec![],
+            active_skill_name: None,
         };
         self.save_session(&session)?;
         Ok(session)
@@ -248,6 +255,7 @@ impl SessionStore {
                     context_window_tokens: tokens as u64,
                     label: lbl,
                     active_toolsets: vec![],
+                    active_skill_name: None,
                 }))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -307,6 +315,7 @@ impl SessionStore {
             context_window_tokens: 0,
             label: label.map(|s| s.to_string()),
             active_toolsets: vec![],
+            active_skill_name: None,
         };
         self.save_session(&session)?;
         Ok(session)
