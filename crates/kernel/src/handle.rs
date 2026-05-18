@@ -631,11 +631,32 @@ impl KernelHandle for CarrierKernel {
 
         scored.sort_by(|a, b| b.0.cmp(&a.0));
 
+        // Debug: log pre-filter state for empty results
+        if scored.is_empty() {
+            tracing::warn!(
+                query = query,
+                registry_size = registry.len(),
+                registry_keys = ?registry.keys().collect::<Vec<_>>(),
+                max_level = ?max_level,
+                "tool_search found 0 candidates (before level filter)"
+            );
+        }
+
         // Filter by max_level + always exclude Dangerous
+        let before_filter = scored.len();
         scored.retain(|(_, _, def)| {
             let level = crate::tool_builder::tool_permission_level(&def.name);
             level <= max_level && level != types::tool::PermissionLevel::Dangerous
         });
+        if before_filter != scored.len() {
+            tracing::warn!(
+                query = query,
+                before = before_filter,
+                after = scored.len(),
+                max_level = ?max_level,
+                "tool_search: some results filtered by permission level"
+            );
+        }
 
         let count = scored.len();
         scored.truncate(limit);
