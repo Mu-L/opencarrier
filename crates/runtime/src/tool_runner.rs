@@ -258,7 +258,10 @@ fn truncate_tool_result(tool_name: &str, content: String) -> String {
         break_point -= 1;
     }
     // Try to break at a newline within the last 200 chars before the limit
-    let search_start = break_point.saturating_sub(200);
+    let mut search_start = break_point.saturating_sub(200);
+    while search_start > 0 && !content.is_char_boundary(search_start) {
+        search_start -= 1;
+    }
     if let Some(nl_pos) = content[search_start..break_point].rfind('\n') {
         break_point = search_start + nl_pos;
     }
