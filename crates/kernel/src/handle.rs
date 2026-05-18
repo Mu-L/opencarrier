@@ -635,8 +635,12 @@ impl KernelHandle for CarrierKernel {
     ) -> Vec<(String, types::tool::ToolDefinition)> {
         let registry = match self.plugins.toolset_registry.read() {
             Ok(r) => r,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                tracing::warn!("toolset_registry read poisoned: {e}");
+                return Vec::new();
+            }
         };
+        tracing::info!(query, toolset_count = registry.len(), "search_tools registry check");
         let query_lower = query.to_lowercase();
         let keywords: Vec<&str> = query_lower
             .split_whitespace()
