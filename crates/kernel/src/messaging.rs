@@ -842,8 +842,10 @@ impl CarrierKernel {
 
                     let tools = {
                         let active = session.active_toolsets.clone();
+                        info!(active_toolsets = ?active, "Session active_toolsets after skill activation");
                         self.available_tools(agent_id, Some(&active))
                     };
+                    info!(pre_filter_count = tools.len(), "Tools from available_tools before mode filter");
                     let tools = entry.mode.filter_tools(tools);
 
                     info!(
