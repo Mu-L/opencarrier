@@ -142,7 +142,6 @@ impl PluginBridgeManager {
             bot = %msg.bot_id,
             route_key = %rk,
             text_len = text.len(),
-            pending_naming = self.pending_naming.len(),
             "Bridge handling inbound message"
         );
 
@@ -169,13 +168,10 @@ impl PluginBridgeManager {
         }
 
         // 1. Check if route is in naming flow
-        info!(route_key = %rk, pending_naming = self.pending_naming.len(), "Checking pending_naming");
         if let Some((_, agent_id)) = self.pending_naming.remove(&rk) {
             let name = text.trim().to_string();
-            info!(route_key = %rk, name = %name, has_sender_router = self.sender_router.is_some(), "Naming flow: user provided name");
             if !name.is_empty() {
                 if let Some(ref router) = self.sender_router {
-                    info!(route_key = %rk, name = %name, agent = %agent_id, "Calling set_alias");
                     router.set_alias(&rk, &name, &agent_id);
                 }
                 let confirm = format!("好的，我现在叫{name}。以后叫我{name}我就出来啦！");
@@ -250,7 +246,6 @@ impl PluginBridgeManager {
             if router.needs_naming(&rk) {
                 info!(route_key = %rk, agent = %agent_id, "Agent needs naming, entering naming flow");
                 self.pending_naming.insert(rk.clone(), agent_id.clone());
-                info!(route_key = %rk, pending_naming = self.pending_naming.len(), "Inserted into pending_naming");
                 self.send_response(&msg, "请给我取个名字吧！以后叫这个名字我就会出来。").await;
                 return;
             }
