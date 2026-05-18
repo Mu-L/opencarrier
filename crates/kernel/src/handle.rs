@@ -640,7 +640,6 @@ impl KernelHandle for CarrierKernel {
                 return Vec::new();
             }
         };
-        tracing::info!(query, toolset_count = registry.len(), "search_tools registry check");
         let query_lower = query.to_lowercase();
         let keywords: Vec<&str> = query_lower
             .split_whitespace()

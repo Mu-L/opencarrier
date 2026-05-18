@@ -135,6 +135,9 @@ pub(crate) fn tool_permission_level(name: &str) -> types::tool::PermissionLevel 
         // Dangerous — irreversible operations
         "shell_exec" | "process_kill" | "agent_kill" => PermissionLevel::Dangerous,
 
+        // MCP tools default to Write (user-configured, trusted by default)
+        n if n.starts_with("mcp_") => PermissionLevel::Write,
+
         // Unknown tools default to Dangerous (fail-safe)
         _ => PermissionLevel::Dangerous,
     }
