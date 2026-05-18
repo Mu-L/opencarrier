@@ -831,14 +831,15 @@ impl CarrierKernel {
                             }
                         }
                     }
-                    // Set active_skill_name for write-back tracking
-                    session.active_skill_name = Some(skill_name.clone());
-                    let _ = self.memory.save_session(&session);
 
                     // Reload session from DB (activate_toolset writes active_toolsets via handle)
                     if let Ok(Some(reloaded)) = self.memory.get_session(entry.session_id) {
                         session = reloaded;
                     }
+
+                    // Set active_skill_name for write-back tracking (after reload so we don't overwrite)
+                    session.active_skill_name = Some(skill_name.clone());
+                    let _ = self.memory.save_session(&session);
 
                     let tools = {
                         let active = session.active_toolsets.clone();
