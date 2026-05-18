@@ -649,6 +649,12 @@ impl KernelHandle for CarrierKernel {
 
         for (ts_name, tools) in registry.iter() {
             let ts_lower = ts_name.to_lowercase();
+            if ts_lower.contains("wechat") {
+                tracing::info!(toolset = %ts_name, tool_count = tools.len(), "search_tools scanning wechat toolset");
+                for tool in tools {
+                    tracing::info!(tool_name = %tool.name, "wechat tool");
+                }
+            }
             for tool in tools {
                 let name_lower = tool.name.to_lowercase();
                 let desc_lower = tool.description.to_lowercase();
