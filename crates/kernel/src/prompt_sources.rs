@@ -675,15 +675,35 @@ fn extract_when_to_use(content: &str) -> String {
 fn extract_keywords(when_to_use: &str) -> Vec<String> {
     const STOP_WORDS: &[&str] = &[
         "用户", "要求", "使用", "时", "当", "想要", "需要", "请", "帮", "帮我", "你",
-        "可以", "时候", "以下", "情况",
+        "可以", "时候", "以下", "情况", "或者", "或", "说",
     ];
 
-    when_to_use
-        .split(&['、', '，', '；', ',', ';', ' ', '\t', '。'][..])
-        .map(|s| s.trim())
-        .filter(|s| s.len() >= 2 && !STOP_WORDS.contains(s) && !s.chars().all(|c| c.is_whitespace()))
-        .map(String::from)
-        .collect()
+    let mut keywords: Vec<String> = Vec::new();
+
+    // Extract quoted terms (Chinese "" and English "") as standalone keywords
+    // e.g. 用户说"排版" → "排版" is a keyword
+    let quote_separators: &[char] = &['"', '"', '"'];
+    for quoted in when_to_use.split(quote_separators) {
+        let q = quoted.trim();
+        if q.len() >= 2 && !STOP_WORDS.contains(&q) && !keywords.iter().any(|k| k == q) {
+            keywords.push(q.to_string());
+        }
+    }
+
+    // Split on punctuation and add remaining segments
+    let punct_separators: &[char] = &['、', '，', '；', ',', ';', ' ', '\t', '。'];
+    for segment in when_to_use.split(punct_separators) {
+        let s = segment.trim();
+        // Strip leading stop words
+        let s = s.strip_prefix("当").unwrap_or(s)
+            .strip_prefix("或").unwrap_or(s)
+            .trim();
+        if s.len() >= 2 && !STOP_WORDS.contains(&s) && !keywords.iter().any(|k| k == s) {
+            keywords.push(s.to_string());
+        }
+    }
+
+    keywords
 }
 
 /// Parse YAML frontmatter from a skill .md file to extract name and when_to_use.
