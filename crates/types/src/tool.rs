@@ -22,6 +22,13 @@ pub enum PermissionLevel {
     Dangerous,
 }
 
+impl PermissionLevel {
+    /// Serde default for max_tool_level: agents default to Write, not None.
+    pub const fn default_max_tool_level() -> Self {
+        Self::Write
+    }
+}
+
 /// Definition of a tool that an agent can use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {

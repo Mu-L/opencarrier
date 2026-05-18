@@ -383,7 +383,7 @@ pub struct AgentManifest {
     /// Maximum tool permission level. Tools above this level are hidden from
     /// tool_search and skill discovery mode. Dangerous-level tools are never
     /// discoverable via search regardless. Default: Write.
-    #[serde(default)]
+    #[serde(default = "crate::tool::PermissionLevel::default_max_tool_level")]
     pub max_tool_level: crate::tool::PermissionLevel,
     /// Run an LLM-based intent classifier on every inbound message to decide
     /// whether to continue the existing session or open a new one. Defaults
