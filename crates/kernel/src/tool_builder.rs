@@ -27,6 +27,7 @@ const CORE_TOOLS: &[&str] = &[
     "tool_search",
     "skill_load",
     "knowledge_read", "knowledge_list",
+    "file_read", "file_list",
     "cron_create", "cron_list", "cron_cancel",
     "memory_tree",
 ];
@@ -38,6 +39,7 @@ pub(crate) fn tool_to_toolset(name: &str) -> Option<&'static str> {
         | "tool_search"
         | "skill_load"
         | "knowledge_read" | "knowledge_list"
+        | "file_read" | "file_list"
         | "cron_create" | "cron_list" | "cron_cancel"
         | "memory_tree" => None,
         n if n.starts_with("file_") => Some("filesystem"),
@@ -159,21 +161,9 @@ impl CarrierKernel {
 
         // Add tools from each active toolset
         if let Ok(registry) = self.plugins.toolset_registry.read() {
-            tracing::info!(
-                active_toolsets = ?combined,
-                registry_keys = ?registry.keys().collect::<Vec<_>>(),
-                "available_tools: resolving active toolsets"
-            );
             for ts_name in &combined {
                 if let Some(toolset_tools) = registry.get(ts_name) {
-                    tracing::info!(
-                        toolset = %ts_name,
-                        tools = ?toolset_tools.iter().map(|t| &t.name).collect::<Vec<_>>(),
-                        "available_tools: toolset resolved"
-                    );
                     tools.extend(toolset_tools.iter().cloned());
-                } else {
-                    tracing::warn!(toolset = %ts_name, "available_tools: toolset not found in registry");
                 }
             }
         }
