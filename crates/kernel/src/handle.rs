@@ -5,8 +5,10 @@
 
 use async_trait::async_trait;
 use runtime::kernel_handle::{self, KernelHandle};
+use runtime::llm_driver::CompletionRequest;
 use types::agent::{AgentId, AgentManifest};
 use types::event::*;
+use types::message::{ContentBlock, Message, MessageContent, Role};
 use std::sync::Arc;
 
 use crate::capabilities::manifest_to_capabilities;
@@ -84,6 +86,108 @@ impl KernelHandle for CarrierKernel {
             .map_err(|e| format!("Send failed: {e}"))?;
 
         Ok(result.response)
+    }
+
+    async fn describe_content(
+        &self,
+        content_type: &str,
+        url: &str,
+        _metadata: Option<&str>,
+    ) -> Result<String, String> {
+        if content_type != "image" {
+            return Ok(format!("[用户发送了非文本内容: {content_type}]"));
+        }
+
+        // Download image from URL
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download image: {e}"))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Image download failed with status: {}", response.status()));
+        }
+
+        let data = response
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read image bytes: {e}"))?;
+
+        // Size check (5 MB max)
+        let max_bytes = 5 * 1024 * 1024;
+        if data.len() > max_bytes {
+            return Err(format!("Image too large: {} bytes (max 5 MB)", data.len()));
+        }
+
+        // Detect MIME from URL extension
+        let mime = {
+            let path = std::path::Path::new(url);
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            match ext.as_str() {
+                "png" => "image/png",
+                "jpg" | "jpeg" => "image/jpeg",
+                "gif" => "image/gif",
+                "webp" => "image/webp",
+                // Default to JPEG if unknown — it's the most common
+                _ => "image/jpeg",
+            }
+            .to_string()
+        };
+
+        // Base64 encode
+        use base64::Engine;
+        let base64_data = base64::engine::general_purpose::STANDARD.encode(&data);
+
+        // Build vision request
+        let request = CompletionRequest {
+            model: String::new(), // brain sets this from the resolved endpoint
+            messages: vec![Message {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Image {
+                        media_type: mime,
+                        data: base64_data,
+                    },
+                    ContentBlock::Text {
+                        text: "请详细描述这张图片的内容。".to_string(),
+                        provider_metadata: None,
+                    },
+                ]),
+            }],
+            tools: vec![],
+            max_tokens: 1024,
+            temperature: 0.3,
+            system: None,
+            thinking: None,
+            extra: Default::default(),
+        };
+
+        let brain: Arc<dyn runtime::llm_driver::Brain> =
+            Arc::clone(&*self.brain.brain.read().map_err(|e| format!("Brain lock: {e}"))?)
+                as Arc<dyn runtime::llm_driver::Brain>;
+
+        let result = brain
+            .complete("vision", request)
+            .await
+            .map_err(|e| format!("Vision call failed: {e}"))?;
+
+        let description = result.text();
+        if description.is_empty() {
+            return Err("Vision model returned empty description".into());
+        }
+
+        tracing::info!(content_type, bytes = data.len(), desc_len = description.len(), "Content described by vision model");
+        Ok(description)
     }
 
     fn list_agents(&self) -> Vec<kernel_handle::AgentInfo> {

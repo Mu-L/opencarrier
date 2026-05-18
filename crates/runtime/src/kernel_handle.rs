@@ -50,6 +50,20 @@ pub trait KernelHandle: Send + Sync {
         channel_type: Option<&str>,
     ) -> Result<String, String>;
 
+    /// Describe non-text content (image, voice, file, location) for the agent.
+    ///
+    /// Default return: hardcoded Chinese text description.
+    /// Carriers with vision capabilities override this to call a vision model
+    /// and return the model's description of the content.
+    async fn describe_content(
+        &self,
+        _content_type: &str,
+        _url: &str,
+        _metadata: Option<&str>,
+    ) -> Result<String, String> {
+        Ok(format!("[用户发送了非文本内容: {_content_type}]"))
+    }
+
     /// List all running agents visible to the caller.
     fn list_agents(&self) -> Vec<AgentInfo>;
 

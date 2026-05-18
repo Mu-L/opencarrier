@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use types::plugin::PluginMessage;
+use types::plugin::{PluginContent, PluginMessage};
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -133,7 +133,7 @@ impl PluginBridgeManager {
     async fn handle_inbound(&self, msg: PluginMessage) {
         let text = match msg.content.as_text() {
             Some(t) => t.to_string(),
-            None => self.describe_non_text_content(&msg),
+            None => self.resolve_non_text_content(&msg).await,
         };
 
         let rk = self.route_key(&msg);
@@ -414,8 +414,28 @@ impl PluginBridgeManager {
         String::new()
     }
 
+    /// Resolve non-text content into a text description.
+    /// Images go through the vision model; other types use hardcoded fallback.
+    async fn resolve_non_text_content(&self, msg: &PluginMessage) -> String {
+        if let PluginContent::Image { url, caption } = &msg.content {
+            match self
+                .kernel
+                .describe_content("image", url, caption.as_deref())
+                .await
+            {
+                Ok(desc) => {
+                    info!(url = %url, desc_len = desc.len(), "Vision model described image");
+                    return desc;
+                }
+                Err(e) => {
+                    warn!(url = %url, error = %e, "describe_content failed, using fallback");
+                }
+            }
+        }
+        self.describe_non_text_content(msg)
+    }
+
     fn describe_non_text_content(&self, msg: &PluginMessage) -> String {
-        use types::plugin::PluginContent;
         match &msg.content {
             PluginContent::Image { url, caption } => {
                 let cap = caption
