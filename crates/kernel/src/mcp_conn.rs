@@ -83,6 +83,7 @@ impl CarrierKernel {
 
                 // --- Phase 1: Detect dead connections by pinging ---
                 let mut dead_servers = Vec::new();
+                let mut registry_dirty = false;
                 {
                     let keys: Vec<String> = kernel
                         .plugins
@@ -106,6 +107,7 @@ impl CarrierKernel {
                         .collect();
                     for key in &dead_keys {
                         kernel.plugins.mcp_connections.remove(key);
+                        registry_dirty = true;
                     }
                 }
 
@@ -136,6 +138,7 @@ impl CarrierKernel {
                                 let prefix = format!("mcp_{key}_");
                                 tools.retain(|t| !t.name.starts_with(&prefix));
                                 removed.push(conn.name().to_string());
+                                registry_dirty = true;
                                 false
                             }
                         });
@@ -182,6 +185,7 @@ impl CarrierKernel {
                                 }
                                 let key = normalize_name(&server_config.name);
                                 kernel.plugins.mcp_connections.insert(key, conn);
+                                registry_dirty = true;
                                 info!(server = %server_config.name, "MCP server connected");
                             }
                             Err(e) => {
@@ -243,6 +247,7 @@ impl CarrierKernel {
                             }
                             kernel.plugins.mcp_reconnect_failures.remove(&key);
                             kernel.plugins.mcp_connections.insert(key, conn);
+                            registry_dirty = true;
                             info!(server = %name, tools = tool_count, "MCP server reconnected");
                         }
                         Err(e) => {
@@ -258,6 +263,11 @@ impl CarrierKernel {
                             );
                         }
                     }
+                }
+
+                // Rebuild toolset registry if any MCP connections changed
+                if registry_dirty {
+                    kernel.build_toolset_registry();
                 }
             }
         });

@@ -633,11 +633,13 @@ impl KernelHandle for CarrierKernel {
 
         // Debug: log pre-filter state for empty results
         if scored.is_empty() {
+            let registry_detail: Vec<(&String, usize)> = registry.iter().map(|(k, v)| (k, v.len())).collect();
             tracing::warn!(
                 query = query,
                 registry_size = registry.len(),
-                registry_keys = ?registry.keys().collect::<Vec<_>>(),
+                registry_detail = ?registry_detail,
                 max_level = ?max_level,
+                keywords = ?keywords,
                 "tool_search found 0 candidates (before level filter)"
             );
         }
