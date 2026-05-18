@@ -175,6 +175,8 @@ pub struct DingTalkInboundMessage {
     pub conversation_id: Option<String>,
     pub msgtype: Option<String>,
     pub text: Option<TextContent>,
+    pub picture: Option<PictureContent>,
+    pub file: Option<FileContent>,
     pub at_users: Option<Vec<AtUser>>,
     pub robot_code: Option<String>,
 }
@@ -183,6 +185,19 @@ pub struct DingTalkInboundMessage {
 #[derive(Debug, Clone, Deserialize)]
 pub struct TextContent {
     pub content: Option<String>,
+}
+
+/// Picture message content.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PictureContent {
+    pub download_code: Option<String>,
+}
+
+/// File message content.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FileContent {
+    pub download_code: Option<String>,
+    pub file_name: Option<String>,
 }
 
 /// @mention user entry.

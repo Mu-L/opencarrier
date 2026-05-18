@@ -307,43 +307,49 @@ async fn webhook_post(
     // Build bot_id for routing
     let bot_id = state.bot_id.clone();
 
-    // Handle text messages
-    if msg_type == "text" {
-        let content = fields.get("Content").cloned().unwrap_or_default();
+    // Build content based on message type
+    let content = match msg_type {
+        "text" => {
+            let text = fields.get("Content").cloned().unwrap_or_default();
+            PluginContent::Text(text)
+        }
+        "image" => {
+            let pic_url = fields.get("PicUrl").cloned().unwrap_or_default();
+            PluginContent::Image { url: pic_url, caption: None }
+        }
+        "voice" => {
+            let recognition = fields.get("Recognition").cloned().unwrap_or_default();
+            if recognition.is_empty() {
+                PluginContent::Voice { url: String::new(), duration_seconds: 0 }
+            } else {
+                PluginContent::Text(recognition)
+            }
+        }
+        "video" | "shortvideo" => {
+            PluginContent::Video { url: String::new(), duration_seconds: None, caption: None }
+        }
+        "event" if event == "subscribe" || event == "enter_agent" => {
+            PluginContent::Command { name: event.to_string(), args: vec![] }
+        }
+        _ => {
+            return "success";
+        }
+    };
 
-        let message = PluginMessage {
-            channel_type: "wecom".to_string(),
-            platform_message_id: msg_id,
-            sender_id: from_user.clone(),
-            sender_name: from_user.clone(),
-            bot_id,
-            content: PluginContent::Text(content),
-            timestamp_ms,
-            is_group: false,
-            thread_id: None,
-            metadata: HashMap::new(),
-        };
+    let message = PluginMessage {
+        channel_type: "wecom".to_string(),
+        platform_message_id: msg_id,
+        sender_id: from_user.clone(),
+        sender_name: from_user.clone(),
+        bot_id,
+        content,
+        timestamp_ms,
+        is_group: false,
+        thread_id: None,
+        metadata: HashMap::new(),
+    };
 
-        let _ = state.tx.send(message).await;
-    } else if msg_type == "event" && (event == "subscribe" || event == "enter_agent") {
-        let message = PluginMessage {
-            channel_type: "wecom".to_string(),
-            platform_message_id: msg_id,
-            sender_id: from_user.clone(),
-            sender_name: from_user.clone(),
-            bot_id,
-            content: PluginContent::Command {
-                name: event.to_string(),
-                args: vec![],
-            },
-            timestamp_ms,
-            is_group: false,
-            thread_id: None,
-            metadata: HashMap::new(),
-        };
-
-        let _ = state.tx.send(message).await;
-    }
+    let _ = state.tx.send(message).await;
 
     "success"
 }

@@ -3,7 +3,9 @@
 use crate::api;
 use crate::token::WEIXIN_STATE;
 use crate::models::*;
+use crate::crypto;
 use types::plugin::{PluginContent, PluginMessage};
+use base64::Engine;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -137,7 +139,7 @@ async fn poll_loop_inner(
                         WEIXIN_STATE.save_session(&state);
                     }
                     for msg in msgs {
-                        process_inbound_message(&bot_id, session_key, &msg, &sender);
+                        process_inbound_message(&bot_id, session_key, &msg, &sender, &http).await;
                     }
                 } else {
                     // No messages but successful poll — still renew to keep session alive
@@ -161,11 +163,40 @@ async fn poll_loop_inner(
     }
 }
 
-fn process_inbound_message(
+/// Download a CDN media file, AES-decrypt it, and return as data URI.
+async fn download_cdn_as_data_uri(
+    http: &reqwest::Client,
+    media: &CDNMedia,
+) -> Result<String, String> {
+    let eqp = media.encrypt_query_param.as_deref().ok_or("No encrypt_query_param")?;
+    let aes_key_b64 = media.aes_key.as_deref().ok_or("No aes_key")?;
+    let key = crypto::parse_aes_key(aes_key_b64).ok_or("Invalid AES key")?;
+
+    let url = crypto::cdn_download_url(eqp);
+    let data = crypto::cdn_download(http, &url, &key).await?;
+
+    let mime = if data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        "image/png"
+    } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "image/jpeg"
+    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        "image/gif"
+    } else if data.starts_with(b"RIFF") && data.len() > 11 && &data[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        "image/jpeg"
+    };
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+    Ok(format!("data:{mime};base64,{b64}"))
+}
+
+async fn process_inbound_message(
     bot_id: &str,
     session_key: &str,
     msg: &ILnkMessage,
     sender: &mpsc::Sender<PluginMessage>,
+    http: &reqwest::Client,
 ) {
     if msg.message_type != Some(MSG_TYPE_USER) {
         return;
@@ -179,30 +210,76 @@ fn process_inbound_message(
         _ => return,
     };
 
-    let text = msg
-        .item_list
-        .as_ref()
-        .and_then(|items| {
-            items.iter().find_map(|item| {
-                if item.type_ == Some(ITEM_TYPE_TEXT) {
-                    item.text_item.as_ref()?.text.clone()
-                } else {
-                    None
-                }
-            })
-        })
-        .unwrap_or_default();
-
     if let Some(ctx_token) = &msg.context_token {
         if let Some(state) = WEIXIN_STATE.bots.get(session_key) {
             state.store_context_token(&from_user_id, ctx_token);
         }
     }
 
+    // Build content from the first item in item_list
+    let content = match msg.item_list.as_ref() {
+        Some(items) if !items.is_empty() => {
+            let item = &items[0];
+            match item.type_.unwrap_or(0) {
+                ITEM_TYPE_TEXT => {
+                    let text = item
+                        .text_item
+                        .as_ref()
+                        .and_then(|t| t.text.clone())
+                        .unwrap_or_default();
+                    PluginContent::Text(text)
+                }
+                ITEM_TYPE_IMAGE => {
+                    let image_url = match item.image_item.as_ref().and_then(|i| i.media.as_ref()) {
+                        Some(media) => {
+                            match download_cdn_as_data_uri(http, media).await {
+                                Ok(uri) => uri,
+                                Err(e) => {
+                                    warn!(error = %e, "Failed to download WeChat image from CDN");
+                                    String::new()
+                                }
+                            }
+                        }
+                        None => String::new(),
+                    };
+                    PluginContent::Image { url: image_url, caption: None }
+                }
+                ITEM_TYPE_VOICE => {
+                    // If voice has text transcription, use it directly
+                    if let Some(text) = item.voice_item.as_ref().and_then(|v| v.text.clone()) {
+                        if !text.is_empty() {
+                            PluginContent::Text(text)
+                        } else {
+                            PluginContent::Voice { url: String::new(), duration_seconds: 0 }
+                        }
+                    } else {
+                        PluginContent::Voice { url: String::new(), duration_seconds: 0 }
+                    }
+                }
+                ITEM_TYPE_FILE => {
+                    let filename = item
+                        .file_item
+                        .as_ref()
+                        .and_then(|f| f.file_name.clone())
+                        .unwrap_or_default();
+                    PluginContent::File { url: String::new(), filename }
+                }
+                ITEM_TYPE_VIDEO => {
+                    PluginContent::Video {
+                        url: String::new(),
+                        duration_seconds: item.video_item.as_ref().and_then(|v| v.play_length).map(|d| d as u32),
+                        caption: None,
+                    }
+                }
+                _ => PluginContent::Text(String::new()),
+            }
+        }
+        _ => PluginContent::Text(String::new()),
+    };
+
     info!(
         bot_id = bot_id,
         from = %from_user_id,
-        text_len = text.len(),
         "Inbound WeChat message"
     );
 
@@ -212,7 +289,7 @@ fn process_inbound_message(
         sender_id: from_user_id.clone(),
         sender_name: from_user_id.clone(),
         bot_id: bot_id.to_string(),
-        content: PluginContent::Text(text),
+        content,
         timestamp_ms: msg.create_time_ms.unwrap_or_else(|| {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

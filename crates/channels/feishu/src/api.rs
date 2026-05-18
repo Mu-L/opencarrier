@@ -1,6 +1,6 @@
 //! Feishu/Lark REST API client.
 //!
-//! Stateless async functions for: token acquisition, message send/reply, WS endpoint.
+//! Stateless async functions for: token acquisition, message send/reply, WS endpoint, media download.
 
 use crate::models::*;
 use reqwest::{header::HeaderMap, Client};
@@ -133,4 +133,64 @@ pub async fn get_ws_endpoint(
     }
 
     serde_json::from_str(&body_text).map_err(|e| format!("Feishu ws/endpoint parse error: {e}"))
+}
+
+/// GET `/open-apis/im/v1/images/{image_key}`
+///
+/// Download an image by its key. Returns raw bytes.
+pub async fn download_image(
+    http: &Client,
+    token: &str,
+    base: &str,
+    image_key: &str,
+) -> Result<Vec<u8>, String> {
+    let url = format!("{base}/open-apis/im/v1/images/{image_key}");
+    let resp = http
+        .get(&url)
+        .headers(feishu_headers(token))
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Feishu download_image request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Feishu download_image HTTP {status}: {body}"));
+    }
+
+    resp.bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("Feishu download_image read error: {e}"))
+}
+
+/// GET `/open-apis/im/v1/files/{file_key}`
+///
+/// Download a file by its key. Returns raw bytes.
+pub async fn download_file(
+    http: &Client,
+    token: &str,
+    base: &str,
+    file_key: &str,
+) -> Result<Vec<u8>, String> {
+    let url = format!("{base}/open-apis/im/v1/files/{file_key}");
+    let resp = http
+        .get(&url)
+        .headers(feishu_headers(token))
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Feishu download_file request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Feishu download_file HTTP {status}: {body}"));
+    }
+
+    resp.bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("Feishu download_file read error: {e}"))
 }

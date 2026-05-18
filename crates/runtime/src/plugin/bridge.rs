@@ -453,6 +453,16 @@ impl PluginBridgeManager {
             } => {
                 format!("[用户发送了一段{}秒的语音]: {}", duration_seconds, url)
             }
+            PluginContent::Video { url, duration_seconds, caption } => {
+                let dur = duration_seconds
+                    .map(|d| format!("{}秒", d))
+                    .unwrap_or_default();
+                let cap = caption
+                    .as_deref()
+                    .map(|c| format!(" ({})", c))
+                    .unwrap_or_default();
+                format!("[用户发送了一段{}视频{}]: {}", dur, cap, url)
+            }
             PluginContent::Location { lat, lon } => {
                 format!("[用户发送了位置]: 经度 {}, 纬度 {}", lon, lat)
             }

@@ -131,3 +131,37 @@ pub async fn send_direct_message(
     Ok(())
 }
 
+/// POST `/v1.0/im/files/download`
+///
+/// Download a media file by its downloadCode. Returns raw bytes.
+pub async fn download_media(
+    http: &Client,
+    token: &str,
+    download_code: &str,
+) -> Result<Vec<u8>, String> {
+    let url = format!("{DINGTALK_API_BASE}/v1.0/im/files/download");
+    let body = serde_json::json!({
+        "downloadCode": download_code,
+    });
+
+    let resp = http
+        .post(&url)
+        .headers(dingtalk_headers(token))
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("DingTalk download_media request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("DingTalk download_media HTTP {status}: {body}"));
+    }
+
+    resp.bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("DingTalk download_media read error: {e}"))
+}
+

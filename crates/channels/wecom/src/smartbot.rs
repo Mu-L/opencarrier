@@ -360,35 +360,50 @@ async fn handle_ws_message(
                 chattype, user_id, msg_type
             );
 
-            // Only handle text messages
-            if msg_type != "text" {
-                return Ok(());
-            }
+            // Parse content based on message type
+            let content = match msg_type.as_str() {
+                "text" => {
+                    let text = body
+                        .content
+                        .as_ref()
+                        .and_then(|c| {
+                            c.get("text")
+                                .and_then(|t| t.get("content"))
+                                .and_then(|v| v.as_str())
+                        })
+                        .unwrap_or("")
+                        .to_string();
 
-            let content = body
-                .content
-                .as_ref()
-                .and_then(|c| {
-                    c.get("text")
-                        .and_then(|t| t.get("content"))
-                        .and_then(|v| v.as_str())
-                })
-                .unwrap_or("")
-                .to_string();
+                    if text.is_empty() {
+                        return Ok(());
+                    }
 
-            if content.is_empty() {
-                return Ok(());
-            }
+                    // Strip @mention prefix in group chats
+                    let text = if text.starts_with('@') {
+                        if let Some(pos) = text.find(' ') {
+                            text[pos + 1..].trim().to_string()
+                        } else {
+                            text
+                        }
+                    } else {
+                        text
+                    };
 
-            // Strip @mention prefix in group chats
-            let content = if content.starts_with('@') {
-                if let Some(pos) = content.find(' ') {
-                    content[pos + 1..].trim().to_string()
-                } else {
-                    content
+                    PluginContent::Text(text)
                 }
-            } else {
-                content
+                "image" => {
+                    let image_url = body
+                        .content
+                        .as_ref()
+                        .and_then(|c| c.get("image").and_then(|i| i.get("image_url")).and_then(|v| v.as_str()))
+                        .unwrap_or("")
+                        .to_string();
+                    PluginContent::Image { url: image_url, caption: None }
+                }
+                _ => {
+                    info!("SmartBot ignoring msgtype: {}", msg_type);
+                    return Ok(());
+                }
             };
 
             let timestamp_ms = std::time::SystemTime::now()
@@ -420,7 +435,7 @@ async fn handle_ws_message(
                 sender_id: user_id.clone(),
                 sender_name: user_id.clone(),
                 bot_id: bot_id.to_string(),
-                content: PluginContent::Text(content),
+                content,
                 timestamp_ms,
                 is_group: chattype == "group",
                 thread_id: body.chat_id.clone(),

@@ -12,7 +12,6 @@
 use crate::api;
 use crate::pbbp2::*;
 use crate::token::BotTokenCache;
-use crate::models::*;
 use types::plugin::{PluginContent, PluginMessage};
 use dashmap::DashMap;
 use futures::{SinkExt, StreamExt};
@@ -302,11 +301,11 @@ impl FeishuWsClient {
             "WS event data received"
         );
 
-        self.dispatch_event(&payload_str, sender);
+        self.dispatch_event(&payload_str, sender).await;
     }
 
     /// Parse event payload and dispatch to handler.
-    fn dispatch_event(&self, payload_str: &str, sender: &mpsc::Sender<PluginMessage>) {
+    async fn dispatch_event(&self, payload_str: &str, sender: &mpsc::Sender<PluginMessage>) {
         let event: serde_json::Value = match serde_json::from_str(payload_str) {
             Ok(v) => v,
             Err(e) => {
@@ -346,21 +345,72 @@ impl FeishuWsClient {
         self.evict_old_entries();
         self.dedup.insert(msg_id.to_string(), Instant::now());
 
-        if message
+        let msg_type = message
             .get("message_type")
             .or_else(|| message.get("msg_type"))
             .and_then(|v| v.as_str())
-            != Some("text")
-        {
-            return;
-        }
+            .unwrap_or("");
 
-        let text = message
+        // Parse content based on message type
+        let content_json: Option<serde_json::Value> = message
             .get("content")
             .and_then(|c| c.as_str())
-            .and_then(|c| serde_json::from_str::<TextContent>(c).ok())
-            .and_then(|tc| tc.text)
-            .unwrap_or_default();
+            .and_then(|c| serde_json::from_str(c).ok());
+
+        let content = match msg_type {
+            "text" => {
+                let text = content_json
+                    .as_ref()
+                    .and_then(|v| v.get("text").and_then(|t| t.as_str()))
+                    .unwrap_or("")
+                    .to_string();
+                PluginContent::Text(text)
+            }
+            "image" => {
+                let image_key = content_json
+                    .as_ref()
+                    .and_then(|v| v.get("image_key").and_then(|k| k.as_str()))
+                    .unwrap_or("")
+                    .to_string();
+
+                if image_key.is_empty() {
+                    PluginContent::Image { url: String::new(), caption: None }
+                } else {
+                    match self.download_image_as_data_uri(&image_key).await {
+                        Ok(data_uri) => PluginContent::Image { url: data_uri, caption: None },
+                        Err(e) => {
+                            warn!(tenant = %self.bot_id, image_key = %image_key, error = %e, "Failed to download image");
+                            PluginContent::Image { url: String::new(), caption: None }
+                        }
+                    }
+                }
+            }
+            "audio" => {
+                let file_key = content_json
+                    .as_ref()
+                    .and_then(|v| v.get("file_key").and_then(|k| k.as_str()))
+                    .unwrap_or("")
+                    .to_string();
+                PluginContent::Voice { url: file_key, duration_seconds: 0 }
+            }
+            "file" => {
+                let file_key = content_json
+                    .as_ref()
+                    .and_then(|v| v.get("file_key").and_then(|k| k.as_str()))
+                    .unwrap_or("")
+                    .to_string();
+                let file_name = content_json
+                    .as_ref()
+                    .and_then(|v| v.get("file_name").and_then(|n| n.as_str()))
+                    .unwrap_or("")
+                    .to_string();
+                PluginContent::File { url: file_key, filename: file_name }
+            }
+            _ => {
+                info!(tenant = %self.bot_id, msg_type, "Ignoring unsupported message type");
+                return;
+            }
+        };
 
         let sender_obj = event.get("event").and_then(|e| e.get("sender"));
         let sender_id_obj = sender_obj.and_then(|s| s.get("sender_id"));
@@ -393,7 +443,7 @@ impl FeishuWsClient {
             tenant = %self.bot_id,
             from = %sender_id,
             chat_type,
-            text_len = text.len(),
+            msg_type,
             "Inbound Feishu message"
         );
 
@@ -403,7 +453,7 @@ impl FeishuWsClient {
             sender_id: sender_id.clone(),
             sender_name,
             bot_id: self.bot_id.clone(),
-            content: PluginContent::Text(text),
+            content,
             timestamp_ms: create_time_ms,
             is_group,
             thread_id: message
@@ -414,6 +464,32 @@ impl FeishuWsClient {
         };
 
         let _ = sender.try_send(plugin_msg);
+    }
+
+    /// Download an image by key and return as data URI (base64).
+    async fn download_image_as_data_uri(&self, image_key: &str) -> Result<String, String> {
+        let token = self.token_cache.get_token().await
+            .map_err(|e| format!("Token error: {e}"))?;
+        let http = self.token_cache.http().clone();
+        let base = self.token_cache.api_base().to_string();
+
+        let data = api::download_image(&http, &token, &base, image_key).await?;
+
+        // Detect MIME from first bytes
+        let mime = if data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+            "image/png"
+        } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            "image/jpeg"
+        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+            "image/gif"
+        } else if data.starts_with(b"RIFF") && data.len() > 11 && &data[8..12] == b"WEBP" {
+            "image/webp"
+        } else {
+            "image/jpeg"
+        };
+
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+        Ok(format!("data:{mime};base64,{b64}"))
     }
 
     /// Remove dedup entries older than TTL.

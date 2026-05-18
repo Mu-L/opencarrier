@@ -62,6 +62,7 @@ pub enum PluginContent {
     Image { url: String, caption: Option<String> },
     File { url: String, filename: String },
     Voice { url: String, duration_seconds: u32 },
+    Video { url: String, duration_seconds: Option<u32>, caption: Option<String> },
     Location { lat: f64, lon: f64 },
     Command { name: String, args: Vec<String> },
 }

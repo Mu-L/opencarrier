@@ -284,21 +284,60 @@ impl DingTalkWsClient {
             }
         };
 
-        // Only handle text messages
-        if msg.msgtype.as_deref() != Some("text") {
-            return;
-        }
-
-        let content = msg
-            .text
-            .as_ref()
-            .and_then(|t| t.content.as_deref())
-            .unwrap_or("")
-            .to_string();
-
-        if content.is_empty() {
-            return;
-        }
+        // Parse content based on message type
+        let msg_type = msg.msgtype.as_deref().unwrap_or("");
+        let content = match msg_type {
+            "text" => {
+                let text = msg
+                    .text
+                    .as_ref()
+                    .and_then(|t| t.content.as_deref())
+                    .unwrap_or("")
+                    .to_string();
+                if text.is_empty() {
+                    return;
+                }
+                PluginContent::Text(text)
+            }
+            "picture" => {
+                let download_code = msg
+                    .picture
+                    .as_ref()
+                    .and_then(|p| p.download_code.as_deref())
+                    .unwrap_or("")
+                    .to_string();
+                if download_code.is_empty() {
+                    PluginContent::Image { url: String::new(), caption: None }
+                } else {
+                    match self.download_image_as_data_uri(&download_code).await {
+                        Ok(data_uri) => PluginContent::Image { url: data_uri, caption: None },
+                        Err(e) => {
+                            warn!(tenant = %self.bot_id, download_code = %download_code, error = %e, "Failed to download image");
+                            PluginContent::Image { url: String::new(), caption: None }
+                        }
+                    }
+                }
+            }
+            "file" => {
+                let download_code = msg
+                    .file
+                    .as_ref()
+                    .and_then(|f| f.download_code.as_deref())
+                    .unwrap_or("")
+                    .to_string();
+                let file_name = msg
+                    .file
+                    .as_ref()
+                    .and_then(|f| f.file_name.as_deref())
+                    .unwrap_or("")
+                    .to_string();
+                PluginContent::File { url: download_code, filename: file_name }
+            }
+            _ => {
+                info!(tenant = %self.bot_id, msg_type, "Ignoring unsupported message type");
+                return;
+            }
+        };
 
         // Dedup by message_id
         if !message_id.is_empty() {
@@ -329,7 +368,7 @@ impl DingTalkWsClient {
             user_id = %user_id,
             nick = %sender_nick,
             is_group,
-            text_len = content.len(),
+            msg_type,
             "Inbound DingTalk message"
         );
 
@@ -344,7 +383,7 @@ impl DingTalkWsClient {
             sender_id: user_id.clone(),
             sender_name: sender_nick,
             bot_id: self.bot_id.clone(),
-            content: PluginContent::Text(content),
+            content,
             timestamp_ms: now_ms,
             is_group,
             thread_id: conversation_id,
@@ -352,6 +391,32 @@ impl DingTalkWsClient {
         };
 
         let _ = sender.try_send(plugin_msg);
+    }
+
+    /// Download an image by downloadCode and return as data URI (base64).
+    async fn download_image_as_data_uri(&self, download_code: &str) -> Result<String, String> {
+        let token = self.token_cache
+            .get_token()
+            .await
+            .map_err(|e| format!("Token error: {e}"))?;
+        let http = self.token_cache.http().clone();
+
+        let data = api::download_media(&http, &token, download_code).await?;
+
+        let mime = if data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+            "image/png"
+        } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            "image/jpeg"
+        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+            "image/gif"
+        } else if data.starts_with(b"RIFF") && data.len() > 11 && &data[8..12] == b"WEBP" {
+            "image/webp"
+        } else {
+            "image/jpeg"
+        };
+
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+        Ok(format!("data:{mime};base64,{b64}"))
     }
 
     fn evict_old_entries(&self) {

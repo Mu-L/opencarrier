@@ -98,55 +98,70 @@ impl KernelHandle for CarrierKernel {
             return Ok(format!("[用户发送了非文本内容: {content_type}]"));
         }
 
-        // Download image from URL
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+        // Parse image data — either from data URI or HTTP download
+        let (base64_data, mime) = if let Some(rest) = url.strip_prefix("data:") {
+            // Data URI: data:{mime};base64,{data}
+            let sep = rest.find(";base64,").ok_or("Invalid data URI format")?;
+            let mime = rest[..sep].to_string();
+            let b64 = rest[sep + ";base64,".len()..].to_string();
 
-        let response = client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| format!("Failed to download image: {e}"))?;
-
-        if !response.status().is_success() {
-            return Err(format!("Image download failed with status: {}", response.status()));
-        }
-
-        let data = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read image bytes: {e}"))?;
-
-        // Size check (5 MB max)
-        let max_bytes = 5 * 1024 * 1024;
-        if data.len() > max_bytes {
-            return Err(format!("Image too large: {} bytes (max 5 MB)", data.len()));
-        }
-
-        // Detect MIME from URL extension
-        let mime = {
-            let path = std::path::Path::new(url);
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            match ext.as_str() {
-                "png" => "image/png",
-                "jpg" | "jpeg" => "image/jpeg",
-                "gif" => "image/gif",
-                "webp" => "image/webp",
-                // Default to JPEG if unknown — it's the most common
-                _ => "image/jpeg",
+            // Size check (base64 is ~33% larger than raw)
+            let max_b64 = 5 * 1024 * 1024 * 2;
+            if b64.len() > max_b64 {
+                return Err(format!("Image too large (data URI): {} chars", b64.len()));
             }
-            .to_string()
-        };
 
-        // Base64 encode
-        use base64::Engine;
-        let base64_data = base64::engine::general_purpose::STANDARD.encode(&data);
+            (b64, mime)
+        } else {
+            // HTTP download
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+
+            let response = client
+                .get(url)
+                .send()
+                .await
+                .map_err(|e| format!("Failed to download image: {e}"))?;
+
+            if !response.status().is_success() {
+                return Err(format!("Image download failed with status: {}", response.status()));
+            }
+
+            let data = response
+                .bytes()
+                .await
+                .map_err(|e| format!("Failed to read image bytes: {e}"))?;
+
+            // Size check (5 MB max)
+            let max_bytes = 5 * 1024 * 1024;
+            if data.len() > max_bytes {
+                return Err(format!("Image too large: {} bytes (max 5 MB)", data.len()));
+            }
+
+            // Detect MIME from URL extension
+            let mime = {
+                let path = std::path::Path::new(url);
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                match ext.as_str() {
+                    "png" => "image/png",
+                    "jpg" | "jpeg" => "image/jpeg",
+                    "gif" => "image/gif",
+                    "webp" => "image/webp",
+                    _ => "image/jpeg",
+                }
+                .to_string()
+            };
+
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+            (b64, mime)
+        };
 
         // Build vision request
         let request = CompletionRequest {
@@ -156,7 +171,7 @@ impl KernelHandle for CarrierKernel {
                 content: MessageContent::Blocks(vec![
                     ContentBlock::Image {
                         media_type: mime,
-                        data: base64_data,
+                        data: base64_data.clone(),
                     },
                     ContentBlock::Text {
                         text: "请详细描述这张图片的内容。".to_string(),
@@ -186,7 +201,7 @@ impl KernelHandle for CarrierKernel {
             return Err("Vision model returned empty description".into());
         }
 
-        tracing::info!(content_type, bytes = data.len(), desc_len = description.len(), "Content described by vision model");
+        tracing::info!(content_type, b64_len = base64_data.len(), desc_len = description.len(), "Content described by vision model");
         Ok(description)
     }
 
