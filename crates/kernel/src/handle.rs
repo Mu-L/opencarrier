@@ -569,61 +569,28 @@ impl KernelHandle for CarrierKernel {
             .map(|p| p.to_string_lossy().to_string())
     }
 
-    fn refresh_tools(
+    fn get_toolset_tools(
         &self,
-        agent_id_str: &str,
+        toolset_name: &str,
     ) -> Option<Vec<types::tool::ToolDefinition>> {
-        let agent_id: types::agent::AgentId = agent_id_str.parse().ok()?;
-        let entry = self.registry.get(agent_id)?;
-        let session = self.memory.get_session(entry.session_id).ok()??;
-        let tools = self.available_tools(agent_id, Some(&session.active_toolsets));
+        let registry = self.plugins.toolset_registry.read().ok()?;
+
+        // Resolve the registry key — try direct match first, then normalize-matching
+        let resolved_key = if registry.contains_key(toolset_name) {
+            toolset_name.to_string()
+        } else {
+            let normalized = runtime::mcp::normalize_name(toolset_name);
+            registry
+                .keys()
+                .find(|k| runtime::mcp::normalize_name(k) == normalized)
+                .cloned()?
+        };
+
+        let tools = registry.get(&resolved_key).cloned()?;
         if tools.is_empty() {
             None
         } else {
             Some(tools)
-        }
-    }
-
-    fn activate_toolset(
-        &self,
-        agent_id_str: &str,
-        toolset_name: &str,
-    ) -> Option<Vec<types::tool::ToolDefinition>> {
-        let agent_id: types::agent::AgentId = agent_id_str.parse().ok()?;
-        let entry = self.registry.get(agent_id)?;
-
-        // Resolve the registry key — try direct match first, then normalize-matching
-        // so toolset names like `wechat-oa` are found even if the LLM passes `wechat_oa`.
-        let resolved_key = {
-            let registry = self.plugins.toolset_registry.read().ok()?;
-            if registry.contains_key(toolset_name) {
-                toolset_name.to_string()
-            } else {
-                let normalized = runtime::mcp::normalize_name(toolset_name);
-                registry
-                    .keys()
-                    .find(|k| runtime::mcp::normalize_name(k) == normalized)
-                    .cloned()?
-            }
-        };
-
-        // Add toolset to session's active_toolsets and persist
-        let mut session = self.memory.get_session(entry.session_id).ok()??;
-        if !session.active_toolsets.iter().any(|t| t == &resolved_key) {
-            session.active_toolsets.push(resolved_key.clone());
-            self.memory.save_session(&session).ok()?;
-        }
-
-        // Return ONLY the tools from the requested toolset (按需加载)
-        let tools = if let Ok(registry) = self.plugins.toolset_registry.read() {
-            registry.get(&resolved_key).cloned()
-        } else {
-            None
-        };
-
-        match tools {
-            Some(t) if t.is_empty() => None,
-            other => other,
         }
     }
 

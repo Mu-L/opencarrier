@@ -162,23 +162,12 @@ pub trait KernelHandle: Send + Sync {
     }
 
     /// Rebuild the available tool list for an agent.
-    /// Used after mid-loop skill installations (e.g., train_write) so the
-    /// LLM can use newly installed tools in the next iteration.
-    fn refresh_tools(
+    /// Query a toolset from the registry and return its tools.
+    /// Stateless — does not modify any session or agent state.
+    fn get_toolset_tools(
         &self,
-        agent_id_str: &str,
+        _toolset_name: &str,
     ) -> Option<Vec<types::tool::ToolDefinition>> {
-        let _ = agent_id_str;
-        None
-    }
-
-    /// Activate a toolset for an agent's session and return refreshed tool list.
-    fn activate_toolset(
-        &self,
-        agent_id_str: &str,
-        toolset_name: &str,
-    ) -> Option<Vec<types::tool::ToolDefinition>> {
-        let _ = (agent_id_str, toolset_name);
         None
     }
 

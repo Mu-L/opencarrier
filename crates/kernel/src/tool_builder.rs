@@ -3,7 +3,7 @@
 //! Assembles the tool set for each agent request using the toolset model:
 //! - Core tools (always visible): session_summarize, tool_search, etc.
 //! - Toolsets (on-demand): filesystem, shell, knowledge, media, misc, web, agent, + MCP servers
-//! - Toolset activation: skill-declared toolsets + tool_search on-demand (both → session.active_toolsets)
+//! - Toolset resolution: skill-declared toolsets queried directly from registry at prompt-build time
 
 use crate::kernel::CarrierKernel;
 use crate::prompt_sources::{
@@ -21,7 +21,7 @@ use types::tool::ToolDefinition;
 /// - knowledge_read / knowledge_list: read workflow docs and discover knowledge
 /// - cron_*: schedule tasks
 ///
-/// All other tools are loaded on-demand via tool_search (active_toolsets).
+/// All other tools are loaded on-demand via tool_search.
 const CORE_TOOLS: &[&str] = &[
     "session_summarize",
     "tool_search",
@@ -59,57 +59,10 @@ pub(crate) fn tool_to_toolset(name: &str) -> Option<&'static str> {
 /// Builtin toolset names (used to distinguish from MCP toolsets).
 const BUILTIN_TOOLSETS: &[&str] = &["filesystem", "shell", "knowledge", "memory", "media", "process", "web", "agent", "misc"];
 
-/// Tools that remain available even when a skill restricts the tool list.
-/// These are foundational: the agent must always be able to summarize
-/// state and look up its own knowledge base. `skill_load` is deliberately
-/// EXCLUDED so the LLM can't escape the skill-imposed scope.
-pub(crate) const ALWAYS_AVAILABLE_WITH_SKILL: &[&str] = &[
-    "session_summarize",
-    "knowledge_read",
-    "knowledge_list",
-    "memory_tree",
-    "tool_search",
-];
-
-/// Filter a tool list by `max_tool_level` (discovery mode).
-/// Keeps ALWAYS_AVAILABLE_WITH_SKILL tools + tools at or below `max_tool_level`
-/// (excluding Dangerous-level tools, which are never allowed through this path).
-pub(crate) fn filter_tools_by_skill_allowed(
-    tools: Vec<ToolDefinition>,
-    max_tool_level: types::tool::PermissionLevel,
-) -> Vec<ToolDefinition> {
-    tools
-        .into_iter()
-        .filter(|t| {
-            if ALWAYS_AVAILABLE_WITH_SKILL.contains(&t.name.as_str()) {
-                return true;
-            }
-            let level = tool_permission_level(&t.name);
-            level <= max_tool_level && level != types::tool::PermissionLevel::Dangerous
-        })
-        .collect()
-}
-
 /// Get the permission level for a tool by name.
 /// Delegates to the centralized `PermissionLevel::for_tool()`.
 pub(crate) fn tool_permission_level(name: &str) -> types::tool::PermissionLevel {
     types::tool::PermissionLevel::for_tool(name)
-}
-
-/// Filter tools by a channel's maximum permission level.
-/// Tools exceeding the max are removed — the LLM never sees them.
-pub(crate) fn filter_tools_by_channel_permission(
-    tools: Vec<ToolDefinition>,
-    max_permission: types::tool::PermissionLevel,
-) -> Vec<ToolDefinition> {
-    // If max is Dangerous (the default), no filtering needed
-    if max_permission == types::tool::PermissionLevel::Dangerous {
-        return tools;
-    }
-    tools
-        .into_iter()
-        .filter(|t| tool_permission_level(&t.name) <= max_permission)
-        .collect()
 }
 
 /// Build tool definitions for delegate_{name} tools from subagent configs.
@@ -138,68 +91,33 @@ pub(crate) fn build_subagent_tool_definitions(subagents: &[SubagentConfig]) -> V
 }
 
 impl CarrierKernel {
-    /// Collect the tools available to an agent using toolset mode.
-    ///
-    /// Always shows core tools + tool_search. Additional tools come ONLY from
-    /// session.active_toolsets (populated by skill auto-match + tool_search on-demand).
-    /// No auto-loading from manifest fields — skills declare toolsets, tool_search discovers the rest.
-    pub(crate) fn available_tools(&self, agent_id: AgentId, active_toolsets: Option<&[String]>) -> Vec<ToolDefinition> {
-        let all_builtins = runtime::tool_runner::builtin_tool_definitions();
+    /// Collect tool definitions for an agent request.
+    /// Returns: core tools + tools from skill-declared toolsets + delegate tools.
+    /// No filtering — all definitions are sent to the LLM. Permission checks
+    /// happen at execution time in execute_tool().
+    pub(crate) fn available_tools(
+        &self,
+        agent_id: AgentId,
+        skill_toolsets: Option<&[String]>,
+    ) -> Vec<ToolDefinition> {
         let entry = self.registry.get(agent_id);
 
-        // Only use session-level active_toolsets (from skill match + tool_search)
-        let combined: Vec<String> = active_toolsets
-            .map(|s| s.to_vec())
-            .unwrap_or_default();
-
-        // Core tools always visible
-        let mut tools: Vec<ToolDefinition> = all_builtins
-            .iter()
+        // Core tools always included
+        let mut tools: Vec<ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
+            .into_iter()
             .filter(|t| CORE_TOOLS.contains(&t.name.as_str()))
-            .cloned()
             .collect();
 
-        // Add tools from each active toolset
-        if let Ok(registry) = self.plugins.toolset_registry.read() {
-            for ts_name in &combined {
-                if let Some(toolset_tools) = registry.get(ts_name) {
-                    tools.extend(toolset_tools.iter().cloned());
+        // Add tools from skill-declared toolsets (queried directly from registry)
+        if let Some(toolset_names) = skill_toolsets {
+            if let Ok(registry) = self.plugins.toolset_registry.read() {
+                for ts_name in toolset_names {
+                    if let Some(toolset_tools) = registry.get(ts_name) {
+                        tools.extend(toolset_tools.iter().cloned());
+                    }
                 }
             }
         }
-
-        // Apply tool_allowlist / tool_blocklist
-        let (tool_allowlist, tool_blocklist) = entry
-            .as_ref()
-            .map(|e| (e.manifest.tool_allowlist.clone(), e.manifest.tool_blocklist.clone()))
-            .unwrap_or_default();
-        if !tool_allowlist.is_empty() {
-            tools.retain(|t| tool_allowlist.iter().any(|a| a == &t.name));
-        }
-        if !tool_blocklist.is_empty() {
-            tools.retain(|t| !tool_blocklist.iter().any(|b| b == &t.name));
-        }
-
-        // Remove shell_exec if exec_policy denies it
-        let exec_blocks_shell = entry.as_ref().is_some_and(|e| {
-            e.manifest
-                .exec_policy
-                .as_ref()
-                .is_some_and(|p| p.mode == types::config::ExecSecurityMode::Deny)
-        });
-        if exec_blocks_shell {
-            tools.retain(|t| t.name != "shell_exec");
-        }
-
-        // Filter by agent's max_tool_level — remove tools above the allowed level
-        let max_level = entry
-            .as_ref()
-            .map(|e| e.manifest.max_tool_level)
-            .unwrap_or(types::tool::PermissionLevel::Write);
-        tools.retain(|t| {
-            let level = types::tool::PermissionLevel::for_tool(&t.name);
-            level <= max_level
-        });
 
         // Add delegate_{name} tools for each subagent in the manifest
         if let Some(ref e) = entry {
@@ -386,6 +304,7 @@ impl CarrierKernel {
         sender_name: Option<String>,
         owner_id: &Option<String>,
         auto_matched_skill: Option<String>,
+        skill_toolsets: Option<Vec<String>>,
     ) {
         // Read user_name from the agent's KV namespace (per-sender memory)
         let sid = sender_id.as_deref().unwrap_or("");
@@ -411,15 +330,7 @@ impl CarrierKernel {
             })
             .collect();
 
-        // Load session for toolset summary
-        let entry_ref = self.registry.get(*agent_id);
-        let session = entry_ref
-            .as_ref()
-            .and_then(|e| self.memory.get_session(e.session_id).ok().flatten());
-        let active = session
-            .as_ref()
-            .map(|s| s.active_toolsets.clone())
-            .unwrap_or_default();
+        let active = skill_toolsets.unwrap_or_default();
 
         let prompt_ctx = runtime::prompt_builder::PromptContext {
             agent_name: manifest.name.clone(),
@@ -521,77 +432,5 @@ impl CarrierKernel {
         };
         manifest.model.system_prompt =
             runtime::prompt_builder::build_system_prompt(&prompt_ctx);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn td(name: &str) -> ToolDefinition {
-        ToolDefinition {
-            name: name.to_string(),
-            description: String::new(),
-            input_schema: serde_json::json!({}),
-        }
-    }
-
-    #[test]
-    fn filter_keeps_always_available() {
-        let tools = vec![td("session_summarize"), td("knowledge_read"), td("knowledge_list"), td("shell_exec")];
-        let filtered = filter_tools_by_skill_allowed(tools, types::tool::PermissionLevel::Write);
-        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"session_summarize"));
-        assert!(names.contains(&"knowledge_read"));
-        assert!(names.contains(&"knowledge_list"));
-        assert!(!names.contains(&"shell_exec"));
-    }
-
-    #[test]
-    fn filter_all_none_level_tools_pass() {
-        let tools = vec![td("tool_search"), td("skill_load"), td("session_summarize"), td("web_search")];
-        let filtered = filter_tools_by_skill_allowed(tools, types::tool::PermissionLevel::Write);
-        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"tool_search"));
-        assert!(names.contains(&"skill_load"));
-        assert!(names.contains(&"session_summarize"));
-        assert!(names.contains(&"web_search"));
-    }
-
-    #[test]
-    fn filter_by_level_write() {
-        let tools = vec![
-            td("session_summarize"),
-            td("tool_search"),
-            td("file_read"),
-            td("file_write"),
-            td("process_start"),
-            td("shell_exec"),
-        ];
-        let filtered = filter_tools_by_skill_allowed(tools, types::tool::PermissionLevel::Write);
-        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"session_summarize"));
-        assert!(names.contains(&"tool_search"));
-        assert!(names.contains(&"file_read"));
-        assert!(names.contains(&"file_write"));
-        assert!(!names.contains(&"process_start"));
-        assert!(!names.contains(&"shell_exec"));
-    }
-
-    #[test]
-    fn filter_by_level_execute() {
-        let tools = vec![td("file_write"), td("process_start"), td("shell_exec")];
-        let filtered = filter_tools_by_skill_allowed(tools, types::tool::PermissionLevel::Execute);
-        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"file_write"));
-        assert!(names.contains(&"process_start"));
-        assert!(!names.contains(&"shell_exec"));
-    }
-
-    #[test]
-    fn dangerous_never_passes() {
-        let tools = vec![td("shell_exec"), td("process_kill"), td("agent_kill")];
-        let filtered = filter_tools_by_skill_allowed(tools, types::tool::PermissionLevel::Dangerous);
-        assert!(filtered.is_empty());
     }
 }

@@ -325,8 +325,6 @@ impl CarrierKernel {
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     label: None,
-                    active_toolsets: vec![],
-                    active_skill_name: None,
                 })
         };
 
@@ -371,19 +369,8 @@ impl CarrierKernel {
             by_messages || by_tokens || by_quota
         };
 
-        // Reset active_toolsets at the start of each turn. Skill auto-match
-        // will re-activate needed toolsets, and tool_search activations only
-        // last for the current turn. This prevents unbounded growth across turns.
-        session.active_toolsets.clear();
-        let _ = self.memory.save_session(&session);
-
-        let tools = {
-            let active = session.active_toolsets.clone();
-            self.available_tools(agent_id, Some(&active))
-        };
-
-        // Auto-match skill based on user message → activate skill.toolsets
-        let (tools, auto_matched_skill, skill_max_iterations) = if let Some(ref ws) = entry.manifest.workspace {
+        // Auto-match skill — query registry directly for skill-declared toolsets
+        let (tools, auto_matched_skill, skill_max_iterations, skill_toolsets) = if let Some(ref ws) = entry.manifest.workspace {
             match crate::prompt_sources::match_skill_for_message(message, ws) {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
@@ -398,80 +385,55 @@ impl CarrierKernel {
                         "Skill auto-matched (streaming)"
                     );
 
-                    // Activate skill-declared toolsets into the session
-                    for ts_name in &skill_toolsets {
-                        if !session.active_toolsets.contains(ts_name) {
-                            if let Some(activated) = self.activate_toolset(&agent_id.to_string(), ts_name) {
-                                info!(toolset = %ts_name, tools_count = activated.len(), "Skill toolset activated (streaming)");
-                            }
-                        }
-                    }
-
-                    // Reload session from DB (activate_toolset writes active_toolsets via handle)
-                    if let Ok(Some(reloaded)) = self.memory.get_session(entry.session_id) {
-                        session = reloaded;
-                    }
-
-                    // Set active_skill_name for write-back tracking (after reload so we don't overwrite)
-                    session.active_skill_name = Some(skill_name.clone());
-                    let _ = self.memory.save_session(&session);
-
-                    let tools = {
-                        let active = session.active_toolsets.clone();
-                        self.available_tools(agent_id, Some(&active))
-                    };
-                    let tools = entry.mode.filter_tools(tools);
+                    let tools = self.available_tools(agent_id, Some(&skill_toolsets));
 
                     info!(
                         agent = %entry.name,
                         tool_count = tools.len(),
-                        "Tools after skill toolset activation (streaming)"
+                        "Tools after skill toolset query (streaming)"
                     );
                     (
                         tools,
                         Some(format!("**{}**\n{}", skill_name, skill_body)),
                         skill_max_iter,
+                        Some(skill_toolsets),
                     )
                 }
                 None => {
-                    let tools = entry.mode.filter_tools(tools);
+                    let tools = self.available_tools(agent_id, None);
                     info!(
                         agent = %entry.name,
                         agent_id = %agent_id,
                         tool_count = tools.len(),
                         "Tools selected for LLM request (streaming)"
                     );
-                    (tools, None, None)
+                    (tools, None, None, None)
                 }
             }
         } else {
-            let tools = entry.mode.filter_tools(tools);
+            let tools = self.available_tools(agent_id, None);
             info!(
                 agent = %entry.name,
                 agent_id = %agent_id,
                 tool_count = tools.len(),
                 "Tools selected for LLM request (streaming)"
             );
-            (tools, None, None)
+            (tools, None, None, None)
         };
 
         // Auto-match subagent trigger (only when no skill matched)
         let (tools, auto_matched_subagent) = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
             if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, &entry.manifest.subagents) {
                 let delegate_tools = crate::tool_builder::build_subagent_tool_definitions(&entry.manifest.subagents);
-                let core_names: Vec<&str> = crate::tool_builder::ALWAYS_AVAILABLE_WITH_SKILL.to_vec();
-                let core_tools: Vec<_> = tools.iter()
-                    .filter(|t| core_names.contains(&t.name.as_str()))
-                    .cloned()
-                    .collect();
-                let filtered: Vec<_> = core_tools.into_iter().chain(delegate_tools).collect();
+                let mut tools = tools;
+                tools.extend(delegate_tools);
                 info!(
                     agent = %entry.name,
                     subagent = %sa_match.name,
-                    tool_count = filtered.len(),
+                    tool_count = tools.len(),
                     "Subagent trigger matched (streaming)"
                 );
-                (filtered, Some(sa_match.name.clone()))
+                (tools, Some(sa_match.name.clone()))
             } else {
                 (tools, None)
             }
@@ -479,45 +441,15 @@ impl CarrierKernel {
             (tools, None)
         };
 
-        // Filter tools by channel max permission level
-        // Also handle subagent delegation (channel_type starts with "subagent:")
-        let (tools, subagent_config) = if let Some(ref ct) = channel_type {
+        // Subagent delegation from channel_type
+        let subagent_config = if let Some(ref ct) = channel_type {
             if let Some(sa_name) = ct.strip_prefix("subagent:") {
-                let sa_config = entry.manifest.subagents.iter().find(|s| s.name == sa_name).cloned();
-                if let Some(ref sa) = sa_config {
-                    let filtered = crate::tool_builder::filter_tools_by_skill_allowed(tools, entry.manifest.max_tool_level);
-                    info!(
-                        agent = %entry.name,
-                        subagent = %sa_name,
-                        tool_count = filtered.len(),
-                        "Tools filtered for subagent delegation (streaming)"
-                    );
-                    (filtered, Some(sa.clone()))
-                } else {
-                    tracing::warn!(subagent = %sa_name, "Subagent not found in manifest, using all tools");
-                    (tools, None)
-                }
+                entry.manifest.subagents.iter().find(|s| s.name == sa_name).cloned()
             } else {
-                let max_perm = self.config.channels
-                    .get(ct)
-                    .map(|c| c.max_permission)
-                    .unwrap_or(types::tool::PermissionLevel::default_max_tool_level());
-                let before_count = tools.len();
-                let filtered = crate::tool_builder::filter_tools_by_channel_permission(tools, max_perm);
-                if filtered.len() != before_count {
-                    info!(
-                        agent = %entry.name,
-                        channel = %ct,
-                        max_permission = ?max_perm,
-                        before = before_count,
-                        after = filtered.len(),
-                        "Tools filtered by channel permission (streaming)"
-                    );
-                }
-                (filtered, None)
+                None
             }
         } else {
-            (tools, None)
+            None
         };
 
         let driver = self.resolve_driver(&entry.manifest)?;
@@ -557,7 +489,7 @@ impl CarrierKernel {
 
         // Build the structured system prompt via prompt_builder
         {
-            self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match);
+            self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match, skill_toolsets);
         }
 
         let memory = Arc::clone(&self.memory);
@@ -932,8 +864,6 @@ impl CarrierKernel {
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     label: None,
-                    active_toolsets: vec![],
-                    active_skill_name: None,
                 })
         };
 
@@ -975,19 +905,8 @@ impl CarrierKernel {
 
         let messages_before = session.messages.len();
 
-        // Reset active_toolsets at the start of each turn. Skill auto-match
-        // will re-activate needed toolsets, and tool_search activations only
-        // last for the current turn. This prevents unbounded growth across turns.
-        session.active_toolsets.clear();
-        let _ = self.memory.save_session(&session);
-
-        let tools = {
-            let active = session.active_toolsets.clone();
-            self.available_tools(agent_id, Some(&active))
-        };
-
-        // Auto-match skill based on user message → activate skill.toolsets
-        let (tools, auto_matched_skill, skill_max_iterations) = if let Some(ref ws) = entry.manifest.workspace {
+        // Auto-match skill — query registry directly for skill-declared toolsets
+        let (tools, auto_matched_skill, skill_max_iterations, skill_toolsets) = if let Some(ref ws) = entry.manifest.workspace {
             match crate::prompt_sources::match_skill_for_message(message, ws) {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
@@ -1002,44 +921,23 @@ impl CarrierKernel {
                         "Skill auto-matched"
                     );
 
-                    // Activate skill-declared toolsets into the session
-                    for ts_name in &skill_toolsets {
-                        if !session.active_toolsets.contains(ts_name) {
-                            if let Some(activated) = self.activate_toolset(&agent_id.to_string(), ts_name) {
-                                info!(toolset = %ts_name, tools_count = activated.len(), "Skill toolset activated");
-                            }
-                        }
-                    }
-
-                    // Reload session from DB (activate_toolset writes active_toolsets via handle)
-                    if let Ok(Some(reloaded)) = self.memory.get_session(entry.session_id) {
-                        session = reloaded;
-                    }
-
-                    // Set active_skill_name for write-back tracking (after reload so we don't overwrite)
-                    session.active_skill_name = Some(skill_name.clone());
-                    let _ = self.memory.save_session(&session);
-
-                    let tools = {
-                        let active = session.active_toolsets.clone();
-                        self.available_tools(agent_id, Some(&active))
-                    };
-                    let tools = entry.mode.filter_tools(tools);
+                    let tools = self.available_tools(agent_id, Some(&skill_toolsets));
 
                     info!(
                         agent = %entry.name,
                         tool_count = tools.len(),
                         tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
-                        "Tools after skill toolset activation"
+                        "Tools after skill toolset query"
                     );
                     (
                         tools,
                         Some(format!("**{}**\n{}", skill_name, skill_body)),
                         skill_max_iter,
+                        Some(skill_toolsets),
                     )
                 }
                 None => {
-                    let tools = entry.mode.filter_tools(tools);
+                    let tools = self.available_tools(agent_id, None);
                     info!(
                         agent = %entry.name,
                         agent_id = %agent_id,
@@ -1047,11 +945,11 @@ impl CarrierKernel {
                         tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
                         "Tools selected for LLM request"
                     );
-                    (tools, None, None)
+                    (tools, None, None, None)
                 }
             }
         } else {
-            let tools = entry.mode.filter_tools(tools);
+            let tools = self.available_tools(agent_id, None);
             info!(
                 agent = %entry.name,
                 agent_id = %agent_id,
@@ -1059,27 +957,22 @@ impl CarrierKernel {
                 tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
                 "Tools selected for LLM request"
             );
-            (tools, None, None)
+            (tools, None, None, None)
         };
 
         // Auto-match subagent trigger (only when no skill matched)
         let (tools, auto_matched_subagent) = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
             if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, &entry.manifest.subagents) {
-                // Replace tool list with delegate_{name} + ALWAYS_AVAILABLE core tools
                 let delegate_tools = crate::tool_builder::build_subagent_tool_definitions(&entry.manifest.subagents);
-                let core_names: Vec<&str> = crate::tool_builder::ALWAYS_AVAILABLE_WITH_SKILL.to_vec();
-                let core_tools: Vec<_> = tools.iter()
-                    .filter(|t| core_names.contains(&t.name.as_str()))
-                    .cloned()
-                    .collect();
-                let filtered: Vec<_> = core_tools.into_iter().chain(delegate_tools).collect();
+                let mut tools = tools;
+                tools.extend(delegate_tools);
                 info!(
                     agent = %entry.name,
                     subagent = %sa_match.name,
-                    tool_count = filtered.len(),
-                    "Subagent trigger matched, tools replaced with delegate tools"
+                    tool_count = tools.len(),
+                    "Subagent trigger matched, delegate tools added"
                 );
-                (filtered, Some(sa_match.name.clone()))
+                (tools, Some(sa_match.name.clone()))
             } else {
                 (tools, None)
             }
@@ -1087,47 +980,15 @@ impl CarrierKernel {
             (tools, None)
         };
 
-        // Filter tools by channel max permission level
-        // Also handle subagent delegation (channel_type starts with "subagent:")
-        let (tools, subagent_config) = if let Some(ref ct) = channel_type {
+        // Subagent delegation from channel_type
+        let subagent_config = if let Some(ref ct) = channel_type {
             if let Some(sa_name) = ct.strip_prefix("subagent:") {
-                // Subagent delegation: filter tools by max_tool_level
-                let sa_config = entry.manifest.subagents.iter().find(|s| s.name == sa_name).cloned();
-                if let Some(ref sa) = sa_config {
-                    let filtered = crate::tool_builder::filter_tools_by_skill_allowed(tools, entry.manifest.max_tool_level);
-                    info!(
-                        agent = %entry.name,
-                        subagent = %sa_name,
-                        tool_count = filtered.len(),
-                        "Tools filtered for subagent delegation"
-                    );
-                    (filtered, Some(sa.clone()))
-                } else {
-                    tracing::warn!(subagent = %sa_name, "Subagent not found in manifest, using all tools");
-                    (tools, None)
-                }
+                entry.manifest.subagents.iter().find(|s| s.name == sa_name).cloned()
             } else {
-                // Regular channel filtering
-                let max_perm = self.config.channels
-                    .get(ct)
-                    .map(|c| c.max_permission)
-                    .unwrap_or(types::tool::PermissionLevel::default_max_tool_level());
-                let before_count = tools.len();
-                let filtered = crate::tool_builder::filter_tools_by_channel_permission(tools, max_perm);
-                if filtered.len() != before_count {
-                    info!(
-                        agent = %entry.name,
-                        channel = %ct,
-                        max_permission = ?max_perm,
-                        before = before_count,
-                        after = filtered.len(),
-                        "Tools filtered by channel permission"
-                    );
-                }
-                (filtered, None)
+                None
             }
         } else {
-            (tools, None)
+            None
         };
 
         // Apply model routing if configured (disabled in Stable mode)
@@ -1160,7 +1021,7 @@ impl CarrierKernel {
         let prompt_auto_match = auto_matched_skill.or_else(|| {
             auto_matched_subagent.map(|name| format!("**Auto-delegation: {}**\nThe user message matches the '{}' subagent. Call delegate_{} to handle this task.", name, name, name))
         });
-        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match);
+        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match, skill_toolsets);
 
         // Model routing is handled by Brain
 

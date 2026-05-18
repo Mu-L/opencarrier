@@ -15,7 +15,6 @@ use crate::llm_errors;
 use crate::mcp::McpConnection;
 use crate::tool_context::ToolContext;
 use crate::tool_runner;
-use crate::tools::knowledge::write_skill_toolsets;
 use crate::web_search::WebToolsContext;
 use crate::text_tool_recovery::recover_text_tool_calls;
 use memory::session::Session;
@@ -492,10 +491,6 @@ async fn run_agent_loop_impl(
     // Track recent (tool_name, input_hash) for loop detection
     let mut recent_tool_calls: Vec<(String, u64)> = Vec::new();
 
-    // Write-back tracking: toolsets activated by tool_search this turn
-    let mut search_activated_toolsets: std::collections::HashSet<String> = std::collections::HashSet::new();
-    // Current skill name (from session.active_skill_name)
-    let current_skill_name = session.active_skill_name.clone();
 
     // Shadow with an owned Vec so we can refresh mid-loop when skills are installed
     let mut tools_owned: Vec<ToolDefinition> = available_tools.to_vec();
@@ -942,37 +937,6 @@ async fn run_agent_loop_impl(
                         is_error: result.is_error,
                     });
 
-                    // Write-back: if tool executed successfully and toolsets were
-                    // activated by tool_search this turn, write them to the skill file.
-                    // This ensures next time the same skill matches, the toolsets are
-                    // pre-declared and don't need another search round-trip.
-                    if !result.is_error && !search_activated_toolsets.is_empty() {
-                        if let Some(ref skill_name) = current_skill_name {
-                            if let Some(ref ws) = manifest.workspace {
-                                let mut existing_toolsets = crate::tools::knowledge::read_skill_toolsets(ws, skill_name);
-                                let mut added = Vec::new();
-                                for ts_name in &search_activated_toolsets {
-                                    if !existing_toolsets.contains(ts_name) {
-                                        existing_toolsets.push(ts_name.clone());
-                                        added.push(ts_name.clone());
-                                    }
-                                }
-                                if !added.is_empty() {
-                                    info!(
-                                        skill = %skill_name,
-                                        toolsets = ?added,
-                                        tool = %tool_call.name,
-                                        "Tool from search-activated toolset executed successfully, writing back to skill"
-                                    );
-                                    if let Err(e) = write_skill_toolsets(ws, skill_name, &existing_toolsets) {
-                                        warn!(skill = %skill_name, error = %e, "Failed to write skill toolsets");
-                                    }
-                                    // Clear to avoid duplicate writes
-                                    search_activated_toolsets.clear();
-                                }
-                            }
-                        }
-                    }
                 }
 
                 // Detect tool errors and inject guidance to prevent fabrication
@@ -1027,7 +991,7 @@ async fn run_agent_loop_impl(
                 });
                 if tools_may_have_changed {
                     if let Some(ref kernel) = kernel {
-                        let agent_id_str = session.agent_id.to_string();
+                        let _agent_id_str = session.agent_id.to_string();
 
                         // Collect toolsets to activate from tool_search
                         let mut toolsets_to_activate: Vec<String> = Vec::new();
@@ -1050,7 +1014,6 @@ async fn run_agent_loop_impl(
                             let results = kernel.search_tools(q, 5, manifest.max_tool_level);
                             for (ts_name, _) in results {
                                 if !toolsets_to_activate.contains(&ts_name) {
-                                    search_activated_toolsets.insert(ts_name.clone());
                                     toolsets_to_activate.push(ts_name);
                                 }
                             }
@@ -1060,14 +1023,14 @@ async fn run_agent_loop_impl(
                         let new_tools = if is_dynamic_activation {
                             let mut added_tools: Vec<types::tool::ToolDefinition> = Vec::new();
                             for ts_name in &toolsets_to_activate {
-                                if let Some(tools) = kernel.activate_toolset(&agent_id_str, ts_name) {
-                                    info!(toolset = ts_name, tools_count = tools.len(), "Toolset activated");
+                                if let Some(tools) = kernel.get_toolset_tools(ts_name) {
+                                    info!(toolset = ts_name, tools_count = tools.len(), "Toolset loaded from registry");
                                     added_tools.extend(tools);
                                 }
                             }
                             if added_tools.is_empty() { None } else { Some(added_tools) }
                         } else {
-                            kernel.refresh_tools(&agent_id_str)
+                            None
                         };
 
                         if let Some(new_tools) = new_tools {
@@ -1463,8 +1426,6 @@ mod tests {
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyAfterToolUseDriver::new());
@@ -1517,8 +1478,6 @@ active_toolsets: vec![],
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyAfterToolUseDriver::new());
@@ -1573,8 +1532,6 @@ active_toolsets: vec![],
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyMaxTokensDriver);
@@ -1627,8 +1584,6 @@ active_toolsets: vec![],
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(NormalDriver);
@@ -1672,8 +1627,6 @@ active_toolsets: vec![],
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyAfterToolUseDriver::new());
@@ -1801,8 +1754,6 @@ active_toolsets: vec![],
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyThenNormalDriver::new());
@@ -1849,8 +1800,6 @@ active_toolsets: vec![],
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(AlwaysEmptyDriver);
@@ -1903,8 +1852,6 @@ active_toolsets: vec![],
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(EmptyMaxTokensDriver);
@@ -2783,8 +2730,6 @@ active_toolsets: vec![],
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(TextToolCallDriver::new());
@@ -2857,8 +2802,6 @@ active_toolsets: vec![],
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(NormalDriver);
@@ -2913,8 +2856,6 @@ active_toolsets: vec![],
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(TextToolCallDriver::new());

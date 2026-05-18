@@ -770,8 +770,6 @@ mod tests {
             messages: vec![Message::user("hello")],
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let config = CompactionConfig::default();
         assert!(!needs_compaction(&session, &config));
@@ -788,8 +786,6 @@ active_toolsets: vec![],
             messages,
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let config = CompactionConfig::default();
         assert!(needs_compaction(&session, &config));
@@ -840,8 +836,6 @@ active_toolsets: vec![],
             messages: vec![Message::user("hello"), Message::assistant("hi")],
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let config = CompactionConfig {
             threshold: 30,
@@ -930,8 +924,6 @@ active_toolsets: vec![],
             messages,
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let config = CompactionConfig {
             threshold: 5,
@@ -1010,8 +1002,6 @@ active_toolsets: vec![],
             messages,
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         let config = CompactionConfig {
             threshold: 30,
@@ -1145,8 +1135,6 @@ active_toolsets: vec![],
             messages,
             context_window_tokens: 0,
             label: None,
-active_toolsets: vec![],
-            active_skill_name: None,
         };
         // With 59 messages and keep_recent=5, split_at starts at 54.
         // Alternating roles → alignment finds Assistant at 54.
