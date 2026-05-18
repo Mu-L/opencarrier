@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Levels are ordered: None < ReadOnly < Write < Execute < Dangerous.
 /// A channel's `max_permission` caps which tools are visible to the LLM.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionLevel {
     /// Pure queries with no side effects: knowledge_read, etc.
@@ -20,6 +20,20 @@ pub enum PermissionLevel {
     Execute,
     /// Irreversible operations: shell_exec, file_delete, process_kill.
     Dangerous,
+}
+
+impl<'de> serde::Deserialize<'de> for PermissionLevel {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        match s.to_lowercase().as_str() {
+            "none" => Ok(Self::None),
+            "readonly" | "read_only" | "read" => Ok(Self::ReadOnly),
+            "write" => Ok(Self::Write),
+            "execute" | "exec" => Ok(Self::Execute),
+            "dangerous" | "danger" => Ok(Self::Dangerous),
+            other => Err(serde::de::Error::unknown_variant(other, &["none", "readonly", "write", "execute", "dangerous"])),
+        }
+    }
 }
 
 impl PermissionLevel {
