@@ -792,33 +792,25 @@ async fn run_agent_loop_impl(
                 }
 
                 // Detect loop: same (name, input_hash) repeated LOOP_DETECTION_WINDOW times.
-                // When detected, hard-break out of the agent loop — returning an error
-                // result to the LLM doesn't work because the LLM ignores it and retries
-                // the same call. We end the turn with a user-facing notice instead.
+                // Instead of terminating the agent loop, remove the looping tool and
+                // inject a system message so the LLM can continue with other tools.
                 if let Some((looping_name, _)) = detect_tool_loop(&recent_tool_calls, LOOP_DETECTION_WINDOW) {
                     warn!(
                         agent = %manifest.name,
                         tool = %looping_name,
                         consecutive = LOOP_DETECTION_WINDOW,
                         iteration,
-                        "Tool loop detected — terminating agent loop"
+                        "Tool loop detected — removing tool and continuing"
                     );
-                    let notice = format!(
-                        "⚠️ 检测到工具循环：连续 {LOOP_DETECTION_WINDOW}+ 次调用 `{looping_name}` 都失败或返回相同结果，已中止本次任务。请换个思路或检查相关配置后重试。"
+                    // Remove the looping tool from available tools
+                    tools_owned.retain(|t| t.name != looping_name);
+                    available_tools = &tools_owned;
+                    recent_tool_calls.clear();
+                    // Inject a system message telling the LLM to stop using this tool
+                    let warning = format!(
+                        "工具 `{looping_name}` 连续多次返回相同结果，已被临时移除。请用其他方式完成任务，不要再用这个工具。"
                     );
-                    session.messages.push(Message::assistant(&notice));
-                    memory
-                        .save_session_async(session)
-                        .await
-                        .map_err(|e| CarrierError::Memory(e.to_string()))?;
-                    return Ok(AgentLoopResult {
-                        response: notice,
-                        total_usage,
-                        iterations: iteration + 1,
-                        silent: false,
-                        directives: Default::default(),
-                        plan: None,
-                    });
+                    messages.push(Message::system(&warning));
                 }
 
                 // Execute each tool call with timeout and truncation
