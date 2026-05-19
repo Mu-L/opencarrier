@@ -569,11 +569,8 @@ impl McpConnection {
     }
 
     async fn connect_sse(url: &str) -> Result<McpTransportHandle, String> {
-        // Basic SSRF check: reject obviously private URLs
-        let lower = url.to_lowercase();
-        if lower.contains("169.254.169.254") || lower.contains("metadata.google") {
-            return Err("SSRF: MCP SSE URL targets metadata endpoint".to_string());
-        }
+        // Full SSRF protection using shared module
+        types::ssrf::check_ssrf(url)?;
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))

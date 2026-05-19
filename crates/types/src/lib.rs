@@ -23,6 +23,7 @@ pub mod model_catalog;
 pub mod plugin;
 pub mod scheduler;
 pub mod serde_compat;
+pub mod ssrf;
 pub mod taint;
 pub mod tool;
 pub mod tool_compat;
