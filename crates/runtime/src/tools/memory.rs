@@ -303,7 +303,7 @@ async fn handle_fetch_leaves(
 
 fn format_hit_response(resp: types::memory_tree::QueryResponse) -> Result<String, String> {
     if resp.hits.is_empty() {
-        return Ok("No memories found matching your query.".to_string());
+        return Ok("No memories found matching your query. This query has been checked thoroughly — do not retry with the same query. Try a different query or proceed without this information.".to_string());
     }
 
     let mut lines = Vec::new();
