@@ -30,6 +30,7 @@ const CORE_TOOLS: &[&str] = &[
     "file_read", "file_list",
     "cron_create", "cron_list", "cron_cancel",
     "memory_tree",
+    "task_plan",
 ];
 
 /// Map a builtin tool name to its toolset. Returns None for core tools.
@@ -41,7 +42,8 @@ pub(crate) fn tool_to_toolset(name: &str) -> Option<&'static str> {
         | "knowledge_read" | "knowledge_list"
         | "file_read" | "file_list"
         | "cron_create" | "cron_list" | "cron_cancel"
-        | "memory_tree" => None,
+        | "memory_tree"
+        | "task_plan" => None,
         n if n.starts_with("file_") => Some("filesystem"),
         "shell_exec" => Some("shell"),
         n if n.starts_with("knowledge_") || n.starts_with("skill_") || n == "clone_evaluate" => Some("knowledge"),

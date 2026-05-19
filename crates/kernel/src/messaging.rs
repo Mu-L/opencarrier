@@ -584,7 +584,15 @@ impl CarrierKernel {
             drop(phase_cb);
 
             match result {
-                Ok(result) => {
+                Ok(mut result) => {
+                    // task_plan in streaming path: log warning, plan not auto-executed
+                    // (streaming clients expect real-time output; plan execution is for
+                    // non-streaming/cron paths)
+                    if result.plan.is_some() {
+                        warn!("task_plan produced in streaming path — plan execution skipped (not supported in streaming mode)");
+                        result.plan = None;
+                    }
+
                     // Evolution hook — post-conversation auto-learning for clones
                     kernel_clone.maybe_run_evolution(&manifest, &message_owned, &result.response, owner_id.as_deref(), sender_id.as_deref());
 
@@ -758,6 +766,7 @@ impl CarrierKernel {
             iterations: 1,
             silent: false,
             directives: Default::default(),
+            plan: None,
         })
     }
 
@@ -817,6 +826,7 @@ impl CarrierKernel {
             iterations: 1,
             silent: false,
             directives: Default::default(),
+            plan: None,
         })
     }
 
@@ -1063,7 +1073,7 @@ impl CarrierKernel {
             &self.memory,
             driver,
             &tools,
-            kernel_handle,
+            kernel_handle.clone(),
             None, // stream_tx: non-streaming path
             Some(&self.plugins.mcp_connections),
             Some(&self.services.web_ctx),
@@ -1073,7 +1083,7 @@ impl CarrierKernel {
             ctx_window,
             Some(&self.coordination.process_manager),
             content_blocks,
-            brain_ref, // Brain for modality-based routing
+            brain_ref.clone(), // Brain for modality-based routing
             sender_id.as_deref(),
             owner_id.as_deref(),
             channel_type.as_deref(),
@@ -1083,6 +1093,28 @@ impl CarrierKernel {
 
         // Detect new output files and append download URLs to the response
         let mut result = result;
+
+        // If agent produced a task_plan, execute it
+        if let Some(plan) = result.plan.take() {
+            info!(
+                agent = %entry.name,
+                plan_title = %plan.title,
+                steps = plan.steps.len(),
+                "Executing task_plan"
+            );
+            result = self.execute_plan(
+                agent_id,
+                &plan,
+                &manifest,
+                &tools,
+                brain_ref.as_ref(),
+                kernel_handle.clone(),
+                sender_id.clone(),
+                owner_id.clone(),
+                channel_type.clone(),
+            ).await?;
+        }
+
         if let (Some((dir, before)), Some(ref sid), Some(ref ext_url)) =
             (&output_dir_before, &sender_id, &self.config.external_url)
         {
@@ -1187,4 +1219,203 @@ impl CarrierKernel {
             self.config.home_dir.join(path)
         }
     }
+
+    /// Execute a task plan — run steps with topological ordering and parallel layers.
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_plan(
+        &self,
+        agent_id: AgentId,
+        plan: &runtime::agent_loop::TaskPlan,
+        manifest: &AgentManifest,
+        tools: &[types::tool::ToolDefinition],
+        brain: Option<&Arc<dyn runtime::llm_driver::Brain>>,
+        kernel_handle: Option<Arc<dyn KernelHandle>>,
+        sender_id: Option<String>,
+        owner_id: Option<String>,
+        channel_type: Option<String>,
+    ) -> KernelResult<AgentLoopResult> {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let mut step_outputs: HashMap<String, String> = HashMap::new();
+        let mut total_usage = types::message::TokenUsage::default();
+        let mut total_iterations = 0u32;
+
+        let driver = self.resolve_driver(manifest)?;
+
+        // Partition steps into parallel execution layers
+        let layers = partition_steps_by_layers(&plan.steps);
+
+        info!(
+            plan_title = %plan.title,
+            layers = layers.len(),
+            total_steps = plan.steps.len(),
+            "Plan execution starting"
+        );
+
+        for (layer_idx, layer) in layers.iter().enumerate() {
+            let mut layer_handles = Vec::new();
+
+            for step in layer {
+                // Build step message: prompt + predecessor outputs
+                let mut message = format!("## Task: {}\n\n{}", step.id, step.prompt);
+                for dep_id in &step.depends_on {
+                    if let Some(output) = step_outputs.get(dep_id) {
+                        message.push_str(&format!("\n\n## Output from step '{}':\n{}", dep_id, output));
+                    }
+                }
+
+                // Each step gets its own session
+                let step_session = self.memory.create_session(agent_id)
+                    .map_err(KernelError::Carrier)?;
+
+                // Clone Arc references for the spawned task
+                let memory = Arc::clone(&self.memory);
+                let kh = kernel_handle.clone();
+                let driver_clone = driver.clone();
+                let brain_clone = brain.map(Arc::clone);
+                let tools_owned = tools.to_vec();
+                let manifest_clone = manifest.clone();
+                let sid = sender_id.clone();
+                let oid = owner_id.clone();
+                let ct = channel_type.clone();
+                let ws = manifest.workspace.clone();
+                let step_id = step.id.clone();
+
+                info!(
+                    step = %step_id,
+                    layer = layer_idx,
+                    depends_on = ?step.depends_on,
+                    "Starting plan step"
+                );
+
+                let handle = tokio::spawn(async move {
+                    let mut session = step_session;
+                    let result = runtime::agent_loop::run_agent_loop(
+                        &manifest_clone, &message, &mut session,
+                        &memory, driver_clone, &tools_owned,
+                        kh, None,
+                        None,   // mcp_connections: MCP tools are already in the tools list
+                        None,   // web_ctx: not available in spawned task
+                        ws.as_deref(),
+                        None,   // on_phase
+                        None,   // hooks: not available in spawned task
+                        None,   // context_window_tokens
+                        None,   // process_manager
+                        None,   // user_content_blocks
+                        brain_clone,
+                        sid.as_deref(), oid.as_deref(),
+                        ct.as_deref(),
+                    ).await;
+                    (step_id, result, session)
+                });
+                layer_handles.push(handle);
+            }
+
+            // Wait for all steps in this layer to complete
+            for handle in layer_handles {
+                match handle.await {
+                    Ok((step_id, Ok(step_result), session)) => {
+                        let _ = self.memory.save_session_async(&session).await;
+                        info!(
+                            step = %step_id,
+                            iterations = step_result.iterations,
+                            response_len = step_result.response.len(),
+                            "Plan step completed"
+                        );
+                        step_outputs.insert(step_id, step_result.response);
+                        total_usage.input_tokens += step_result.total_usage.input_tokens;
+                        total_usage.output_tokens += step_result.total_usage.output_tokens;
+                        total_iterations += step_result.iterations;
+                    }
+                    Ok((step_id, Err(e), _)) => {
+                        warn!(step = %step_id, error = %e, "Plan step failed");
+                        return Err(KernelError::Carrier(CarrierError::Internal(
+                            format!("Plan step '{}' failed: {}", step_id, e)
+                        )));
+                    }
+                    Err(e) => {
+                        return Err(KernelError::Carrier(CarrierError::Internal(
+                            format!("Plan step panicked: {}", e)
+                        )));
+                    }
+                }
+            }
+        }
+
+        // Final result = last step's output
+        let final_output = plan.steps.last()
+            .and_then(|s| step_outputs.get(&s.id))
+            .cloned()
+            .unwrap_or_default();
+
+        info!(
+            plan_title = %plan.title,
+            total_iterations,
+            steps_completed = step_outputs.len(),
+            "Plan execution completed"
+        );
+
+        Ok(AgentLoopResult {
+            response: final_output,
+            total_usage,
+            iterations: total_iterations,
+            silent: false,
+            directives: Default::default(),
+            plan: None,
+        })
+    }
+}
+
+/// Partition task plan steps into parallel execution layers using topological ordering.
+///
+/// Steps in the same layer have no dependencies on each other and can run in parallel.
+/// Each layer only contains steps whose dependencies are all in earlier layers.
+fn partition_steps_by_layers(steps: &[runtime::agent_loop::TaskStep]) -> Vec<Vec<&runtime::agent_loop::TaskStep>> {
+    use std::collections::HashMap;
+
+    let step_map: HashMap<&str, &runtime::agent_loop::TaskStep> = steps.iter()
+        .map(|s| (s.id.as_str(), s))
+        .collect();
+
+    let mut layer_of: HashMap<String, usize> = HashMap::new();
+
+    // Compute layer for each step: layer = max(dep.layer) + 1, or 0 if no deps
+    // Process in topological order (simple iterative approach)
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for step in steps {
+            let computed_layer = if step.depends_on.is_empty() {
+                0
+            } else {
+                step.depends_on.iter()
+                    .filter_map(|dep| layer_of.get(dep))
+                    .max()
+                    .map(|&l| l + 1)
+                    .unwrap_or(0)
+            };
+            let current = layer_of.entry(step.id.clone()).or_insert(0);
+            if computed_layer > *current {
+                *current = computed_layer;
+                changed = true;
+            }
+        }
+    }
+
+    // Assign layer 0 to any step not yet assigned (shouldn't happen but safety)
+    for step in steps {
+        layer_of.entry(step.id.clone()).or_insert(0);
+    }
+
+    // Group by layer
+    let max_layer = layer_of.values().copied().max().unwrap_or(0);
+    let mut layers: Vec<Vec<&runtime::agent_loop::TaskStep>> = vec![Vec::new(); max_layer + 1];
+    for step in steps {
+        if let Some(&layer) = layer_of.get(&step.id) {
+            layers[layer].push(step_map[step.id.as_str()]);
+        }
+    }
+
+    layers
 }

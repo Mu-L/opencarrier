@@ -114,6 +114,21 @@ pub enum LoopPhase {
 /// Implementations should be non-blocking (fire-and-forget) to avoid slowing the loop.
 pub type PhaseCallback = Arc<dyn Fn(LoopPhase) + Send + Sync>;
 
+/// A step within a task plan produced by the `task_plan` tool.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TaskStep {
+    pub id: String,
+    pub prompt: String,
+    pub depends_on: Vec<String>,
+}
+
+/// A task plan produced by the `task_plan` tool.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TaskPlan {
+    pub title: String,
+    pub steps: Vec<TaskStep>,
+}
+
 /// Result of an agent loop execution.
 #[derive(Debug)]
 pub struct AgentLoopResult {
@@ -127,6 +142,8 @@ pub struct AgentLoopResult {
     pub silent: bool,
     /// Reply directives extracted from the agent's response.
     pub directives: types::message::ReplyDirectives,
+    /// Task plan produced by the task_plan tool, if any.
+    pub plan: Option<TaskPlan>,
 }
 
 /// Run the agent execution loop for a single user message.
@@ -488,6 +505,9 @@ async fn run_agent_loop_impl(
     let context_budget = ContextBudget::new(ctx_window);
     let mut any_tools_executed = false;
 
+    // Track task_plan produced during this loop
+    let mut detected_plan: Option<TaskPlan> = None;
+
     // Track recent (tool_name, input_hash) for loop detection
     let mut recent_tool_calls: Vec<(String, u64)> = Vec::new();
 
@@ -626,6 +646,7 @@ async fn run_agent_loop_impl(
                             current_thread: parsed_directives_s.current_thread,
                             silent: true,
                         },
+                        plan: None,
                     });
                 }
 
@@ -740,6 +761,7 @@ async fn run_agent_loop_impl(
                     iterations: iteration + 1,
                     silent: false,
                     directives: Default::default(),
+                    plan: None,
                 });
             }
             StopReason::ToolUse => {
@@ -795,6 +817,7 @@ async fn run_agent_loop_impl(
                         iterations: iteration + 1,
                         silent: false,
                         directives: Default::default(),
+                        plan: None,
                     });
                 }
 
@@ -1063,6 +1086,35 @@ async fn run_agent_loop_impl(
                 if let Err(e) = memory.save_session_async(session).await {
                     warn!("Failed to interim-save session: {e}");
                 }
+
+                // Detect task_plan: extract plan data and break out of the loop
+                if let Some(tc) = response.tool_calls.iter().find(|tc| tc.name == "task_plan") {
+                    let title = tc.input["title"].as_str().unwrap_or("").to_string();
+                    let steps: Vec<TaskStep> = tc.input["steps"].as_array()
+                        .map(|arr| arr.iter().filter_map(|s| {
+                            Some(TaskStep {
+                                id: s["id"].as_str()?.to_string(),
+                                prompt: s["prompt"].as_str()?.to_string(),
+                                depends_on: s["depends_on"].as_array()
+                                    .map(|d| d.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                    .unwrap_or_default(),
+                            })
+                        }).collect())
+                        .unwrap_or_default();
+                    if !steps.is_empty() {
+                        info!(
+                            plan_title = %title,
+                            steps = steps.len(),
+                            "task_plan detected — breaking out of agent loop"
+                        );
+                        detected_plan = Some(TaskPlan { title, steps });
+                        // Save session before breaking
+                        if let Err(e) = memory.save_session_async(session).await {
+                            warn!("Failed to save session before plan break: {e}");
+                        }
+                        break;
+                    }
+                }
             }
             StopReason::MaxTokens => {
                 consecutive_max_tokens += 1;
@@ -1101,6 +1153,7 @@ async fn run_agent_loop_impl(
                         iterations: iteration + 1,
                         silent: false,
                         directives: Default::default(),
+                        plan: None,
                     });
                 }
                 let text = response.text();
@@ -1129,6 +1182,18 @@ async fn run_agent_loop_impl(
             }),
         };
         let _ = hook_reg.fire(&ctx);
+    }
+
+    // If task_plan was detected, return success with the plan
+    if let Some(plan) = detected_plan {
+        return Ok(AgentLoopResult {
+            response: format!("Plan '{}' created with {} steps. Executing...", plan.title, plan.steps.len()),
+            total_usage,
+            iterations: max_iterations, // approximate — loop was broken early
+            silent: false,
+            directives: Default::default(),
+            plan: Some(plan),
+        });
     }
 
     Err(CarrierError::MaxIterationsExceeded(max_iterations))

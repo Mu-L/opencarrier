@@ -523,6 +523,39 @@ async fn tool_task_post(
     Ok(format!("Task created with ID: {task_id}"))
 }
 
+fn tool_task_plan(input: &serde_json::Value) -> Result<String, String> {
+    let title = input["title"].as_str().ok_or("Missing 'title' parameter")?;
+    let steps = input["steps"].as_array().ok_or("Missing 'steps' parameter")?;
+    if steps.is_empty() {
+        return Err("Steps array must not be empty".to_string());
+    }
+    let ids: Vec<&str> = steps.iter().filter_map(|s| s["id"].as_str()).collect();
+    if ids.len() != steps.len() {
+        return Err("All steps must have an 'id' field".to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for &id in &ids {
+        if !seen.insert(id) {
+            return Err(format!("Duplicate step id: '{}'", id));
+        }
+    }
+    for step in steps {
+        let id = step["id"].as_str().ok_or("Step missing 'id'")?;
+        if step["prompt"].as_str().is_none() {
+            return Err(format!("Step '{}' missing 'prompt'", id));
+        }
+        if let Some(deps) = step["depends_on"].as_array() {
+            for dep in deps {
+                let dep_str = dep.as_str().unwrap_or("");
+                if !ids.contains(&dep_str) {
+                    return Err(format!("Step '{}' depends_on unknown step '{}'", id, dep_str));
+                }
+            }
+        }
+    }
+    Ok(format!("Plan '{}' accepted with {} steps. Execution will begin now.", title, steps.len()))
+}
+
 async fn tool_task_claim(
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
@@ -1134,6 +1167,37 @@ impl ToolModule for AgentTools {
                     "required": ["message"]
                 }),
             },
+            ToolDefinition {
+                name: "task_plan".to_string(),
+                description: "Split a complex task into ordered steps with dependencies. Each step runs as an independent agent turn (up to 15 iterations). Use this when the task is too complex for a single turn — e.g. multi-stage workflows like research -> write -> format -> publish. Steps without dependencies run in parallel; steps with depends_on wait for those steps to complete first. Previous step outputs are injected into the step's prompt automatically.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "Short title for the overall plan"
+                        },
+                        "steps": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string", "description": "Unique step identifier (e.g. 'research', 'write', 'publish')" },
+                                    "prompt": { "type": "string", "description": "What to do in this step — detailed instructions" },
+                                    "depends_on": {
+                                        "type": "array",
+                                        "items": { "type": "string" },
+                                        "description": "IDs of steps that must complete before this step starts. Empty = run immediately."
+                                    }
+                                },
+                                "required": ["id", "prompt"]
+                            },
+                            "description": "Ordered list of steps. Each step gets its own agent turn."
+                        }
+                    },
+                    "required": ["title", "steps"]
+                }),
+            },
         ]
     }
 
@@ -1174,6 +1238,7 @@ impl ToolModule for AgentTools {
             "task_claim" => Some(tool_task_claim(kernel, caller_agent_id).await),
             "task_complete" => Some(tool_task_complete(input, kernel, caller_agent_id).await),
             "task_list" => Some(tool_task_list(input, kernel, caller_agent_id).await),
+            "task_plan" => Some(tool_task_plan(input)),
             "event_publish" => Some(tool_event_publish(input, kernel, caller_agent_id).await),
 
             // Scheduling tools
@@ -1209,7 +1274,7 @@ impl ToolModule for AgentTools {
             | "train_evaluate" | "user_profile"
             | "task_list" | "schedule_list" | "cron_list"
             | "a2a_discover" => types::tool::PermissionLevel::None,
-            "task_post" | "task_claim" | "task_complete"
+            "task_post" | "task_claim" | "task_complete" | "task_plan"
             | "event_publish" | "schedule_create" | "schedule_delete"
             | "train_write"
             | "cron_create" | "cron_cancel" => types::tool::PermissionLevel::Write,

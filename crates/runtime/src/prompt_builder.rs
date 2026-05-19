@@ -236,6 +236,11 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
         sections.push(build_mcp_section(&ctx.mcp_summary));
     }
 
+    // Section 6.5 — Task Planning (only if task_plan tool is available)
+    if ctx.granted_tools.contains(&"task_plan".to_string()) {
+        sections.push(TASK_PLAN_GUIDE.to_string());
+    }
+
     // Section 7 — Persona / Identity files (skip for subagents)
     // For clones, SOUL.md and MEMORY.md are already in Section 1.1 — skip them here.
     if !ctx.is_subagent {
@@ -379,6 +384,31 @@ without sharing what you found.
 - IMPORTANT: If your instructions or persona mention a shell command, script path, or code snippet, \
 execute it via the appropriate tool call (shell_exec, file_write, etc.). Never output commands as \
 code blocks — always call the tool instead.";
+
+const TASK_PLAN_GUIDE: &str = "\
+## Task Planning
+When a task is complex and cannot be completed in a single turn (e.g. \
+multi-stage workflows like research → write → format → publish), use \
+the `task_plan` tool to split it into steps. Each step runs independently \
+with its own iteration budget. Steps without dependencies run in parallel.
+
+**When to use task_plan:**
+- The task has 3+ distinct stages
+- A single turn would exceed your iteration limit
+- Stages can be clearly separated (e.g. gathering info, then acting on it)
+
+**When NOT to use task_plan:**
+- Simple tasks that complete in one turn
+- Tasks where stages are tightly interleaved
+
+Example:
+```json
+{\"title\": \"Write and publish article\", \"steps\": [
+  {\"id\": \"research\", \"prompt\": \"Search for trending AI topics and select the best one\", \"depends_on\": []},
+  {\"id\": \"write\", \"prompt\": \"Write a 1000-word article about the selected topic\", \"depends_on\": [\"research\"]},
+  {\"id\": \"publish\", \"prompt\": \"Format the article and publish to WeChat\", \"depends_on\": [\"write\"]}
+]}
+```";
 
 /// Tools that have been removed and should not be used.
 /// If conversation history references these, the agent must NOT attempt to call them.
