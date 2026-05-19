@@ -589,6 +589,14 @@ pub async fn write_agent_knowledge(
     let knowledge_dir = workspace.join("knowledge");
     let file_path: PathBuf = knowledge_dir.join(&safe_name);
 
+    // Ensure knowledge dir exists before canonicalize (TOCTOU fix)
+    if let Err(e) = std::fs::create_dir_all(&knowledge_dir) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to create knowledge dir: {e}")})),
+        );
+    }
+
     // Security: ensure resolved path is still under knowledge dir
     if let Ok(canonical_parent) = knowledge_dir.canonicalize() {
         if let Ok(canonical_file) = file_path.canonicalize() {
@@ -601,10 +609,11 @@ pub async fn write_agent_knowledge(
         }
     }
 
-    if let Err(e) = std::fs::create_dir_all(&knowledge_dir) {
+    // Double-check: string prefix validation as belt-and-suspenders
+    if safe_name.contains('/') || safe_name.contains('\\') {
         return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to create knowledge dir: {e}")})),
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Path traversal denied"})),
         );
     }
     if let Err(e) = std::fs::write(&file_path, &body.content) {

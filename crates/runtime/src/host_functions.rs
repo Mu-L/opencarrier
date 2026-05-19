@@ -255,10 +255,30 @@ fn host_net_fetch(state: &GuestState, params: &serde_json::Value) -> serde_json:
         match request.send().await {
             Ok(resp) => {
                 let status = resp.status().as_u16();
-                match resp.text().await {
-                    Ok(text) => json!({"ok": {"status": status, "body": text}}),
-                    Err(e) => json!({"error": format!("Failed to read response: {e}")}),
+                let mut body = String::new();
+                let mut total = 0usize;
+                let max_bytes = 10 * 1024 * 1024;
+                let mut stream = resp.bytes_stream();
+                use futures::StreamExt;
+                let mut exceeded = false;
+                while let Some(chunk) = stream.next().await {
+                    match chunk {
+                        Ok(bytes) => {
+                            total += bytes.len();
+                            if total > max_bytes {
+                                exceeded = true;
+                                break;
+                            }
+                            let lossy = String::from_utf8_lossy(&bytes);
+                            body.push_str(&lossy);
+                        }
+                        Err(e) => return json!({"error": format!("Failed to read response chunk: {e}")}),
+                    }
                 }
+                if exceeded {
+                    return json!({"error": format!("Response body exceeded {} byte limit", max_bytes)});
+                }
+                json!({"ok": {"status": status, "body": body}})
             }
             Err(e) => json!({"error": format!("Request failed: {e}")}),
         }

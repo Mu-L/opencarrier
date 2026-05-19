@@ -1691,32 +1691,34 @@ impl UnifiedHttpDriver {
 // Shared helper functions
 // ===========================================================================
 
-/// Extract `<think>...</think>` blocks from content text.
+/// Extract think tags from content text, returning (cleaned_text, thinking_content).
 fn extract_think_tags(text: &str) -> (String, Option<String>) {
     let mut thinking_parts = Vec::new();
-    let mut cleaned = text.to_string();
+    let mut cleaned = String::with_capacity(text.len());
+    let mut remaining = text;
+    let open_tag = "<think>";
+    let close_tag = "</think>";
 
-    while let Some(start) = cleaned.find("<think>") {
-        if let Some(end) = cleaned.find("</think>") {
-            let think_start = start + "<think>".len();
-            if think_start <= end {
-                let think_text = cleaned[think_start..end].trim().to_string();
-                if !think_text.is_empty() {
-                    thinking_parts.push(think_text);
-                }
-                cleaned = format!("{}{}", &cleaned[..start], &cleaned[end + "</think>".len()..]);
-                continue;
+    while let Some(start) = remaining.find(open_tag) {
+        cleaned.push_str(&remaining[..start]);
+        let after_open = start + open_tag.len();
+
+        if let Some(end) = remaining[after_open..].find(close_tag) {
+            let think_text = remaining[after_open..after_open + end].trim();
+            if !think_text.is_empty() {
+                thinking_parts.push(think_text.to_string());
             }
+            remaining = &remaining[after_open + end + close_tag.len()..];
         } else {
-            // Unclosed <think> tag — treat everything after as thinking
-            let thought = cleaned[start + "<think>".len()..].trim().to_string();
+            let thought = remaining[after_open..].trim();
             if !thought.is_empty() {
-                thinking_parts.push(thought);
+                thinking_parts.push(thought.to_string());
             }
-            cleaned = cleaned[..start].to_string();
             break;
         }
     }
+
+    cleaned.push_str(remaining);
 
     let thinking = if thinking_parts.is_empty() {
         None
@@ -1897,6 +1899,10 @@ impl UnifiedHttpDriver {
                     if let Some(calls) = delta["tool_calls"].as_array() {
                         for call in calls {
                             let idx = call["index"].as_u64().unwrap_or(0) as usize;
+                            if idx > 100 {
+                                warn!(idx = idx, "tool_calls index exceeds 100, skipping");
+                                continue;
+                            }
                             while tool_accum.len() <= idx {
                                 tool_accum.push((String::new(), String::new(), String::new()));
                             }

@@ -830,11 +830,32 @@ impl CarrierKernel {
                     "Invalid signed manifest JSON: {e}"
                 )))
             })?;
-        signed.verify().map_err(|e| {
-            KernelError::Carrier(types::error::CarrierError::Config(format!(
-                "Manifest signature verification failed: {e}"
-            )))
-        })?;
+
+        // Verify using trust store if trusted keys are configured
+        let trusted_keys: Vec<ed25519_dalek::VerifyingKey> = self.config.trusted_signing_keys
+            .iter()
+            .filter_map(|hex_str| {
+                let bytes = hex::decode(hex_str).ok()?;
+                let arr: [u8; 32] = bytes.try_into().ok()?;
+                ed25519_dalek::VerifyingKey::from_bytes(&arr).ok()
+            })
+            .collect();
+        if !trusted_keys.is_empty() {
+            signed.verify_with_trust_store(&trusted_keys).map_err(|e| {
+                KernelError::Carrier(types::error::CarrierError::Config(format!(
+                    "Manifest signature verification failed: {e}"
+                )))
+            })?;
+        } else {
+            // Fallback: verify with embedded key + warn
+            warn!("No trusted_signing_keys configured — verifying with embedded key (less secure)");
+            signed.verify().map_err(|e| {
+                KernelError::Carrier(types::error::CarrierError::Config(format!(
+                    "Manifest signature verification failed: {e}"
+                )))
+            })?;
+        }
+
         info!(signer = %signed.signer_id, hash = %signed.content_hash, "Signed manifest verified");
         Ok(signed.manifest)
     }

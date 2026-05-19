@@ -284,7 +284,10 @@ fn resolve_refs(obj: &serde_json::Map<String, serde_json::Value>) -> serde_json:
     result.remove("$defs");
 
     // Recursively replace $ref in the schema
-    fn inline_refs(val: &mut serde_json::Value, defs: &serde_json::Map<String, serde_json::Value>) {
+    fn inline_refs(val: &mut serde_json::Value, defs: &serde_json::Map<String, serde_json::Value>, depth: u32) {
+        if depth > 20 {
+            return;
+        }
         match val {
             serde_json::Value::Object(map) => {
                 // If this object is a $ref, replace it with the definition
@@ -296,19 +299,19 @@ fn resolve_refs(obj: &serde_json::Map<String, serde_json::Value>) -> serde_json:
                         if let Some(def) = defs.get(name) {
                             *val = def.clone();
                             // Recurse into the inlined definition
-                            inline_refs(val, defs);
+                            inline_refs(val, defs, depth + 1);
                             return;
                         }
                     }
                 }
                 // Recurse into all values
                 for v in map.values_mut() {
-                    inline_refs(v, defs);
+                    inline_refs(v, defs, depth + 1);
                 }
             }
             serde_json::Value::Array(arr) => {
                 for item in arr.iter_mut() {
-                    inline_refs(item, defs);
+                    inline_refs(item, defs, depth + 1);
                 }
             }
             _ => {}
@@ -316,7 +319,7 @@ fn resolve_refs(obj: &serde_json::Map<String, serde_json::Value>) -> serde_json:
     }
 
     let mut resolved = serde_json::Value::Object(result);
-    inline_refs(&mut resolved, &defs);
+    inline_refs(&mut resolved, &defs, 0);
     resolved
 }
 

@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 18;
+const SCHEMA_VERSION: u32 = 19;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -81,6 +81,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 18 {
         migrate_v18(conn)?;
+    }
+
+    if current_version < 19 {
+        migrate_v19(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -857,6 +861,22 @@ fn migrate_v18(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![18, "Session: add active_skill_name for skill write-back tracking"],
+    )?;
+    Ok(())
+}
+
+/// Version 19: Add session_id and identity columns to agents table (moved from save_agent hot-path).
+fn migrate_v19(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "agents", "session_id") {
+        conn.execute_batch("ALTER TABLE agents ADD COLUMN session_id TEXT DEFAULT ''")?;
+    }
+    if !column_exists(conn, "agents", "identity") {
+        conn.execute_batch("ALTER TABLE agents ADD COLUMN identity TEXT DEFAULT '{}'")?;
+    }
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![19, "Agents: add session_id and identity columns (from hot-path to migration)"],
     )?;
     Ok(())
 }

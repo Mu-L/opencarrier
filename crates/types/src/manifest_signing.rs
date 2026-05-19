@@ -111,6 +111,11 @@ impl SignedManifest {
 
     /// Verifies the integrity and authenticity of this signed manifest.
     ///
+    /// **Warning**: This method trusts the embedded `signer_public_key` without
+    /// checking it against a known key store. A malicious actor can generate
+    /// a valid signature with their own key pair. Use `verify_with_trust_store`
+    /// with a set of known trusted keys for production verification.
+    ///
     /// Checks:
     /// 1. The `content_hash` matches a fresh SHA-256 of `manifest`.
     /// 2. The `signature` is valid for `content_hash` under `signer_public_key`.

@@ -256,17 +256,6 @@ impl SystemKV {
             .map_err(|e| CarrierError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
 
-        // Add session_id column if it doesn't exist yet (migration compat)
-        let _ = conn.execute(
-            "ALTER TABLE agents ADD COLUMN session_id TEXT DEFAULT ''",
-            [],
-        );
-        // Add identity column (migration compat)
-        let _ = conn.execute(
-            "ALTER TABLE agents ADD COLUMN identity TEXT DEFAULT '{}'",
-            [],
-        );
-
         let identity_json = serde_json::to_string(&entry.identity)
             .map_err(|e| CarrierError::Serialization(e.to_string()))?;
 

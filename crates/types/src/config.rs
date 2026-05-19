@@ -728,6 +728,11 @@ pub struct KernelConfig {
     /// Tools exceeding the channel's max_permission are filtered out before the LLM sees them.
     #[serde(default)]
     pub channels: HashMap<String, ChannelConfig>,
+    /// Trusted Ed25519 public keys for manifest signature verification (hex-encoded).
+    /// When empty, `verify()` is used (less secure — trusts embedded key).
+    /// When non-empty, `verify_with_trust_store()` is used instead.
+    #[serde(default)]
+    pub trusted_signing_keys: Vec<String>,
 }
 
 /// Per-channel configuration for tool permission filtering.
@@ -935,6 +940,7 @@ impl Default for KernelConfig {
             whitelist_tools: Vec::new(),
             llm_concurrency: default_llm_concurrency(),
             channels: HashMap::new(),
+            trusted_signing_keys: Vec::new(),
         }
     }
 }
@@ -1063,10 +1069,22 @@ pub fn home_dir() -> PathBuf {
 ///   (group users under a bot). When `None` or equal to `owner_id`, the path is
 ///   `senders/{owner_id}/{agent_name}/` (the owner's own data).
 pub fn sender_data_dir(home_dir: &std::path::Path, owner_id: &str, agent_name: &str, user_id: Option<&str>) -> PathBuf {
-    let base = home_dir.join("senders").join(owner_id).join(agent_name);
+    let safe_owner = sanitize_path_component(owner_id);
+    let safe_agent = sanitize_path_component(agent_name);
+    let base = home_dir.join("senders").join(safe_owner).join(safe_agent);
     match user_id {
-        Some(uid) if uid != owner_id => base.join("users").join(uid),
+        Some(uid) if uid != owner_id => base.join("users").join(sanitize_path_component(uid)),
         _ => base,
+    }
+}
+
+/// Sanitize a path component to prevent directory traversal.
+/// Returns "_" for empty/unsafe values.
+fn sanitize_path_component(s: &str) -> &str {
+    if s.is_empty() || s.contains('/') || s.contains('\\') || s.contains("..") {
+        "_"
+    } else {
+        s
     }
 }
 
@@ -1278,9 +1296,42 @@ impl Default for MemoryConfig {
 impl KernelConfig {
     /// Validate the configuration, returning a list of warnings.
     pub fn validate(&self) -> Vec<String> {
-        // --- Production bounds validation ---
-        // Clamp dangerous zero/extreme values to safe defaults instead of crashing.
-        Vec::new()
+        let mut warnings = Vec::new();
+
+        // API listen address
+        if !self.api_listen.is_empty() && !self.api_listen.contains(':') {
+            warnings.push(format!("api_listen '{}' may be missing a port", self.api_listen));
+        }
+
+        // Auth config: if enabled, password_hash should be non-empty
+        if self.auth.enabled {
+            if self.auth.password_hash.is_empty() {
+                warnings.push("auth.enabled=true but password_hash is empty — dashboard login will not work".to_string());
+            } else if !self.auth.password_hash.starts_with("$argon2") {
+                warnings.push("password_hash is not Argon2id — consider upgrading for better security".to_string());
+            }
+        }
+
+        // Numeric bounds
+        if self.max_cron_jobs == 0 {
+            warnings.push("max_cron_jobs is 0 — cron jobs will be disabled".to_string());
+        }
+        if self.llm_concurrency == 0 {
+            warnings.push("llm_concurrency is 0 — no LLM requests will be allowed".to_string());
+        }
+        if self.max_cron_jobs > 10000 {
+            warnings.push(format!("max_cron_jobs={} is very high — may impact performance", self.max_cron_jobs));
+        }
+
+        // Hub URL
+        if !self.hub.url.is_empty()
+            && !self.hub.url.starts_with("https://")
+            && !self.hub.url.starts_with("http://")
+        {
+            warnings.push(format!("hub.url '{}' is not HTTP(S)", self.hub.url));
+        }
+
+        warnings
     }
 
     /// Clamp configuration values to safe production bounds.

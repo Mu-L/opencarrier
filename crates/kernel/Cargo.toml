@@ -18,6 +18,8 @@ toml = { workspace = true }
 dashmap = { workspace = true }
 crossbeam = { workspace = true }
 tracing = { workspace = true }
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
@@ -29,7 +31,6 @@ dirs = { workspace = true }
 futures = { workspace = true }
 subtle = { workspace = true }
 rand = { workspace = true }
-hex = { workspace = true }
 reqwest = { workspace = true }
 cron = "0.15"
 zeroize = { workspace = true }
