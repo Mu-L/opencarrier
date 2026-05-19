@@ -369,23 +369,23 @@ impl CarrierKernel {
             by_messages || by_tokens || by_quota
         };
 
-        // Auto-match skill — query registry directly for skill-declared toolsets
-        let (tools, auto_matched_skill, skill_max_iterations, skill_toolsets) = if let Some(ref ws) = entry.manifest.workspace {
+        // Auto-match skill — query registry directly for skill-declared tools
+        let (tools, auto_matched_skill, skill_max_iterations, skill_tools) = if let Some(ref ws) = entry.manifest.workspace {
             match crate::prompt_sources::match_skill_for_message(message, ws) {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
                     let skill_body = skill.body.clone();
                     let skill_max_iter = skill.max_iterations;
-                    let skill_toolsets = skill.toolsets.clone();
+                    let skill_tools = skill.tools.clone();
 
                     info!(
                         agent = %entry.name,
                         skill = %skill_name,
-                        toolsets = ?skill_toolsets,
+                        tools = ?skill_tools,
                         "Skill auto-matched (streaming)"
                     );
 
-                    let tools = self.available_tools(agent_id, Some(&skill_toolsets));
+                    let tools = self.available_tools(agent_id, Some(&skill_tools));
 
                     info!(
                         agent = %entry.name,
@@ -396,7 +396,7 @@ impl CarrierKernel {
                         tools,
                         Some(format!("**{}**\n{}", skill_name, skill_body)),
                         skill_max_iter,
-                        Some(skill_toolsets),
+                        Some(skill_tools),
                     )
                 }
                 None => {
@@ -489,7 +489,7 @@ impl CarrierKernel {
 
         // Build the structured system prompt via prompt_builder
         {
-            self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match, skill_toolsets);
+            self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match, skill_tools);
         }
 
         let memory = Arc::clone(&self.memory);
@@ -905,23 +905,23 @@ impl CarrierKernel {
 
         let messages_before = session.messages.len();
 
-        // Auto-match skill — query registry directly for skill-declared toolsets
-        let (tools, auto_matched_skill, skill_max_iterations, skill_toolsets) = if let Some(ref ws) = entry.manifest.workspace {
+        // Auto-match skill — query registry directly for skill-declared tools
+        let (tools, auto_matched_skill, skill_max_iterations, skill_tools) = if let Some(ref ws) = entry.manifest.workspace {
             match crate::prompt_sources::match_skill_for_message(message, ws) {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
                     let skill_body = skill.body.clone();
                     let skill_max_iter = skill.max_iterations;
-                    let skill_toolsets = skill.toolsets.clone();
+                    let skill_tools = skill.tools.clone();
 
                     info!(
                         agent = %entry.name,
                         skill = %skill_name,
-                        toolsets = ?skill_toolsets,
+                        tools = ?skill_tools,
                         "Skill auto-matched"
                     );
 
-                    let tools = self.available_tools(agent_id, Some(&skill_toolsets));
+                    let tools = self.available_tools(agent_id, Some(&skill_tools));
 
                     info!(
                         agent = %entry.name,
@@ -933,7 +933,7 @@ impl CarrierKernel {
                         tools,
                         Some(format!("**{}**\n{}", skill_name, skill_body)),
                         skill_max_iter,
-                        Some(skill_toolsets),
+                        Some(skill_tools),
                     )
                 }
                 None => {
@@ -1021,7 +1021,7 @@ impl CarrierKernel {
         let prompt_auto_match = auto_matched_skill.or_else(|| {
             auto_matched_subagent.map(|name| format!("**Auto-delegation: {}**\nThe user message matches the '{}' subagent. Call delegate_{} to handle this task.", name, name, name))
         });
-        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match, skill_toolsets);
+        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match, skill_tools);
 
         // Model routing is handled by Brain
 

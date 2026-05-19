@@ -92,13 +92,13 @@ pub(crate) fn build_subagent_tool_definitions(subagents: &[SubagentConfig]) -> V
 
 impl CarrierKernel {
     /// Collect tool definitions for an agent request.
-    /// Returns: core tools + tools from skill-declared toolsets + delegate tools.
+    /// Returns: core tools + skill-declared individual tools + delegate tools.
     /// No filtering — all definitions are sent to the LLM. Permission checks
     /// happen at execution time in execute_tool().
     pub(crate) fn available_tools(
         &self,
         agent_id: AgentId,
-        skill_toolsets: Option<&[String]>,
+        skill_tools: Option<&[String]>,
     ) -> Vec<ToolDefinition> {
         let entry = self.registry.get(agent_id);
 
@@ -108,14 +108,27 @@ impl CarrierKernel {
             .filter(|t| CORE_TOOLS.contains(&t.name.as_str()))
             .collect();
 
-        // Add tools from skill-declared toolsets (queried directly from registry)
-        if let Some(toolset_names) = skill_toolsets {
+        // Add individual tools declared by the skill (looked up by name from registry)
+        if let Some(tool_names) = skill_tools {
             if let Ok(registry) = self.plugins.toolset_registry.read() {
-                for ts_name in toolset_names {
-                    if let Some(toolset_tools) = registry.get(ts_name) {
-                        tools.extend(toolset_tools.iter().cloned());
+                let existing_names: std::collections::HashSet<&str> =
+                    tools.iter().map(|t| t.name.as_str()).collect();
+                let mut found_tools: Vec<ToolDefinition> = Vec::new();
+                for tool_name in tool_names {
+                    if existing_names.contains(tool_name.as_str()) {
+                        continue;
+                    }
+                    if found_tools.iter().any(|t| t.name == *tool_name) {
+                        continue;
+                    }
+                    for (_, toolset_tools) in registry.iter() {
+                        if let Some(found) = toolset_tools.iter().find(|t| t.name == *tool_name) {
+                            found_tools.push(found.clone());
+                            break;
+                        }
                     }
                 }
+                tools.extend(found_tools);
             }
         }
 
@@ -182,7 +195,7 @@ impl CarrierKernel {
     /// Build a compact toolset summary for the system prompt.
     fn build_toolset_summary(
         &self,
-        active_toolsets: &[String],
+        active_tools: &[String],
     ) -> String {
         let registry = match self.plugins.toolset_registry.read() {
             Ok(r) => r.clone(),
@@ -207,7 +220,8 @@ impl CarrierKernel {
         });
 
         for (name, tools) in &entries {
-            let is_active = active_toolsets.contains(name);
+            // A toolset is "ACTIVE" if any of its tools are in the active list
+            let is_active = tools.iter().any(|t| active_tools.contains(&t.name));
             let status = if is_active { "ACTIVE" } else { "available" };
 
             let examples: Vec<&str> = tools
@@ -304,7 +318,7 @@ impl CarrierKernel {
         sender_name: Option<String>,
         owner_id: &Option<String>,
         auto_matched_skill: Option<String>,
-        skill_toolsets: Option<Vec<String>>,
+        skill_tools: Option<Vec<String>>,
     ) {
         // Read user_name from the agent's KV namespace (per-sender memory)
         let sid = sender_id.as_deref().unwrap_or("");
@@ -330,7 +344,7 @@ impl CarrierKernel {
             })
             .collect();
 
-        let active = skill_toolsets.unwrap_or_default();
+        let active = skill_tools.unwrap_or_default();
 
         let prompt_ctx = runtime::prompt_builder::PromptContext {
             agent_name: manifest.name.clone(),

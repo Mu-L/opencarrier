@@ -476,11 +476,11 @@ fn parse_yaml_string_list(val: &str) -> Vec<String> {
         .collect()
 }
 
-/// Parse a skill .md file to extract name, max_iterations, toolsets, and body.
+/// Parse a skill .md file to extract name, max_iterations, tools, and body.
 pub fn parse_skill_full(content: &str) -> (String, Option<u32>, Vec<String>, &str) {
     let mut name = String::new();
     let mut max_iterations: Option<u32> = None;
-    let mut toolsets: Vec<String> = Vec::new();
+    let mut tools: Vec<String> = Vec::new();
 
     if let Some(rest) = content.strip_prefix("---") {
         if let Some(end) = rest.find("---") {
@@ -491,12 +491,12 @@ pub fn parse_skill_full(content: &str) -> (String, Option<u32>, Vec<String>, &st
                     name = val.trim().trim_matches('"').trim_matches('\'').to_string();
                 } else if let Some(val) = line.strip_prefix("max_iterations:") {
                     max_iterations = val.trim().parse().ok();
-                } else if let Some(val) = line.strip_prefix("toolsets:") {
-                    toolsets = parse_yaml_string_list(val.trim());
+                } else if let Some(val) = line.strip_prefix("tools:") {
+                    tools = parse_yaml_string_list(val.trim());
                 }
             }
             let body = rest[end + 3..].trim();
-            return (name, max_iterations, toolsets, body);
+            return (name, max_iterations, tools, body);
         }
     }
 
@@ -512,8 +512,8 @@ pub struct SkillMatch {
     pub body: String,
     /// Override max_iterations for the agent loop (from skill frontmatter).
     pub max_iterations: Option<u32>,
-    /// Toolsets this skill declares (e.g. ["web", "filesystem"]).
-    pub toolsets: Vec<String>,
+    /// Individual tool names this skill declares (e.g. ["mcp_wechat_oa_create_draft", "file_write"]).
+    pub tools: Vec<String>,
 }
 
 /// Result of automatic subagent trigger matching against a user message.
@@ -624,7 +624,7 @@ pub fn match_skill_for_message(message: &str, workspace: &Path) -> Option<SkillM
             continue;
         }
 
-        let (name, max_iterations, toolsets, body) = parse_skill_full(trimmed);
+        let (name, max_iterations, tools, body) = parse_skill_full(trimmed);
 
         if best.as_ref().is_none_or(|(c, _)| match_count > *c) {
             best = Some((
@@ -633,7 +633,7 @@ pub fn match_skill_for_message(message: &str, workspace: &Path) -> Option<SkillM
                     name,
                     body: body.to_string(),
                     max_iterations,
-                    toolsets,
+                    tools,
                 },
             ));
         }
