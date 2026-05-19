@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}{{ agent.display_name or agent.name }} — {{ sender_id }} — OpenCarrier{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div style="display:flex;align-items:center;gap:12px">
+    <a href="/agents/{{ agent.id }}" class="btn btn-sm btn-ghost" style="text-decoration:none">&larr; 返回</a>
+    {% if agent.emoji %}
+    <span style="font-size:24px">{{ agent.emoji }}</span>
+    {% endif %}
+    <div>
+      <h2 style="margin:0;font-size:20px">{{ agent.display_name or agent.name }} <span style="color:var(--text-dim);font-weight:400;font-size:16px">&gt; {{ sender_id }}</span></h2>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="chat-messages" style="max-height:calc(100vh - 160px);overflow-y:auto">
+    {% if messages %}
+    {% for msg in messages %}
+    {% if msg.role == "user" %}
+    <div class="msg msg-user">{{ msg.text }}</div>
+    {% elif msg.role == "assistant" %}
+    <div class="msg msg-bot">{{ msg.text }}</div>
+    {% endif %}
+    {% endfor %}
+    {% else %}
+    <p style="color:var(--text-dim);text-align:center;padding:40px 0">暂无对话记录</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

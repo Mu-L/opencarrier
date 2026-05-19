@@ -1,47 +1,56 @@
 {% extends "base.html" %}
 
-{% block title %}分身 — OpenCarrier{% endblock %}
+{% block title %}{{ agent.name }} — OpenCarrier{% endblock %}
 
 {% block content %}
 <div class="page-header">
-  <h2>分身</h2>
-  <p>管理与 AI 分身对话</p>
+  <div style="display:flex;align-items:center;gap:12px">
+    <a href="/" class="btn btn-sm btn-ghost" style="text-decoration:none">&larr; 返回</a>
+    {% if agent.emoji %}
+    <span style="font-size:24px">{{ agent.emoji }}</span>
+    {% endif %}
+    <div>
+      <h2 style="margin:0;font-size:20px">{{ agent.display_name or agent.name }}</h2>
+      {% if agent.ready %}
+      <span class="badge badge-green">运行中</span>
+      {% else %}
+      <span class="badge badge-yellow">{{ agent.state }}</span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="card-grid">
+  <div class="card stat-card">
+    <h3>安装数</h3>
+    <div class="value">{{ install_count }}</div>
+  </div>
+  <div class="card stat-card">
+    <h3>用户数</h3>
+    <div class="value">{{ user_count }}</div>
+  </div>
+  <div class="card stat-card">
+    <h3>模型</h3>
+    <div class="value" style="font-size:15px">{{ agent.model_name }}</div>
+  </div>
 </div>
 
 <div class="card">
-  {% if agents %}
+  <h3 style="font-size:16px;margin-bottom:16px">用户列表</h3>
+  {% if users %}
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>名称</th><th>状态</th><th>模型</th><th>模式</th><th>操作</th></tr>
+        <tr><th>用户</th><th>会话数</th><th>最近活跃</th><th>操作</th></tr>
       </thead>
       <tbody>
-        {% for agent in agents %}
+        {% for u in users %}
         <tr>
+          <td style="font-weight:500">{{ u.sender_id }}</td>
+          <td>{{ u.session_count }}</td>
+          <td style="color:var(--text-dim);font-size:13px">{{ u.last_active_ago }}</td>
           <td>
-            <div style="display:flex;align-items:center;gap:8px">
-              {% if agent.identity.emoji %}
-              <span style="font-size:18px">{{ agent.identity.emoji }}</span>
-              {% endif %}
-              <div>
-                <div style="font-weight:500">{{ agent.name }}</div>
-                {% if agent.display_name %}
-                <div style="font-size:12px;color:var(--text-dim)">{{ agent.display_name }}</div>
-                {% endif %}
-              </div>
-            </div>
-          </td>
-          <td>
-            {% if agent.ready %}
-            <span class="badge badge-green">运行中</span>
-            {% else %}
-            <span class="badge badge-yellow">{{ agent.state }}</span>
-            {% endif %}
-          </td>
-          <td>{{ agent.model_name }}</td>
-          <td><span class="badge">{{ agent.mode }}</span></td>
-          <td>
-            <a href="/agents/{{ agent.id }}/chat" class="btn btn-sm btn-primary">对话</a>
+            <a href="/agents/{{ agent.id }}/users/{{ u.sender_id }}" class="btn btn-sm btn-primary">查看对话</a>
           </td>
         </tr>
         {% endfor %}
@@ -49,7 +58,7 @@
     </table>
   </div>
   {% else %}
-  <p style="color:var(--text-dim)">暂无分身。请通过 CLI 或 API 创建。</p>
+  <p style="color:var(--text-dim)">暂无用户</p>
   {% endif %}
 </div>
 {% endblock %}

@@ -206,6 +206,20 @@ impl MemorySubstrate {
         self.sessions.list_sessions()
     }
 
+    /// List all users (by label) for a given agent, with session stats.
+    pub fn list_agent_users(&self, agent_id: &str) -> CarrierResult<Vec<serde_json::Value>> {
+        self.sessions.list_agent_users(agent_id)
+    }
+
+    /// Load all sessions + messages for a given agent + sender_id.
+    pub fn list_user_sessions(
+        &self,
+        agent_id: &str,
+        sender_id: &str,
+    ) -> CarrierResult<Vec<(String, Vec<types::message::Message>)>> {
+        self.sessions.list_user_sessions(agent_id, sender_id)
+    }
+
     /// Delete a session by ID.
     pub fn delete_session(&self, session_id: SessionId) -> CarrierResult<()> {
         self.sessions.delete_session(session_id)

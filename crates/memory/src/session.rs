@@ -152,6 +152,47 @@ impl SessionStore {
         Ok(sessions)
     }
 
+    /// List all users (by label) for a given agent, with session stats.
+    ///
+    /// Groups sessions by their label (format `user:{sender_id}`), returning
+    /// each user's sender_id, session count, and last active timestamp.
+    pub fn list_agent_users(&self, agent_id: &str) -> CarrierResult<Vec<serde_json::Value>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
+
+        let sql = "SELECT label, COUNT(*) as session_count, MAX(created_at) as last_active \
+                   FROM sessions \
+                   WHERE agent_id = ?1 AND label LIKE 'user:%' \
+                   GROUP BY label \
+                   ORDER BY last_active DESC";
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+
+        let rows: Vec<serde_json::Value> = stmt
+            .query_map(rusqlite::params![agent_id], |row| {
+                let label: String = row.get(0)?;
+                let session_count: i64 = row.get(1)?;
+                let last_active: String = row.get(2)?;
+                Ok((label, session_count, last_active))
+            })
+            .map_err(|e| CarrierError::Memory(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .map(|(label, session_count, last_active)| {
+                let sender_id = label.strip_prefix("user:").unwrap_or(&label).to_string();
+                serde_json::json!({
+                    "sender_id": sender_id,
+                    "session_count": session_count,
+                    "last_active": last_active,
+                })
+            })
+            .collect();
+
+        Ok(rows)
+    }
+
     /// Helper to map a session row to JSON.
     fn session_row_to_json(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
         let session_id: String = row.get(0)?;
@@ -284,6 +325,43 @@ impl SessionStore {
             sessions.push(row.map_err(|e| CarrierError::Memory(e.to_string()))?);
         }
         Ok(sessions)
+    }
+
+    /// Load all sessions + messages for a given agent + sender_id (label = "user:{sender_id}").
+    pub fn list_user_sessions(
+        &self,
+        agent_id: &str,
+        sender_id: &str,
+    ) -> CarrierResult<Vec<(String, Vec<Message>)>> {
+        let label = format!("user:{}", sender_id);
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, messages FROM sessions \
+                 WHERE agent_id = ?1 AND label = ?2 \
+                 ORDER BY created_at ASC",
+            )
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![agent_id, label], |row| {
+                let session_id: String = row.get(0)?;
+                let messages_blob: Vec<u8> = row.get(1)?;
+                Ok((session_id, messages_blob))
+            })
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            let (session_id, messages_blob) = row.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            let messages: Vec<Message> = rmp_serde::from_slice(&messages_blob)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?;
+            result.push((session_id, messages));
+        }
+        Ok(result)
     }
 
     /// Create a new session with an optional label.

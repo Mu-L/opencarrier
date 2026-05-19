@@ -118,8 +118,12 @@ pub async fn build_router(
         .route("/logout", axum::routing::get(crate::pages::logout_page))
         .route("/agents", axum::routing::get(crate::pages::agents_page))
         .route(
-            "/agents/{id}/chat",
-            axum::routing::get(crate::pages::chat_page),
+            "/agents/{id}",
+            axum::routing::get(crate::pages::agent_detail_page),
+        )
+        .route(
+            "/agents/{id}/users/{sender_id}",
+            axum::routing::get(crate::pages::user_chat_page),
         )
         .route("/tasks", axum::routing::get(crate::pages::tasks_page))
         .route("/brain", axum::routing::get(crate::pages::brain_page))

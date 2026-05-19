@@ -5,40 +5,43 @@
 {% block content %}
 <div class="page-header">
   <h2>概览</h2>
-  <p>OpenCarrier 运行状态</p>
+  <p>分身运行状态</p>
 </div>
 
 <div class="card-grid">
   <div class="card stat-card">
-    <h3>分身数量</h3>
-    <div class="value">{{ agent_count }}</div>
+    <h3>运行分身</h3>
+    <div class="value">{{ running_count }}</div>
   </div>
   <div class="card stat-card">
-    <h3>运行时长</h3>
-    <div class="value">{{ uptime }}</div>
+    <h3>安装数</h3>
+    <div class="value">{{ total_installs }}</div>
   </div>
   <div class="card stat-card">
-    <h3>版本</h3>
-    <div class="value" style="font-size:18px">{{ version }}</div>
-  </div>
-  <div class="card stat-card">
-    <h3>默认模型</h3>
-    <div class="value" style="font-size:18px">{{ default_model }}</div>
+    <h3>用户数</h3>
+    <div class="value">{{ total_users }}</div>
   </div>
 </div>
 
 <div class="card">
-  <h3 style="font-size:16px;margin-bottom:16px">最近活跃的分身</h3>
+  <h3 style="font-size:16px;margin-bottom:16px">分身列表</h3>
   {% if agents %}
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>名称</th><th>状态</th><th>模型</th><th>创建时间</th></tr>
+        <tr><th>名称</th><th>状态</th><th>安装</th><th>用户</th><th>模型</th></tr>
       </thead>
       <tbody>
         {% for agent in agents %}
         <tr>
-          <td><a href="/agents/{{ agent.id }}/chat">{{ agent.name }}</a></td>
+          <td>
+            <div style="display:flex;align-items:center;gap:8px">
+              {% if agent.emoji %}
+              <span style="font-size:18px">{{ agent.emoji }}</span>
+              {% endif %}
+              <a href="/agents/{{ agent.id }}">{{ agent.name }}</a>
+            </div>
+          </td>
           <td>
             {% if agent.ready %}
             <span class="badge badge-green">运行中</span>
@@ -46,8 +49,9 @@
             <span class="badge badge-yellow">{{ agent.state }}</span>
             {% endif %}
           </td>
-          <td>{{ agent.model_name }}</td>
-          <td style="color:var(--text-dim);font-size:13px">{{ agent.created_at }}</td>
+          <td>{{ agent.installs }}</td>
+          <td>{{ agent.users }}</td>
+          <td style="color:var(--text-dim);font-size:13px">{{ agent.model_name }}</td>
         </tr>
         {% endfor %}
       </tbody>
