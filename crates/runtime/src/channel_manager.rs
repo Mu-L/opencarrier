@@ -243,6 +243,14 @@ impl ChannelManager {
         }
     }
 
+    /// Count how many senders have each agent bound (default + clones).
+    pub fn count_agents_per_sender(&self) -> std::collections::HashMap<String, usize> {
+        match &self.sender_router {
+            Some(router) => router.count_agents_per_sender(),
+            None => std::collections::HashMap::new(),
+        }
+    }
+
     /// Start a new sender that was added after initial startup.
     ///
     /// Called by the API after writing a new `senders/{sender_id}/session.json`.

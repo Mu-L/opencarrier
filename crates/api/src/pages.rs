@@ -107,15 +107,14 @@ pub async fn overview_page(
         .filter(|e| matches!(e.state, types::agent::AgentState::Running))
         .count();
 
-    // Compute install counts per agent from sender routes
-    let mut install_counts: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
-    if let Some(ref pm_arc) = state.channel_manager {
-        let pm = pm_arc.lock().await;
-        for (_sender_id, agent_id) in pm.list_sender_routes() {
-            *install_counts.entry(agent_id).or_insert(0) += 1;
-        }
-    }
+    // Compute install counts per agent (default + clones across all senders)
+    let install_counts: std::collections::HashMap<String, usize> =
+        if let Some(ref pm_arc) = state.channel_manager {
+            let pm = pm_arc.lock().await;
+            pm.count_agents_per_sender()
+        } else {
+            std::collections::HashMap::new()
+        };
     let total_installs: usize = install_counts.values().sum();
 
     // Compute user counts per agent from sessions (label = user:sender_id)
@@ -255,16 +254,16 @@ async fn render_clone_detail(
     let ready = matches!(entry.state, types::agent::AgentState::Running);
     let (_, model) = state.kernel.resolve_model_label(&entry.manifest.model.modality);
 
-    // Install count from sender routes
-    let mut install_count: usize = 0;
-    if let Some(ref pm_arc) = state.channel_manager {
+    // Install count (default + clones across all senders)
+    let install_count: usize = if let Some(ref pm_arc) = state.channel_manager {
         let pm = pm_arc.lock().await;
-        for (_sender_id, aid) in pm.list_sender_routes() {
-            if aid == agent_id_str {
-                install_count += 1;
-            }
-        }
-    }
+        pm.count_agents_per_sender()
+            .get(&agent_id_str)
+            .copied()
+            .unwrap_or(0)
+    } else {
+        0
+    };
 
     // User list from sessions
     let users_raw = state

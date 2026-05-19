@@ -357,6 +357,27 @@ impl SenderRouter {
             .collect()
     }
 
+    /// Count how many senders have each agent bound (default + clones).
+    /// Returns agent_id → sender_count.
+    pub fn count_agents_per_sender(&self) -> HashMap<String, usize> {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for entry in self.routes.iter() {
+            let sender_id = entry.key();
+            let default_agent = entry.value();
+            // Count default
+            *counts.entry(default_agent.clone()).or_insert(0) += 1;
+            // Count clones (skip default since already counted)
+            if let Some(clones_map) = self.clones.get(sender_id) {
+                for agent_id in clones_map.keys() {
+                    if agent_id != default_agent {
+                        *counts.entry(agent_id.clone()).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        counts
+    }
+
     // -----------------------------------------------------------------------
     // Alias (name) support — backed by clones map
     // -----------------------------------------------------------------------
