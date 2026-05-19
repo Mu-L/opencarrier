@@ -778,6 +778,8 @@ struct OaiRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -848,7 +850,7 @@ struct OaiChoice { message: OaiResponseMessage, finish_reason: Option<String> }
 struct OaiResponseMessage {
     content: Option<String>,
     tool_calls: Option<Vec<OaiToolCall>>,
-    reasoning_content: Option<String>,
+    reasoning_content: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -874,6 +876,15 @@ fn temperature_must_be_one(model: &str) -> bool {
 fn needs_reasoning_content(model: &str, base_url: &str) -> bool {
     let m = model.to_lowercase();
     base_url.contains("moonshot") || m.contains("kimi") || m.contains("reasoner") || m.contains("deepseek")
+}
+
+fn extract_reasoning_text(val: &serde_json::Value) -> String {
+    match val {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(arr) => arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(""),
+        serde_json::Value::Object(obj) => obj.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        _ => String::new(),
+    }
 }
 
 fn mime_to_audio_format(mime: &str) -> &str {
@@ -1069,6 +1080,12 @@ impl UnifiedHttpDriver {
 
         let tool_choice = if tools.is_empty() { None } else { Some(serde_json::json!("auto")) };
 
+        let reasoning_effort = if model.to_lowercase().contains("deepseek") {
+            Some("none".to_string())
+        } else {
+            None
+        };
+
         OaiRequest {
             model: model.clone(),
             messages,
@@ -1079,6 +1096,7 @@ impl UnifiedHttpDriver {
             tool_choice,
             stream: false,
             stream_options: None,
+            reasoning_effort,
         }
     }
 
@@ -1096,9 +1114,10 @@ impl UnifiedHttpDriver {
         let mut tool_calls = Vec::new();
 
         if let Some(ref reasoning) = choice.message.reasoning_content {
-            if !reasoning.is_empty() {
-                debug!(len = reasoning.len(), "Captured reasoning_content from response");
-                content.push(ContentBlock::Thinking { thinking: reasoning.clone() });
+            let text = extract_reasoning_text(reasoning);
+            if !text.is_empty() {
+                debug!(len = text.len(), "Captured reasoning_content from response");
+                content.push(ContentBlock::Thinking { thinking: text });
             }
         }
 
