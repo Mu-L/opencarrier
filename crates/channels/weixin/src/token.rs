@@ -257,8 +257,14 @@ impl WeixinState {
         let path = dir.join("session.json");
         match serde_json::to_string_pretty(&tf) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
+                if let Err(e) = std::fs::write(&path, &json) {
                     warn!(path = %path.display(), "Failed to write session file: {e}");
+                } else {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+                    }
                 }
             }
             Err(e) => {

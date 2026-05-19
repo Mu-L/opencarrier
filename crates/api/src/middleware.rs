@@ -18,6 +18,7 @@ pub const REQUEST_ID_HEADER: &str = "x-request-id";
 pub async fn request_logging(request: Request<Body>, next: Next) -> Response<Body> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let method = request.method().clone();
+    // Deliberately use .path() not full URI to avoid logging ?token= query params
     let uri = request.uri().path().to_string();
     let start = Instant::now();
 

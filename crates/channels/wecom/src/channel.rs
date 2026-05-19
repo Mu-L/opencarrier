@@ -248,11 +248,11 @@ async fn webhook_get(
 
 async fn webhook_post(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<WebhookState>>,
-    Query(_params): Query<CallbackParams>,
+    Query(params): Query<CallbackParams>,
     body: String,
 ) -> &'static str {
     let fields = if let Some(ref aes_key) = state.encoding_aes_key {
-        // Encrypted payload — need signature verification
+        // Encrypted payload — extract encrypted content for signature verification
         let xml_fields = match crypto::parse_wecom_xml_fields(&body) {
             Ok(f) => f,
             Err(e) => {
@@ -268,6 +268,20 @@ async fn webhook_post(
                 return "success";
             }
         };
+
+        // Verify signature if callback_token is configured
+        if let Some(ref token) = state.callback_token {
+            if let (Some(ts), Some(nonce), Some(sig)) = (
+                params.timestamp.as_deref(),
+                params.nonce.as_deref(),
+                params.msg_signature.as_deref(),
+            ) {
+                if !crypto::is_valid_wecom_signature(token, ts, nonce, &encrypted, sig) {
+                    warn!("WeCom POST webhook: invalid signature");
+                    return "success";
+                }
+            }
+        }
 
         // Decrypt
         match crypto::decode_wecom_payload(aes_key, &encrypted) {

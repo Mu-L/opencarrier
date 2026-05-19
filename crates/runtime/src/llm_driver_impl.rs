@@ -1673,11 +1673,11 @@ impl UnifiedHttpDriver {
         };
 
         let url = format!(
-            "{}/v1beta/models/{}:generateContent?key={}",
-            self.base_url, request.model, self.api_key.as_str()
+            "{}/v1beta/models/{}:generateContent",
+            self.base_url, request.model
         );
 
-        let resp = self.send_request(&url, &gemini_request, &[]).await?;
+        let resp = self.send_request(&url, &gemini_request, &[("x-goog-api-key", self.api_key.as_str())]).await?;
         let body = resp.text().await.map_err(|e| LlmError::Http(e.to_string()))?;
 
         let gemini_response: GeminiResponse = serde_json::from_str(&body)
@@ -2208,11 +2208,11 @@ impl UnifiedHttpDriver {
         };
 
         let url = format!(
-            "{}/v1beta/models/{}:streamGenerateContent?alt=sse&key={}",
-            self.base_url, request.model, self.api_key.as_str()
+            "{}/v1beta/models/{}:streamGenerateContent?alt=sse",
+            self.base_url, request.model
         );
 
-        let resp = self.send_request(&url, &gemini_request, &[]).await?;
+        let resp = self.send_request(&url, &gemini_request, &[("x-goog-api-key", self.api_key.as_str())]).await?;
 
         let mut buffer = String::new();
         let mut text_content = String::new();

@@ -1083,6 +1083,7 @@ pub async fn clone_agent(
 // ---------------------------------------------------------------------------
 
 /// Read access.toml from a clone workspace.
+/// Auto-migrates plaintext passwords to Argon2id hashes.
 fn read_access_config(workspace: &std::path::Path) -> (String, Option<String>) {
     let access_path = workspace.join("access.toml");
     let content = match std::fs::read_to_string(&access_path) {
@@ -1091,6 +1092,7 @@ fn read_access_config(workspace: &std::path::Path) -> (String, Option<String>) {
     };
     let mut access = "public".to_string();
     let mut password = None;
+    let mut needs_rewrite = false;
     for line in content.lines() {
         let line = line.trim();
         if let Some(val) = line.strip_prefix("access=") {
@@ -1098,7 +1100,22 @@ fn read_access_config(workspace: &std::path::Path) -> (String, Option<String>) {
         } else if let Some(val) = line.strip_prefix("password=") {
             let pw = val.trim().trim_matches('"').trim_matches('\'').to_string();
             if !pw.is_empty() {
-                password = Some(pw);
+                if pw.starts_with("$argon2") {
+                    password = Some(pw);
+                } else {
+                    let hashed = crate::session_auth::hash_password(&pw);
+                    password = Some(hashed.clone());
+                    needs_rewrite = true;
+                    tracing::info!("Auto-migrated clone password to Argon2id hash");
+                }
+            }
+        }
+    }
+    if needs_rewrite {
+        if let Some(ref hashed) = password {
+            let new_content = format!("access=\"{access}\"\npassword=\"{hashed}\"\n");
+            if let Err(e) = std::fs::write(&access_path, new_content) {
+                tracing::warn!(path = %access_path.display(), error = %e, "Failed to rewrite access.toml with hashed password");
             }
         }
     }
@@ -1157,12 +1174,18 @@ pub async fn verify_clone_access(
         return (StatusCode::OK, Json(serde_json::json!({"ok": true})));
     }
 
-    let provided = body["password"].as_str().unwrap_or("");
-    let expected = stored_password.unwrap_or_default();
+    let expected = match stored_password {
+        Some(p) => p,
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"ok": false, "error": "Access denied"})),
+            );
+        }
+    };
 
-    let match_result = provided.len() == expected.len()
-        && subtle::ConstantTimeEq::ct_eq(provided.as_bytes(), expected.as_bytes()).into();
-    if match_result {
+    let provided = body["password"].as_str().unwrap_or("");
+    if crate::session_auth::verify_password(provided, &expected) {
         (StatusCode::OK, Json(serde_json::json!({"ok": true})))
     } else {
         (
