@@ -296,6 +296,8 @@ pub async fn upload_file(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    cleanup_expired_uploads();
+
     // Validate agent ID format
     let agent_id = match parse_agent_id(&id) {
         Ok(id) => id,
@@ -507,6 +509,8 @@ pub async fn upload_file(
 }
 /// GET /api/uploads/{file_id} — Serve an uploaded file.
 pub async fn serve_upload(Path(file_id): Path<String>) -> impl IntoResponse {
+    cleanup_expired_uploads();
+
     // Validate file_id is a UUID to prevent path traversal
     if uuid::Uuid::parse_str(&file_id).is_err() {
         return (

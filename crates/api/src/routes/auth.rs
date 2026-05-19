@@ -112,6 +112,15 @@ pub async fn auth_login(
     }
 
     // Rate limiting check
+    // Clean up expired entries on each read to prevent unbounded growth
+    {
+        let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| {
+            tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering");
+            e.into_inner()
+        });
+        failures.retain(|_, (_, first_fail)| first_fail.elapsed().as_secs() < LOGIN_BAN_SECS);
+    }
+
     let client_ip = parts
         .headers
         .get("x-real-ip")
@@ -125,7 +134,7 @@ pub async fn auth_login(
         .to_string();
 
     {
-        let mut failures = LOGIN_FAILURES.lock().unwrap();
+        let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| { tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering"); e.into_inner() });
         if let Some((count, first_fail)) = failures.get(&client_ip) {
             if *count >= MAX_LOGIN_FAILURES && first_fail.elapsed().as_secs() < LOGIN_BAN_SECS {
                 return (
@@ -143,7 +152,7 @@ pub async fn auth_login(
     if username != auth_config.username {
         // On credential failure, record the attempt
         {
-            let mut failures = LOGIN_FAILURES.lock().unwrap();
+            let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| { tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering"); e.into_inner() });
             let entry = failures.entry(client_ip.clone()).or_insert((0, Instant::now()));
             entry.0 += 1;
             if entry.1.elapsed().as_secs() >= LOGIN_BAN_SECS {
@@ -160,7 +169,7 @@ pub async fn auth_login(
     if !session_auth::verify_password(password, &auth_config.password_hash) {
         // On credential failure, record the attempt
         {
-            let mut failures = LOGIN_FAILURES.lock().unwrap();
+            let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| { tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering"); e.into_inner() });
             let entry = failures.entry(client_ip.clone()).or_insert((0, Instant::now()));
             entry.0 += 1;
             if entry.1.elapsed().as_secs() >= LOGIN_BAN_SECS {
@@ -176,7 +185,7 @@ pub async fn auth_login(
 
     // Clear rate limit on successful login
     {
-        let mut failures = LOGIN_FAILURES.lock().unwrap();
+        let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| { tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering"); e.into_inner() });
         failures.remove(&client_ip);
     }
 

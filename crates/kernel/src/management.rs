@@ -12,7 +12,7 @@ use types::agent::*;
 use types::error::CarrierError;
 use types::event::*;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 impl CarrierKernel {
     // ── Self-handle ───────────────────────────────────────────
@@ -215,23 +215,35 @@ impl CarrierKernel {
 
     /// Return a cloned Arc<Brain> for the API (None if not loaded).
     pub fn brain_info(&self) -> Arc<Brain> {
-        Arc::clone(&*self.brain.brain.read().unwrap())
+        Arc::clone(&*self.brain.brain.read().unwrap_or_else(|e| {
+            warn!("Brain RwLock poisoned, recovering");
+            e.into_inner()
+        }))
     }
 
     /// Acquire a read lock on the Brain (for validation before updates).
     pub fn brain_read(&self) -> std::sync::RwLockReadGuard<'_, Arc<Brain>> {
-        self.brain.brain.read().unwrap()
+        self.brain.brain.read().unwrap_or_else(|e| {
+            warn!("Brain RwLock poisoned, recovering");
+            e.into_inner()
+        })
     }
 
     /// Resolve a human-readable (modality, model_name) pair for display.
     pub fn resolve_model_label(&self, modality: &str) -> (String, String) {
-        let brain = self.brain.brain.read().unwrap();
+        let brain = self.brain.brain.read().unwrap_or_else(|e| {
+            warn!("Brain RwLock poisoned, recovering");
+            e.into_inner()
+        });
         let model = brain.model_for(modality).to_string();
         (modality.to_string(), model)
     }
 
     pub fn resolve_driver(&self, manifest: &AgentManifest) -> KernelResult<Arc<dyn LlmDriver>> {
-        let brain = self.brain.brain.read().unwrap();
+        let brain = self.brain.brain.read().unwrap_or_else(|e| {
+            warn!("Brain RwLock poisoned, recovering");
+            e.into_inner()
+        });
         let modality = if manifest.model.modality.is_empty() {
             "chat"
         } else {
@@ -285,7 +297,10 @@ impl CarrierKernel {
         let config: types::brain::BrainConfig =
             serde_json::from_str(&json_str).map_err(|e| format!("Invalid brain.json: {e}"))?;
         let brain = Brain::new(config).map_err(|e| format!("Brain init failed: {e}"))?;
-        *self.brain.brain.write().unwrap() = Arc::new(brain);
+        *self.brain.brain.write().unwrap_or_else(|e| {
+            warn!("Brain RwLock poisoned, recovering");
+            e.into_inner()
+        }) = Arc::new(brain);
         info!("Brain reloaded from {}", self.brain.brain_path.display());
         Ok(())
     }
@@ -297,7 +312,10 @@ impl CarrierKernel {
     {
         // Read current config
         let mut config = {
-            let guard = self.brain.brain.read().unwrap();
+            let guard = self.brain.brain.read().unwrap_or_else(|e| {
+                warn!("Brain RwLock poisoned, recovering");
+                e.into_inner()
+            });
             guard.config().clone()
         };
 
@@ -313,7 +331,10 @@ impl CarrierKernel {
         // Hot-reload: create new Brain from updated config
         let brain =
             Brain::new(config).map_err(|e| format!("Brain init failed after update: {e}"))?;
-        *self.brain.brain.write().unwrap() = Arc::new(brain);
+        *self.brain.brain.write().unwrap_or_else(|e| {
+            warn!("Brain RwLock poisoned, recovering");
+            e.into_inner()
+        }) = Arc::new(brain);
         info!("Brain config updated and reloaded");
         Ok(())
     }

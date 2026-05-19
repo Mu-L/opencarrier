@@ -98,6 +98,8 @@ impl CarrierKernel {
         // Subagent delegation (channel_type starts with "subagent:") skips the lock because
         // it's already running inside the parent's tool execution (which holds the lock).
         let is_subagent_delegate = channel_type.as_ref().is_some_and(|ct| ct.starts_with("subagent:"));
+        // Clean up stale per-agent locks (no one is waiting on them)
+        self.runtime.agent_msg_locks.retain(|_, v| Arc::strong_count(v) > 1);
         let _lock_arc;
         let _guard = if !is_subagent_delegate {
             let lock_key = (agent_id, owner_id.clone());
@@ -514,7 +516,10 @@ impl CarrierKernel {
         let handle = tokio::spawn(async move {
             // Clone Brain Arc before any .await so the RwLockReadGuard is dropped (not Send).
             let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> =
-                Some(Arc::clone(&*kernel_clone.brain.brain.read().unwrap())
+                Some(Arc::clone(&*kernel_clone.brain.brain.read().unwrap_or_else(|e| {
+                    warn!("Brain RwLock poisoned, recovering");
+                    e.into_inner()
+                }))
                     as Arc<dyn runtime::llm_driver::Brain>);
 
             // Auto-compact if the session is large before running the loop
@@ -593,6 +598,9 @@ impl CarrierKernel {
 
             match result {
                 Ok(mut result) => {
+                    // Clean up running_tasks entry
+                    kernel_clone.runtime.running_tasks.remove(&agent_id);
+
                     // task_plan in streaming path: log warning, plan not auto-executed
                     // (streaming clients expect real-time output; plan execution is for
                     // non-streaming/cron paths)
@@ -678,6 +686,9 @@ impl CarrierKernel {
                     Ok(result)
                 }
                 Err(e) => {
+                    // Clean up running_tasks entry
+                    kernel_clone.runtime.running_tasks.remove(&agent_id);
+
                     kernel_clone.runtime.supervisor.record_panic();
                     warn!(agent_id = %agent_id, error = %e, "Streaming agent loop failed");
                     Err(KernelError::Carrier(e))
@@ -854,7 +865,10 @@ impl CarrierKernel {
     ) -> KernelResult<AgentLoopResult> {
         // Clone Brain Arc early so the RwLockReadGuard is dropped before any .await.
         let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> =
-            Some(Arc::clone(&*self.brain.brain.read().unwrap())
+            Some(Arc::clone(&*self.brain.brain.read().unwrap_or_else(|e| {
+                warn!("Brain RwLock poisoned, recovering");
+                e.into_inner()
+            }))
                 as Arc<dyn runtime::llm_driver::Brain>);
 
         // Load session: use per-user session when sender_id is present (multi-tenancy),

@@ -54,6 +54,7 @@ pub async fn get_agent_session(
                                     // Persist image to upload dir so it can be
                                     // served back when loading session history.
                                     let file_id = uuid::Uuid::new_v4().to_string();
+                                    cleanup_expired_uploads();
                                     let upload_dir = std::env::temp_dir().join("carrier_uploads");
                                     let _ = std::fs::create_dir_all(&upload_dir);
                                     if let Ok(bytes) =
