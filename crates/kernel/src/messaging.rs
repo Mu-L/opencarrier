@@ -425,12 +425,20 @@ impl CarrierKernel {
         let (tools, auto_matched_subagent) = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
             if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, &entry.manifest.subagents) {
                 let delegate_tools = crate::tool_builder::build_subagent_tool_definitions(&entry.manifest.subagents);
+                let existing_names: std::collections::HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
                 let mut tools = tools;
-                tools.extend(delegate_tools);
+                let mut added = 0;
+                for dt in delegate_tools {
+                    if !existing_names.contains(&dt.name) {
+                        tools.push(dt);
+                        added += 1;
+                    }
+                }
                 info!(
                     agent = %entry.name,
                     subagent = %sa_match.name,
                     tool_count = tools.len(),
+                    added = added,
                     "Subagent trigger matched (streaming)"
                 );
                 (tools, Some(sa_match.name.clone()))
@@ -974,12 +982,20 @@ impl CarrierKernel {
         let (tools, auto_matched_subagent) = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
             if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, &entry.manifest.subagents) {
                 let delegate_tools = crate::tool_builder::build_subagent_tool_definitions(&entry.manifest.subagents);
+                let existing_names: std::collections::HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
                 let mut tools = tools;
-                tools.extend(delegate_tools);
+                let mut added = 0;
+                for dt in delegate_tools {
+                    if !existing_names.contains(&dt.name) {
+                        tools.push(dt);
+                        added += 1;
+                    }
+                }
                 info!(
                     agent = %entry.name,
                     subagent = %sa_match.name,
                     tool_count = tools.len(),
+                    added = added,
                     "Subagent trigger matched, delegate tools added"
                 );
                 (tools, Some(sa_match.name.clone()))
