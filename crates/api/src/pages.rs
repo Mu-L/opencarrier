@@ -197,7 +197,7 @@ pub async fn agents_page(
     }
     // Show first agent by default
     let first = &agents_list[0];
-    render_clone_detail(&state, &user, first)
+    render_clone_detail(&state, &user, first).await
 }
 
 /// GET /agents/:id — Clone detail page for a specific agent.
@@ -242,11 +242,11 @@ pub async fn agent_detail_page(
         }
     };
 
-    render_clone_detail(&state, &user, &entry)
+    render_clone_detail(&state, &user, &entry).await
 }
 
 /// Shared helper to render the clone detail page.
-fn render_clone_detail(
+async fn render_clone_detail(
     state: &Arc<AppState>,
     user: &str,
     entry: &types::agent::AgentEntry,
@@ -258,7 +258,7 @@ fn render_clone_detail(
     // Install count from sender routes
     let mut install_count: usize = 0;
     if let Some(ref pm_arc) = state.channel_manager {
-        let pm = pm_arc.blocking_lock();
+        let pm = pm_arc.lock().await;
         for (_sender_id, aid) in pm.list_sender_routes() {
             if aid == agent_id_str {
                 install_count += 1;
