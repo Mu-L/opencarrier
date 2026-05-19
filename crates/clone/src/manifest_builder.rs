@@ -123,8 +123,8 @@ pub fn build_manifest_from_workspace(
         priority: types::agent::Priority::default(),
         capabilities: ManifestCapabilities {
             tools,
-            network: vec!["*".to_string()],
-            memory_read: vec!["*".to_string()],
+            network: vec![],
+            memory_read: vec!["self.*".to_string()],
             memory_write: vec!["self.*".to_string()],
             ..Default::default()
         },

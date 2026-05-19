@@ -65,28 +65,18 @@ pub fn extract_agx(agx_data: &[u8], workspace: &Path) -> Result<Vec<String>> {
             continue;
         }
 
-        // Security: prevent tar slip (path traversal)
-        let dest = workspace.join(&name);
-        let canonical_workspace = workspace.canonicalize().unwrap_or_else(|_| workspace.to_path_buf());
-        if let Some(parent) = dest.parent() {
-            if let Ok(canonical_parent) = parent.canonicalize() {
-                if !canonical_parent.starts_with(&canonical_workspace) {
-                    warn!("Tar slip detected, skipping: {}", name);
-                    continue;
-                }
-            }
+        // Security: prevent tar slip (path traversal) — component check
+        let path = Path::new(&name);
+        if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            warn!("Tar slip detected (.. component), skipping: {}", name);
+            continue;
         }
 
-        // Ensure parent directory exists
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
-        entry.unpack(&dest).with_context(|| {
+        entry.unpack_in(workspace).with_context(|| {
             format!(
                 "Failed to extract {} to {}",
                 name,
-                dest.display()
+                workspace.display()
             )
         })?;
         file_count += 1;

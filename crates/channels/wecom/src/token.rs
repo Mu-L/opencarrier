@@ -9,7 +9,7 @@
 //! discovered at startup via `WecomState::load_from_dir()`.
 
 use dashmap::DashMap;
-use reqwest::Client;
+use reqwest::{Client, redirect::Policy};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -94,7 +94,7 @@ impl BotEntry {
             encoding_aes_key,
             callback_token,
             mode: WecomMode::App { agent_id },
-            http: Client::new(),
+            http: Client::builder().redirect(Policy::none()).build().unwrap_or_else(|_| Client::new()),
             cached_token: Mutex::new(None),
             mcp_bot_id,
             mcp_bot_secret,
@@ -122,7 +122,7 @@ impl BotEntry {
             encoding_aes_key,
             callback_token,
             mode: WecomMode::Kf { open_kfid },
-            http: Client::new(),
+            http: Client::builder().redirect(Policy::none()).build().unwrap_or_else(|_| Client::new()),
             cached_token: Mutex::new(None),
             mcp_bot_id,
             mcp_bot_secret,
@@ -139,7 +139,7 @@ impl BotEntry {
             encoding_aes_key: None,
             callback_token: None,
             mode: WecomMode::SmartBot { bot_id, secret },
-            http: Client::new(),
+            http: Client::builder().redirect(Policy::none()).build().unwrap_or_else(|_| Client::new()),
             cached_token: Mutex::new(None),
             mcp_bot_id: None, // SmartBot uses mode's bot_id directly
             mcp_bot_secret: None,
@@ -465,7 +465,7 @@ impl WecomState {
     fn new() -> Self {
         Self {
             bots: DashMap::new(),
-            http: Client::new(),
+            http: Client::builder().redirect(Policy::none()).build().unwrap_or_else(|_| Client::new()),
         }
     }
 

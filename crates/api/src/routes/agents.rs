@@ -1140,9 +1140,14 @@ pub async fn get_clone_access(
     let workspace = match state.kernel.resolve_agent_workspace(&name) {
         Some(ws) => PathBuf::from(ws),
         None => {
+            // Return same format as private clone to prevent enumeration
             return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Clone '{}' not found", name)})),
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "name": name,
+                    "access": "private",
+                    "requires_password": true,
+                })),
             );
         }
     };
@@ -1170,9 +1175,10 @@ pub async fn verify_clone_access(
     let workspace = match state.kernel.resolve_agent_workspace(&name) {
         Some(ws) => PathBuf::from(ws),
         None => {
+            // Return same error as wrong password to prevent enumeration
             return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Clone '{}' not found", name)})),
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"ok": false, "error": "Access denied"})),
             );
         }
     };
