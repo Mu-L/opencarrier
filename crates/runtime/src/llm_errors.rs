@@ -217,6 +217,8 @@ const TIMEOUT_PATTERNS: &[&str] = &[
     "connection refused",
     "network error",
     "fetch failed",
+    "error decoding",
+    "error sending request",
 ];
 
 // ---------------------------------------------------------------------------

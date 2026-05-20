@@ -85,10 +85,22 @@ impl UnifiedHttpDriver {
                 builder = builder.header(*k, *v);
             }
 
-            let resp = builder
-                .send()
-                .await
-                .map_err(|e| LlmError::Http(e.to_string()))?;
+            let resp = match builder.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    let err_str = e.to_string();
+                    if attempt < max_retries && (err_str.contains("error decoding")
+                        || err_str.contains("error sending")
+                        || err_str.contains("connection"))
+                    {
+                        let retry_ms = (attempt as u64 + 1) * 2000;
+                        warn!(%err_str, attempt, retry_ms, "HTTP transport error, retrying");
+                        tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
+                        continue;
+                    }
+                    return Err(LlmError::Http(err_str));
+                }
+            };
 
             let status = resp.status().as_u16();
             if resp.status().is_success() {
@@ -1244,7 +1256,22 @@ impl UnifiedHttpDriver {
                 .json(&*oai_request);
             builder = self.apply_auth(builder);
 
-            let resp = builder.send().await.map_err(|e| LlmError::Http(e.to_string()))?;
+            let resp = match builder.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    let err_str = e.to_string();
+                    if attempt < max_retries && (err_str.contains("error decoding")
+                        || err_str.contains("error sending")
+                        || err_str.contains("connection"))
+                    {
+                        let retry_ms = (attempt as u64 + 1) * 2000;
+                        warn!(%err_str, attempt, retry_ms, "HTTP transport error, retrying");
+                        tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
+                        continue;
+                    }
+                    return Err(LlmError::Http(err_str));
+                }
+            };
             let status = resp.status().as_u16();
 
             if resp.status().is_success() {
