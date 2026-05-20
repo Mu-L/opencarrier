@@ -42,7 +42,7 @@ impl UnifiedHttpDriver {
         let timeout = match format {
             ApiFormat::DashScopeTts => 60,
             ApiFormat::MiniMaxSearch | ApiFormat::GlmSearch | ApiFormat::ZhipuSearch => 15,
-            _ => 120,
+            _ => 300,
         };
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
