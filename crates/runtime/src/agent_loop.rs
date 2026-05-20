@@ -48,7 +48,7 @@ const TOOL_TIMEOUT_SECS: u64 = 120;
 /// is returned so the caller can notify the user.
 /// Raised from 300s to 600s — compaction + multiple LLM calls + tool
 /// execution easily exceed 300s with 30+ iterations.
-const AGENT_LOOP_TIMEOUT_SECS: u64 = 600;
+const AGENT_LOOP_TIMEOUT_SECS: u64 = 1200;
 
 /// Maximum consecutive MaxTokens continuations before returning partial response.
 /// Raised from 3 to 5 to allow longer-form generation.
