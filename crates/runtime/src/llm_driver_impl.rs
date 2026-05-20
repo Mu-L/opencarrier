@@ -1133,6 +1133,9 @@ impl UnifiedHttpDriver {
 
         let tools: Vec<OaiTool> = request.tools.iter().map(|t| {
             let schema = types::tool::normalize_schema_for_provider(&t.input_schema, "openai");
+            if !schema.is_object() {
+                warn!(tool = %t.name, "Tool schema is not an object after normalization, type={}", schema);
+            }
             OaiTool {
                 tool_type: "function".to_string(),
                 function: OaiToolDef {
@@ -1281,6 +1284,15 @@ impl UnifiedHttpDriver {
             }
 
             let body = resp.text().await.unwrap_or_default();
+
+            // Log 400 errors with tool details for debugging provider schema issues
+            if status == 400 && body.contains("arguments") && attempt == 0 {
+                let problem_tools: Vec<&str> = oai_request.tools.iter()
+                    .filter(|t| !t.function.parameters.is_object())
+                    .map(|t| t.function.name.as_str())
+                    .collect();
+                warn!(status, ?problem_tools, "Provider rejected tool arguments schema");
+            }
 
             // 429 rate limit
             if status == 429 {
