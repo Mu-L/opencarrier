@@ -1112,7 +1112,21 @@ impl UnifiedHttpDriver {
     }
 
     fn build_oai_request(&self, request: &CompletionRequest) -> OaiRequest {
-        let messages = self.build_oai_messages(request);
+        let mut messages = self.build_oai_messages(request);
+
+        // Sanitize tool_call arguments: strict providers (e.g. Qwen) reject
+        // non-JSON arguments like "null", empty strings, or malformed JSON.
+        for msg in &mut messages {
+            if let Some(calls) = &mut msg.tool_calls {
+                for tc in calls.iter_mut() {
+                    let args = tc.function.arguments.trim();
+                    if args.is_empty() || args == "null" || serde_json::from_str::<serde_json::Value>(args).is_err() {
+                        warn!(tool = %tc.function.name, raw_args = %tc.function.arguments, "Sanitizing invalid tool_call arguments to empty JSON object");
+                        tc.function.arguments = "{}".to_string();
+                    }
+                }
+            }
+        }
         let model = &request.model;
 
         let (max_tokens, max_completion_tokens) = if uses_completion_tokens(model) {
