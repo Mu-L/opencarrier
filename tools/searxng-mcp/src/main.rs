@@ -149,7 +149,7 @@ struct SearchParams {
     #[schemars(description = "Search categories (e.g. ['general', 'news'])")]
     #[serde(default)]
     categories: Option<Vec<String>>,
-    #[schemars(description = "Specific search engines to use (default: bing,duckduckgo)")]
+    #[schemars(description = "Specific search engines to use (default: bing)")]
     #[serde(default = "default_engines")]
     engines: Option<Vec<String>>,
     #[schemars(description = "Safe search level: 0 (off), 1 (moderate), 2 (strict)", default = "default_safesearch")]
@@ -167,7 +167,7 @@ fn default_language() -> String { "zh".to_string() }
 fn default_safesearch() -> u8 { 1 }
 fn default_pageno() -> usize { 1 }
 fn default_max_results() -> usize { 10 }
-fn default_engines() -> Option<Vec<String>> { Some(vec!["bing".into(), "duckduckgo".into()]) }
+fn default_engines() -> Option<Vec<String>> { Some(vec!["bing".into()]) }
 
 // ---------------------------------------------------------------------------
 // MCP server
