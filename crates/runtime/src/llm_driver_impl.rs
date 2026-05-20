@@ -1131,11 +1131,7 @@ impl UnifiedHttpDriver {
 
         let tool_choice = if tools.is_empty() { None } else { Some(serde_json::json!("auto")) };
 
-        let reasoning_effort = if model.to_lowercase().contains("deepseek") {
-            Some("none".to_string())
-        } else {
-            None
-        };
+        let reasoning_effort = None;
 
         OaiRequest {
             model: model.clone(),
