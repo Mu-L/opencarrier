@@ -1291,7 +1291,17 @@ impl UnifiedHttpDriver {
                     .filter(|t| !t.function.parameters.is_object())
                     .map(|t| t.function.name.as_str())
                     .collect();
-                warn!(status, ?problem_tools, "Provider rejected tool arguments schema");
+                // Also check message history for bad tool_call arguments
+                let bad_msg_args: Vec<String> = oai_request.messages.iter()
+                    .filter_map(|m| m.tool_calls.as_ref())
+                    .flat_map(|calls| calls.iter())
+                    .filter(|c| {
+                        let s = c.function.arguments.trim();
+                        s.is_empty() || s == "null" || serde_json::from_str::<serde_json::Value>(s).is_err()
+                    })
+                    .map(|c| format!("{}: {}...", c.function.name, &c.function.arguments[..c.function.arguments.len().min(80)]))
+                    .collect();
+                warn!(status, ?problem_tools, ?bad_msg_args, "Provider rejected tool arguments schema");
             }
 
             // 429 rate limit
