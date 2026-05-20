@@ -62,7 +62,6 @@ pub fn build_manifest_from_workspace(
     // Default tools for chat clones
     if tools.len() == evolution_tools.len() {
         tools.push("web_fetch".into());
-        tools.push("web_search".into());
     }
 
     tools.sort();

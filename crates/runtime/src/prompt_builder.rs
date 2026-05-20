@@ -377,7 +377,7 @@ const TOOL_CALL_BEHAVIOR: &str = "\
 - Prefer action over narration. If you can answer by using a tool, do it.
 - When executing multiple sequential tool calls, batch them — don't output reasoning between each call.
 - If a tool returns useful results, present the KEY information, not the raw output.
-- When web_fetch or web_search returns content, you MUST include the relevant data in your response. \
+- When web_fetch returns content, you MUST include the relevant data in your response. \
 Quote specific facts, numbers, or passages from the fetched content. Never say you fetched something \
 without sharing what you found.
 - Start with the answer, not meta-commentary about how you'll help.
@@ -703,7 +703,7 @@ pub fn tool_category(name: &str) -> &'static str {
         "file_read" | "file_write" | "file_list" | "file_delete" | "file_move" | "file_copy"
         | "file_search" => "Files",
 
-        "web_search" | "web_fetch" => "Web",
+        "web_fetch" => "Web",
 
         "browser_navigate" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_read_page" | "browser_close" | "browser_scroll" | "browser_wait"
@@ -740,7 +740,6 @@ pub fn tool_hint(name: &str) -> &'static str {
         "file_search" => "search files by name pattern",
 
         // Web
-        "web_search" => "search the web for information",
         "web_fetch" => "fetch a URL and get its content as markdown",
 
         // Browser
@@ -861,7 +860,7 @@ mod tests {
             agent_description: "Research agent".to_string(),
             base_system_prompt: "You are Researcher, a research agent.".to_string(),
             granted_tools: vec![
-                "web_search".to_string(),
+                "web_fetch".to_string(),
                 "web_fetch".to_string(),
                 "file_read".to_string(),
                 "file_write".to_string(),
@@ -926,7 +925,7 @@ mod tests {
     #[test]
     fn test_tool_grouping() {
         let tools = vec![
-            "web_search".to_string(),
+            "web_fetch".to_string(),
             "web_fetch".to_string(),
             "file_read".to_string(),
             "browser_navigate".to_string(),
@@ -940,7 +939,7 @@ mod tests {
     #[test]
     fn test_tool_categories() {
         assert_eq!(tool_category("file_read"), "Files");
-        assert_eq!(tool_category("web_search"), "Web");
+        assert_eq!(tool_category("web_fetch"), "Web");
         assert_eq!(tool_category("browser_navigate"), "Browser");
         assert_eq!(tool_category("shell_exec"), "Shell");
         assert_eq!(tool_category("agent_send"), "Agents");
@@ -950,7 +949,7 @@ mod tests {
 
     #[test]
     fn test_tool_hints() {
-        assert!(!tool_hint("web_search").is_empty());
+        assert!(!tool_hint("web_fetch").is_empty());
         assert!(!tool_hint("file_read").is_empty());
         assert!(!tool_hint("browser_navigate").is_empty());
         assert!(tool_hint("some_unknown_tool").is_empty());
@@ -1208,7 +1207,7 @@ mod tests {
             base_system_prompt: "You are a researcher.".to_string(),
             clone_system_prompt_md: Some("This should be ignored".to_string()),
             clone_skills_catalog: Some("This too".to_string()),
-            granted_tools: vec!["web_search".to_string()],
+            granted_tools: vec!["web_fetch".to_string()],
             ..Default::default()
         };
         let prompt = build_system_prompt(&ctx);

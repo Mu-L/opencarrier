@@ -241,7 +241,7 @@ pub async fn set_brain_endpoint(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": format!(
-                    "Invalid format '{}'. Supported: openai, anthropic, gemini, dashscope_tts, dashscope_image, dashscope_video, kling, openai_images, minimax_image, minimax_search, glm_search, zhipu_search",
+                    "Invalid format '{}'. Supported: openai, anthropic, gemini, dashscope_tts, dashscope_image, dashscope_video, kling, openai_images, minimax_image",
                     format_str
                 )})),
             )

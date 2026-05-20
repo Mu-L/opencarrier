@@ -65,7 +65,7 @@ pub async fn execute_tool(
         kernel: _,
         caller_agent_id: _,
         mcp_connections,
-        web_ctx,
+        fetch_engine,
         allowed_env_vars: _,
         workspace_root: _,
         brain: _,
@@ -156,26 +156,18 @@ pub async fn execute_tool(
                     is_error: true,
                 };
             }
-            match web_ctx {
-                Some(ctx) => {
+            match fetch_engine {
+                Some(engine) => {
                     let method = input["method"].as_str().unwrap_or("GET");
                     let headers = input.get("headers").and_then(|v| v.as_object());
                     let body = input["body"].as_str();
-                    ctx.fetch
+                    engine
                         .fetch_with_options(url, method, headers, body)
                         .await
                 }
                 None => Err("Web fetch not available".to_string()),
             }
         }
-        "web_search" => match web_ctx {
-            Some(ctx) => {
-                let query = input["query"].as_str().unwrap_or("");
-                let max_results = input["max_results"].as_u64().unwrap_or(5) as usize;
-                ctx.search(query, max_results).await
-            }
-            None => Err("Web search not available".to_string()),
-        },
 
         // Browser automation tools are now handled by browser-mcp (standalone MCP server)
         other => {
@@ -235,7 +227,6 @@ pub async fn execute_tool(
 fn tool_max_result_chars(name: &str) -> Option<usize> {
     match name {
         "web_fetch" => Some(20_000),
-        "web_search" => Some(10_000),
         "file_read" => Some(50_000),
         "shell_exec" => Some(10_000),
         "knowledge_read" => Some(30_000),
@@ -360,18 +351,6 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "required": ["url"]
             }),
         },
-        ToolDefinition {
-            name: "web_search".to_string(),
-            description: "Search the web using multiple providers (Tavily, Brave, Perplexity, DuckDuckGo) with automatic fallback. Returns structured results with titles, URLs, and snippets.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string", "description": "The search query" },
-                    "max_results": { "type": "integer", "description": "Maximum number of results to return (default: 5, max: 20)" }
-                },
-                "required": ["query"]
-            }),
-        },
     ]);
     defs
 }
@@ -386,7 +365,7 @@ mod tests {
             kernel: None,
             caller_agent_id: None,
             mcp_connections: None,
-            web_ctx: None,
+            fetch_engine: None,
             allowed_env_vars: None,
             workspace_root: None,
             brain: None,
@@ -549,19 +528,6 @@ mod tests {
             "Expected path rejection, got: {}",
             result.content
         );
-    }
-
-    #[tokio::test]
-    async fn test_web_search() {
-        let result = execute_tool(
-            "test-id",
-            "web_search",
-            &serde_json::json!({"query": "rust programming"}),
-            &noop_ctx(),
-        )
-        .await;
-        // web_search now attempts a real fetch; may succeed or fail depending on network
-        assert!(!result.tool_use_id.is_empty());
     }
 
     #[tokio::test]

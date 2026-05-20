@@ -55,10 +55,10 @@ impl KernelA2a {
     }
 }
 
-/// External service integrations (web search, media, TTS, embeddings).
+/// External service integrations (web fetch, media, TTS, embeddings).
 pub struct KernelServices {
-    /// Web tools context (multi-provider search + SSRF-protected fetch + caching).
-    pub web_ctx: runtime::web_search::WebToolsContext,
+    /// Web fetch engine (SSRF-protected URL fetching + caching).
+    pub fetch_engine: runtime::web_fetch::WebFetchEngine,
     /// Media understanding engine (image description, audio transcription).
     pub media_engine: runtime::media_understanding::MediaEngine,
 }
@@ -531,18 +531,15 @@ impl CarrierKernel {
         // MCP server list: use config directly (no extension merging)
         let all_mcp_servers = config.mcp_servers.clone();
 
-        // Initialize web tools (free search + SSRF-protected fetch + caching)
+        let brain_arc: Arc<Brain> = Arc::new(brain);
+
+        // Initialize web fetch engine (SSRF-protected fetch + caching)
         let cache_ttl = std::time::Duration::from_secs(config.web.cache_ttl_minutes * 60);
         let web_cache = Arc::new(runtime::web_cache::WebCache::new(cache_ttl));
-        let brain_arc: Arc<Brain> = Arc::new(brain);
-        let web_ctx = runtime::web_search::WebToolsContext {
-            search: runtime::web_search::WebSearchEngine::new(web_cache.clone()),
-            fetch: runtime::web_fetch::WebFetchEngine::new(
-                config.web.fetch.clone(),
-                web_cache,
-            ),
-            brain: Some(brain_arc.clone() as Arc<dyn runtime::llm_driver::Brain>),
-        };
+        let fetch_engine = runtime::web_fetch::WebFetchEngine::new(
+            config.web.fetch.clone(),
+            web_cache,
+        );
 
         // Initialize media understanding engine
         let media_engine =
@@ -586,7 +583,7 @@ impl CarrierKernel {
                 a2a_external_agents: std::sync::Mutex::new(Vec::new()),
             },
             services: KernelServices {
-                web_ctx,
+                fetch_engine,
                 media_engine,
             },
             plugins: KernelPlugins {
@@ -903,10 +900,10 @@ mod tests {
             plugins: vec![],
             subagents: vec![],
         };
-        manifest.capabilities.tools = vec!["file_read".to_string(), "web_search".to_string()];
+        manifest.capabilities.tools = vec!["file_read".to_string(), "web_fetch".to_string()];
         let caps = manifest_to_capabilities(&manifest);
         assert!(caps.iter().any(|c| matches!(c, Capability::ToolInvoke(t) if t == "file_read")));
-        assert!(caps.iter().any(|c| matches!(c, Capability::ToolInvoke(t) if t == "web_search")));
+        assert!(caps.iter().any(|c| matches!(c, Capability::ToolInvoke(t) if t == "web_fetch")));
     }
 
     fn test_manifest(name: &str, description: &str, tags: Vec<String>) -> AgentManifest {

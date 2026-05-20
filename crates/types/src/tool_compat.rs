@@ -16,7 +16,6 @@ pub fn map_tool_name(name: &str) -> Option<&'static str> {
         "Glob" | "glob" | "list_files" => Some("file_list"),
         "Grep" | "grep" => Some("file_list"),
         "Bash" | "bash" | "exec" | "execute_command" => Some("shell_exec"),
-        "WebSearch" | "web_search" => Some("web_search"),
         "WebFetch" | "fetch_url" | "web_fetch" => Some("web_fetch"),
         "browser_navigate" => Some("browser_navigate"),
         "sessions_send" | "agent_message" => Some("agent_send"),
@@ -60,7 +59,7 @@ pub fn is_known_carrier_tool(name: &str) -> bool {
             | "file_write"
             | "file_list"
             | "shell_exec"
-            | "web_search"
+            
             | "web_fetch"
             | "browser_navigate"
             | "agent_send"
@@ -95,7 +94,7 @@ mod tests {
         assert_eq!(map_tool_name("Glob"), Some("file_list"));
         assert_eq!(map_tool_name("Grep"), Some("file_list"));
         assert_eq!(map_tool_name("Bash"), Some("shell_exec"));
-        assert_eq!(map_tool_name("WebSearch"), Some("web_search"));
+        assert_eq!(map_tool_name("WebFetch"), Some("web_fetch"));
         assert_eq!(map_tool_name("WebFetch"), Some("web_fetch"));
 
         // Lowercase variants
@@ -114,7 +113,7 @@ mod tests {
         assert_eq!(map_tool_name("list_files"), Some("file_list"));
         assert_eq!(map_tool_name("fetch_url"), Some("web_fetch"));
         assert_eq!(map_tool_name("web_fetch"), Some("web_fetch"));
-        assert_eq!(map_tool_name("web_search"), Some("web_search"));
+        assert_eq!(map_tool_name("web_fetch"), Some("web_fetch"));
         assert_eq!(map_tool_name("browser_navigate"), Some("browser_navigate"));
         assert_eq!(map_tool_name("sessions_send"), Some("agent_send"));
         assert_eq!(map_tool_name("agent_message"), Some("agent_send"));
@@ -156,7 +155,7 @@ mod tests {
         assert_eq!(normalize_tool_name("file_read"), "file_read");
         assert_eq!(normalize_tool_name("file_write"), "file_write");
         assert_eq!(normalize_tool_name("shell_exec"), "shell_exec");
-        assert_eq!(normalize_tool_name("web_search"), "web_search");
+        assert_eq!(normalize_tool_name("web_fetch"), "web_fetch");
 
         // Aliases get normalized to canonical names
         assert_eq!(normalize_tool_name("fs-read"), "file_read");
@@ -179,7 +178,7 @@ mod tests {
             "file_write",
             "file_list",
             "shell_exec",
-            "web_search",
+            "web_fetch",
             "web_fetch",
             "browser_navigate",
             "agent_send",

@@ -572,7 +572,7 @@ impl CarrierKernel {
                 kernel_handle,
                 tx,
                 Some(&kernel_clone.plugins.mcp_connections),
-                Some(&kernel_clone.services.web_ctx),
+                Some(&kernel_clone.services.fetch_engine),
                 manifest.workspace.as_deref(),
                 Some(&phase_cb),
                 Some(&kernel_clone.coordination.hooks),
@@ -1106,7 +1106,7 @@ impl CarrierKernel {
             kernel_handle.clone(),
             None, // stream_tx: non-streaming path
             Some(&self.plugins.mcp_connections),
-            Some(&self.services.web_ctx),
+            Some(&self.services.fetch_engine),
             manifest.workspace.as_deref(),
             None, // on_phase callback
             Some(&self.coordination.hooks),
@@ -1326,7 +1326,7 @@ impl CarrierKernel {
                         &memory, driver_clone, &tools_owned,
                         kh, None,
                         None,   // mcp_connections: MCP tools are already in the tools list
-                        None,   // web_ctx: not available in spawned task
+                        None,   // fetch_engine: not available in spawned task
                         ws.as_deref(),
                         None,   // on_phase
                         None,   // hooks: not available in spawned task

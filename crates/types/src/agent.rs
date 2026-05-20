@@ -149,7 +149,7 @@ impl AgentMode {
                     "file_read",
                     "file_list",
                     "web_fetch",
-                    "web_search",
+                    
                     "agent_list",
                 ];
                 tools
@@ -252,7 +252,7 @@ impl ToolProfile {
                 "shell_exec",
                 "web_fetch",
             ],
-            Self::Research => vec!["web_fetch", "web_search", "file_read", "file_write"],
+            Self::Research => vec!["web_fetch",  "file_read", "file_write"],
             Self::Messaging => vec!["agent_send", "agent_list"],
             Self::Automation => vec![
                 "file_read",
@@ -260,7 +260,7 @@ impl ToolProfile {
                 "file_list",
                 "shell_exec",
                 "web_fetch",
-                "web_search",
+                
                 "agent_send",
                 "agent_list",
             ],
@@ -756,8 +756,8 @@ mod tests {
     fn test_tool_profile_research() {
         let tools = ToolProfile::Research.tools();
         assert!(tools.contains(&"web_fetch".to_string()));
-        assert!(tools.contains(&"web_search".to_string()));
-        assert_eq!(tools.len(), 4);
+        assert!(tools.contains(&"web_fetch".to_string()));
+        assert_eq!(tools.len(), 3);
     }
 
     #[test]
@@ -770,7 +770,7 @@ mod tests {
     #[test]
     fn test_tool_profile_automation() {
         let tools = ToolProfile::Automation.tools();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 7);
     }
 
     #[test]
@@ -865,7 +865,7 @@ mod tests {
                 input_schema: serde_json::Value::Null,
             },
             ToolDefinition {
-                name: "web_search".into(),
+                name: "web_fetch".into(),
                 description: String::new(),
                 input_schema: serde_json::Value::Null,
             },

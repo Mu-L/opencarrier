@@ -243,7 +243,7 @@ mod tests {
     fn test_tool_all_grants_specific() {
         assert!(capability_matches(
             &Capability::ToolAll,
-            &Capability::ToolInvoke("web_search".to_string()),
+            &Capability::ToolInvoke("web_fetch".to_string()),
         ));
     }
 

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub enum PermissionLevel {
     /// Pure queries with no side effects: knowledge_read, etc.
     None,
-    /// Read from external sources: web_fetch, file_read, web_search.
+    /// Read from external sources: web_fetch, file_read.
     ReadOnly,
     /// Write within sandbox: file_write (workspace), system_kv_store (own ns).
     #[default]
@@ -63,7 +63,7 @@ impl PermissionLevel {
 
             // ReadOnly — reads from external sources
             "file_read" | "file_list" | "file_convert"
-            | "web_fetch" | "web_search"
+            | "web_fetch" 
             | "image_analyze" | "media_describe" | "media_transcribe"
             | "speech_to_text" | "location_get" | "system_time" => Self::ReadOnly,
 
@@ -453,7 +453,7 @@ mod tests {
     #[test]
     fn test_tool_definition_serialization() {
         let tool = ToolDefinition {
-            name: "web_search".to_string(),
+            name: "web_fetch".to_string(),
             description: "Search the web".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -464,7 +464,7 @@ mod tests {
             }),
         };
         let json = serde_json::to_string(&tool).unwrap();
-        assert!(json.contains("web_search"));
+        assert!(json.contains("web_fetch"));
     }
 
     #[test]

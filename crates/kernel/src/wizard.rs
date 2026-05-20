@@ -100,13 +100,11 @@ impl SetupWizard {
             }
         }
 
-        // Add web_search + web_fetch if web/network capability is needed
+        // Add web_fetch if web/network capability is needed
         if caps.network.contains(&"*".to_string()) {
-            for t in &["web_search", "web_fetch"] {
-                let s = t.to_string();
-                if !caps.tools.contains(&s) {
-                    caps.tools.push(s);
-                }
+            let s = "web_fetch".to_string();
+            if !caps.tools.contains(&s) {
+                caps.tools.push(s);
             }
         }
 
@@ -216,9 +214,6 @@ impl SetupWizard {
         let mut hints = Vec::new();
         let has = |name: &str| tools.iter().any(|t| t == name);
 
-        if has("web_search") {
-            hints.push("- Use web_search to find current information on any topic.");
-        }
         if has("web_fetch") {
             hints.push("- Use web_fetch to read the full content of a specific URL as markdown.");
         }
@@ -363,7 +358,7 @@ mod tests {
             .manifest
             .capabilities
             .tools
-            .contains(&"web_search".to_string()));
+            .contains(&"web_fetch".to_string()));
     }
 
     #[test]

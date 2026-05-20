@@ -15,7 +15,7 @@ use crate::llm_errors;
 use crate::mcp::McpConnection;
 use crate::tool_context::ToolContext;
 use crate::tool_runner;
-use crate::web_search::WebToolsContext;
+use crate::web_fetch::WebFetchEngine;
 use crate::text_tool_recovery::recover_text_tool_calls;
 use memory::session::Session;
 use memory::MemorySubstrate;
@@ -164,7 +164,7 @@ pub async fn run_agent_loop(
     kernel: Option<Arc<dyn KernelHandle>>,
     stream_tx: Option<mpsc::Sender<StreamEvent>>,
     mcp_connections: Option<&dashmap::DashMap<String, McpConnection>>,
-    web_ctx: Option<&WebToolsContext>,
+    fetch_engine: Option<&WebFetchEngine>,
     workspace_root: Option<&Path>,
     on_phase: Option<&PhaseCallback>,
     hooks: Option<&crate::hooks::HookRegistry>,
@@ -181,7 +181,7 @@ pub async fn run_agent_loop(
         timeout,
         run_agent_loop_impl(
             manifest, user_message, session, memory, driver, available_tools,
-            kernel, stream_tx, mcp_connections, web_ctx, workspace_root,
+            kernel, stream_tx, mcp_connections, fetch_engine, workspace_root,
             on_phase, hooks, context_window_tokens, process_manager,
             user_content_blocks, brain, sender_id, owner_id, channel_type,
         ),
@@ -405,7 +405,7 @@ async fn run_agent_loop_impl(
     kernel: Option<Arc<dyn KernelHandle>>,
     stream_tx: Option<mpsc::Sender<StreamEvent>>,
     mcp_connections: Option<&dashmap::DashMap<String, McpConnection>>,
-    web_ctx: Option<&WebToolsContext>,
+    fetch_engine: Option<&WebFetchEngine>,
     workspace_root: Option<&Path>,
     on_phase: Option<&PhaseCallback>,
     hooks: Option<&crate::hooks::HookRegistry>,
@@ -864,7 +864,7 @@ async fn run_agent_loop_impl(
                         kernel: kernel.as_ref(),
                         caller_agent_id: Some(&caller_id_str),
                         mcp_connections,
-                        web_ctx,
+                        fetch_engine,
                         allowed_env_vars: if hand_allowed_env.is_empty() {
                             None
                         } else {
@@ -1206,7 +1206,7 @@ pub async fn run_agent_loop_streaming(
     kernel: Option<Arc<dyn KernelHandle>>,
     stream_tx: mpsc::Sender<StreamEvent>,
     mcp_connections: Option<&dashmap::DashMap<String, McpConnection>>,
-    web_ctx: Option<&WebToolsContext>,
+    fetch_engine: Option<&WebFetchEngine>,
     workspace_root: Option<&Path>,
     on_phase: Option<&PhaseCallback>,
     hooks: Option<&crate::hooks::HookRegistry>,
@@ -1220,7 +1220,7 @@ pub async fn run_agent_loop_streaming(
 ) -> CarrierResult<AgentLoopResult> {
     run_agent_loop(
         manifest, user_message, session, memory, driver, available_tools,
-        kernel, Some(stream_tx), mcp_connections, web_ctx, workspace_root,
+        kernel, Some(stream_tx), mcp_connections, fetch_engine, workspace_root,
         on_phase, hooks, context_window_tokens, process_manager,
         user_content_blocks, brain, sender_id, owner_id, channel_type,
     ).await
@@ -1497,7 +1497,7 @@ mod tests {
             None, // kernel
             None, // stream_tx
             None, // mcp_connections
-            None, // web_ctx
+            None, // fetch_engine
             None, // workspace_root
             None, // on_phase
             None, // hooks
@@ -1549,7 +1549,7 @@ mod tests {
             None, // kernel
             None, // stream_tx
             None, // mcp_connections
-            None, // web_ctx
+            None, // fetch_engine
             None, // workspace_root
             None, // on_phase
             None, // hooks

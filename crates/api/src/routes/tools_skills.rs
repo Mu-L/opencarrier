@@ -185,7 +185,7 @@ pub async fn mcp_http(
             kernel: Some(&kernel_handle),
             caller_agent_id: None,
             mcp_connections: Some(&state.kernel.plugins.mcp_connections),
-            web_ctx: Some(&state.kernel.services.web_ctx),
+            fetch_engine: Some(&state.kernel.services.fetch_engine),
             allowed_env_vars: None,
             workspace_root: None,
             brain: None,

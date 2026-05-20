@@ -75,7 +75,7 @@ pub fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
          - Search stored context with system_kv_recall before asking the user for information they may have given before.\n\n\
          ## Tool Usage Protocols\n\
          - file_read BEFORE file_write \u{2014} always understand what exists.\n\
-         - web_search for current info, web_fetch for specific URLs.\n\
+         - web_fetch for specific URLs.\n\
          - browser_* for interactive sites that need clicks/forms.\n\
          - shell_exec: explain destructive commands before running.\n\n\
          ## Response Style\n\
