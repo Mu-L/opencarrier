@@ -1116,16 +1116,36 @@ impl UnifiedHttpDriver {
 
         // Sanitize tool_call arguments: strict providers (e.g. Qwen) reject
         // non-JSON arguments like "null", empty strings, or malformed JSON.
+        // Instead of replacing with "{}" (which produces a tool execution error),
+        // remove the invalid tool_call from the assistant message AND the matching
+        // tool_result message, so the model isn't confused by failed calls in history.
+        let mut removed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for msg in &mut messages {
             if let Some(calls) = &mut msg.tool_calls {
-                for tc in calls.iter_mut() {
+                calls.retain(|tc| {
                     let args = tc.function.arguments.trim();
-                    if args.is_empty() || args == "null" || serde_json::from_str::<serde_json::Value>(args).is_err() {
-                        warn!(tool = %tc.function.name, raw_args = %tc.function.arguments, "Sanitizing invalid tool_call arguments to empty JSON object");
-                        tc.function.arguments = "{}".to_string();
+                    let valid = !args.is_empty() && args != "null" && serde_json::from_str::<serde_json::Value>(args).is_ok();
+                    if !valid {
+                        warn!(tool = %tc.function.name, raw_args = %tc.function.arguments, "Removing tool_call with invalid arguments from request");
+                        removed_ids.insert(tc.id.clone());
                     }
+                    valid
+                });
+                if calls.is_empty() {
+                    msg.tool_calls = None;
                 }
             }
+        }
+        // Remove tool_result messages whose call was removed
+        if !removed_ids.is_empty() {
+            messages.retain(|msg| {
+                if msg.role == "tool" {
+                    if let Some(ref id) = msg.tool_call_id {
+                        return !removed_ids.contains(id);
+                    }
+                }
+                true
+            });
         }
         let model = &request.model;
 
