@@ -46,6 +46,7 @@ impl UnifiedHttpDriver {
         };
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
+            .http1_only()
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(timeout))
             .build()
