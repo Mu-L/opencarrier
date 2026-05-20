@@ -103,6 +103,8 @@ pub enum ApiFormat {
     MiniMaxSearch,
     #[serde(rename = "glm_search")]
     GlmSearch,
+    #[serde(rename = "zhipu_search")]
+    ZhipuSearch,
 }
 
 /// All supported API format names (for dashboard UI).
@@ -118,6 +120,7 @@ pub const SUPPORTED_FORMATS: &[&str] = &[
     "minimax_image",
     "minimax_search",
     "glm_search",
+    "zhipu_search",
 ];
 
 /// Authentication header type for HTTP API drivers.
@@ -148,6 +151,7 @@ impl std::fmt::Display for ApiFormat {
             ApiFormat::MiniMaxImage => write!(f, "minimax_image"),
             ApiFormat::MiniMaxSearch => write!(f, "minimax_search"),
             ApiFormat::GlmSearch => write!(f, "glm_search"),
+            ApiFormat::ZhipuSearch => write!(f, "zhipu_search"),
         }
     }
 }

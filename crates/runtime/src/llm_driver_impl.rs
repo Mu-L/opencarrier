@@ -41,7 +41,7 @@ impl UnifiedHttpDriver {
     ) -> Self {
         let timeout = match format {
             ApiFormat::DashScopeTts => 60,
-            ApiFormat::MiniMaxSearch | ApiFormat::GlmSearch => 15,
+            ApiFormat::MiniMaxSearch | ApiFormat::GlmSearch | ApiFormat::ZhipuSearch => 15,
             _ => 120,
         };
         let client = reqwest::Client::builder()
@@ -310,6 +310,7 @@ impl LlmDriver for UnifiedHttpDriver {
             ApiFormat::MiniMaxImage => self.complete_minimax_image(request).await,
             ApiFormat::MiniMaxSearch => self.complete_minimax_search(request).await,
             ApiFormat::GlmSearch => self.complete_glm_search(request).await,
+            ApiFormat::ZhipuSearch => self.complete_zhipu_search(request).await,
             ApiFormat::OpenAIImages => self.complete_openai_images(request).await,
         }
     }
@@ -423,6 +424,56 @@ impl UnifiedHttpDriver {
 
         if found == 0 {
             return Err(LlmError::Api { status: 200, message: format!("No results found for '{query}' (GLM search)") });
+        }
+
+        Ok(CompletionResponse {
+            content: vec![ContentBlock::Text { text: output, provider_metadata: None }],
+            stop_reason: StopReason::EndTurn,
+            usage: TokenUsage { input_tokens: 0, output_tokens: found as u64 },
+            tool_calls: vec![],
+            media: None,
+        })
+    }
+
+    // --- Zhipu Search ---
+    async fn complete_zhipu_search(&self, request: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+        let query = Self::extract_query(&request);
+        if query.is_empty() {
+            return Err(LlmError::Api { status: 400, message: "Search query is required".to_string() });
+        }
+
+        let count = if request.max_tokens > 0 { request.max_tokens.min(20) } else { 10 };
+        let mut body = serde_json::json!({
+            "search_query": query,
+            "search_engine": "search_std",
+            "count": count,
+        });
+        if let Some(recency) = request.extra.get("search_recency_filter").and_then(|v| v.as_str()) {
+            body["search_recency_filter"] = serde_json::Value::String(recency.to_string());
+        }
+
+        let resp = self.send_request(&self.base_url, &body, &[]).await?;
+        let result: serde_json::Value = resp.json().await.map_err(|e| LlmError::Parse(e.to_string()))?;
+
+        let mut output = format!("Search results for '{query}':\n\n");
+        let mut found = 0u32;
+
+        if let Some(results) = result.get("search_result").and_then(|r| r.as_array()) {
+            for item in results {
+                if found >= count { break; }
+                let title = item.get("title").and_then(|t| t.as_str()).unwrap_or("");
+                let link = item.get("link").and_then(|l| l.as_str()).unwrap_or("");
+                let content = item.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                let date = item.get("publish_date").and_then(|d| d.as_str()).unwrap_or("");
+                if title.is_empty() && link.is_empty() { continue; }
+                found += 1;
+                let date_str = if date.is_empty() { String::new() } else { format!(" ({date})") };
+                output.push_str(&format!("{found}. {title}\n   URL: {link}\n   {content}{date_str}\n\n"));
+            }
+        }
+
+        if found == 0 {
+            return Err(LlmError::Api { status: 200, message: format!("No results found for '{query}' (Zhipu search)") });
         }
 
         Ok(CompletionResponse {
