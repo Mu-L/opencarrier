@@ -230,6 +230,7 @@ fn tool_max_result_chars(name: &str) -> Option<usize> {
         "file_read" => Some(50_000),
         "shell_exec" => Some(10_000),
         "knowledge_read" => Some(30_000),
+        "sqlite_query" => Some(30_000),
         "image_analyze" | "media_describe" | "media_transcribe" => Some(10_000),
         _ => None,
     }

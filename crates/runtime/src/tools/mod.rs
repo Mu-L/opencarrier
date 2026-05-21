@@ -10,6 +10,7 @@ pub mod media;
 pub mod memory;
 pub mod misc;
 pub mod shell;
+pub mod sqlite;
 pub mod toolset;
 
 use crate::tool_context::ToolContext;
@@ -57,6 +58,7 @@ pub trait ToolModule: Send + Sync {
 pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
     vec![
         Box::new(filesystem::FilesystemTools),
+        Box::new(sqlite::SqliteTools),
         Box::new(shell::ShellTools),
         Box::new(misc::MiscTools),
         Box::new(toolset::ToolSearchTools),
