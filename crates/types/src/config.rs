@@ -834,6 +834,9 @@ fn default_llm_concurrency() -> usize {
 pub struct McpServerConfigEntry {
     /// Display name for this server.
     pub name: String,
+    /// Brief description of what this MCP server does (shown to LLM in system prompt).
+    #[serde(default)]
+    pub description: String,
     /// Transport configuration.
     pub transport: McpTransportEntry,
     /// Request timeout in seconds.

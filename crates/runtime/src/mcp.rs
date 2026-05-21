@@ -22,6 +22,9 @@ use tracing::{debug, info};
 pub struct McpServerConfig {
     /// Display name for this server (used in tool namespacing).
     pub name: String,
+    /// Brief description of what this MCP server does (shown to LLM in system prompt).
+    #[serde(default)]
+    pub description: String,
     /// Transport configuration.
     pub transport: McpTransport,
     /// Request timeout in seconds (default: 30).
@@ -803,6 +806,7 @@ mod tests {
     fn test_mcp_transport_config_serde() {
         let config = McpServerConfig {
             name: "github".to_string(),
+            description: String::new(),
             transport: McpTransport::Stdio {
                 command: "npx".to_string(),
                 args: vec![
@@ -831,6 +835,7 @@ mod tests {
         // SSE variant
         let sse_config = McpServerConfig {
             name: "test".to_string(),
+            description: String::new(),
             transport: McpTransport::Sse {
                 url: "https://example.com/mcp".to_string(),
             },

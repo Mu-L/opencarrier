@@ -32,6 +32,7 @@ impl CarrierKernel {
 
             let mcp_config = McpServerConfig {
                 name: server_config.name.clone(),
+                description: server_config.description.clone(),
                 transport,
                 timeout_secs: server_config.timeout_secs,
                 env: server_config.env.clone(),
@@ -173,6 +174,7 @@ impl CarrierKernel {
                         };
                         let mcp_config = McpServerConfig {
                             name: server_config.name.clone(),
+                            description: server_config.description.clone(),
                             transport,
                             timeout_secs: server_config.timeout_secs,
                             env: server_config.env.clone(),

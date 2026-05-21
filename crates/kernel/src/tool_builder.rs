@@ -199,64 +199,74 @@ impl CarrierKernel {
         &self,
         active_tools: &[String],
     ) -> String {
+        let mut summary = String::new();
+
+        // --- Built-in toolsets ---
         let registry = match self.plugins.toolset_registry.read() {
             Ok(r) => r.clone(),
             Err(_) => return String::new(),
         };
-        if registry.is_empty() {
-            return String::new();
+
+        if !registry.is_empty() {
+            summary.push_str(
+                "\n\n--- Built-in Toolsets ---\nTools listed as ACTIVE are already in your tool list — use them directly.\nTools listed as available can be loaded by calling tool_search(\"query\").\n\n",
+            );
+
+            let mut entries: Vec<_> = registry.iter().collect();
+            entries.sort_by_key(|(name, _)| {
+                if BUILTIN_TOOLSETS.contains(&name.as_str()) {
+                    0
+                } else {
+                    1
+                }
+            });
+
+            for (name, tools) in &entries {
+                let is_active = tools.iter().any(|t| active_tools.contains(&t.name));
+                let status = if is_active { "ACTIVE" } else { "available" };
+
+                let examples: Vec<&str> = tools.iter().take(3).map(|t| t.name.as_str()).collect();
+                let example_str = if tools.len() > 3 {
+                    format!("{}, ... ({} total)", examples.join(", "), tools.len())
+                } else {
+                    examples.join(", ")
+                };
+
+                summary.push_str(&format!(
+                    "- {} [{}]: {} tools ({})\n",
+                    name, status, tools.len(), example_str
+                ));
+            }
         }
 
-        let mut summary = String::from(
-            "\n\n--- Toolsets ---\nTools listed as ACTIVE are already in your tool list — use them directly.\nTools listed as available can be loaded by calling tool_search(\"query\").\n\n",
-        );
-
-        // Sort: builtins first, MCP servers last
-        let mut entries: Vec<_> = registry.iter().collect();
-        entries.sort_by_key(|(name, _)| {
-            if BUILTIN_TOOLSETS.contains(&name.as_str()) {
-                0
-            } else {
-                1
+        // --- MCP Servers ---
+        let mcp_entries: Vec<_> = self.plugins.mcp_connections.iter().collect();
+        if !mcp_entries.is_empty() {
+            summary.push_str(
+                "\n--- MCP Servers ---\nThese servers are configured and their tools are available directly.\n",
+            );
+            for entry in &mcp_entries {
+                let conn = entry.value();
+                let config = conn.config();
+                let desc = if config.description.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", config.description)
+                };
+                let tool_names: Vec<&str> = conn.tools().iter().take(3).map(|t| t.name.as_str()).collect();
+                let tool_str = if conn.tools().len() > 3 {
+                    format!("{}, ... ({} total)", tool_names.join(", "), conn.tools().len())
+                } else {
+                    tool_names.join(", ")
+                };
+                summary.push_str(&format!("- {}{} — {}\n", config.name, desc, tool_str));
             }
-        });
-
-        for (name, tools) in &entries {
-            // A toolset is "ACTIVE" if any of its tools are in the active list
-            let is_active = tools.iter().any(|t| active_tools.contains(&t.name));
-            let status = if is_active { "ACTIVE" } else { "available" };
-
-            let examples: Vec<&str> = tools
-                .iter()
-                .take(3)
-                .map(|t| {
-                    let prefix = format!("mcp_{}_", name);
-                    t.name.strip_prefix(&prefix).unwrap_or(&t.name)
-                })
-                .collect();
-            let example_str = if tools.len() > 3 {
-                format!(
-                    "{}, ... ({} total)",
-                    examples.join(", "),
-                    tools.len()
-                )
-            } else {
-                examples.join(", ")
-            };
-
-            summary.push_str(&format!(
-                "- {} [{}]: {} tools ({})\n",
-                name,
-                status,
-                tools.len(),
-                example_str
-            ));
         }
 
         // Filesystem MCP guidance
         if registry.keys().any(|s| s.contains("filesystem")) {
             summary.push_str(
-                "IMPORTANT: For accessing files OUTSIDE your workspace directory, you MUST use \
+                "\nIMPORTANT: For accessing files OUTSIDE your workspace directory, you MUST use \
                  the MCP filesystem tools (e.g. mcp_filesystem_read_file, mcp_filesystem_list_directory) \
                  instead of the built-in file_read/file_list/file_write tools, which are restricted to \
                  the workspace. The MCP filesystem server has been granted access to specific directories \
