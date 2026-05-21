@@ -32,6 +32,81 @@ use tracing::{debug, info, warn};
 /// Maximum iterations in the agent loop before giving up.
 const MAX_ITERATIONS: u32 = 15;
 
+/// Tool search recall limit (stage 1: how many candidates to retrieve).
+const TOOL_SEARCH_RECALL_LIMIT: usize = 10;
+
+/// Use a lightweight LLM call to review tool_search candidates and select relevant ones.
+/// Returns a list of tool names the LLM confirmed as relevant.
+/// Falls back to returning all candidates on LLM failure.
+async fn review_tools_with_llm(
+    query: &str,
+    candidates: &[types::tool::ToolDefinition],
+    brain: &Arc<dyn Brain>,
+) -> Vec<String> {
+    let mut prompt = String::from(
+        "You are a tool selector. Given a search query and candidate tools, \
+         return ONLY a JSON array of tool names that are relevant to the query. \
+         If none match, return [].\n\nCandidates:\n",
+    );
+    for def in candidates {
+        let desc = if def.description.len() > 100 {
+            format!("{}...", &def.description[..97])
+        } else {
+            def.description.clone()
+        };
+        prompt.push_str(&format!("- {}: {}\n", def.name, desc));
+    }
+    prompt.push_str(&format!("\nQuery: {}\n\nSelected tools:", query));
+
+    let request = CompletionRequest {
+        model: String::new(),
+        messages: vec![Message {
+            role: Role::User,
+            content: MessageContent::Text(prompt),
+        }],
+        tools: Vec::new(),
+        max_tokens: 200,
+        temperature: 0.0,
+        system: None,
+        thinking: None,
+        extra: Default::default(),
+    };
+
+    match brain.complete("text", request).await {
+        Ok(response) => {
+            let text = response.text().to_string();
+            parse_tool_selection(&text)
+        }
+        Err(e) => {
+            warn!("Tool review LLM call failed (falling back to all candidates): {}", e);
+            candidates.iter().map(|def| def.name.clone()).collect()
+        }
+    }
+}
+
+/// Parse LLM response for tool selection. Expects a JSON array of strings.
+fn parse_tool_selection(raw: &str) -> Vec<String> {
+    let cleaned = raw
+        .trim_matches('`')
+        .trim_start_matches("json")
+        .trim();
+
+    if let Ok(arr) = serde_json::from_str::<Vec<String>>(cleaned) {
+        return arr.into_iter().filter(|s| !s.is_empty()).collect();
+    }
+
+    // Try to extract array from surrounding text
+    if let Some(start) = cleaned.find('[') {
+        if let Some(end) = cleaned.rfind(']') {
+            if let Ok(arr) = serde_json::from_str::<Vec<String>>(&cleaned[start..=end]) {
+                return arr.into_iter().filter(|s| !s.is_empty()).collect();
+            }
+        }
+    }
+
+    Vec::new()
+}
+
 /// Maximum retries for rate-limited or overloaded API calls.
 const MAX_RETRIES: u32 = 3;
 
@@ -528,6 +603,8 @@ async fn run_agent_loop_impl(
     // Tool names from discovered set that executed successfully (for skill write-back)
     let mut successful_discovered_tools: std::collections::HashSet<String> =
         std::collections::HashSet::new();
+    // Tool queries that found no suitable tools (for gap reporting)
+    let mut unsatisfied_tool_queries: Vec<String> = Vec::new();
 
     for iteration in 0..max_iterations {
         debug!(iteration, "Streaming agent loop iteration");
@@ -1052,7 +1129,7 @@ async fn run_agent_loop_impl(
                             info!(count = skill_load_count, "Skill(s) loaded");
                         }
 
-                        // --- tool_search: search and collect specific matching tools ---
+                        // --- tool_search: two-stage search (recall 10 + LLM review) ---
                         let search_queries: Vec<&str> = response.tool_calls.iter()
                             .filter(|tc| tc.name == "tool_search")
                             .filter_map(|tc| tc.input.get("query").and_then(|v| v.as_str()))
@@ -1062,10 +1139,35 @@ async fn run_agent_loop_impl(
                         let mut found_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
                         for q in &search_queries {
-                            let results = kernel.search_tools(q, 5, manifest.max_tool_level);
-                            for (_, tool_def) in results {
-                                if found_names.insert(tool_def.name.clone()) {
-                                    found_tools.push(tool_def);
+                            // Stage 1: recall top candidates
+                            let results = kernel.search_tools(q, TOOL_SEARCH_RECALL_LIMIT, manifest.max_tool_level);
+                            let candidates: Vec<types::tool::ToolDefinition> = results
+                                .into_iter()
+                                .map(|(_, def)| def)
+                                .collect();
+
+                            if candidates.is_empty() {
+                                unsatisfied_tool_queries.push(q.to_string());
+                                continue;
+                            }
+
+                            // Stage 2: LLM review (if brain available)
+                            let confirmed_names = if let Some(ref brain) = brain {
+                                review_tools_with_llm(q, &candidates, brain).await
+                            } else {
+                                // No brain: fall back to all candidates
+                                candidates.iter().map(|def| def.name.clone()).collect()
+                            };
+
+                            if confirmed_names.is_empty() {
+                                unsatisfied_tool_queries.push(q.to_string());
+                                continue;
+                            }
+
+                            // Only keep confirmed tools
+                            for def in candidates {
+                                if confirmed_names.contains(&def.name) && found_names.insert(def.name.clone()) {
+                                    found_tools.push(def);
                                 }
                             }
                         }
@@ -1208,6 +1310,11 @@ async fn run_agent_loop_impl(
         });
     }
 
+    // Record tool gap reports for unsatisfied tool_search queries
+    if !unsatisfied_tool_queries.is_empty() {
+        record_tool_gaps(workspace_root, &manifest.name, user_message, &unsatisfied_tool_queries);
+    }
+
     Err(CarrierError::MaxIterationsExceeded(max_iterations))
 }
 
@@ -1248,6 +1355,38 @@ pub async fn run_agent_loop_streaming(
     ).await
 }
 
+/// Append a tool gap report to `{workspace}/tool-gaps.jsonl`.
+/// Each line is a JSON object with the agent name, original user message,
+/// unsatisfied queries, and timestamp. Non-fatal on write failure.
+fn record_tool_gaps(
+    workspace_root: Option<&Path>,
+    agent_name: &str,
+    user_message: &str,
+    queries: &[String],
+) {
+    let Some(workspace) = workspace_root else { return };
+
+    let entry = serde_json::json!({
+        "agent": agent_name,
+        "message": user_message.chars().take(200).collect::<String>(),
+        "queries": queries,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+
+    let path = workspace.join("tool-gaps.jsonl");
+    let line = format!("{}\n", entry);
+
+    if let Err(e) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()))
+    {
+        warn!(path = %path.display(), error = %e, "Failed to write tool gap report");
+    } else {
+        info!(queries = ?queries, "Recorded tool gap report");
+    }
+}
 
 #[cfg(test)]
 mod tests {

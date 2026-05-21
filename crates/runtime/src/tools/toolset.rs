@@ -42,7 +42,7 @@ impl ToolModule for ToolSearchTools {
             .unwrap_or("");
 
         let results = if let Some(kernel) = ctx.kernel {
-            kernel.search_tools(query, 5, ctx.max_tool_level)
+            kernel.search_tools(query, 10, ctx.max_tool_level)
         } else {
             Vec::new()
         };
