@@ -736,7 +736,7 @@ impl CarrierKernel {
 
         // Create session
         self.memory
-            .create_session(agent_id)
+            .create_session(name.clone())
             .map_err(KernelError::Carrier)?;
 
         // Inherit kernel exec_policy as fallback if agent manifest doesn't have one

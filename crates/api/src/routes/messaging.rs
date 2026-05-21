@@ -81,7 +81,7 @@ pub fn inject_attachments_into_session(
         Ok(Some(s)) => s,
         _ => memory::session::Session {
             id: entry.session_id,
-            agent_id,
+            agent_id: entry.name.clone(),
             messages: Vec::new(),
             context_window_tokens: 0,
             label: None,

@@ -158,7 +158,7 @@ pub async fn get_agent_session(
                 StatusCode::OK,
                 Json(serde_json::json!({
                     "session_id": session.id.0.to_string(),
-                    "agent_id": session.agent_id.0.to_string(),
+                    "agent_id": session.agent_id.clone(),
                     "message_count": session.messages.len(),
                     "context_window_tokens": session.context_window_tokens,
                     "label": session.label,
@@ -304,17 +304,17 @@ pub async fn find_session_by_label(
     State(state): State<Arc<AppState>>,
     Path((agent_id_str, label)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let (agent_id, _entry) = match resolve_agent_id(&agent_id_str, &state.kernel.registry) {
+    let (_agent_id, entry) = match resolve_agent_id(&agent_id_str, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
 
-    match state.kernel.memory.find_session_by_label(agent_id, &label) {
+    match state.kernel.memory.find_session_by_label(&entry.name, &label) {
         Ok(Some(session)) => (
             StatusCode::OK,
             Json(serde_json::json!({
                 "session_id": session.id.0.to_string(),
-                "agent_id": session.agent_id.0.to_string(),
+                "agent_id": session.agent_id.clone(),
                 "label": session.label,
                 "message_count": session.messages.len(),
             })),

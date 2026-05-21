@@ -29,9 +29,10 @@ impl CarrierKernel {
         let _ = self.memory.delete_session(entry.session_id);
 
         // Create a fresh session
+        let agent_name = entry.name.clone();
         let new_session = self
             .memory
-            .create_session(agent_id)
+            .create_session(agent_name)
             .map_err(KernelError::Carrier)?;
 
         // Update registry with new session ID
@@ -50,19 +51,20 @@ impl CarrierKernel {
     ///
     /// Creates a fresh empty session afterward so the agent is still usable.
     pub fn clear_agent_history(&self, agent_id: AgentId) -> KernelResult<()> {
-        let _entry = self.registry.get(agent_id).ok_or_else(|| {
+        let entry = self.registry.get(agent_id).ok_or_else(|| {
             KernelError::Carrier(CarrierError::AgentNotFound(agent_id.to_string()))
         })?;
 
         // Delete all regular sessions
-        let _ = self.memory.delete_agent_sessions(agent_id);
+        let _ = self.memory.delete_agent_sessions(&entry.name);
 
         // Delete canonical (cross-channel) session
 
         // Create a fresh session
+        let agent_name = entry.name.clone();
         let new_session = self
             .memory
-            .create_session(agent_id)
+            .create_session(agent_name)
             .map_err(KernelError::Carrier)?;
 
         // Update registry with new session ID
@@ -83,7 +85,7 @@ impl CarrierKernel {
 
         let mut sessions = self
             .memory
-            .list_agent_sessions(agent_id)
+            .list_agent_sessions(&entry.name)
             .map_err(KernelError::Carrier)?;
 
         // Mark the active session
@@ -112,9 +114,10 @@ impl CarrierKernel {
             KernelError::Carrier(CarrierError::AgentNotFound(agent_id.to_string()))
         })?;
 
+        let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
         let session = self
             .memory
-            .create_session_with_label(agent_id, label)
+            .create_session_with_label(agent_name, label)
             .map_err(KernelError::Carrier)?;
 
         // Switch to the new session
@@ -137,7 +140,7 @@ impl CarrierKernel {
         session_id: SessionId,
     ) -> KernelResult<()> {
         // Verify agent exists
-        let _entry = self.registry.get(agent_id).ok_or_else(|| {
+        let entry = self.registry.get(agent_id).ok_or_else(|| {
             KernelError::Carrier(CarrierError::AgentNotFound(agent_id.to_string()))
         })?;
 
@@ -150,7 +153,7 @@ impl CarrierKernel {
                 KernelError::Carrier(CarrierError::Internal("Session not found".to_string()))
             })?;
 
-        if session.agent_id != agent_id {
+        if session.agent_id != entry.name {
             return Err(KernelError::Carrier(CarrierError::Internal(
                 "Session belongs to a different agent".to_string(),
             )));
@@ -368,7 +371,7 @@ impl CarrierKernel {
             .map_err(KernelError::Carrier)?
             .unwrap_or_else(|| memory::session::Session {
                 id: session_id,
-                agent_id,
+                agent_id: entry.name.clone(),
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
@@ -528,7 +531,7 @@ impl CarrierKernel {
             );
             let new_session = self
                 .memory
-                .create_session(agent_id)
+                .create_session(entry.name.clone())
                 .map_err(KernelError::Carrier)?;
             self.registry
                 .update_session_id(agent_id, new_session.id)
@@ -561,7 +564,7 @@ impl CarrierKernel {
             .map_err(KernelError::Carrier)?
             .unwrap_or_else(|| memory::session::Session {
                 id: entry.session_id,
-                agent_id,
+                agent_id: entry.name.clone(),
                 messages: Vec::new(),
                 context_window_tokens: 0,
                 label: None,

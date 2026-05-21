@@ -381,7 +381,7 @@ async fn test_invalid_agent_id_returns_400() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 404);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body["error"].as_str().unwrap().contains("Agent not found"));
 
@@ -391,7 +391,7 @@ async fn test_invalid_agent_id_returns_400() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 404);
 
     // Session for invalid ID
     let resp = client
@@ -399,7 +399,7 @@ async fn test_invalid_agent_id_returns_400() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 400);
+    assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]

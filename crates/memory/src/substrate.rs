@@ -114,7 +114,7 @@ impl MemorySubstrate {
 
     /// Remove an agent from persistent storage and cascade-delete sessions.
     pub fn remove_agent(&self, agent_id: AgentId) -> CarrierResult<()> {
-        let _ = self.sessions.delete_agent_sessions(agent_id);
+        let _ = self.sessions.delete_agent_sessions(&agent_id.to_string());
         self.system_kv.remove_agent(agent_id)
     }
 
@@ -197,7 +197,7 @@ impl MemorySubstrate {
     }
 
     /// Create a new empty session for an agent.
-    pub fn create_session(&self, agent_id: AgentId) -> CarrierResult<Session> {
+    pub fn create_session(&self, agent_id: String) -> CarrierResult<Session> {
         self.sessions.create_session(agent_id)
     }
 
@@ -226,7 +226,7 @@ impl MemorySubstrate {
     }
 
     /// Delete all sessions belonging to an agent.
-    pub fn delete_agent_sessions(&self, agent_id: AgentId) -> CarrierResult<()> {
+    pub fn delete_agent_sessions(&self, agent_id: &str) -> CarrierResult<()> {
         self.sessions.delete_agent_sessions(agent_id)
     }
 
@@ -242,21 +242,21 @@ impl MemorySubstrate {
     /// Find a session by label for a given agent.
     pub fn find_session_by_label(
         &self,
-        agent_id: AgentId,
+        agent_id: &str,
         label: &str,
     ) -> CarrierResult<Option<Session>> {
         self.sessions.find_session_by_label(agent_id, label)
     }
 
     /// List all sessions for a specific agent.
-    pub fn list_agent_sessions(&self, agent_id: AgentId) -> CarrierResult<Vec<serde_json::Value>> {
+    pub fn list_agent_sessions(&self, agent_id: &str) -> CarrierResult<Vec<serde_json::Value>> {
         self.sessions.list_agent_sessions(agent_id)
     }
 
     /// Create a new session with an optional label.
     pub fn create_session_with_label(
         &self,
-        agent_id: AgentId,
+        agent_id: String,
         label: Option<&str>,
     ) -> CarrierResult<Session> {
         self.sessions.create_session_with_label(agent_id, label)

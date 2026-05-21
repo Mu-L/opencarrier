@@ -1,6 +1,6 @@
 //! Session management — load/save conversation history.
 
-use types::agent::{AgentId, SessionId};
+use types::agent::SessionId;
 use types::error::{CarrierError, CarrierResult};
 use types::message::{ContentBlock, Message, MessageContent, Role};
 use chrono::Utc;
@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 pub struct Session {
     /// Session ID.
     pub id: SessionId,
-    /// Owning agent ID.
-    pub agent_id: AgentId,
+    /// Owning agent name (stable across restarts).
+    pub agent_id: String,
     /// Conversation messages.
     pub messages: Vec<Message>,
     /// Estimated token count for the context window.
@@ -56,14 +56,11 @@ impl SessionStore {
 
         match result {
             Ok((agent_str, messages_blob, tokens, label)) => {
-                let agent_id = uuid::Uuid::parse_str(&agent_str)
-                    .map(AgentId)
-                    .map_err(|e| CarrierError::Memory(e.to_string()))?;
                 let messages: Vec<Message> = rmp_serde::from_slice(&messages_blob)
                     .map_err(|e| CarrierError::Serialization(e.to_string()))?;
                 Ok(Some(Session {
                     id: session_id,
-                    agent_id,
+                    agent_id: agent_str,
                     messages,
                     context_window_tokens: tokens as u64,
                     label,
@@ -89,7 +86,7 @@ impl SessionStore {
              ON CONFLICT(id) DO UPDATE SET messages = ?3, context_window_tokens = ?4, label = ?5, updated_at = ?6",
             rusqlite::params![
                 session.id.0.to_string(),
-                session.agent_id.0.to_string(),
+                &session.agent_id,
                 messages_blob,
                 session.context_window_tokens as i64,
                 session.label.as_deref(),
@@ -115,14 +112,14 @@ impl SessionStore {
     }
 
     /// Delete all sessions belonging to an agent.
-    pub fn delete_agent_sessions(&self, agent_id: AgentId) -> CarrierResult<()> {
+    pub fn delete_agent_sessions(&self, agent_id: &str) -> CarrierResult<()> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         conn.execute(
             "DELETE FROM sessions WHERE agent_id = ?1",
-            rusqlite::params![agent_id.0.to_string()],
+            rusqlite::params![agent_id],
         )
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())
@@ -213,7 +210,7 @@ impl SessionStore {
     }
 
     /// Create a new empty session for an agent.
-    pub fn create_session(&self, agent_id: AgentId) -> CarrierResult<Session> {
+    pub fn create_session(&self, agent_id: String) -> CarrierResult<Session> {
         let session = Session {
             id: SessionId::new(),
             agent_id,
@@ -246,7 +243,7 @@ impl SessionStore {
     /// Find a session by label for a given agent.
     pub fn find_session_by_label(
         &self,
-        agent_id: AgentId,
+        agent_id: &str,
         label: &str,
     ) -> CarrierResult<Option<Session>> {
         let conn = self
@@ -260,7 +257,7 @@ impl SessionStore {
             )
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
-        let result = stmt.query_row(rusqlite::params![agent_id.0.to_string(), label], |row| {
+        let result = stmt.query_row(rusqlite::params![agent_id, label], |row| {
             let id_str: String = row.get(0)?;
             let messages_blob: Vec<u8> = row.get(1)?;
             let tokens: i64 = row.get(2)?;
@@ -277,7 +274,7 @@ impl SessionStore {
                     .map_err(|e| CarrierError::Serialization(e.to_string()))?;
                 Ok(Some(Session {
                     id: session_id,
-                    agent_id,
+                    agent_id: agent_id.to_string(),
                     messages,
                     context_window_tokens: tokens as u64,
                     label: lbl,
@@ -291,7 +288,7 @@ impl SessionStore {
 
 impl SessionStore {
     /// List all sessions for a specific agent.
-    pub fn list_agent_sessions(&self, agent_id: AgentId) -> CarrierResult<Vec<serde_json::Value>> {
+    pub fn list_agent_sessions(&self, agent_id: &str) -> CarrierResult<Vec<serde_json::Value>> {
         let conn = self
             .conn
             .lock()
@@ -303,7 +300,7 @@ impl SessionStore {
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let rows = stmt
-            .query_map(rusqlite::params![agent_id.0.to_string()], |row| {
+            .query_map(rusqlite::params![agent_id], |row| {
                 let session_id: String = row.get(0)?;
                 let messages_blob: Vec<u8> = row.get(1)?;
                 let created_at: String = row.get(2)?;
@@ -367,7 +364,7 @@ impl SessionStore {
     /// Create a new session with an optional label.
     pub fn create_session_with_label(
         &self,
-        agent_id: AgentId,
+        agent_id: String,
         label: Option<&str>,
     ) -> CarrierResult<Session> {
         let session = Session {
@@ -537,8 +534,8 @@ mod tests {
     #[test]
     fn test_create_and_load_session() {
         let store = setup();
-        let agent_id = AgentId::new();
-        let session = store.create_session(agent_id).unwrap();
+        let agent_id = "test-agent".to_string();
+        let session = store.create_session(agent_id.clone()).unwrap();
 
         let loaded = store.get_session(session.id).unwrap().unwrap();
         assert_eq!(loaded.agent_id, agent_id);
@@ -548,7 +545,7 @@ mod tests {
     #[test]
     fn test_save_and_load_with_messages() {
         let store = setup();
-        let agent_id = AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = store.create_session(agent_id).unwrap();
         session.messages.push(Message::user("Hello"));
         session.messages.push(Message::assistant("Hi there!"));
@@ -568,7 +565,7 @@ mod tests {
     #[test]
     fn test_delete_session() {
         let store = setup();
-        let agent_id = AgentId::new();
+        let agent_id = "test-agent".to_string();
         let session = store.create_session(agent_id).unwrap();
         let sid = session.id;
         assert!(store.get_session(sid).unwrap().is_some());
@@ -579,12 +576,12 @@ mod tests {
     #[test]
     fn test_delete_agent_sessions() {
         let store = setup();
-        let agent_id = AgentId::new();
-        let s1 = store.create_session(agent_id).unwrap();
-        let s2 = store.create_session(agent_id).unwrap();
+        let agent_id = "test-agent".to_string();
+        let s1 = store.create_session(agent_id.clone()).unwrap();
+        let s2 = store.create_session(agent_id.clone()).unwrap();
         assert!(store.get_session(s1.id).unwrap().is_some());
         assert!(store.get_session(s2.id).unwrap().is_some());
-        store.delete_agent_sessions(agent_id).unwrap();
+        store.delete_agent_sessions(&agent_id).unwrap();
         assert!(store.get_session(s1.id).unwrap().is_none());
         assert!(store.get_session(s2.id).unwrap().is_none());
     }
@@ -592,7 +589,7 @@ mod tests {
     #[test]
     fn test_jsonl_mirror_write() {
         let store = setup();
-        let agent_id = AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = store.create_session(agent_id).unwrap();
         session
             .messages

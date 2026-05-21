@@ -150,7 +150,8 @@ impl CarrierKernel {
                 {
                     tracing::warn!(agent_id = %agent_id, error = %e, "Intent classifier failed; opening new session as fallback");
                     // Fallback: open new session on classifier error.
-                    if let Ok(new_session) = self.memory.create_session(agent_id) {
+                    let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
+                    if let Ok(new_session) = self.memory.create_session(agent_name) {
                         let _ = self.registry.update_session_id(agent_id, new_session.id);
                     }
                 }
@@ -304,17 +305,18 @@ impl CarrierKernel {
         // LLM agent: true streaming via agent loop
         // Load session: use per-user session when sender_id is present (multi-tenancy),
         // otherwise use the agent's default session.
+        let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
         let mut session = if let Some(ref sid) = sender_id {
             let user_label = format!("user:{}", sid);
             match self
                 .memory
-                .find_session_by_label(agent_id, &user_label)
+                .find_session_by_label(&agent_name, &user_label)
                 .map_err(KernelError::Carrier)?
             {
                 Some(s) => s,
                 None => self
                     .memory
-                    .create_session_with_label(agent_id, Some(&user_label))
+                    .create_session_with_label(agent_name.clone(), Some(&user_label))
                     .map_err(KernelError::Carrier)?,
             }
         } else {
@@ -323,7 +325,7 @@ impl CarrierKernel {
                 .map_err(KernelError::Carrier)?
                 .unwrap_or_else(|| memory::session::Session {
                     id: entry.session_id,
-                    agent_id,
+                    agent_id: agent_name.clone(),
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     label: None,
@@ -883,17 +885,18 @@ impl CarrierKernel {
 
         // Load session: use per-user session when sender_id is present (multi-tenancy),
         // otherwise use the agent's default session.
+        let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
         let mut session = if let Some(ref sid) = sender_id {
             let user_label = format!("user:{}", sid);
             match self
                 .memory
-                .find_session_by_label(agent_id, &user_label)
+                .find_session_by_label(&agent_name, &user_label)
                 .map_err(KernelError::Carrier)?
             {
                 Some(s) => s,
                 None => self
                     .memory
-                    .create_session_with_label(agent_id, Some(&user_label))
+                    .create_session_with_label(agent_name.clone(), Some(&user_label))
                     .map_err(KernelError::Carrier)?,
             }
         } else {
@@ -902,7 +905,7 @@ impl CarrierKernel {
                 .map_err(KernelError::Carrier)?
                 .unwrap_or_else(|| memory::session::Session {
                     id: entry.session_id,
-                    agent_id,
+                    agent_id: agent_name.clone(),
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     label: None,
@@ -1309,7 +1312,8 @@ impl CarrierKernel {
                 }
 
                 // Each step gets its own session
-                let step_session = self.memory.create_session(agent_id)
+                let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
+                let step_session = self.memory.create_session(agent_name)
                     .map_err(KernelError::Carrier)?;
 
                 // Clone Arc references for the spawned task

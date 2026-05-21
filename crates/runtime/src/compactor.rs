@@ -766,7 +766,7 @@ mod tests {
     fn test_needs_compaction_below_threshold() {
         let session = Session {
             id: types::agent::SessionId::new(),
-            agent_id: types::agent::AgentId::new(),
+            agent_id: "test-agent".to_string(),
             messages: vec![Message::user("hello")],
             context_window_tokens: 0,
             label: None,
@@ -782,7 +782,7 @@ mod tests {
             .collect();
         let session = Session {
             id: types::agent::SessionId::new(),
-            agent_id: types::agent::AgentId::new(),
+            agent_id: "test-agent".to_string(),
             messages,
             context_window_tokens: 0,
             label: None,
@@ -832,7 +832,7 @@ mod tests {
 
         let session = Session {
             id: types::agent::SessionId::new(),
-            agent_id: types::agent::AgentId::new(),
+            agent_id: "test-agent".to_string(),
             messages: vec![Message::user("hello"), Message::assistant("hi")],
             context_window_tokens: 0,
             label: None,
@@ -920,7 +920,7 @@ mod tests {
 
         let session = Session {
             id: types::agent::SessionId::new(),
-            agent_id: types::agent::AgentId::new(),
+            agent_id: "test-agent".to_string(),
             messages,
             context_window_tokens: 0,
             label: None,
@@ -998,7 +998,7 @@ mod tests {
             .collect();
         let session = Session {
             id: types::agent::SessionId::new(),
-            agent_id: types::agent::AgentId::new(),
+            agent_id: "test-agent".to_string(),
             messages,
             context_window_tokens: 0,
             label: None,
@@ -1131,7 +1131,7 @@ mod tests {
             .collect();
         let session = Session {
             id: types::agent::SessionId::new(),
-            agent_id: types::agent::AgentId::new(),
+            agent_id: "test-agent".to_string(),
             messages,
             context_window_tokens: 0,
             label: None,

@@ -506,7 +506,7 @@ async fn run_agent_loop_impl(
 
     // TODO(Phase 13): Tree memory recall will be restored here.
     // Fire BeforePromptBuild hook
-    let agent_id_str = session.agent_id.0.to_string();
+    let agent_id_str = session.agent_id.clone();
     if let Some(hook_reg) = hooks {
         let ctx = crate::hooks::HookContext {
             agent_name: &manifest.name,
@@ -1637,7 +1637,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_response_after_tool_use_returns_fallback() {
         let memory = memory::MemorySubstrate::open_in_memory().unwrap();
-        let agent_id = types::agent::AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
             agent_id,
@@ -1690,7 +1690,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_error_injects_no_fabrication_guidance() {
         let memory = memory::MemorySubstrate::open_in_memory().unwrap();
-        let agent_id = types::agent::AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
             agent_id,
@@ -1745,7 +1745,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_response_max_tokens_returns_fallback() {
         let memory = memory::MemorySubstrate::open_in_memory().unwrap();
-        let agent_id = types::agent::AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
             agent_id,
@@ -1798,7 +1798,7 @@ mod tests {
     #[tokio::test]
     async fn test_normal_response_not_replaced_by_fallback() {
         let memory = memory::MemorySubstrate::open_in_memory().unwrap();
-        let agent_id = types::agent::AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
             agent_id,
@@ -1842,7 +1842,7 @@ mod tests {
     #[tokio::test]
     async fn test_streaming_empty_response_after_tool_use_returns_fallback() {
         let memory = memory::MemorySubstrate::open_in_memory().unwrap();
-        let agent_id = types::agent::AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
             agent_id,
@@ -1970,7 +1970,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_first_response_retries_and_recovers() {
         let memory = memory::MemorySubstrate::open_in_memory().unwrap();
-        let agent_id = types::agent::AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
             agent_id,
@@ -2017,7 +2017,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_first_response_fallback_when_retry_also_empty() {
         let memory = memory::MemorySubstrate::open_in_memory().unwrap();
-        let agent_id = types::agent::AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
             agent_id,
@@ -2070,7 +2070,7 @@ mod tests {
     #[tokio::test]
     async fn test_streaming_empty_response_max_tokens_returns_fallback() {
         let memory = memory::MemorySubstrate::open_in_memory().unwrap();
-        let agent_id = types::agent::AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
             agent_id,
@@ -2949,7 +2949,7 @@ mod tests {
         // the recovery code detects it, promotes it to ToolUse, executes the tool,
         // and the agent loop continues to produce a final response.
         let memory = memory::MemorySubstrate::open_in_memory().unwrap();
-        let agent_id = types::agent::AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
             agent_id,
@@ -3022,7 +3022,7 @@ mod tests {
     #[tokio::test]
     async fn test_normal_flow_unaffected_by_recovery() {
         let memory = memory::MemorySubstrate::open_in_memory().unwrap();
-        let agent_id = types::agent::AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
             agent_id,
@@ -3077,7 +3077,7 @@ mod tests {
     #[tokio::test]
     async fn test_text_tool_call_recovery_streaming_e2e() {
         let memory = memory::MemorySubstrate::open_in_memory().unwrap();
-        let agent_id = types::agent::AgentId::new();
+        let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
             agent_id,
