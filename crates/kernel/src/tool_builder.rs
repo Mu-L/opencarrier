@@ -444,6 +444,22 @@ impl CarrierKernel {
                 .workspace
                 .as_ref()
                 .and_then(|w| read_evolution_rules(w)),
+            mental_models_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_identity_file(w, "MENTAL-MODELS.md")),
+            decision_heuristics_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_identity_file(w, "DECISION-HEURISTICS.md")),
+            expression_dna_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_identity_file(w, "EXPRESSION-DNA.md")),
+            timeline_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| read_identity_file(w, "TIMELINE.md")),
             auto_matched_skill,
         };
         manifest.model.system_prompt =

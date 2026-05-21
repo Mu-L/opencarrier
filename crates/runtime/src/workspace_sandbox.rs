@@ -154,6 +154,28 @@ pub fn resolve_sandbox_path_for_write(
         ));
     }
 
+    // V3: Block writes to identity-frozen files (MENTAL-MODELS.md, DECISION-HEURISTICS.md, etc.)
+    // Only enforced when EVOLUTION.md contains identity freeze rules.
+    const IDENTITY_FILES: &[&str] = &[
+        "MENTAL-MODELS.md",
+        "DECISION-HEURISTICS.md",
+        "EXPRESSION-DNA.md",
+        "TIMELINE.md",
+        "system_prompt.md",
+    ];
+    if IDENTITY_FILES.contains(&rel_str.as_ref()) {
+        // Check if EVOLUTION.md has identity freeze rules
+        let evolution_path = workspace_root.join("EVOLUTION.md");
+        if let Ok(content) = std::fs::read_to_string(&evolution_path) {
+            if content.contains("身份层不可修改") || content.contains("identity_frozen:") {
+                return Err(format!(
+                    "Write denied: '{}' is a frozen identity file (evolution system may not modify)",
+                    rel_str
+                ));
+            }
+        }
+    }
+
     // Rewrite output/ and memory/ to per-sender directories when sender_id is present
     // Non-internal paths are auto-routed to senders/{sender_id}/{agent_name}/output/
     let effective_path = if let (Some(sid), Some(an)) = (sender_id, agent_name) {

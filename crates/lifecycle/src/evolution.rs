@@ -329,16 +329,37 @@ fn write_knowledge(workspace: &Path, candidate: &KnowledgeCandidate) -> Result<P
 }
 
 /// Rebuild MEMORY.md by scanning knowledge/ directory.
+/// Preserves V3 sections (## 技能, ## 身份文件) if they exist.
 pub fn update_memory_index(workspace: &Path) -> Result<()> {
     let index_path = workspace.join("MEMORY.md");
+
+    // Read existing MEMORY.md to extract preserved sections
+    let existing = if index_path.exists() {
+        fs::read_to_string(&index_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let preserved = extract_preserved_sections(&existing);
 
     let mut lines = vec![
         "# 知识索引".to_string(),
         String::new(),
-        "> 此文件由系统自动维护，不要手动编辑。".to_string(),
-        String::new(),
     ];
 
+    // Preserved: 技能 section (V3 format)
+    if let Some(ref skills) = preserved.skills {
+        lines.extend(skills.lines().map(|l| l.to_string()));
+        lines.push(String::new());
+    }
+
+    // Preserved: 身份文件 section (V3 format)
+    if let Some(ref identity) = preserved.identity_files {
+        lines.extend(identity.lines().map(|l| l.to_string()));
+        lines.push(String::new());
+    }
+
+    // Rebuilt: 知识 section (scanned from knowledge/)
     let knowledge_dir = workspace.join("knowledge");
     if knowledge_dir.exists() {
         lines.push("## 知识".to_string());
@@ -378,8 +399,7 @@ pub fn update_memory_index(workspace: &Path) -> Result<()> {
     }
 
     // Check for existing gaps section
-    if index_path.exists() {
-        let existing = fs::read_to_string(&index_path).unwrap_or_default();
+    if !existing.is_empty() {
         if let Some(gaps_start) = existing.find("## 知识缺口") {
             lines.push(String::new());
             // Preserve gaps section as-is
@@ -789,4 +809,48 @@ mod tests {
         assert!(compiled.contains("Just compiled truth"));
         assert!(timeline.is_empty());
     }
+}
+
+/// Preserved sections from existing MEMORY.md that should survive rebuild.
+struct PreservedSections {
+    skills: Option<String>,
+    identity_files: Option<String>,
+}
+
+/// Extract V3 preserved sections (## 技能, ## 身份文件) from existing MEMORY.md.
+fn extract_preserved_sections(existing: &str) -> PreservedSections {
+    let mut skills: Option<String> = None;
+    let mut identity_files: Option<String> = None;
+
+    // Section headers to look for
+    let section_headers = ["## 技能", "## 身份文件", "## 知识", "## 知识缺口"];
+
+    for (i, line) in existing.lines().enumerate() {
+        if line.starts_with("## 技能") {
+            skills = Some(extract_section(existing, i, &section_headers));
+        } else if line.starts_with("## 身份文件") {
+            identity_files = Some(extract_section(existing, i, &section_headers));
+        }
+    }
+
+    PreservedSections {
+        skills,
+        identity_files,
+    }
+}
+
+/// Extract a section from line index until the next section header or EOF.
+fn extract_section(text: &str, start_line: usize, stop_headers: &[&str]) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut section_lines = Vec::new();
+
+    for line in lines.iter().skip(start_line) {
+        // Stop if we hit another section header
+        if stop_headers.iter().any(|h| line.starts_with(h)) && !section_lines.is_empty() {
+            break;
+        }
+        section_lines.push(*line);
+    }
+
+    section_lines.join("\n")
 }

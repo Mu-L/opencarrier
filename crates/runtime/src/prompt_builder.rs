@@ -91,6 +91,15 @@ pub struct PromptContext {
     pub clone_agents_md: Option<String>,
     /// EVOLUTION.md body text (rules only, frontmatter stripped).
     pub evolution_rules_md: Option<String>,
+    // --- V3 identity layer (名人分身专属) ---
+    /// MENTAL-MODELS.md — detailed mental models with evidence.
+    pub mental_models_md: Option<String>,
+    /// DECISION-HEURISTICS.md — decision rules with scenarios.
+    pub decision_heuristics_md: Option<String>,
+    /// EXPRESSION-DNA.md — quantified style, sentence patterns, catchphrases.
+    pub expression_dna_md: Option<String>,
+    /// TIMELINE.md — biographical timeline + intellectual lineage.
+    pub timeline_md: Option<String>,
     /// Auto-matched skill content — injected at high priority when the system
     /// detects a skill matching the user's message before the LLM call.
     pub auto_matched_skill: Option<String>,
@@ -134,6 +143,37 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
                     cap_str(&strip_code_blocks(soul), 2000)
                 ));
             }
+        }
+
+        // V3 身份层文件 → 心智模型 + 决策启发式 + 表达DNA + 时间线
+        // 只要有任何一个身份文件存在就注入
+        if ctx.mental_models_md.is_some()
+            || ctx.decision_heuristics_md.is_some()
+            || ctx.expression_dna_md.is_some()
+            || ctx.timeline_md.is_some()
+        {
+            let mut identity_section = String::from("## 身份层详解\nSOUL.md 中的视角和风格指向这些详解文件。回答时参考对应内容。\n");
+            if let Some(ref mm) = ctx.mental_models_md {
+                if !mm.trim().is_empty() {
+                    identity_section.push_str(&format!("\n### 心智模型\n{}\n", cap_str(mm, 3000)));
+                }
+            }
+            if let Some(ref dh) = ctx.decision_heuristics_md {
+                if !dh.trim().is_empty() {
+                    identity_section.push_str(&format!("\n### 决策启发式\n{}\n", cap_str(dh, 1500)));
+                }
+            }
+            if let Some(ref ed) = ctx.expression_dna_md {
+                if !ed.trim().is_empty() {
+                    identity_section.push_str(&format!("\n### 表达DNA\n{}\n", cap_str(ed, 2000)));
+                }
+            }
+            if let Some(ref tl) = ctx.timeline_md {
+                if !tl.trim().is_empty() {
+                    identity_section.push_str(&format!("\n### 时间线\n{}\n", cap_str(tl, 1500)));
+                }
+            }
+            sections.push(identity_section);
         }
 
         // system_prompt.md → 行为指令

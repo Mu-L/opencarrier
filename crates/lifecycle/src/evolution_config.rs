@@ -42,6 +42,8 @@ pub struct EvolutionConfig {
     pub bloat_delete_days: u32,
     /// Whether to send anonymized feedback to Hub.
     pub feedback_to_hub: bool,
+    /// V3: identity layer files that are frozen — evolution system may not modify.
+    pub identity_frozen_files: Vec<String>,
 }
 
 impl Default for EvolutionConfig {
@@ -55,6 +57,7 @@ impl Default for EvolutionConfig {
             bloat_stale_days: 30,
             bloat_delete_days: 60,
             feedback_to_hub: false,
+            identity_frozen_files: Vec::new(),
         }
     }
 }
@@ -120,6 +123,13 @@ fn parse_evolution_config(content: &str) -> EvolutionConfig {
             }
         } else if let Some(val) = line.strip_prefix("feedback_to_hub:") {
             config.feedback_to_hub = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("identity_frozen:") {
+            let v = val.trim().trim_matches('"').trim_matches('\'');
+            config.identity_frozen_files = v
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
         }
     }
 
@@ -135,6 +145,12 @@ pub fn should_evolve(config: &EvolutionConfig, knowledge_count: usize) -> bool {
         return false;
     }
     true
+}
+
+/// Check if a file is frozen (V3 identity layer protection).
+/// Returns true if the file is in the identity_frozen_files list.
+pub fn is_file_identity_frozen(config: &EvolutionConfig, filename: &str) -> bool {
+    config.identity_frozen_files.iter().any(|f| f == filename)
 }
 
 #[cfg(test)]
