@@ -1173,7 +1173,7 @@ pub async fn create_sender(
             )
         }
     };
-    let agent_id = match body.get("agent_id").and_then(|v| v.as_str()) {
+    let agent_id_raw = match body.get("agent_id").and_then(|v| v.as_str()) {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => {
             return (
@@ -1182,6 +1182,7 @@ pub async fn create_sender(
             )
         }
     };
+    let agent_id = resolve_agent_name(&state, &agent_id_raw);
 
     let Some(ref pm) = state.channel_manager else {
         return (
@@ -1239,7 +1240,7 @@ pub async fn bind_sender(
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id = match body.get("agent_id").and_then(|v| v.as_str()) {
+    let agent_id_raw = match body.get("agent_id").and_then(|v| v.as_str()) {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => {
             return (
@@ -1248,6 +1249,7 @@ pub async fn bind_sender(
             )
         }
     };
+    let agent_id = resolve_agent_name(&state, &agent_id_raw);
 
     let Some(ref pm) = state.channel_manager else {
         return (
@@ -1355,14 +1357,17 @@ async fn register_bot_from_scan(
     credentials: &serde_json::Value,
     agent_name: &str,
 ) -> Result<String, String> {
-    // Resolve agent_name to UUID
-    let agent_uuid = if uuid::Uuid::parse_str(agent_name).is_ok() {
-        agent_name.to_string()
+    // Resolve agent_name: accept name or UUID, store as name
+    let agent_ref = if uuid::Uuid::parse_str(agent_name).is_ok() {
+        // Input is UUID — resolve to name
+        resolve_agent_name(state, agent_name)
     } else {
+        // Input is name — validate it exists
         let agents = state.kernel.list_agents();
-        match agents.iter().find(|a| a.name == agent_name) {
-            Some(agent) => agent.id.clone(),
-            None => return Err(format!("分身 '{agent_name}' 不存在")),
+        if agents.iter().any(|a| a.name == agent_name) {
+            agent_name.to_string()
+        } else {
+            return Err(format!("分身 '{agent_name}' 不存在"));
         }
     };
 
@@ -1396,14 +1401,14 @@ async fn register_bot_from_scan(
                 callback_token: None,
                 mcp_bot_id: None,
                 mcp_bot_secret: None,
-                bind_agent: Some(agent_uuid.clone()),
+                bind_agent: Some(agent_ref.clone()),
             };
             channel_wecom::token::WECOM_STATE.save_session(&sf);
 
             // Set sender route — sender_id = wecom bot_id
             if let Some(ref pm) = state.channel_manager {
                 let pm = pm.lock().await;
-                pm.set_sender_route(&wecom_bot_id, &agent_uuid);
+                pm.set_sender_route(&wecom_bot_id, &agent_ref);
                 // Immediately start the new bot's connection
                 if let Err(e) = pm.start_sender("wecom", &wecom_bot_id) {
                     tracing::warn!(sender_id = %wecom_bot_id, error = %e, "start_sender failed for wecom");
@@ -1413,7 +1418,7 @@ async fn register_bot_from_scan(
             tracing::info!(
                 platform = "wecom",
                 sender_id = %wecom_bot_id,
-                agent = %agent_uuid,
+                agent = %agent_ref,
                 "Registered WeCom bot from scan"
             );
             Ok(wecom_bot_id)
@@ -1438,14 +1443,14 @@ async fn register_bot_from_scan(
                 app_secret: Some(app_secret),
                 secret_env: None,
                 brand: "feishu".to_string(),
-                bind_agent: Some(agent_uuid.clone()),
+                bind_agent: Some(agent_ref.clone()),
             };
             channel_feishu::FEISHU_STATE.save_session(&sf);
 
             // Set sender route using Feishu app_id
             if let Some(ref pm) = state.channel_manager {
                 let pm = pm.lock().await;
-                pm.set_sender_route(&app_id, &agent_uuid);
+                pm.set_sender_route(&app_id, &agent_ref);
                 // Immediately start the new bot's connection
                 if let Err(e) = pm.start_sender("feishu", &app_id) {
                     tracing::warn!(sender_id = %app_id, error = %e, "start_sender failed for feishu");
@@ -1455,7 +1460,7 @@ async fn register_bot_from_scan(
             tracing::info!(
                 platform = "feishu",
                 sender_id = %app_id,
-                agent = %agent_uuid,
+                agent = %agent_ref,
                 "Registered Feishu bot from scan"
             );
             Ok(app_id)
@@ -1480,14 +1485,14 @@ async fn register_bot_from_scan(
                 app_secret: Some(app_secret),
                 secret_env: None,
                 corp_id: None,
-                bind_agent: Some(agent_uuid.clone()),
+                bind_agent: Some(agent_ref.clone()),
             };
             channel_dingtalk::DINGTALK_STATE.save_session(&sf);
 
             // Set sender route using DingTalk app_key
             if let Some(ref pm) = state.channel_manager {
                 let pm = pm.lock().await;
-                pm.set_sender_route(&app_key, &agent_uuid);
+                pm.set_sender_route(&app_key, &agent_ref);
                 // Immediately start the new bot's connection
                 if let Err(e) = pm.start_sender("dingtalk", &app_key) {
                     tracing::warn!(sender_id = %app_key, error = %e, "start_sender failed for dingtalk");
@@ -1497,7 +1502,7 @@ async fn register_bot_from_scan(
             tracing::info!(
                 platform = "dingtalk",
                 sender_id = %app_key,
-                agent = %agent_uuid,
+                agent = %agent_ref,
                 "Registered DingTalk bot from scan"
             );
             Ok(app_key)
@@ -1549,4 +1554,19 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
             "/api/senders/dingtalk/device-auth/poll",
             routing::get(dingtalk_device_auth_poll),
         )
+}
+
+/// Resolve an agent_id input to agent name.
+/// Accepts either a UUID or an agent name string.
+/// Returns the agent name if found, or the original input as fallback.
+fn resolve_agent_name(state: &crate::routes::state::AppState, input: &str) -> String {
+    if let Ok(id) = input.parse::<types::agent::AgentId>() {
+        // Input is UUID — look up agent name from registry
+        state.kernel.registry.get(id)
+            .map(|e| e.manifest.name.clone())
+            .unwrap_or_else(|| input.to_string())
+    } else {
+        // Input is already a name
+        input.to_string()
+    }
 }

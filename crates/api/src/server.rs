@@ -228,6 +228,12 @@ pub async fn run_daemon(
             let router = std::sync::Arc::new(
                 runtime::plugin::router::SenderRouter::new(&kernel.config.home_dir),
             );
+            // Migrate any routes stored as UUIDs to agent names
+            router.migrate_uuid_to_names(|uuid| {
+                uuid.parse::<types::agent::AgentId>().ok().and_then(|id| {
+                    kernel.registry.get(id).map(|e| e.manifest.name.clone())
+                })
+            });
             cm.set_sender_router(router);
             info!("Sender-based routing enabled");
         }
@@ -298,17 +304,25 @@ pub async fn run_daemon(
                                     tf.get("bot_id").and_then(|v| v.as_str()),
                                     tf.get("bind_agent").and_then(|v| v.as_str()),
                                 ) {
-                                    if uuid::Uuid::parse_str(agent).is_ok() {
+                                    if !agent.is_empty() {
+                                        // Resolve UUID bind_agent to agent name
+                                        let agent_ref = if let Ok(id) = agent.parse::<types::agent::AgentId>() {
+                                            kernel.registry.get(id)
+                                                .map(|e| e.manifest.name.clone())
+                                                .unwrap_or_else(|| agent.to_string())
+                                        } else {
+                                            agent.to_string()
+                                        };
                                         if let Some(uid) =
                                             tf.get("user_id").and_then(|v| v.as_str())
                                         {
                                             if !uid.is_empty()
                                                 && cm.get_sender_route(uid).is_none()
                                             {
-                                                cm.set_sender_route(uid, agent);
+                                                cm.set_sender_route(uid, &agent_ref);
                                                 info!(
                                                     bot = %bot_id,
-                                                    agent = %agent,
+                                                    agent = %agent_ref,
                                                     "Registered WeChat binding from token file (no existing route)"
                                                 );
                                             }

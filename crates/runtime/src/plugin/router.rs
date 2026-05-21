@@ -3,18 +3,19 @@
 //! Directory structure:
 //!   ~/.opencarrier/senders/{sender_id}/config.json   — routing + clone registry
 //!
-//! config.json format (unified):
+//! config.json format:
 //!   {
-//!     "default": "<agent_id>",          // current active clone
+//!     "default": "<agent_name>",        // agent name (not UUID)
 //!     "clones": {
-//!       "<agent_id>": { "alias": "名字", "installed_at": 1778713691 },
+//!       "<agent_name>": { "alias": "名字", "installed_at": 1778713691 },
 //!       ...
 //!     },
 //!     "created_at": 1778389219
 //!   }
 //!
-//! Legacy format (auto-migrated on first load):
-//!   { "agent_id": "...", "created_at": ... }  +  aliases.json
+//! Legacy formats (auto-migrated on load):
+//!   - Old unified: { "default": "<uuid>", ... }  → migrated via migrate_uuid_to_names()
+//!   - Original: { "agent_id": "<uuid>", ... } + aliases.json
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -51,17 +52,17 @@ struct LegacyAliasMap {
     aliases: HashMap<String, String>,
 }
 
-/// Per-sender routing: sender_id → agent_id, with name-based aliases.
+/// Per-sender routing: sender_id → agent_name, with name-based aliases.
 ///
 /// Thread-safe via DashMap. Shared between the bridge (reads) and API routes (writes).
 pub struct SenderRouter {
-    /// In-memory cache: sender_id → agent_id (default route).
+    /// In-memory cache: sender_id → agent_name (default route).
     routes: DashMap<String, String>,
-    /// In-memory cache: sender_id → { agent_id → CloneEntry }.
+    /// In-memory cache: sender_id → { agent_name → CloneEntry }.
     clones: DashMap<String, HashMap<String, CloneEntry>>,
     /// Root directory: ~/.opencarrier/senders/
     senders_dir: PathBuf,
-    /// First available agent (for auto-assigning new senders).
+    /// First available agent name (for auto-assigning new senders).
     first_agent: Mutex<Option<String>>,
 }
 
@@ -79,11 +80,81 @@ impl SenderRouter {
     }
 
     /// Set the first available agent (called after bindings are populated).
-    pub fn set_first_agent(&self, agent_id: String) {
+    pub fn set_first_agent(&self, agent_name: String) {
         let mut first = self.first_agent.lock().unwrap();
         if first.is_none() {
-            info!(agent = %agent_id, "SenderRouter: first agent set");
-            *first = Some(agent_id);
+            info!(agent = %agent_name, "SenderRouter: first agent set");
+            *first = Some(agent_name);
+        }
+    }
+
+    /// Migrate any routes still stored as UUIDs to agent names.
+    /// Called once after the kernel registry is populated (agents are spawned).
+    /// `lookup` is a closure that maps UUID → agent_name.
+    pub fn migrate_uuid_to_names<F>(&self, lookup: F)
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let mut migrated = 0usize;
+
+        // Collect routes that need migration
+        let to_migrate: Vec<(String, String)> = self.routes
+            .iter()
+            .filter_map(|entry| {
+                let val = entry.value();
+                if uuid::Uuid::parse_str(val).is_ok() {
+                    lookup(val).map(|name| (entry.key().clone(), name))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (sender_id, new_name) in &to_migrate {
+            self.routes.insert(sender_id.clone(), new_name.clone());
+            migrated += 1;
+        }
+
+        // Also migrate clones map keys
+        let clone_migrations: Vec<(String, Vec<(String, String)>)> = self.clones
+            .iter()
+            .filter_map(|entry| {
+                let clones_map = entry.value();
+                let keys: Vec<(String, String)> = clones_map
+                    .keys()
+                    .filter_map(|k| {
+                        if uuid::Uuid::parse_str(k).is_ok() {
+                            lookup(k).map(|name| (k.clone(), name))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if keys.is_empty() { None } else { Some((entry.key().clone(), keys)) }
+            })
+            .collect();
+
+        for (sender_id, keys) in &clone_migrations {
+            if let Some(mut clones_map) = self.clones.get_mut(sender_id) {
+                for (old_key, new_key) in keys {
+                    if let Some(entry_val) = clones_map.remove(old_key) {
+                        clones_map.insert(new_key.clone(), entry_val);
+                    }
+                }
+            }
+        }
+
+        // Persist migrated configs
+        if migrated > 0 {
+            for (sender_id, _) in &to_migrate {
+                self.persist_config(sender_id);
+            }
+            // Check for orphaned routes (UUID that couldn't be resolved)
+            let orphaned = self.routes
+                .iter()
+                .filter(|e| uuid::Uuid::parse_str(e.value()).is_ok())
+                .count();
+            info!(migrated, orphaned, "Migrated sender routes from UUID to agent name");
         }
     }
 
@@ -210,16 +281,16 @@ impl SenderRouter {
     }
 
     fn auto_assign(&self, sender_id: &str) -> Option<String> {
-        let agent_id = {
+        let agent_name = {
             let first = self.first_agent.lock().unwrap();
             first.clone()?
         };
 
-        self.persist_route(sender_id, &agent_id);
+        self.persist_route(sender_id, &agent_name);
         self.routes
-            .insert(sender_id.to_string(), agent_id.clone());
-        info!(sender = %sender_id, agent = %agent_id, "Auto-assigned sender to agent");
-        Some(agent_id)
+            .insert(sender_id.to_string(), agent_name.clone());
+        info!(sender = %sender_id, agent = %agent_name, "Auto-assigned sender to agent");
+        Some(agent_name)
     }
 
     /// Write a sender's route config and create directory structure.

@@ -70,11 +70,11 @@ pub async fn install_hub_template(
             if let Some(ref sid) = sender_id {
                 if let Some(ref pm_arc) = state.channel_manager {
                     let pm = pm_arc.lock().await;
-                    pm.set_sender_route(sid, &agent_id);
+                    pm.set_sender_route(sid, &agent_name);
                     if let Some(ref alias_name) = alias {
-                        pm.set_sender_alias(sid, alias_name, &agent_id);
+                        pm.set_sender_alias(sid, alias_name, &agent_name);
                     }
-                    tracing::info!(sender = %sid, agent = %agent_id, "Bound installed clone to sender");
+                    tracing::info!(sender = %sid, agent = %agent_name, "Bound installed clone to sender");
                 }
             }
             let serial = allocate_serial_number(&state.kernel.config.data_dir);

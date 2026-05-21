@@ -275,9 +275,18 @@ pub async fn weixin_qrcode_status(
 
                             let effective_agent = resolved_agent
                                 .as_ref()
-                                .map(|(id, _)| id.clone())
+                                .map(|(id, _display)| {
+                                    // Resolve UUID to agent name for routing
+                                    if let Ok(aid) = id.parse::<types::agent::AgentId>() {
+                                        state.kernel.registry.get(aid)
+                                            .map(|e| e.manifest.name.clone())
+                                            .unwrap_or_else(|| id.clone())
+                                    } else {
+                                        id.clone()
+                                    }
+                                })
                                 .or(existing_bind.clone())
-                                .filter(|a| !a.is_empty() && uuid::Uuid::parse_str(a).is_ok());
+                                .filter(|a| !a.is_empty());
 
                             if let Some((ref new_agent_id, _)) = resolved_agent {
                                 tf["bind_agent"] = serde_json::Value::String(new_agent_id.clone());
@@ -352,15 +361,21 @@ pub async fn weixin_qrcode_status(
 
         // Register dynamic binding + start sender
         if let Some((ref agent_id, _)) = resolved_agent {
-            if uuid::Uuid::parse_str(agent_id).is_ok() {
-                if let Some(ref pm_arc) = state.channel_manager {
-                    let pm = pm_arc.lock().await;
-                    if let Some(uid) = ilink_user_id {
-                        if !uid.is_empty() {
-                            pm.set_sender_route(uid, agent_id);
-                            if let Err(e) = pm.start_sender("weixin", uid) {
-                                tracing::warn!(sender_id = %uid, error = %e, "start_sender failed for weixin new user");
-                            }
+            // Resolve UUID to agent name for routing
+            let agent_name = if let Ok(aid) = agent_id.parse::<types::agent::AgentId>() {
+                state.kernel.registry.get(aid)
+                    .map(|e| e.manifest.name.clone())
+                    .unwrap_or_else(|| agent_id.clone())
+            } else {
+                agent_id.clone()
+            };
+            if let Some(ref pm_arc) = state.channel_manager {
+                let pm = pm_arc.lock().await;
+                if let Some(uid) = ilink_user_id {
+                    if !uid.is_empty() {
+                        pm.set_sender_route(uid, &agent_name);
+                        if let Err(e) = pm.start_sender("weixin", uid) {
+                            tracing::warn!(sender_id = %uid, error = %e, "start_sender failed for weixin new user");
                         }
                     }
                 }
@@ -498,12 +513,20 @@ pub async fn weixin_save_token(
     }
 
     // Register dynamic bridge binding + start sender
-    if !bind_agent.is_empty() && uuid::Uuid::parse_str(&bind_agent).is_ok() {
+    if !bind_agent.is_empty() {
+        // Resolve bind_agent to agent name (accept UUID or name)
+        let agent_name = if let Ok(aid) = bind_agent.parse::<types::agent::AgentId>() {
+            state.kernel.registry.get(aid)
+                .map(|e| e.manifest.name.clone())
+                .unwrap_or_else(|| bind_agent.clone())
+        } else {
+            bind_agent.clone()
+        };
         if let Some(ref pm_arc) = state.channel_manager {
             let pm = pm_arc.lock().await;
             if let Some(ref uid) = ilink_user_id {
                 if !uid.is_empty() {
-                    pm.set_sender_route(uid, &bind_agent);
+                    pm.set_sender_route(uid, &agent_name);
                     if let Err(e) = pm.start_sender("weixin", uid) {
                         tracing::warn!(sender_id = %uid, error = %e, "start_sender failed for weixin save-token");
                     }
@@ -685,20 +708,27 @@ pub async fn weixin_bind_bot(
         }
     };
 
-    // Resolve agent_name to UUID
-    let agent_uuid = if uuid::Uuid::parse_str(&agent_input).is_ok() {
-        agent_input.clone()
+    // Resolve agent_name: accept name or UUID, store as name
+    let agent_name = if let Ok(id) = agent_input.parse::<types::agent::AgentId>() {
+        // Input is UUID — resolve to agent name
+        state.kernel.registry.get(id)
+            .map(|e| e.manifest.name.clone())
+            .unwrap_or_else(|| {
+                let agents = state.kernel.list_agents();
+                agents.iter().find(|a| a.id == id.to_string())
+                    .map(|a| a.name.clone())
+                    .unwrap_or_else(|| agent_input.clone())
+            })
     } else {
+        // Input is name — validate it exists
         let agents = state.kernel.list_agents();
-        match agents.iter().find(|a| a.name == agent_input) {
-            Some(agent) => agent.id.clone(),
-            None => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": format!("分身 '{agent_input}' 不存在")})),
-                );
-            }
+        if !agents.iter().any(|a| a.name == agent_input) {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": format!("分身 '{agent_input}' 不存在")})),
+            );
         }
+        agent_input.clone()
     };
 
     // Scan senders/ for weixin sessions matching the bot name
@@ -714,7 +744,7 @@ pub async fn weixin_bind_bot(
 
         let session_path = home.join("senders").join(&sender_id).join("session.json");
         let mut tf = json.clone();
-        tf["bind_agent"] = serde_json::Value::String(agent_uuid.clone());
+        tf["bind_agent"] = serde_json::Value::String(agent_name.clone());
         if let Ok(json_str) = serde_json::to_string_pretty(&tf) {
             let _ = atomic_write(&session_path, &json_str);
         }
@@ -722,7 +752,7 @@ pub async fn weixin_bind_bot(
         // Register dynamic binding + start sender
         if let Some(ref pm_arc) = state.channel_manager {
             let pm = pm_arc.lock().await;
-            pm.set_sender_route(&sender_id, &agent_uuid);
+            pm.set_sender_route(&sender_id, &agent_name);
             if let Err(e) = pm.start_sender("weixin", &sender_id) {
                 tracing::warn!(sender_id = %sender_id, error = %e, "start_sender failed for weixin bind");
             }
@@ -733,7 +763,7 @@ pub async fn weixin_bind_bot(
             Json(serde_json::json!({
                 "status": "bound",
                 "message": "微信机器人已绑定",
-                "bind_agent": agent_uuid,
+                "bind_agent": agent_name,
             })),
         );
     }
