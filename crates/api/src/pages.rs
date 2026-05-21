@@ -121,8 +121,8 @@ pub async fn overview_page(
     let mut user_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     for e in &all_agents {
-        if let Ok(users) = state.kernel.memory.list_agent_users(&e.id.to_string()) {
-            user_counts.insert(e.id.to_string(), users.len());
+        if let Ok(users) = state.kernel.memory.list_agent_users(&e.name) {
+            user_counts.insert(e.name.clone(), users.len());
         }
     }
     let total_users: usize = user_counts.values().sum();
@@ -142,7 +142,7 @@ pub async fn overview_page(
                 model_name => model,
                 emoji => e.identity.emoji,
                 installs => install_counts.get(&e.name).copied().unwrap_or(0),
-                users => user_counts.get(&id_str).copied().unwrap_or(0),
+                users => user_counts.get(&e.name).copied().unwrap_or(0),
             }
         })
         .collect();
@@ -250,7 +250,6 @@ async fn render_clone_detail(
     user: &str,
     entry: &types::agent::AgentEntry,
 ) -> Result<Html<String>, Html<String>> {
-    let agent_id_str = entry.id.to_string();
     let ready = matches!(entry.state, types::agent::AgentState::Running);
     let (_, model) = state.kernel.resolve_model_label(&entry.manifest.model.modality);
 
@@ -269,7 +268,7 @@ async fn render_clone_detail(
     let users_raw = state
         .kernel
         .memory
-        .list_agent_users(&agent_id_str)
+        .list_agent_users(&entry.name)
         .unwrap_or_default();
     let user_count = users_raw.len();
 
@@ -293,7 +292,7 @@ async fn render_clone_detail(
             session_user => user,
             version => env!("CARGO_PKG_VERSION"),
             agent => minijinja::context! {
-                id => agent_id_str,
+                id => entry.id.to_string(),
                 name => entry.name,
                 display_name => entry.manifest.display_name,
                 state => format!("{:?}", entry.state),
@@ -375,7 +374,7 @@ pub async fn user_chat_page(
         }
     };
 
-    let agent_id_str = entry.id.to_string();
+    let agent_id_str = entry.name.clone();
 
     // Load all sessions for this agent + sender
     let sessions = state
