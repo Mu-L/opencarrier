@@ -890,3 +890,158 @@ pub fn read_skill_toolsets(workspace: &Path, skill_name: &str) -> Vec<String> {
 
     Vec::new()
 }
+
+/// Append tool names to a skill .md file's `tools:` frontmatter field.
+///
+/// If a `tools:` line already exists in the frontmatter, new tools are merged
+/// (duplicates removed). Otherwise, a new line is inserted after `name:`.
+/// Uses atomic write (tmp + rename) for safety.
+pub fn write_skill_tools(workspace: &Path, skill_name: &str, tools: &[String]) -> Result<(), String> {
+    let skills_dir = workspace.join("skills");
+    let filename = lifecycle::evolution::sanitize_filename(skill_name);
+    let flat_path = skills_dir.join(format!("{filename}.md"));
+    let dir_path = skills_dir.join(&filename).join("SKILL.md");
+
+    let target = if flat_path.exists() {
+        flat_path
+    } else if dir_path.exists() {
+        dir_path
+    } else {
+        return Err(format!("Skill '{skill_name}' not found"));
+    };
+
+    let content = std::fs::read_to_string(&target)
+        .map_err(|e| format!("Failed to read skill: {e}"))?;
+
+    if tools.is_empty() {
+        return Ok(());
+    }
+
+    let updated = if let Some(rest) = content.strip_prefix("---") {
+        if let Some(end) = rest.find("---") {
+            let fm = &rest[..end];
+            let after_fm = &rest[end + 3..]; // skip closing ---
+
+            if fm.contains("tools:") {
+                // Merge into existing tools line
+                let new_fm: String = fm.lines().map(|line| {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("tools:") {
+                        // Parse existing list
+                        if let Some(val) = trimmed.strip_prefix("tools:") {
+                            let val = val.trim();
+                            if val.starts_with('[') && val.ends_with(']') {
+                                let inner = &val[1..val.len() - 1];
+                                let mut existing: Vec<String> = if inner.is_empty() {
+                                    Vec::new()
+                                } else {
+                                    inner.split(',').map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string()).filter(|s| !s.is_empty()).collect()
+                                };
+                                for t in tools {
+                                    if !existing.contains(t) {
+                                        existing.push(t.clone());
+                                    }
+                                }
+                                let ts_str = existing.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", ");
+                                format!("tools: [{ts_str}]")
+                            } else {
+                                line.to_string()
+                            }
+                        } else {
+                            line.to_string()
+                        }
+                    } else {
+                        line.to_string()
+                    }
+                }).collect::<Vec<_>>().join("\n");
+                format!("---\n{new_fm}---{after_fm}")
+            } else {
+                // Insert after name: line
+                let mut new_fm = String::new();
+                let mut inserted = false;
+                for line in fm.lines() {
+                    new_fm.push_str(line);
+                    new_fm.push('\n');
+                    if !inserted && line.trim().starts_with("name:") {
+                        let ts_str = tools.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", ");
+                        new_fm.push_str(&format!("tools: [{ts_str}]"));
+                        new_fm.push('\n');
+                        inserted = true;
+                    }
+                }
+                if !inserted {
+                    let ts_str = tools.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", ");
+                    new_fm.push_str(&format!("tools: [{ts_str}]"));
+                    new_fm.push('\n');
+                }
+                format!("---\n{new_fm}---{after_fm}")
+            }
+        } else {
+            return Err("Invalid frontmatter: no closing ---".to_string());
+        }
+    } else {
+        return Err("No frontmatter found in skill file".to_string());
+    };
+
+    // Atomic write
+    let tmp_path = target.with_extension("tmp");
+    std::fs::write(&tmp_path, &updated)
+        .map_err(|e| format!("Failed to write temp file: {e}"))?;
+    std::fs::rename(&tmp_path, &target)
+        .map_err(|e| format!("Failed to rename temp file: {e}"))?;
+
+    Ok(())
+}
+
+/// Read the tools field from a skill .md file's frontmatter.
+/// Returns an empty Vec if the skill doesn't exist or has no tools.
+pub fn read_skill_tools(workspace: &Path, skill_name: &str) -> Vec<String> {
+    let skills_dir = workspace.join("skills");
+    let filename = lifecycle::evolution::sanitize_filename(skill_name);
+    let flat_path = skills_dir.join(format!("{filename}.md"));
+    let dir_path = skills_dir.join(&filename).join("SKILL.md");
+
+    let target = if flat_path.exists() {
+        flat_path
+    } else if dir_path.exists() {
+        dir_path
+    } else {
+        return Vec::new();
+    };
+
+    let content = match std::fs::read_to_string(&target) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let rest = match content.strip_prefix("---") {
+        Some(r) => r,
+        None => return Vec::new(),
+    };
+    let end = match rest.find("---") {
+        Some(e) => e,
+        None => return Vec::new(),
+    };
+    let fm = &rest[..end];
+
+    for line in fm.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("tools:") {
+            let val = value.trim();
+            if !val.starts_with('[') || !val.ends_with(']') {
+                continue;
+            }
+            let inner = &val[1..val.len() - 1];
+            if inner.is_empty() {
+                continue;
+            }
+            return inner
+                .split(',')
+                .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+
+    Vec::new()
+}

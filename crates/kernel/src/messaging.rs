@@ -372,10 +372,12 @@ impl CarrierKernel {
         };
 
         // Auto-match skill — query registry directly for skill-declared tools
+        let mut matched_skill_name: Option<String> = None;
         let (tools, auto_matched_skill, skill_max_iterations, skill_tools) = if let Some(ref ws) = entry.manifest.workspace {
             match crate::prompt_sources::match_skill_for_message(message, ws) {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
+                    matched_skill_name = Some(skill_name.clone());
                     let skill_body = skill.body.clone();
                     let skill_max_iter = skill.max_iterations;
                     let skill_tools = skill.tools.clone();
@@ -583,6 +585,7 @@ impl CarrierKernel {
                 sender_id.as_deref(),
                 owner_id.as_deref(),
                 channel_type.as_deref(),
+                matched_skill_name.as_deref(),
             )
             .await;
 
@@ -938,10 +941,12 @@ impl CarrierKernel {
         let messages_before = session.messages.len();
 
         // Auto-match skill — query registry directly for skill-declared tools
+        let mut matched_skill_name: Option<String> = None;
         let (tools, auto_matched_skill, skill_max_iterations, skill_tools) = if let Some(ref ws) = entry.manifest.workspace {
             match crate::prompt_sources::match_skill_for_message(message, ws) {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
+                    matched_skill_name = Some(skill_name.clone());
                     let skill_body = skill.body.clone();
                     let skill_max_iter = skill.max_iterations;
                     let skill_tools = skill.tools.clone();
@@ -1117,6 +1122,7 @@ impl CarrierKernel {
             sender_id.as_deref(),
             owner_id.as_deref(),
             channel_type.as_deref(),
+            matched_skill_name.as_deref(),
         )
         .await
         .map_err(KernelError::Carrier)?;
@@ -1336,6 +1342,7 @@ impl CarrierKernel {
                         brain_clone,
                         sid.as_deref(), oid.as_deref(),
                         ct.as_deref(),
+                        None,   // matched_skill: plan steps don't write back
                     ).await;
                     (step_id, result, session)
                 });

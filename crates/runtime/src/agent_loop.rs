@@ -175,6 +175,7 @@ pub async fn run_agent_loop(
     sender_id: Option<&str>,
     owner_id: Option<&str>,
     channel_type: Option<&str>,
+    matched_skill: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     let timeout = std::time::Duration::from_secs(AGENT_LOOP_TIMEOUT_SECS);
     match tokio::time::timeout(
@@ -184,6 +185,7 @@ pub async fn run_agent_loop(
             kernel, stream_tx, mcp_connections, fetch_engine, workspace_root,
             on_phase, hooks, context_window_tokens, process_manager,
             user_content_blocks, brain, sender_id, owner_id, channel_type,
+            matched_skill,
         ),
     )
     .await
@@ -416,6 +418,7 @@ async fn run_agent_loop_impl(
     sender_id: Option<&str>,
     owner_id: Option<&str>,
     channel_type: Option<&str>,
+    matched_skill: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
 
@@ -515,6 +518,16 @@ async fn run_agent_loop_impl(
     // Shadow with an owned Vec so we can refresh mid-loop when skills are installed
     let mut tools_owned: Vec<ToolDefinition> = available_tools.to_vec();
     let mut available_tools: &[ToolDefinition] = &tools_owned;
+
+    // Track original tool names for discovery-vs-declared comparison
+    let original_tool_names: std::collections::HashSet<String> =
+        available_tools.iter().map(|t| t.name.clone()).collect();
+    // Tool names discovered via tool_search this turn (not in original set)
+    let mut discovered_tool_names: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    // Tool names from discovered set that executed successfully (for skill write-back)
+    let mut successful_discovered_tools: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     for iteration in 0..max_iterations {
         debug!(iteration, "Streaming agent loop iteration");
@@ -952,6 +965,29 @@ async fn run_agent_loop_impl(
                         is_error: result.is_error,
                     });
 
+                    // Track successful execution of newly-discovered tools for skill write-back
+                    if !result.is_error && discovered_tool_names.contains(&tool_call.name) {
+                        successful_discovered_tools.insert(tool_call.name.clone());
+                    }
+                }
+
+                // Write-back: persist successfully-used discovered tools to the matched skill
+                if let (Some(skill_name), Some(ws)) = (matched_skill, manifest.workspace.as_ref()) {
+                    if !successful_discovered_tools.is_empty() {
+                        let to_write: Vec<String> = successful_discovered_tools.iter().cloned().collect();
+                        info!(
+                            skill = %skill_name,
+                            tools = ?to_write,
+                            "Writing discovered tools back to skill"
+                        );
+                        if let Err(e) = crate::tools::knowledge::write_skill_tools(
+                            ws, skill_name, &to_write,
+                        ) {
+                            warn!(skill = %skill_name, error = %e, "Failed to write discovered tools to skill");
+                        }
+                        // Clear after write so we don't duplicate on subsequent iterations
+                        successful_discovered_tools.clear();
+                    }
                 }
 
                 // Detect tool errors and inject guidance to prevent fabrication
@@ -1008,9 +1044,6 @@ async fn run_agent_loop_impl(
                     if let Some(ref kernel) = kernel {
                         let _agent_id_str = session.agent_id.to_string();
 
-                        // Collect toolsets to activate from tool_search
-                        let mut toolsets_to_activate: Vec<String> = Vec::new();
-
                         // Log skill_load calls (no allowed_tools parsing needed)
                         let skill_load_count = response.tool_calls.iter()
                             .filter(|tc| tc.name == "skill_load")
@@ -1019,57 +1052,44 @@ async fn run_agent_loop_impl(
                             info!(count = skill_load_count, "Skill(s) loaded");
                         }
 
-                        // --- tool_search: search and collect matching toolsets ---
+                        // --- tool_search: search and collect specific matching tools ---
                         let search_queries: Vec<&str> = response.tool_calls.iter()
                             .filter(|tc| tc.name == "tool_search")
                             .filter_map(|tc| tc.input.get("query").and_then(|v| v.as_str()))
                             .collect();
 
+                        let mut found_tools: Vec<types::tool::ToolDefinition> = Vec::new();
+                        let mut found_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+
                         for q in &search_queries {
                             let results = kernel.search_tools(q, 5, manifest.max_tool_level);
-                            for (ts_name, _) in results {
-                                if !toolsets_to_activate.contains(&ts_name) {
-                                    toolsets_to_activate.push(ts_name);
+                            for (_, tool_def) in results {
+                                if found_names.insert(tool_def.name.clone()) {
+                                    found_tools.push(tool_def);
                                 }
                             }
                         }
 
-                        let is_dynamic_activation = !toolsets_to_activate.is_empty();
-                        let new_tools = if is_dynamic_activation {
-                            let mut added_tools: Vec<types::tool::ToolDefinition> = Vec::new();
-                            for ts_name in &toolsets_to_activate {
-                                if let Some(tools) = kernel.get_toolset_tools(ts_name) {
-                                    info!(toolset = ts_name, tools_count = tools.len(), "Toolset loaded from registry");
-                                    added_tools.extend(tools);
+                        let is_dynamic_activation = !found_tools.is_empty();
+                        if is_dynamic_activation {
+                            // Track newly discovered tools (not in original skill-declared set)
+                            for t in &found_tools {
+                                if !original_tool_names.contains(&t.name) {
+                                    discovered_tool_names.insert(t.name.clone());
                                 }
                             }
-                            if added_tools.is_empty() { None } else { Some(added_tools) }
-                        } else {
-                            None
-                        };
 
-                        if let Some(new_tools) = new_tools {
-                            if is_dynamic_activation {
-                                // Append new toolset tools to existing list (按需加载)
-                                let existing_names: std::collections::HashSet<String> =
-                                    available_tools.iter().map(|t| t.name.clone()).collect();
-                                let fresh: Vec<_> = new_tools.into_iter()
-                                    .filter(|t| !existing_names.contains(&t.name))
-                                    .collect();
-                                if !fresh.is_empty() {
-                                    info!(added = fresh.len(), total = available_tools.len() + fresh.len(), "Tools added from tool_search");
-                                    tools_owned = available_tools.to_vec();
-                                    tools_owned.extend(fresh);
-                                    available_tools = &tools_owned;
-                                }
-                            } else {
-                                // Full refresh (after train_write/file_write) — replace entire list
-                                if new_tools.len() != available_tools.len() {
-                                    let added = new_tools.len().saturating_sub(available_tools.len());
-                                    info!(added, total = new_tools.len(), "Tool list refreshed");
-                                    tools_owned = new_tools;
-                                    available_tools = &tools_owned;
-                                }
+                            // Append only the specific matched tools (按需加载)
+                            let existing_names: std::collections::HashSet<String> =
+                                available_tools.iter().map(|t| t.name.clone()).collect();
+                            let fresh: Vec<_> = found_tools.into_iter()
+                                .filter(|t| !existing_names.contains(&t.name))
+                                .collect();
+                            if !fresh.is_empty() {
+                                info!(added = fresh.len(), total = available_tools.len() + fresh.len(), "Tools added from tool_search");
+                                tools_owned = available_tools.to_vec();
+                                tools_owned.extend(fresh);
+                                available_tools = &tools_owned;
                             }
                         }
                     }
@@ -1217,12 +1237,14 @@ pub async fn run_agent_loop_streaming(
     sender_id: Option<&str>,
     owner_id: Option<&str>,
     channel_type: Option<&str>,
+    matched_skill: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     run_agent_loop(
         manifest, user_message, session, memory, driver, available_tools,
         kernel, Some(stream_tx), mcp_connections, fetch_engine, workspace_root,
         on_phase, hooks, context_window_tokens, process_manager,
         user_content_blocks, brain, sender_id, owner_id, channel_type,
+        matched_skill,
     ).await
 }
 
@@ -1508,6 +1530,7 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
+        None, // matched_skill
         )
         .await
         .expect("Loop should complete without error");
@@ -1560,6 +1583,7 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
+        None, // matched_skill
         )
         .await
         .expect("Loop should complete without error");
@@ -1614,6 +1638,7 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
+        None, // matched_skill
         )
         .await
         .expect("Loop should complete without error");
@@ -1666,6 +1691,7 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
+        None, // matched_skill
         )
         .await
         .expect("Loop should complete without error");
@@ -1710,6 +1736,7 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
+        None, // matched_skill
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -1836,6 +1863,7 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
+        None, // matched_skill
         )
         .await
         .expect("Loop should recover via retry");
@@ -1882,6 +1910,7 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
+        None, // matched_skill
         )
         .await
         .expect("Loop should complete with fallback");
@@ -1935,6 +1964,7 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
+        None, // matched_skill
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -2824,6 +2854,7 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
+        None, // matched_skill
         )
         .await
         .expect("Agent loop should complete");
@@ -2890,6 +2921,7 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
+        None, // matched_skill
         )
         .await
         .expect("Normal loop should complete");
@@ -2951,6 +2983,7 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
+        None, // matched_skill
         )
         .await
         .expect("Streaming loop should complete");
