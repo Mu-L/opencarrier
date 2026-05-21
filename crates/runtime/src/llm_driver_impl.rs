@@ -177,7 +177,8 @@ impl UnifiedHttpDriver {
             },
             ApiFormat::Anthropic => {
                 builder = builder.header("x-api-key", key);
-                builder = builder.header("anthropic-version", "2023-06-01");
+                builder = builder.header("anthropic-version", "2025-10-01");
+                builder = builder.header("user-agent", "claude-cli/2.1.145 (external, cli)");
             }
             ApiFormat::Gemini => {
                 builder = builder.header("x-goog-api-key", key);
