@@ -141,7 +141,7 @@ pub async fn overview_page(
                 ready => ready,
                 model_name => model,
                 emoji => e.identity.emoji,
-                installs => install_counts.get(&id_str).copied().unwrap_or(0),
+                installs => install_counts.get(&e.name).copied().unwrap_or(0),
                 users => user_counts.get(&id_str).copied().unwrap_or(0),
             }
         })
@@ -258,7 +258,7 @@ async fn render_clone_detail(
     let install_count: usize = if let Some(ref pm_arc) = state.channel_manager {
         let pm = pm_arc.lock().await;
         pm.count_agents_per_sender()
-            .get(&agent_id_str)
+            .get(&entry.name)
             .copied()
             .unwrap_or(0)
     } else {
