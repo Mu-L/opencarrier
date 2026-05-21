@@ -762,6 +762,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   };
 
   function beginAuth(platform) {
+    // Ensure clone is installed before any channel auth
+    var alreadyInstalled = allAgents.some(function(a){ return a.name === targetAgentName; });
+    if (alreadyInstalled) {
+      proceedAuth(platform);
+      return;
+    }
+    document.getElementById('auth-status-text').textContent = '正在安装分身...';
+    api('POST', '/api/hub/templates/' + encodeURIComponent(targetAgentName) + '/install', {}).then(function(res){
+      if (res.error) throw new Error(res.error);
+      proceedAuth(platform);
+    }).catch(function(e){
+      document.getElementById('auth-status-text').textContent = '安装失败: ' + (e.message || '未知错误');
+    });
+  }
+
+  function proceedAuth(platform) {
     showView('auth');
     var cfg = platformConfig[platform] || {};
     document.getElementById('auth-title').textContent = cfg.label + '授权绑定';
