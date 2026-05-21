@@ -191,10 +191,16 @@ pub async fn agent_ws(
         }
     };
 
-    let agent_id: AgentId = match id.parse() {
-        Ok(id) => id,
-        Err(_) => {
-            return axum::http::StatusCode::BAD_REQUEST.into_response();
+    // Resolve agent by UUID or name
+    let agent_id: AgentId = if let Ok(parsed) = id.parse() {
+        parsed
+    } else {
+        // Try resolving by name
+        match state.kernel.registry.find_by_name(&id) {
+            Some(entry) => entry.id,
+            None => {
+                return axum::http::StatusCode::NOT_FOUND.into_response();
+            }
         }
     };
 

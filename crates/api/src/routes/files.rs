@@ -62,7 +62,7 @@ pub async fn get_agent_file(
     State(state): State<Arc<AppState>>,
     Path((id, filename)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -145,7 +145,7 @@ pub async fn set_agent_file(
     Path((id, filename)): Path<(String, String)>,
     Json(req): Json<SetAgentFileRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -299,7 +299,7 @@ pub async fn upload_file(
     cleanup_expired_uploads();
 
     // Validate agent ID format
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };

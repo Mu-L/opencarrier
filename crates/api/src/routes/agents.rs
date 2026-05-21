@@ -366,7 +366,7 @@ pub async fn set_agent_mode(
     Path(id): Path<String>,
     Json(body): Json<SetModeRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -519,7 +519,7 @@ pub async fn stop_agent(
     _extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -546,7 +546,7 @@ pub async fn write_agent_knowledge(
     Path(id): Path<String>,
     Json(body): Json<WriteKnowledgeRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -635,7 +635,7 @@ pub async fn suspend_agent(
     _extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -677,7 +677,7 @@ pub async fn resume_agent(
     _extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -718,7 +718,7 @@ pub async fn set_model(
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -762,7 +762,7 @@ pub async fn update_agent_identity(
     Path(id): Path<String>,
     Json(req): Json<UpdateIdentityRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -833,7 +833,7 @@ pub async fn patch_agent_config(
     Path(id): Path<String>,
     Json(req): Json<PatchAgentConfigRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -1016,7 +1016,7 @@ pub async fn clone_agent(
     Path(id): Path<String>,
     Json(req): Json<CloneAgentRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };

@@ -4,7 +4,8 @@ use axum::http::StatusCode;
 use axum::Json;
 use types::agent::{AgentEntry, AgentId};
 
-/// Parse a path-parameter agent ID, returning BAD_REQUEST on failure.
+/// Parse a path-parameter agent ID (UUID or agent name).
+/// UUIDs are parsed directly; names are resolved via the registry.
 pub fn parse_agent_id(id: &str) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
     id.parse().map_err(|_| {
         (
@@ -12,6 +13,27 @@ pub fn parse_agent_id(id: &str) -> Result<AgentId, (StatusCode, Json<serde_json:
             Json(serde_json::json!({"error": "Invalid agent ID"})),
         )
     })
+}
+
+/// Parse an agent ID or name from a path parameter, returning the resolved AgentId.
+/// Unlike `parse_agent_id`, this also accepts agent names and resolves them to UUIDs.
+pub fn resolve_agent_id_from_path(
+    id: &str,
+    registry: &kernel::registry::AgentRegistry,
+) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
+    // Try UUID first
+    if let Ok(uuid) = id.parse::<AgentId>() {
+        return Ok(uuid);
+    }
+    // Name lookup
+    registry.find_by_name(id)
+        .map(|e| e.id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": format!("Agent not found: {id}")})),
+            )
+        })
 }
 
 /// Look up an agent in the registry, returning NOT_FOUND if missing.
@@ -27,14 +49,13 @@ pub fn get_agent_or_404(
     })
 }
 
-/// Parse agent ID from path and look up the agent. Returns (AgentId, AgentEntry) or an error response.
+/// Parse agent ID from path and look up the agent. Accepts both UUID and agent name.
+/// Returns (AgentId, AgentEntry) or an error response.
 pub fn parse_and_get_agent(
     id: &str,
     registry: &kernel::registry::AgentRegistry,
 ) -> Result<(AgentId, AgentEntry), (StatusCode, Json<serde_json::Value>)> {
-    let agent_id = parse_agent_id(id)?;
-    let entry = get_agent_or_404(registry, &agent_id)?;
-    Ok((agent_id, entry))
+    resolve_agent_id(id, registry)
 }
 
 /// Resolve an agent by UUID or name.

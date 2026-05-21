@@ -336,7 +336,7 @@ pub async fn list_agent_sessions(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -357,7 +357,7 @@ pub async fn create_agent_session(
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -375,7 +375,7 @@ pub async fn switch_agent_session(
     State(state): State<Arc<AppState>>,
     Path((id, session_id_str)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -406,7 +406,7 @@ pub async fn reset_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -451,7 +451,7 @@ pub async fn compact_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };

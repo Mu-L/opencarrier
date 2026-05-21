@@ -321,29 +321,15 @@ pub async fn comms_send(
     State(state): State<Arc<AppState>>,
     Json(req): Json<types::comms::CommsSendRequest>,
 ) -> impl IntoResponse {
-    // Validate from agent exists
-    let from_id = match parse_agent_id(&req.from_agent_id) {
+    // Validate agents exist
+    let _from_id = match resolve_agent_id_from_path(&req.from_agent_id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
-    if state.kernel.registry.get(from_id).is_none() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Source agent not found"})),
-        );
-    }
-
-    // Validate to agent exists
-    let to_id = match parse_agent_id(&req.to_agent_id) {
+    let to_id = match resolve_agent_id_from_path(&req.to_agent_id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
-    if state.kernel.registry.get(to_id).is_none() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Target agent not found"})),
-        );
-    }
 
     // SECURITY: Limit message size
     if req.message.len() > 64 * 1024 {

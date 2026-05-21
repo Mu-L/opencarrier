@@ -241,7 +241,7 @@ pub async fn set_agent_tools(
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -320,7 +320,7 @@ pub async fn set_agent_mcp_servers(
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_agent_id(&id) {
+    let agent_id = match resolve_agent_id_from_path(&id, &state.kernel.registry) {
         Ok(id) => id,
         Err(resp) => return resp,
     };

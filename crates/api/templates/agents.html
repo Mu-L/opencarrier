@@ -50,7 +50,7 @@
           <td>{{ u.session_count }}</td>
           <td style="color:var(--text-dim);font-size:13px">{{ u.last_active_ago }}</td>
           <td>
-            <a href="/agents/{{ agent.id }}/users/{{ u.sender_id }}" class="btn btn-sm btn-primary">查看对话</a>
+            <a href="/agents/{{ agent.name }}/users/{{ u.sender_id }}" class="btn btn-sm btn-primary">查看对话</a>
           </td>
         </tr>
         {% endfor %}
