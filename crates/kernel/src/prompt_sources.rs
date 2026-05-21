@@ -126,7 +126,7 @@ pub fn touch_user_profile(home_dir: &Path, owner_id: &str, agent_name: &str, use
 }
 
 /// Read clone skill catalog from workspace/skills/ directory.
-/// Returns a short summary of all skills: "1. **{name}** — {when_to_use}"
+/// Returns a short summary of all skills: "1. **{name}** — {description}"
 pub fn read_skills_catalog(workspace: &Path) -> Option<String> {
     let skills_dir = workspace.join("skills");
     if !skills_dir.is_dir() {
@@ -147,15 +147,15 @@ pub fn read_skills_catalog(workspace: &Path) -> Option<String> {
         if path.is_dir() {
             let skill_md = path.join("SKILL.md");
             if skill_md.exists() {
-                if let Some((name, when_to_use)) = parse_skill_frontmatter(&skill_md) {
-                    entries.push((name, when_to_use));
+                if let Some((name, description)) = parse_skill_frontmatter(&skill_md) {
+                    entries.push((name, description));
                 }
             }
         }
         // Flat format: skills/<name>.md
         else if path.extension().is_some_and(|ext| ext == "md") {
-            if let Some((name, when_to_use)) = parse_skill_frontmatter(&path) {
-                entries.push((name, when_to_use));
+            if let Some((name, description)) = parse_skill_frontmatter(&path) {
+                entries.push((name, description));
             }
         }
     }
@@ -167,11 +167,11 @@ pub fn read_skills_catalog(workspace: &Path) -> Option<String> {
     let catalog: String = entries
         .iter()
         .enumerate()
-        .map(|(i, (name, when_to_use))| {
-            if when_to_use.is_empty() {
+        .map(|(i, (name, description))| {
+            if description.is_empty() {
                 format!("{}. **{}**", i + 1, name)
             } else {
-                format!("{}. **{}** — {}", i + 1, name, when_to_use)
+                format!("{}. **{}** — {}", i + 1, name, description)
             }
         })
         .collect::<Vec<_>>()
@@ -447,7 +447,7 @@ pub fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
         }
 
         // Parse frontmatter
-        let (name, _, _, body) = parse_skill_full(trimmed);
+        let (name, _, _, _, body) = parse_skill_full(trimmed);
         let section = format!("### {}\n{}", name, body);
         parts.push(section);
     }
@@ -476,9 +476,10 @@ fn parse_yaml_string_list(val: &str) -> Vec<String> {
         .collect()
 }
 
-/// Parse a skill .md file to extract name, max_iterations, tools, and body.
-pub fn parse_skill_full(content: &str) -> (String, Option<u32>, Vec<String>, &str) {
+/// Parse a skill .md file to extract name, description, max_iterations, tools, and body.
+pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, Vec<String>, &str) {
     let mut name = String::new();
+    let mut description = String::new();
     let mut max_iterations: Option<u32> = None;
     let mut tools: Vec<String> = Vec::new();
 
@@ -489,6 +490,8 @@ pub fn parse_skill_full(content: &str) -> (String, Option<u32>, Vec<String>, &st
                 let line = line.trim();
                 if let Some(val) = line.strip_prefix("name:") {
                     name = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                } else if let Some(val) = line.strip_prefix("description:") {
+                    description = val.trim().trim_matches('"').trim_matches('\'').to_string();
                 } else if let Some(val) = line.strip_prefix("max_iterations:") {
                     max_iterations = val.trim().parse().ok();
                 } else if let Some(val) = line.strip_prefix("tools:") {
@@ -498,13 +501,23 @@ pub fn parse_skill_full(content: &str) -> (String, Option<u32>, Vec<String>, &st
                     tools = parse_yaml_string_list(val.trim());
                 }
             }
+            // Fallback: if no description, try when_to_use (transitional compatibility)
+            if description.is_empty() {
+                for line in frontmatter.lines() {
+                    let line = line.trim();
+                    if let Some(val) = line.strip_prefix("when_to_use:") {
+                        description = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                        break;
+                    }
+                }
+            }
             let body = rest[end + 3..].trim();
-            return (name, max_iterations, tools, body);
+            return (name, description, max_iterations, tools, body);
         }
     }
 
     // No frontmatter
-    (String::new(), None, Vec::new(), content)
+    (String::new(), String::new(), None, Vec::new(), content)
 }
 
 /// Result of automatic skill matching against a user message.
@@ -552,13 +565,12 @@ pub async fn classify_skill_with_llm(
         let content = std::fs::read_to_string(&skill_path).ok()?;
         let trimmed = content.trim();
 
-        let when_to_use = extract_when_to_use(trimmed);
-        if when_to_use.is_empty() {
+        let (name, description, _, _, _) = parse_skill_full(trimmed);
+        if description.is_empty() {
             continue;
         }
 
-        let (name, _, _, _) = parse_skill_full(trimmed);
-        skill_summaries.push((name, when_to_use));
+        skill_summaries.push((name, description));
     }
 
     if skill_summaries.is_empty() {
@@ -569,8 +581,8 @@ pub async fn classify_skill_with_llm(
     let mut prompt = String::from(
         "You are a skill classifier. Given a user message and available skills, respond with ONLY the best-matching skill name or \"none\".\n\nAvailable skills:\n",
     );
-    for (name, when_to_use) in &skill_summaries {
-        prompt.push_str(&format!("- {}: {}\n", name, when_to_use));
+    for (name, description) in &skill_summaries {
+        prompt.push_str(&format!("- {}: {}\n", name, description));
     }
     prompt.push_str(&format!("\nUser message: {}\n\nSkill name:", message));
 
@@ -643,7 +655,7 @@ pub async fn classify_skill_with_llm(
     // Load full skill content
     let skill_file = skills_dir.join(&matched_name).join("SKILL.md");
     let content = std::fs::read_to_string(&skill_file).ok()?;
-    let (name, max_iterations, tools, body) = parse_skill_full(&content);
+    let (name, _description, max_iterations, tools, body) = parse_skill_full(&content);
 
     tracing::info!(
         skill = %name,
@@ -716,22 +728,6 @@ pub fn match_subagent_for_message(message: &str, subagents: &[types::agent::Suba
 
 /// Match a user message against available skills using keyword matching.
 ///
-/// Extract `when_to_use` value from YAML frontmatter.
-fn extract_when_to_use(content: &str) -> String {
-    if let Some(rest) = content.strip_prefix("---") {
-        if let Some(end) = rest.find("---") {
-            let frontmatter = &rest[..end];
-            for line in frontmatter.lines() {
-                let line = line.trim();
-                if let Some(val) = line.strip_prefix("when_to_use:") {
-                    return val.trim().trim_matches('"').trim_matches('\'').to_string();
-                }
-            }
-        }
-    }
-    String::new()
-}
-
 /// Split `when_to_use` into keywords by common delimiters, filtering stop words.
 /// Also used by subagent trigger matching.
 fn extract_keywords(when_to_use: &str) -> Vec<String> {
@@ -768,7 +764,7 @@ fn extract_keywords(when_to_use: &str) -> Vec<String> {
     keywords
 }
 
-/// Parse YAML frontmatter from a skill .md file to extract name and when_to_use.
+/// Parse YAML frontmatter from a skill .md file to extract name and description.
 pub fn parse_skill_frontmatter(path: &Path) -> Option<(String, String)> {
     let content = std::fs::read_to_string(path).ok()?;
     let content = content.trim();
@@ -785,14 +781,19 @@ pub fn parse_skill_frontmatter(path: &Path) -> Option<(String, String)> {
     let frontmatter = &rest[..end];
 
     let mut name = String::new();
-    let mut when_to_use = String::new();
+    let mut description = String::new();
 
     for line in frontmatter.lines() {
         let line = line.trim();
         if let Some(val) = line.strip_prefix("name:") {
             name = val.trim().trim_matches('"').trim_matches('\'').to_string();
+        } else if let Some(val) = line.strip_prefix("description:") {
+            description = val.trim().trim_matches('"').trim_matches('\'').to_string();
         } else if let Some(val) = line.strip_prefix("when_to_use:") {
-            when_to_use = val.trim().trim_matches('"').trim_matches('\'').to_string();
+            // Fallback for transitional skill files
+            if description.is_empty() {
+                description = val.trim().trim_matches('"').trim_matches('\'').to_string();
+            }
         }
     }
 
@@ -800,5 +801,5 @@ pub fn parse_skill_frontmatter(path: &Path) -> Option<(String, String)> {
         name = path.parent()?.file_name()?.to_str()?.to_string();
     }
 
-    Some((name, when_to_use))
+    Some((name, description))
 }
