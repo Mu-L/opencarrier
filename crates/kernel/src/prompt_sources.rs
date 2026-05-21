@@ -493,6 +493,9 @@ pub fn parse_skill_full(content: &str) -> (String, Option<u32>, Vec<String>, &st
                     max_iterations = val.trim().parse().ok();
                 } else if let Some(val) = line.strip_prefix("tools:") {
                     tools = parse_yaml_string_list(val.trim());
+                } else if let Some(val) = line.strip_prefix("allowed_tools:") {
+                    // Legacy alias — skill files may still use `allowed_tools:`
+                    tools = parse_yaml_string_list(val.trim());
                 }
             }
             let body = rest[end + 3..].trim();
