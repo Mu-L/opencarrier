@@ -30,7 +30,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 /// Maximum iterations in the agent loop before giving up.
-const MAX_ITERATIONS: u32 = 15;
+const MAX_ITERATIONS: u32 = 25;
 
 /// Tool search recall limit (stage 1: how many candidates to retrieve).
 const TOOL_SEARCH_RECALL_LIMIT: usize = 10;
@@ -1401,7 +1401,7 @@ mod tests {
 
     #[test]
     fn test_max_iterations_constant() {
-        assert_eq!(MAX_ITERATIONS, 15);
+        assert_eq!(MAX_ITERATIONS, 25);
     }
 
     #[test]
