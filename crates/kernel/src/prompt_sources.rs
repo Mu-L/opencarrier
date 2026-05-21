@@ -501,16 +501,6 @@ pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, Vec<Stri
                     tools = parse_yaml_string_list(val.trim());
                 }
             }
-            // Fallback: if no description, try when_to_use (transitional compatibility)
-            if description.is_empty() {
-                for line in frontmatter.lines() {
-                    let line = line.trim();
-                    if let Some(val) = line.strip_prefix("when_to_use:") {
-                        description = val.trim().trim_matches('"').trim_matches('\'').to_string();
-                        break;
-                    }
-                }
-            }
             let body = rest[end + 3..].trim();
             return (name, description, max_iterations, tools, body);
         }
@@ -544,7 +534,7 @@ pub async fn classify_skill_with_llm(
         return None;
     }
 
-    // Collect all skill summaries (name + when_to_use)
+    // Collect all skill summaries (name + description)
     let mut skill_summaries: Vec<(String, String)> = Vec::new();
     for entry in std::fs::read_dir(&skills_dir).ok()? {
         let entry = entry.ok()?;
@@ -726,11 +716,9 @@ pub fn match_subagent_for_message(message: &str, subagents: &[types::agent::Suba
     })
 }
 
-/// Match a user message against available skills using keyword matching.
-///
-/// Split `when_to_use` into keywords by common delimiters, filtering stop words.
+/// Split description text into keywords by common delimiters, filtering stop words.
 /// Also used by subagent trigger matching.
-fn extract_keywords(when_to_use: &str) -> Vec<String> {
+fn extract_keywords(text: &str) -> Vec<String> {
     const STOP_WORDS: &[&str] = &[
         "用户", "要求", "使用", "时", "当", "想要", "需要", "请", "帮", "帮我", "你",
         "可以", "时候", "以下", "情况", "或者", "或", "说",
@@ -741,7 +729,7 @@ fn extract_keywords(when_to_use: &str) -> Vec<String> {
     // Extract quoted terms (Chinese "" and English "") as standalone keywords
     // e.g. 用户说"排版" → "排版" is a keyword
     let quote_separators: &[char] = &['"', '"', '"'];
-    for quoted in when_to_use.split(quote_separators) {
+    for quoted in text.split(quote_separators) {
         let q = quoted.trim();
         if q.len() >= 2 && !STOP_WORDS.contains(&q) && !keywords.iter().any(|k| k == q) {
             keywords.push(q.to_string());
@@ -750,7 +738,7 @@ fn extract_keywords(when_to_use: &str) -> Vec<String> {
 
     // Split on punctuation and add remaining segments
     let punct_separators: &[char] = &['、', '，', '；', ',', ';', ' ', '\t', '。'];
-    for segment in when_to_use.split(punct_separators) {
+    for segment in text.split(punct_separators) {
         let s = segment.trim();
         // Strip leading stop words
         let s = s.strip_prefix("当").unwrap_or(s)
@@ -789,11 +777,6 @@ pub fn parse_skill_frontmatter(path: &Path) -> Option<(String, String)> {
             name = val.trim().trim_matches('"').trim_matches('\'').to_string();
         } else if let Some(val) = line.strip_prefix("description:") {
             description = val.trim().trim_matches('"').trim_matches('\'').to_string();
-        } else if let Some(val) = line.strip_prefix("when_to_use:") {
-            // Fallback for transitional skill files
-            if description.is_empty() {
-                description = val.trim().trim_matches('"').trim_matches('\'').to_string();
-            }
         }
     }
 

@@ -465,7 +465,7 @@ pub struct SubagentConfig {
     pub name: String,
     /// Description shown to the LLM in the delegate tool definition.
     pub description: String,
-    /// Trigger keywords for auto-delegation (same format as skill's when_to_use).
+    /// Trigger keywords for auto-delegation (same format as skill's description).
     /// Comma/顿号-separated keywords.
     pub trigger: String,
     /// Maximum iterations for the subagent's agent loop.

@@ -75,7 +75,7 @@ pub struct PromptContext {
     /// Clone's system_prompt.md — behavioral instructions ("你怎么做事").
     /// Only present for agents loaded from .agx with a workspace system_prompt.md.
     pub clone_system_prompt_md: Option<String>,
-    /// Clone's skill catalog — all skills' name + when_to_use (short summary).
+    /// Clone's skill catalog — all skills' name + description (short summary).
     /// Scanned from workspace/skills/ at prompt build time.
     pub clone_skills_catalog: Option<String>,
     /// Clone's style samples — extracted speaking patterns from chat history.
@@ -183,7 +183,7 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             }
         }
 
-        // skills/ → 技能目录（name + when_to_use，始终注入，很短）
+        // skills/ → 技能目录（name + description，始终注入，很短）
         if let Some(ref catalog) = ctx.clone_skills_catalog {
             if !catalog.trim().is_empty() {
                 sections.push(format!(

@@ -127,7 +127,7 @@ impl ToolModule for KnowledgeTools {
                     "type": "object",
                     "properties": {
                         "name": {"type": "string", "description": "Skill name (used as filename)"},
-                        "when_to_use": {"type": "string", "description": "Brief description of when to activate this skill"},
+                        "description": {"type": "string", "description": "Brief description of when to activate this skill"},
                         "toolsets": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -140,7 +140,7 @@ impl ToolModule for KnowledgeTools {
             },
             ToolDefinition {
                 name: "skill_update".to_string(),
-                description: "Update the body of an existing skill. Preserves the skill's frontmatter (name, when_to_use).".to_string(),
+                description: "Update the body of an existing skill. Preserves the skill's frontmatter (name, description).".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -477,7 +477,7 @@ async fn tool_skill_create(
 ) -> Result<String, String> {
     let root = workspace_root.ok_or("skill_create requires a workspace root")?;
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
-    let when_to_use = input["when_to_use"].as_str().unwrap_or("");
+    let description = input["description"].as_str().unwrap_or("");
     let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
     let toolsets: Vec<String> = input["toolsets"]
         .as_array()
@@ -499,8 +499,8 @@ async fn tool_skill_create(
     }
 
     let mut frontmatter = format!("---\nname: {name}\n");
-    if !when_to_use.is_empty() {
-        frontmatter.push_str(&format!("when_to_use: {when_to_use}\n"));
+    if !description.is_empty() {
+        frontmatter.push_str(&format!("description: {description}\n"));
     }
     if !toolsets.is_empty() {
         let ts_str = toolsets.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", ");
