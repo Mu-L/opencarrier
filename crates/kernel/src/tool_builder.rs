@@ -110,19 +110,21 @@ impl CarrierKernel {
             .filter(|t| CORE_TOOLS.contains(&t.name.as_str()))
             .collect();
 
-        // Add individual tools declared by the skill (looked up by name from registry)
+        let existing_names: std::collections::HashSet<&str> =
+            tools.iter().map(|t| t.name.as_str()).collect();
+
+        // Add individual tools declared by the skill (looked up by name from builtin registry + mcp_tools)
         if let Some(tool_names) = skill_tools {
-            if let Ok(registry) = self.plugins.toolset_registry.read() {
-                let existing_names: std::collections::HashSet<&str> =
-                    tools.iter().map(|t| t.name.as_str()).collect();
-                let mut found_tools: Vec<ToolDefinition> = Vec::new();
-                for tool_name in tool_names {
-                    if existing_names.contains(tool_name.as_str()) {
-                        continue;
-                    }
-                    if found_tools.iter().any(|t| t.name == *tool_name) {
-                        continue;
-                    }
+            let mut found_tools: Vec<ToolDefinition> = Vec::new();
+            for tool_name in tool_names {
+                if existing_names.contains(tool_name.as_str()) {
+                    continue;
+                }
+                if found_tools.iter().any(|t| t.name == *tool_name) {
+                    continue;
+                }
+                // Try builtin registry first
+                if let Ok(registry) = self.plugins.toolset_registry.read() {
                     for (_, toolset_tools) in registry.iter() {
                         if let Some(found) = toolset_tools.iter().find(|t| t.name == *tool_name) {
                             found_tools.push(found.clone());
@@ -130,7 +132,37 @@ impl CarrierKernel {
                         }
                     }
                 }
-                tools.extend(found_tools);
+                // If not found in builtin, try mcp_tools
+                if !found_tools.iter().any(|t| t.name == *tool_name) {
+                    if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
+                        if let Some(found) = mcp_tools.iter().find(|t| t.name == *tool_name) {
+                            found_tools.push(found.clone());
+                        }
+                    }
+                }
+            }
+            tools.extend(found_tools);
+        }
+
+        // Add MCP tools for agents that declare mcp_servers in their config
+        if let Some(ref e) = entry {
+            if !e.manifest.mcp_servers.is_empty() {
+                if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
+                    let mcp_servers = &e.manifest.mcp_servers;
+                    for tool in mcp_tools.iter() {
+                        let tool_name = &tool.name;
+                        if tools.iter().any(|t| t.name == *tool_name) {
+                            continue;
+                        }
+                        for server in mcp_servers {
+                            let prefix = format!("mcp_{}_", runtime::mcp::normalize_name(server));
+                            if tool_name.starts_with(&prefix) {
+                                tools.push(tool.clone());
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -144,8 +176,9 @@ impl CarrierKernel {
         tools
     }
 
-    /// Build the toolset registry from builtin modules and MCP tools.
-    /// Must be called after MCP connections are established.
+    /// Build the toolset registry from builtin modules only.
+    /// MCP tools are stored separately in mcp_tools and loaded by agent config.
+    /// Must be called after MCP connections are established (for logging purposes).
     pub(crate) fn build_toolset_registry(&self) {
         let mut registry: std::collections::HashMap<String, Vec<ToolDefinition>> =
             std::collections::HashMap::new();
@@ -161,32 +194,12 @@ impl CarrierKernel {
             }
         }
 
-        // Group MCP tools by server
-        if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
-            let known_names: Vec<String> = self
-                .plugins
-                .mcp_connections
-                .iter()
-                .map(|e| e.value().name().to_string())
-                .collect();
-            let known_refs: Vec<&str> = known_names.iter().map(|s| s.as_str()).collect();
-
-            for tool in mcp_tools.iter() {
-                if let Some(server) =
-                    runtime::mcp::extract_mcp_server_from_known(&tool.name, &known_refs)
-                {
-                    registry
-                        .entry(server.to_string())
-                        .or_default()
-                        .push(tool.clone());
-                }
-            }
-        }
-
+        let mcp_count = self.plugins.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
         tracing::info!(
-            toolset_count = registry.len(),
+            builtin_toolsets = registry.len(),
+            mcp_tools = mcp_count,
             toolsets = ?registry.keys().collect::<Vec<_>>(),
-            "Built toolset registry"
+            "Built toolset registry (builtins only, MCP tools separate)"
         );
 
         if let Ok(mut reg) = self.plugins.toolset_registry.write() {
