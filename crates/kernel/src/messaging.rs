@@ -223,7 +223,7 @@ impl CarrierKernel {
     /// WASM and Python agents don't support true streaming — they execute
     /// synchronously and emit a single `TextDelta` + `ContentComplete` pair.
     #[allow(clippy::too_many_arguments)]
-    pub fn send_message_streaming(
+    pub async fn send_message_streaming(
         self: &Arc<Self>,
         agent_id: AgentId,
         message: &str,
@@ -371,10 +371,17 @@ impl CarrierKernel {
             by_messages || by_tokens || by_quota
         };
 
-        // Auto-match skill — query registry directly for skill-declared tools
+        // Auto-match skill using LLM classification (replaces keyword matching)
+        let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> =
+            Some(Arc::clone(&*self.brain.brain.read().unwrap_or_else(|e| {
+                warn!("Brain RwLock poisoned, recovering");
+                e.into_inner()
+            }))
+                as Arc<dyn runtime::llm_driver::Brain>);
+
         let mut matched_skill_name: Option<String> = None;
-        let (tools, auto_matched_skill, skill_max_iterations, skill_tools) = if let Some(ref ws) = entry.manifest.workspace {
-            match crate::prompt_sources::match_skill_for_message(message, ws) {
+        let (tools, auto_matched_skill, skill_max_iterations, skill_tools) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
+            match crate::prompt_sources::classify_skill_with_llm(message, ws, brain).await {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
                     matched_skill_name = Some(skill_name.clone());
@@ -386,7 +393,7 @@ impl CarrierKernel {
                         agent = %entry.name,
                         skill = %skill_name,
                         tools = ?skill_tools,
-                        "Skill auto-matched (streaming)"
+                        "Skill classified by LLM (streaming)"
                     );
 
                     let tools = self.available_tools(agent_id, Some(&skill_tools));
@@ -940,10 +947,10 @@ impl CarrierKernel {
 
         let messages_before = session.messages.len();
 
-        // Auto-match skill — query registry directly for skill-declared tools
+        // Auto-match skill using LLM classification (replaces keyword matching)
         let mut matched_skill_name: Option<String> = None;
-        let (tools, auto_matched_skill, skill_max_iterations, skill_tools) = if let Some(ref ws) = entry.manifest.workspace {
-            match crate::prompt_sources::match_skill_for_message(message, ws) {
+        let (tools, auto_matched_skill, skill_max_iterations, skill_tools) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
+            match crate::prompt_sources::classify_skill_with_llm(message, ws, brain).await {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
                     matched_skill_name = Some(skill_name.clone());
@@ -955,7 +962,7 @@ impl CarrierKernel {
                         agent = %entry.name,
                         skill = %skill_name,
                         tools = ?skill_tools,
-                        "Skill auto-matched"
+                        "Skill classified by LLM"
                     );
 
                     let tools = self.available_tools(agent_id, Some(&skill_tools));

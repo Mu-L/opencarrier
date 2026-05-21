@@ -228,7 +228,7 @@ pub async fn send_message_stream(
         req.sender_name,
         None,
         None,
-    ) {
+    ).await {
         Ok(pair) => pair,
         Err(e) => {
             tracing::warn!("Streaming message failed for agent {id}: {e}");

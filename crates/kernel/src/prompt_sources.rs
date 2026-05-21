@@ -519,6 +519,145 @@ pub struct SkillMatch {
     pub tools: Vec<String>,
 }
 
+/// Classify which skill (if any) matches the user message using an LLM.
+/// Replaces the keyword-based `match_skill_for_message` with semantic classification.
+pub async fn classify_skill_with_llm(
+    message: &str,
+    workspace: &std::path::Path,
+    brain: &std::sync::Arc<dyn runtime::llm_driver::Brain>,
+) -> Option<SkillMatch> {
+    let skills_dir = workspace.join("skills");
+    if !skills_dir.is_dir() {
+        return None;
+    }
+
+    // Collect all skill summaries (name + when_to_use)
+    let mut skill_summaries: Vec<(String, String)> = Vec::new();
+    for entry in std::fs::read_dir(&skills_dir).ok()? {
+        let entry = entry.ok()?;
+        let path = entry.path();
+
+        let skill_path = if path.is_dir() {
+            path.join("SKILL.md")
+        } else if path.extension().is_some_and(|ext| ext == "md") {
+            path
+        } else {
+            continue;
+        };
+
+        if !skill_path.exists() {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&skill_path).ok()?;
+        let trimmed = content.trim();
+
+        let when_to_use = extract_when_to_use(trimmed);
+        if when_to_use.is_empty() {
+            continue;
+        }
+
+        let (name, _, _, _) = parse_skill_full(trimmed);
+        skill_summaries.push((name, when_to_use));
+    }
+
+    if skill_summaries.is_empty() {
+        return None;
+    }
+
+    // Build classification prompt
+    let mut prompt = String::from(
+        "You are a skill classifier. Given a user message and available skills, respond with ONLY the best-matching skill name or \"none\".\n\nAvailable skills:\n",
+    );
+    for (name, when_to_use) in &skill_summaries {
+        prompt.push_str(&format!("- {}: {}\n", name, when_to_use));
+    }
+    prompt.push_str(&format!("\nUser message: {}\n\nSkill name:", message));
+
+    // Call LLM for classification
+    let request = runtime::llm_driver::CompletionRequest {
+        model: String::new(),
+        messages: vec![types::message::Message {
+            role: types::message::Role::User,
+            content: types::message::MessageContent::Text(prompt),
+        }],
+        tools: Vec::new(),
+        max_tokens: 50,
+        temperature: 0.0,
+        system: None,
+        thinking: None,
+        extra: Default::default(),
+    };
+
+    let response = match brain.complete("text", request).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("Skill classification LLM call failed: {}", e);
+            return None;
+        }
+    };
+
+    let raw = response.text().trim().to_lowercase();
+    if raw == "none" || raw.is_empty() {
+        return None;
+    }
+
+    // Clean up common LLM artifacts (quotes, markdown, newlines)
+    let skill_name = raw
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_matches('`')
+        .lines()
+        .next()
+        .unwrap_or(&raw)
+        .trim()
+        .to_string();
+
+    if skill_name.is_empty() {
+        return None;
+    }
+
+    // Find matching skill (exact or case-insensitive)
+    let matched = skill_summaries
+        .iter()
+        .find(|(name, _)| name.to_lowercase() == skill_name)
+        .or_else(|| {
+            skill_summaries.iter().find(|(name, _)| {
+                name.to_lowercase().contains(&skill_name)
+                    || skill_name.contains(&name.to_lowercase())
+            })
+        });
+
+    let matched_name = match matched {
+        Some((name, _)) => name.clone(),
+        None => {
+            tracing::warn!(
+                skill_name = %skill_name,
+                available = ?skill_summaries.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+                "LLM returned unknown skill name"
+            );
+            return None;
+        }
+    };
+
+    // Load full skill content
+    let skill_file = skills_dir.join(&matched_name).join("SKILL.md");
+    let content = std::fs::read_to_string(&skill_file).ok()?;
+    let (name, max_iterations, tools, body) = parse_skill_full(&content);
+
+    tracing::info!(
+        skill = %name,
+        "Skill classified by LLM"
+    );
+
+    Some(SkillMatch {
+        name,
+        body: body.to_string(),
+        max_iterations,
+        tools,
+    })
+}
+
 /// Result of automatic subagent trigger matching against a user message.
 pub struct SubagentMatch {
     /// Subagent name (forms the `delegate_{name}` tool).
@@ -577,87 +716,6 @@ pub fn match_subagent_for_message(message: &str, subagents: &[types::agent::Suba
 
 /// Match a user message against available skills using keyword matching.
 ///
-/// Extracts keywords from each skill's `when_to_use` frontmatter field and
-/// checks if the user message contains them. Returns the best match (most
-/// keyword hits), or `None` if nothing matches.
-pub fn match_skill_for_message(message: &str, workspace: &Path) -> Option<SkillMatch> {
-    let skills_dir = workspace.join("skills");
-    if !skills_dir.is_dir() {
-        return None;
-    }
-
-    let msg_lower = message.to_lowercase();
-    let mut best: Option<(usize, SkillMatch)> = None;
-
-    for entry in std::fs::read_dir(&skills_dir).ok()? {
-        let entry = entry.ok()?;
-        let path = entry.path();
-
-        let skill_path = if path.is_dir() {
-            path.join("SKILL.md")
-        } else if path.extension().is_some_and(|ext| ext == "md") {
-            path
-        } else {
-            continue;
-        };
-
-        if !skill_path.exists() {
-            continue;
-        }
-
-        let content = std::fs::read_to_string(&skill_path).ok()?;
-        let trimmed = content.trim();
-
-        let when_to_use = extract_when_to_use(trimmed);
-        if when_to_use.is_empty() {
-            continue;
-        }
-
-        let keywords = extract_keywords(&when_to_use);
-        if keywords.is_empty() {
-            continue;
-        }
-
-        let match_count = keywords
-            .iter()
-            .filter(|kw| msg_lower.contains(&kw.to_lowercase()))
-            .count();
-
-        if match_count == 0 {
-            continue;
-        }
-
-        let (name, max_iterations, tools, body) = parse_skill_full(trimmed);
-
-        if best.as_ref().is_none_or(|(c, _)| match_count > *c) {
-            best = Some((
-                match_count,
-                SkillMatch {
-                    name,
-                    body: body.to_string(),
-                    max_iterations,
-                    tools,
-                },
-            ));
-        }
-    }
-
-    if let Some((count, m)) = &best {
-        tracing::info!(
-            skill = %m.name,
-            keyword_matches = count,
-            keywords = ?extract_keywords(&extract_when_to_use(
-                &std::fs::read_to_string(
-                    workspace.join("skills").join(&m.name).join("SKILL.md")
-                ).unwrap_or_default()
-            )),
-            "Skill auto-matched for message"
-        );
-    }
-
-    best.map(|(_, m)| m)
-}
-
 /// Extract `when_to_use` value from YAML frontmatter.
 fn extract_when_to_use(content: &str) -> String {
     if let Some(rest) = content.strip_prefix("---") {
@@ -675,6 +733,7 @@ fn extract_when_to_use(content: &str) -> String {
 }
 
 /// Split `when_to_use` into keywords by common delimiters, filtering stop words.
+/// Also used by subagent trigger matching.
 fn extract_keywords(when_to_use: &str) -> Vec<String> {
     const STOP_WORDS: &[&str] = &[
         "用户", "要求", "使用", "时", "当", "想要", "需要", "请", "帮", "帮我", "你",
