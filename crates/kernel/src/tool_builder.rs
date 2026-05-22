@@ -195,12 +195,6 @@ impl CarrierKernel {
         }
 
         let mcp_count = self.plugins.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
-        // Debug: log misc toolset contents
-        if let Some(misc_tools) = registry.get("misc") {
-            let names: Vec<&str> = misc_tools.iter().map(|t| t.name.as_str()).collect();
-            tracing::info!(tools = ?names, "misc toolset contents");
-        }
-
         tracing::info!(
             builtin_toolsets = registry.len(),
             mcp_tools = mcp_count,
