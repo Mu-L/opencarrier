@@ -78,12 +78,17 @@ impl SessionStore {
     }
 
     /// Save a session to the database.
+    ///
+    /// Strips tool_use/tool_result blocks before persisting — these are
+    /// execution details needed only during the current agent loop, not
+    /// for future conversation continuity.
     pub fn save_session(&self, session: &Session) -> CarrierResult<()> {
+        let clean_messages = strip_tool_history(&session.messages);
         let conn = self
             .conn
             .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
-        let messages_blob = rmp_serde::to_vec_named(&session.messages)
+        let messages_blob = rmp_serde::to_vec_named(&clean_messages)
             .map_err(|e| CarrierError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
         conn.execute(
@@ -571,6 +576,79 @@ impl SessionStore {
     }
 }
 
+/// Strip tool_use/tool_result blocks from messages before persisting to DB.
+///
+/// The purpose of the session is to maintain conversational continuity
+/// (what the user asked, what the assistant responded). Tool calls and
+/// results are execution ephemera — needed during the current agent loop
+/// but useless noise for future turns. Stripping them prevents context
+/// bloat (especially from large tool results like base64 image data).
+///
+/// After stripping:
+/// - User messages: kept as-is
+/// - Assistant messages: keep only text/thinking blocks, drop tool_use
+/// - Messages that become empty after stripping are removed entirely
+fn strip_tool_history(messages: &[Message]) -> Vec<Message> {
+    let mut clean = Vec::with_capacity(messages.len());
+    for msg in messages {
+        match &msg.content {
+            MessageContent::Text(_) => {
+                // Plain text messages always kept
+                clean.push(msg.clone());
+            }
+            MessageContent::Blocks(blocks) => {
+                let mut has_tool_use = false;
+                let mut kept_blocks: Vec<ContentBlock> = Vec::new();
+                for block in blocks {
+                    match block {
+                        ContentBlock::ToolUse { name, input, .. } => {
+                            has_tool_use = true;
+                            // Replace tool_use with a brief summary line
+                            let summary = format!("[Called {name}]");
+                            kept_blocks.push(ContentBlock::Text {
+                                text: summary,
+                                provider_metadata: None,
+                            });
+                            // Log input size for debugging (not persisted)
+                            let _ = input;
+                        }
+                        ContentBlock::ToolResult { tool_name, is_error, .. } => {
+                            // Replace tool_result with a brief placeholder
+                            let marker = if *is_error { " (error)" } else { "" };
+                            let summary = format!("[Result from {tool_name}{marker}]");
+                            kept_blocks.push(ContentBlock::Text {
+                                text: summary,
+                                provider_metadata: None,
+                            });
+                        }
+                        ContentBlock::Image { .. } | ContentBlock::Audio { .. } => {
+                            // Drop inline media — too large for persistence
+                        }
+                        other => {
+                            kept_blocks.push(other.clone());
+                        }
+                    }
+                }
+
+                if kept_blocks.is_empty() && !has_tool_use {
+                    // Message with only images/audio — skip entirely
+                    continue;
+                }
+
+                // If all blocks were tool-use related but we have summaries, keep them
+                // If the message had text alongside tool_use, the text is preserved
+                if !kept_blocks.is_empty() {
+                    clean.push(Message {
+                        role: msg.role,
+                        content: MessageContent::Blocks(kept_blocks),
+                    });
+                }
+            }
+        }
+    }
+    clean
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,5 +751,119 @@ mod tests {
         assert_eq!(line2["role"], "assistant");
         assert_eq!(line2["content"], "Hi there!");
         assert!(line2.get("tool_use").is_none());
+    }
+
+    #[test]
+    fn test_strip_tool_history_removes_tool_blocks() {
+        let messages = vec![
+            Message::user("Generate an image"),
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolUse {
+                        id: "tu1".to_string(),
+                        name: "image_generate".to_string(),
+                        input: serde_json::json!({"prompt": "a cat"}),
+                        provider_metadata: None,
+                    },
+                ]),
+            },
+            Message {
+                role: Role::User,
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "tu1".to_string(),
+                        tool_name: "image_generate".to_string(),
+                        content: "huge base64 data here...".repeat(1000),
+                        is_error: false,
+                    },
+                ]),
+            },
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![
+                    ContentBlock::Text {
+                        text: "Image generated successfully".to_string(),
+                        provider_metadata: None,
+                    },
+                ]),
+            },
+        ];
+
+        let clean = super::strip_tool_history(&messages);
+
+        // Should have 4 messages (none removed entirely — tool blocks replaced with summaries)
+        assert_eq!(clean.len(), 4);
+
+        // First message unchanged
+        assert_eq!(clean[0].role, Role::User);
+
+        // Tool_use replaced with text summary
+        if let MessageContent::Blocks(blocks) = &clean[1].content {
+            assert!(blocks.iter().any(|b| matches!(b, ContentBlock::Text { text, .. } if text.contains("Called image_generate"))));
+            assert!(!blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })));
+        } else {
+            panic!("Expected Blocks");
+        }
+
+        // Tool_result replaced with text summary
+        if let MessageContent::Blocks(blocks) = &clean[2].content {
+            assert!(blocks.iter().any(|b| matches!(b, ContentBlock::Text { text, .. } if text.contains("Result from"))));
+            assert!(!blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })));
+        } else {
+            panic!("Expected Blocks");
+        }
+
+        // Final assistant text preserved
+        if let MessageContent::Blocks(blocks) = &clean[3].content {
+            assert!(blocks.iter().any(|b| matches!(b, ContentBlock::Text { text, .. } if text.contains("successfully"))));
+        }
+    }
+
+    #[test]
+    fn test_save_session_strips_tools() {
+        let store = setup();
+        let mut session = store.create_session("test-agent".to_string()).unwrap();
+
+        // Add messages with tool blocks
+        session.messages.push(Message::user("Hello"));
+        session.messages.push(Message {
+            role: Role::Assistant,
+            content: MessageContent::Blocks(vec![
+                ContentBlock::ToolUse {
+                    id: "tu1".to_string(),
+                    name: "some_tool".to_string(),
+                    input: serde_json::json!({}),
+                    provider_metadata: None,
+                },
+            ]),
+        });
+        session.messages.push(Message {
+            role: Role::User,
+            content: MessageContent::Blocks(vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "tu1".to_string(),
+                    tool_name: "some_tool".to_string(),
+                    content: "big result data".repeat(1000),
+                    is_error: false,
+                },
+            ]),
+        });
+
+        store.save_session(&session).unwrap();
+
+        // Reload — tool blocks should be stripped
+        let loaded = store.get_session(session.id).unwrap().unwrap();
+        assert_eq!(loaded.messages.len(), 3);
+
+        // No ToolUse or ToolResult blocks in loaded messages
+        for msg in &loaded.messages {
+            if let MessageContent::Blocks(blocks) = &msg.content {
+                for block in blocks {
+                    assert!(!matches!(block, ContentBlock::ToolUse { .. }), "ToolUse should be stripped");
+                    assert!(!matches!(block, ContentBlock::ToolResult { .. }), "ToolResult should be stripped");
+                }
+            }
+        }
     }
 }
