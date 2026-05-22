@@ -454,7 +454,9 @@ impl UnifiedHttpDriver {
             return Err(LlmError::Api { status: 400, message: "Image generation requires a prompt".to_string() });
         }
 
-        let size = request.extra.get("size").and_then(|v| v.as_str()).unwrap_or("1280*1280");
+        let size_raw = request.extra.get("size").and_then(|v| v.as_str()).unwrap_or("1280*1280");
+        // DashScope expects width*height (asterisk), normalize from 1024x1024 format
+        let size = size_raw.replace('x', "*");
         let n = request.extra.get("n").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
 
         let body = serde_json::json!({
