@@ -612,7 +612,7 @@ pub async fn classify_skill_with_llm(
         extra: Default::default(),
     };
 
-    let response = match brain.complete("text", request).await {
+    let response = match brain.complete("fast", request).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("Skill classification LLM call failed: {}", e);

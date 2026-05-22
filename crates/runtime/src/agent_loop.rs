@@ -1245,9 +1245,8 @@ async fn run_agent_loop_impl(
                     }
                 }
 
-                if let Err(e) = save_new!().await {
-                    warn!("Failed to interim-save session: {e}");
-                }
+                // Note: no per-iteration save here — save happens at loop end
+                // (success → full save, failure → summary only)
 
                 // Detect task_plan: extract plan data and break out of the loop
                 if let Some(tc) = response.tool_calls.iter().find(|tc| tc.name == "task_plan") {
@@ -1328,8 +1327,25 @@ async fn run_agent_loop_impl(
         }
     }
 
-    if let Err(e) = save_new!().await {
-        warn!("Failed to save session on max iterations: {e}");
+    // Plan B: on failure, save only user message + error summary (discard tool noise)
+    {
+        let discarded = session.messages.len() - session_base_len;
+        let summary = format!(
+            "[Agent loop failed: max iterations ({}) exceeded. {} messages discarded.]",
+            max_iterations, discarded,
+        );
+        let user_msg = session.messages[session_base_len..]
+            .iter()
+            .find(|m| m.role == Role::User)
+            .cloned()
+            .unwrap_or_else(|| Message::user(user_message));
+        let fail_msgs = vec![user_msg, Message::assistant(&summary)];
+        if let Err(e) = memory.save_session_append_async(
+            session.id, &session.agent_id, &fail_msgs,
+            session.context_window_tokens, session.label.as_deref(),
+        ).await {
+            warn!("Failed to save failure summary: {e}");
+        }
     }
 
     // Fire AgentLoopEnd hook on max iterations exceeded
@@ -1516,18 +1532,18 @@ mod tests {
     #[test]
     fn test_loop_detection_blocks_consecutive_same_call() {
         let recent: Vec<(String, u64)> = (0..LOOP_DETECTION_WINDOW)
-            .map(|_| make_call("web_search", serde_json::json!({"q": "rust"})))
+            .map(|_| make_call("test_query", serde_json::json!({"q": "rust"})))
             .collect();
         let result = detect_tool_loop(&recent, LOOP_DETECTION_WINDOW);
         assert!(result.is_some(), "Should detect loop with same call repeated");
-        assert_eq!(result.unwrap().0, "web_search");
+        assert_eq!(result.unwrap().0, "test_query");
     }
 
     #[test]
     fn test_loop_detection_allows_pagination() {
         // Same tool name but different inputs (pagination) — not a loop
         let recent: Vec<(String, u64)> = (0..LOOP_DETECTION_WINDOW)
-            .map(|i| make_call("web_search", serde_json::json!({"q": format!("rust page {}", i)})))
+            .map(|i| make_call("test_query", serde_json::json!({"q": format!("rust page {}", i)})))
             .collect();
         let result = detect_tool_loop(&recent, LOOP_DETECTION_WINDOW);
         assert!(result.is_none(), "Pagination with different queries should not be flagged");
@@ -1537,7 +1553,7 @@ mod tests {
     fn test_loop_detection_requires_full_window() {
         // 5 same calls is below threshold of 6
         let recent: Vec<(String, u64)> = (0..5)
-            .map(|_| make_call("web_search", serde_json::json!({"q": "rust"})))
+            .map(|_| make_call("test_query", serde_json::json!({"q": "rust"})))
             .collect();
         let result = detect_tool_loop(&recent, LOOP_DETECTION_WINDOW);
         assert!(result.is_none(), "Below-threshold count should not trigger");
@@ -1547,11 +1563,11 @@ mod tests {
     fn test_loop_detection_breaks_on_different_tool() {
         // 5 web_search + 1 web_fetch + 5 web_search → no loop (window is 6, last 6 are mixed)
         let mut recent: Vec<(String, u64)> = (0..5)
-            .map(|_| make_call("web_search", serde_json::json!({"q": "rust"})))
+            .map(|_| make_call("test_query", serde_json::json!({"q": "rust"})))
             .collect();
         recent.push(make_call("web_fetch", serde_json::json!({"url": "https://example.com"})));
         recent.extend(
-            (0..5).map(|_| make_call("web_search", serde_json::json!({"q": "rust"})))
+            (0..5).map(|_| make_call("test_query", serde_json::json!({"q": "rust"})))
         );
         let result = detect_tool_loop(&recent, LOOP_DETECTION_WINDOW);
         assert!(result.is_none(), "Mixed tail should not trigger loop detection");
@@ -2171,7 +2187,7 @@ mod tests {
     #[test]
     fn test_recover_text_tool_calls_basic() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search the web".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2179,7 +2195,7 @@ mod tests {
             r#"Let me search for that. <function=web_search>{"query":"rust async"}</function>"#;
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "web_search");
+        assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[0].input["query"], "rust async");
         assert!(calls[0].id.starts_with("recovered_"));
     }
@@ -2187,7 +2203,7 @@ mod tests {
     #[test]
     fn test_recover_text_tool_calls_unknown_tool() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search the web".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2199,7 +2215,7 @@ mod tests {
     #[test]
     fn test_recover_text_tool_calls_invalid_json() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search the web".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2212,7 +2228,7 @@ mod tests {
     fn test_recover_text_tool_calls_multiple() {
         let tools = vec![
             ToolDefinition {
-                name: "web_search".into(),
+                name: "test_query".into(),
                 description: "Search".into(),
                 input_schema: serde_json::json!({}),
             },
@@ -2225,14 +2241,14 @@ mod tests {
         let text = r#"<function=web_search>{"query":"hello"}</function> then <function=read_file>{"path":"a.txt"}</function>"#;
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].name, "web_search");
+        assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[1].name, "read_file");
     }
 
     #[test]
     fn test_recover_text_tool_calls_no_pattern() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2253,7 +2269,7 @@ mod tests {
     #[test]
     fn test_recover_text_tool_calls_nested_json() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2266,7 +2282,7 @@ mod tests {
     #[test]
     fn test_recover_text_tool_calls_with_surrounding_text() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2279,7 +2295,7 @@ mod tests {
     #[test]
     fn test_recover_text_tool_calls_whitespace_in_json() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2293,7 +2309,7 @@ mod tests {
     #[test]
     fn test_recover_text_tool_calls_unclosed_tag() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2306,7 +2322,7 @@ mod tests {
     #[test]
     fn test_recover_text_tool_calls_missing_closing_bracket() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2337,7 +2353,7 @@ mod tests {
     fn test_recover_text_tool_calls_mixed_valid_invalid() {
         let tools = vec![
             ToolDefinition {
-                name: "web_search".into(),
+                name: "test_query".into(),
                 description: "Search".into(),
                 input_schema: serde_json::json!({}),
             },
@@ -2351,7 +2367,7 @@ mod tests {
         let text = r#"<function=web_search>{"q":"a"}</function> <function=unknown>{"x":1}</function> <function=read_file>{"path":"b"}</function>"#;
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 2, "Should recover 2 valid, skip 1 unknown");
-        assert_eq!(calls[0].name, "web_search");
+        assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[1].name, "read_file");
     }
 
@@ -2374,7 +2390,7 @@ mod tests {
     #[test]
     fn test_recover_variant2_unknown_tool() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2386,21 +2402,21 @@ mod tests {
     #[test]
     fn test_recover_variant2_with_surrounding_text() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
         let text = r#"Let me search for that. <function>web_search{"query":"rust lang"}</function> I'll find the answer."#;
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "web_search");
+        assert_eq!(calls[0].name, "test_query");
     }
 
     #[test]
     fn test_recover_both_variants_mixed() {
         let tools = vec![
             ToolDefinition {
-                name: "web_search".into(),
+                name: "test_query".into(),
                 description: "Search".into(),
                 input_schema: serde_json::json!({}),
             },
@@ -2414,7 +2430,7 @@ mod tests {
         let text = r#"<function=web_search>{"q":"a"}</function> <function>web_fetch{"url":"https://x.com"}</function>"#;
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0].name, "web_search");
+        assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[1].name, "web_fetch");
     }
 
@@ -2449,14 +2465,14 @@ mod tests {
     #[test]
     fn test_recover_markdown_code_block_with_lang() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
         let text = "```json\nweb_search {\"query\": \"rust\"}\n```";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "web_search");
+        assert_eq!(calls[0].name, "test_query");
     }
 
     #[test]
@@ -2597,14 +2613,14 @@ mod tests {
     #[test]
     fn test_recover_tool_call_xml_with_surrounding_text() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
         let text = "I'll search for that.\n\n<tool_call>\n{\"name\": \"web_search\", \"arguments\": {\"query\": \"rust async\"}}\n</tool_call>\n\nLet me get results.";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "web_search");
+        assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[0].input["query"], "rust async");
     }
 
@@ -2670,7 +2686,7 @@ mod tests {
                 input_schema: serde_json::json!({}),
             },
             ToolDefinition {
-                name: "web_search".into(),
+                name: "test_query".into(),
                 description: "Search".into(),
                 input_schema: serde_json::json!({}),
             },
@@ -2679,7 +2695,7 @@ mod tests {
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "shell_exec");
-        assert_eq!(calls[1].name, "web_search");
+        assert_eq!(calls[1].name, "test_query");
     }
 
     // --- Pattern 8: Bare JSON tool call object tests ---
@@ -2729,21 +2745,21 @@ mod tests {
     #[test]
     fn test_recover_xml_attribute_basic() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
-        let text = r#"<function name="web_search" parameters="{&quot;query&quot;: &quot;best crypto 2024&quot;}" />"#;
+        let text = r#"<function name="test_query" parameters="{&quot;query&quot;: &quot;best crypto 2024&quot;}" />"#;
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "web_search");
+        assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[0].input["query"], "best crypto 2024");
     }
 
     #[test]
     fn test_recover_xml_attribute_unknown_tool() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2770,21 +2786,21 @@ mod tests {
     #[test]
     fn test_recover_plugin_block() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
         let text = "<|plugin|>\n{\"name\": \"web_search\", \"arguments\": {\"query\": \"rust\"}}\n<|endofblock|>";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "web_search");
+        assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[0].input["query"], "rust");
     }
 
     #[test]
     fn test_recover_plugin_block_unknown_tool() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2799,21 +2815,21 @@ mod tests {
     #[test]
     fn test_recover_action_input() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
         let text = "Action: web_search\nAction Input: {\"query\": \"rust programming\"}";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "web_search");
+        assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[0].input["query"], "rust programming");
     }
 
     #[test]
     fn test_recover_action_input_unknown_tool() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2855,7 +2871,7 @@ mod tests {
     #[test]
     fn test_recover_tool_use_block() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -2863,13 +2879,13 @@ mod tests {
             "<tool_use>{\"name\": \"web_search\", \"arguments\": {\"query\": \"test\"}}</tool_use>";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "web_search");
+        assert_eq!(calls[0].name, "test_query");
     }
 
     #[test]
     fn test_recover_tool_use_block_unknown() {
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -3010,7 +3026,7 @@ mod tests {
 
         // Provide web_search as an available tool so recovery can match it
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search the web".into(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -3082,7 +3098,7 @@ mod tests {
         let driver: Arc<dyn LlmDriver> = Arc::new(NormalDriver);
 
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search the web".into(),
             input_schema: serde_json::json!({}),
         }];
@@ -3137,7 +3153,7 @@ mod tests {
         let driver: Arc<dyn LlmDriver> = Arc::new(TextToolCallDriver::new());
 
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search the web".into(),
             input_schema: serde_json::json!({
                 "type": "object",
