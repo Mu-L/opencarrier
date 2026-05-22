@@ -30,9 +30,9 @@ impl ContextBudget {
         }
     }
 
-    /// Per-result character cap: 30% of context window converted to chars.
+    /// Per-result character cap: 10% of context window converted to chars.
     pub fn per_result_cap(&self) -> usize {
-        let tokens_for_tool = (self.context_window_tokens as f64 * 0.30) as usize;
+        let tokens_for_tool = (self.context_window_tokens as f64 * 0.10) as usize;
         (tokens_for_tool as f64 * self.tool_chars_per_token) as usize
     }
 
@@ -88,20 +88,119 @@ pub fn truncate_tool_result_dynamic(content: &str, budget: &ContextBudget) -> St
         &content[..break_point],
         content.len(),
         break_point,
-        30,
+        10,
         budget.context_window_tokens / 1000
     )
 }
 
+/// Strip large base64 blobs from tool result content.
+///
+/// Detects JSON fields containing long base64 strings and standalone base64
+/// runs, replacing them with compact placeholders.
+fn strip_base64_content(content: &str) -> String {
+    if content.len() < 2000 {
+        return content.to_string();
+    }
+
+    let mut result = content.to_string();
+
+    // Strip JSON "base64" field values > 1K chars
+    if let Some(start) = result.find("\"base64\": \"") {
+        let val_start = start + "\"base64\": \"".len();
+        if val_start < result.len() {
+            let base64_content = &result[val_start..];
+            let val_len = base64_content.find('"').unwrap_or(0);
+            if val_len > 1000 {
+                let placeholder = format!("[base64: {} chars removed]", val_len);
+                result.replace_range(val_start..val_start + val_len, &placeholder);
+            }
+        }
+    }
+
+    // Strip standalone long base64 runs (> 4K continuous base64 chars)
+    if result.len() > 5000 {
+        result = strip_long_base64_runs(&result);
+    }
+
+    result
+}
+
+/// Replace runs of base64 characters (>4K continuous) with a placeholder.
+fn strip_long_base64_runs(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut result = String::with_capacity(len);
+    let mut i = 0;
+    let mut run_start: Option<usize> = None;
+
+    while i < len {
+        let b = bytes[i];
+        let is_b64 = b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=';
+        if is_b64 {
+            if run_start.is_none() {
+                run_start = Some(i);
+            }
+            i += 1;
+        } else {
+            if let Some(rs) = run_start.take() {
+                let run_len = i - rs;
+                if run_len > 4096 {
+                    result.push_str(&format!("[base64: {} chars removed]", run_len));
+                } else {
+                    result.push_str(&s[rs..i]);
+                }
+            }
+            // Find next valid UTF-8 char boundary
+            let char_start = i;
+            let mut char_end = i + 1;
+            while char_end < len && !s.is_char_boundary(char_end) {
+                char_end += 1;
+            }
+            result.push_str(&s[char_start..char_end]);
+            i = char_end;
+        }
+    }
+
+    // Handle trailing run
+    if let Some(rs) = run_start.take() {
+        let run_len = len - rs;
+        if run_len > 4096 {
+            result.push_str(&format!("[base64: {} chars removed]", run_len));
+        } else {
+            result.push_str(&s[rs..]);
+        }
+    }
+
+    result
+}
+
 /// Layer 2: Context guard — scan all tool_result blocks in the message history.
 ///
-/// If total tool result content exceeds 75% of the context headroom,
-/// compact oldest results first. Returns the number of results compacted.
+/// Pass 0: Strip large base64 blobs from all tool results (image data, etc.)
+/// Pass 1: Cap any single result exceeding 50% of context
+/// Pass 2: Compact oldest results until total is under headroom
 pub fn apply_context_guard(
     messages: &mut [Message],
     budget: &ContextBudget,
     _tools: &[ToolDefinition],
 ) -> usize {
+    // Pass 0: Strip base64 blobs from tool results.
+    // This removes large image/file data that the LLM doesn't need to see again.
+    let mut compacted = 0;
+    for msg in messages.iter_mut() {
+        if let MessageContent::Blocks(blocks) = &mut msg.content {
+            for block in blocks.iter_mut() {
+                if let ContentBlock::ToolResult { content, .. } = block {
+                    let stripped = strip_base64_content(content);
+                    if stripped.len() < content.len() {
+                        *content = stripped;
+                        compacted += 1;
+                    }
+                }
+            }
+        }
+    }
+
     let headroom = budget.total_tool_headroom_chars();
     let single_max = budget.single_result_max();
 
@@ -233,15 +332,15 @@ mod tests {
     fn test_budget_defaults() {
         let budget = ContextBudget::default();
         assert_eq!(budget.context_window_tokens, 200_000);
-        // 30% of 200K * 2.0 chars/token = 120K chars
-        assert_eq!(budget.per_result_cap(), 120_000);
+        // 10% of 200K * 2.0 chars/token = 40K chars
+        assert_eq!(budget.per_result_cap(), 40_000);
     }
 
     #[test]
     fn test_small_model_budget() {
         let budget = ContextBudget::new(8_000);
-        // 30% of 8K * 2.0 = 4800 chars
-        assert_eq!(budget.per_result_cap(), 4_800);
+        // 10% of 8K * 2.0 = 1600 chars
+        assert_eq!(budget.per_result_cap(), 1_600);
     }
 
     #[test]
