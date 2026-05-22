@@ -342,12 +342,12 @@ mod tests {
     fn test_group_expansion() {
         let policy = ToolPolicy {
             agent_rules: vec![ToolPolicyRule {
-                pattern: "@web_tools".to_string(),
+                pattern: "@test_tools".to_string(),
                 effect: PolicyEffect::Deny,
             }],
             groups: vec![ToolGroup {
-                name: "web_tools".to_string(),
-                tools: vec!["web_*".to_string()],
+                name: "test_tools".to_string(),
+                tools: vec!["test_*".to_string()],
             }],
             ..Default::default()
         };
@@ -384,7 +384,7 @@ mod tests {
     fn test_implicit_deny_when_allow_rules_exist() {
         let policy = ToolPolicy {
             agent_rules: vec![ToolPolicyRule {
-                pattern: "web_*".to_string(),
+                pattern: "test_*".to_string(),
                 effect: PolicyEffect::Allow,
             }],
             ..Default::default()

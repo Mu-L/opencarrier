@@ -1561,7 +1561,7 @@ mod tests {
 
     #[test]
     fn test_loop_detection_breaks_on_different_tool() {
-        // 5 web_search + 1 web_fetch + 5 web_search → no loop (window is 6, last 6 are mixed)
+        // 5 test_query + 1 web_fetch + 5 test_query → no loop (window is 6, last 6 are mixed)
         let mut recent: Vec<(String, u64)> = (0..5)
             .map(|_| make_call("test_query", serde_json::json!({"q": "rust"})))
             .collect();
@@ -2192,7 +2192,7 @@ mod tests {
             input_schema: serde_json::json!({}),
         }];
         let text =
-            r#"Let me search for that. <function=web_search>{"query":"rust async"}</function>"#;
+            r#"Let me search for that. <function=test_query>{"query":"rust async"}</function>"#;
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
@@ -2219,7 +2219,7 @@ mod tests {
             description: "Search the web".into(),
             input_schema: serde_json::json!({}),
         }];
-        let text = r#"<function=web_search>not valid json</function>"#;
+        let text = r#"<function=test_query>not valid json</function>"#;
         let calls = recover_text_tool_calls(text, &tools);
         assert!(calls.is_empty(), "Invalid JSON should be skipped");
     }
@@ -2238,7 +2238,7 @@ mod tests {
                 input_schema: serde_json::json!({}),
             },
         ];
-        let text = r#"<function=web_search>{"query":"hello"}</function> then <function=read_file>{"path":"a.txt"}</function>"#;
+        let text = r#"<function=test_query>{"query":"hello"}</function> then <function=read_file>{"path":"a.txt"}</function>"#;
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "test_query");
@@ -2259,7 +2259,7 @@ mod tests {
 
     #[test]
     fn test_recover_text_tool_calls_empty_tools() {
-        let text = r#"<function=web_search>{"query":"hello"}</function>"#;
+        let text = r#"<function=test_query>{"query":"hello"}</function>"#;
         let calls = recover_text_tool_calls(text, &[]);
         assert!(calls.is_empty(), "No tools = no recovery");
     }
@@ -2273,7 +2273,7 @@ mod tests {
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
-        let text = r#"<function=web_search>{"query":"rust","filters":{"lang":"en","year":2024}}</function>"#;
+        let text = r#"<function=test_query>{"query":"rust","filters":{"lang":"en","year":2024}}</function>"#;
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].input["filters"]["lang"], "en");
@@ -2286,7 +2286,7 @@ mod tests {
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
-        let text = "Sure, let me search that for you.\n\n<function=web_search>{\"query\":\"rust async programming\"}</function>\n\nI'll get back to you with results.";
+        let text = "Sure, let me search that for you.\n\n<function=test_query>{\"query\":\"rust async programming\"}</function>\n\nI'll get back to you with results.";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].input["query"], "rust async programming");
@@ -2300,7 +2300,7 @@ mod tests {
             input_schema: serde_json::json!({}),
         }];
         // Some models emit pretty-printed JSON
-        let text = "<function=web_search>\n  {\"query\": \"hello world\"}\n</function>";
+        let text = "<function=test_query>\n  {\"query\": \"hello world\"}\n</function>";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].input["query"], "hello world");
@@ -2314,7 +2314,7 @@ mod tests {
             input_schema: serde_json::json!({}),
         }];
         // Missing </function> — should gracefully skip
-        let text = r#"<function=web_search>{"query":"test"}"#;
+        let text = r#"<function=test_query>{"query":"test"}"#;
         let calls = recover_text_tool_calls(text, &tools);
         assert!(calls.is_empty(), "Unclosed tag should be skipped");
     }
@@ -2327,7 +2327,7 @@ mod tests {
             input_schema: serde_json::json!({}),
         }];
         // Missing > after tool name
-        let text = r#"<function=web_search{"query":"test"}</function>"#;
+        let text = r#"<function=test_query{"query":"test"}</function>"#;
         let calls = recover_text_tool_calls(text, &tools);
         // The parser finds > inside JSON, will likely produce invalid tool name
         // or invalid JSON — either way, should not panic
@@ -2364,7 +2364,7 @@ mod tests {
             },
         ];
         // First: valid, second: unknown tool, third: valid
-        let text = r#"<function=web_search>{"q":"a"}</function> <function=unknown>{"x":1}</function> <function=read_file>{"path":"b"}</function>"#;
+        let text = r#"<function=test_query>{"q":"a"}</function> <function=unknown>{"x":1}</function> <function=read_file>{"path":"b"}</function>"#;
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 2, "Should recover 2 valid, skip 1 unknown");
         assert_eq!(calls[0].name, "test_query");
@@ -2406,7 +2406,7 @@ mod tests {
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
-        let text = r#"Let me search for that. <function>web_search{"query":"rust lang"}</function> I'll find the answer."#;
+        let text = r#"Let me search for that. <function>test_query{"query":"rust lang"}</function> I'll find the answer."#;
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
@@ -2427,7 +2427,7 @@ mod tests {
             },
         ];
         // Mix of variant 1 and variant 2
-        let text = r#"<function=web_search>{"q":"a"}</function> <function>web_fetch{"url":"https://x.com"}</function>"#;
+        let text = r#"<function=test_query>{"q":"a"}</function> <function>web_fetch{"url":"https://x.com"}</function>"#;
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "test_query");
@@ -2469,7 +2469,7 @@ mod tests {
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
-        let text = "```json\nweb_search {\"query\": \"rust\"}\n```";
+        let text = "```json\ntest_query {\"query\": \"rust\"}\n```";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
@@ -2617,7 +2617,7 @@ mod tests {
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
-        let text = "I'll search for that.\n\n<tool_call>\n{\"name\": \"web_search\", \"arguments\": {\"query\": \"rust async\"}}\n</tool_call>\n\nLet me get results.";
+        let text = "I'll search for that.\n\n<tool_call>\n{\"name\": \"test_query\", \"arguments\": {\"query\": \"rust async\"}}\n</tool_call>\n\nLet me get results.";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
@@ -2691,7 +2691,7 @@ mod tests {
                 input_schema: serde_json::json!({}),
             },
         ];
-        let text = "<tool_call>{\"name\": \"shell_exec\", \"arguments\": {\"command\": \"ls\"}}</tool_call>\n<tool_call>{\"name\": \"web_search\", \"arguments\": {\"query\": \"rust\"}}</tool_call>";
+        let text = "<tool_call>{\"name\": \"shell_exec\", \"arguments\": {\"command\": \"ls\"}}</tool_call>\n<tool_call>{\"name\": \"test_query\", \"arguments\": {\"query\": \"rust\"}}</tool_call>";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "shell_exec");
@@ -2790,7 +2790,7 @@ mod tests {
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
-        let text = "<|plugin|>\n{\"name\": \"web_search\", \"arguments\": {\"query\": \"rust\"}}\n<|endofblock|>";
+        let text = "<|plugin|>\n{\"name\": \"test_query\", \"arguments\": {\"query\": \"rust\"}}\n<|endofblock|>";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
@@ -2819,7 +2819,7 @@ mod tests {
             description: "Search".into(),
             input_schema: serde_json::json!({}),
         }];
-        let text = "Action: web_search\nAction Input: {\"query\": \"rust programming\"}";
+        let text = "Action: test_query\nAction Input: {\"query\": \"rust programming\"}";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
@@ -2876,7 +2876,7 @@ mod tests {
             input_schema: serde_json::json!({}),
         }];
         let text =
-            "<tool_use>{\"name\": \"web_search\", \"arguments\": {\"query\": \"test\"}}</tool_use>";
+            "<tool_use>{\"name\": \"test_query\", \"arguments\": {\"query\": \"test\"}}</tool_use>";
         let calls = recover_text_tool_calls(text, &tools);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
@@ -2952,7 +2952,7 @@ mod tests {
     // --- End-to-end integration test: text-as-tool-call recovery through agent loop ---
 
     /// Mock driver that simulates a Groq/Llama model outputting tool calls as text.
-    /// Call 1: Returns text with `<function=web_search>...</function>` (EndTurn, no tool_calls)
+    /// Call 1: Returns text with `<function=test_query>...</function>` (EndTurn, no tool_calls)
     /// Call 2: Returns a normal text response (after tool result is provided)
     struct TextToolCallDriver {
         call_count: AtomicU32,
@@ -2977,7 +2977,7 @@ mod tests {
                 // Simulate Groq/Llama: tool call as text, not in tool_calls field
                 Ok(CompletionResponse {
                     content: vec![ContentBlock::Text {
-                        text: r#"Let me search for that. <function=web_search>{"query":"rust async"}</function>"#.to_string(),
+                        text: r#"Let me search for that. <function=test_query>{"query":"rust async"}</function>"#.to_string(),
                         provider_metadata: None,
                     }],
                     stop_reason: StopReason::EndTurn,
@@ -3024,7 +3024,7 @@ mod tests {
         let manifest = test_manifest();
         let driver: Arc<dyn LlmDriver> = Arc::new(TextToolCallDriver::new());
 
-        // Provide web_search as an available tool so recovery can match it
+        // Provide test_query as an available tool so recovery can match it
         let tools = vec![ToolDefinition {
             name: "test_query".into(),
             description: "Search the web".into(),
