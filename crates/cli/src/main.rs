@@ -230,6 +230,9 @@ enum HubCommands {
         /// Specific version (default: latest).
         #[arg(short, long)]
         version: Option<String>,
+        /// Update an existing clone (overwrite files, keep runtime state).
+        #[arg(long)]
+        update: bool,
     },
 }
 
@@ -360,6 +363,11 @@ enum AgentCommands {
     Kill {
         /// Agent ID (UUID).
         agent_id: String,
+    },
+    /// Restart an agent by name or ID (kill + spawn).
+    Restart {
+        /// Agent name or ID prefix.
+        name_or_id: String,
     },
 }
 
@@ -538,6 +546,7 @@ fn main() {
             AgentCommands::Spawn { manifest } => cmd_agent_spawn(cli.config, manifest),
             AgentCommands::List { json } => cmd_agent_list(cli.config, json),
             AgentCommands::Kill { agent_id } => cmd_agent_kill(cli.config, &agent_id),
+            AgentCommands::Restart { name_or_id } => cmd_agent_restart(cli.config, &name_or_id),
         },
         Commands::Config(sub) => match sub {
             ConfigCommands::Show => cmd_config_show(),
@@ -1325,6 +1334,79 @@ fn cmd_agent_kill(config: Option<PathBuf>, agent_id_str: &str) {
                 std::process::exit(1);
             }
         }
+    }
+}
+
+fn cmd_agent_restart(config: Option<PathBuf>, name_or_id: &str) {
+    // 1. Find agent by name or ID prefix via daemon
+    let base = find_daemon().unwrap_or_else(|| {
+        eprintln!("需要 daemon 运行才能 restart");
+        std::process::exit(1);
+    });
+    let client = daemon_client();
+    let body = daemon_json(client.get(format!("{base}/api/agents")).send());
+    let agents = match body.as_array() {
+        Some(a) => a,
+        None => {
+            eprintln!("No agents running.");
+            std::process::exit(1);
+        }
+    };
+    let found = agents.iter().find(|a| {
+        let id = a["id"].as_str().unwrap_or("");
+        let name = a["name"].as_str().unwrap_or("");
+        id.starts_with(name_or_id) || name == name_or_id
+    });
+    let agent = match found {
+        Some(a) => a,
+        None => {
+            eprintln!("找不到 agent: {name_or_id}");
+            std::process::exit(1);
+        }
+    };
+    let agent_id = agent["id"].as_str().unwrap_or("?").to_string();
+    let workspace_path = match agent["workspace"].as_str() {
+        Some(ws) => ws.to_string(),
+        None => {
+            eprintln!("无法获取 agent workspace 路径");
+            std::process::exit(1);
+        }
+    };
+
+    let manifest_path = std::path::Path::new(&workspace_path).join("agent.toml");
+    if !manifest_path.exists() {
+        eprintln!("Manifest 文件不存在: {}", manifest_path.display());
+        std::process::exit(1);
+    }
+
+    // 2. Kill
+    let kill_body = daemon_json(
+        client.delete(format!("{base}/api/agents/{agent_id}")).send(),
+    );
+    if kill_body.get("status").is_none() {
+        eprintln!("Kill 失败: {}", kill_body["error"].as_str().unwrap_or("Unknown error"));
+        std::process::exit(1);
+    }
+    println!("Agent {agent_id} killed.");
+
+    // 3. Spawn from same workspace
+    let contents = std::fs::read_to_string(&manifest_path).unwrap_or_else(|e| {
+        eprintln!("Error reading manifest: {e}");
+        std::process::exit(1);
+    });
+    let spawn_body = daemon_json(
+        client
+            .post(format!("{base}/api/agents"))
+            .json(&serde_json::json!({"manifest_toml": contents}))
+            .send(),
+    );
+    if spawn_body.get("agent_id").is_some() {
+        println!("Agent restarted successfully!");
+        println!("  ID:   {}", spawn_body["agent_id"].as_str().unwrap_or("?"));
+        println!("  Name: {}", spawn_body["name"].as_str().unwrap_or("?"));
+    } else {
+        eprintln!("Spawn 失败: {}", spawn_body["error"].as_str().unwrap_or("Unknown error"));
+        std::process::exit(1);
     }
 }
 
@@ -3657,9 +3739,9 @@ async fn cmd_hub(cmd: HubCommands) {
                 Err(e) => eprintln!("搜索失败: {e}"),
             }
         }
-        HubCommands::Install { name, version } => {
+        HubCommands::Install { name, version, update } => {
             let workspace_dir = config.effective_workspaces_dir().join(&name);
-            if workspace_dir.exists() {
+            if workspace_dir.exists() && !update {
                 eprintln!("分身 '{}' 已存在: {}", name, workspace_dir.display());
                 std::process::exit(1);
             }
