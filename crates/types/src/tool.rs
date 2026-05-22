@@ -93,8 +93,8 @@ impl PermissionLevel {
             // MCP tools default to Write (user-configured, trusted by default)
             n if n.starts_with("mcp_") => Self::Write,
 
-            // SQLite tools — read-only database queries
-            "sqlite_query" | "sqlite_schema" => Self::ReadOnly,
+            // SQLite tools — database queries and writes (agent's own workspace)
+            "sqlite_query" | "sqlite_schema" => Self::Write,
 
             // Unknown tools default to Dangerous (fail-safe)
             _ => Self::Dangerous,

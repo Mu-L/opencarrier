@@ -1,7 +1,7 @@
 //! SQLite tools: sqlite_query, sqlite_schema.
 //!
-//! Allows agents to query embedded SQLite databases (e.g. gaokao admission data).
-//! All queries are read-only (SELECT / PRAGMA). DML/DDL is rejected.
+//! Allows agents to query and modify embedded SQLite databases in their workspace.
+//! SELECT/PRAGMA return rows as a markdown table; DML/DDL return affected-row counts.
 
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
@@ -26,12 +26,12 @@ impl super::ToolModule for SqliteTools {
         vec![
             ToolDefinition {
                 name: "sqlite_query".to_string(),
-                description: "Execute a read-only SQL query against an SQLite database in the workspace. Only SELECT and PRAGMA are allowed. Returns results as a markdown table.".to_string(),
+                description: "Execute a SQL query against an SQLite database in the workspace. Supports SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, and other statements. SELECT/PRAGMA return rows as a markdown table; DML/DDL return the number of affected rows.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "db_path": { "type": "string", "description": "Path to the .db file (relative to workspace). If omitted, the first .db file in the workspace is used." },
-                        "sql": { "type": "string", "description": "SQL query to execute. Only SELECT and PRAGMA statements are permitted." }
+                        "sql": { "type": "string", "description": "SQL statement to execute." }
                     },
                     "required": ["sql"]
                 }),
@@ -64,7 +64,7 @@ impl super::ToolModule for SqliteTools {
     }
 
     fn permission_level(&self, _tool_name: &str) -> types::tool::PermissionLevel {
-        types::tool::PermissionLevel::ReadOnly
+        types::tool::PermissionLevel::Write
     }
 
     fn max_result_size_chars(&self, _tool_name: &str) -> Option<usize> {
@@ -125,51 +125,32 @@ fn resolve_db_path(input: &Value, workspace_root: Option<&Path>) -> Result<PathB
     Err("No database file found. Provide db_path or place a .db file in the workspace.".to_string())
 }
 
-/// Validate that SQL is read-only (SELECT or PRAGMA).
-fn validate_readonly_sql(sql: &str) -> Result<(), String> {
-    let trimmed = sql.trim();
-    let upper = trimmed.to_uppercase();
-
-    // Reject obvious DML/DDL
-    let forbidden = [
-        "INSERT ", "UPDATE ", "DELETE ", "DROP ", "CREATE ", "ALTER ",
-        "REPLACE ", "TRUNCATE ", "ATTACH ", "DETACH ", "PRAGMA WRITABLE",
-    ];
-    for kw in &forbidden {
-        if upper.contains(kw) {
-            return Err(format!(
-                "Only read-only queries (SELECT / PRAGMA) are allowed. Forbidden keyword detected: {}",
-                kw.trim()
-            ));
-        }
+/// Validate SQL — only block ATTACH/DETACH (path escape risk).
+fn validate_sql(sql: &str) -> Result<(), String> {
+    let upper = sql.trim().to_uppercase();
+    if upper.starts_with("ATTACH") || upper.starts_with("DETACH") {
+        return Err("ATTACH/DETACH is not allowed.".to_string());
     }
-
-    // Must start with SELECT or PRAGMA
-    if !upper.starts_with("SELECT") && !upper.starts_with("PRAGMA") && !upper.starts_with("WITH") {
-        return Err("Query must start with SELECT, WITH, or PRAGMA".to_string());
-    }
-
     Ok(())
 }
 
-/// Execute a SELECT/PRAGMA query and return markdown table.
+/// Execute a SQL query and return markdown table (SELECT) or affected-row count (DML/DDL).
 async fn tool_sqlite_query(
     input: &Value,
     workspace_root: Option<&Path>,
 ) -> Result<String, String> {
     let sql = input["sql"].as_str().ok_or("Missing 'sql' parameter")?;
-    validate_readonly_sql(sql)?;
+    validate_sql(sql)?;
 
     let db_path = resolve_db_path(input, workspace_root)?;
 
-    // Run in blocking thread because rusqlite is sync
     let sql = sql.to_string();
     let db_path_str = db_path.display().to_string();
 
     let inner = tokio::time::timeout(
         Duration::from_secs(QUERY_TIMEOUT_SECS),
         tokio::task::spawn_blocking(move || {
-            run_query(&db_path_str, &sql)
+            run_statement(&db_path_str, &sql)
         }),
     )
     .await
@@ -178,12 +159,24 @@ async fn tool_sqlite_query(
     inner
 }
 
-fn run_query(db_path: &str, sql: &str) -> Result<String, String> {
+fn run_statement(db_path: &str, sql: &str) -> Result<String, String> {
     use rusqlite::{Connection, types::ValueRef};
 
     let conn = Connection::open(db_path)
         .map_err(|e| format!("Failed to open database: {e}"))?;
 
+    let trimmed = sql.trim().to_uppercase();
+
+    // DML/DDL: use execute() and return affected rows
+    if !trimmed.starts_with("SELECT") && !trimmed.starts_with("PRAGMA") && !trimmed.starts_with("WITH")
+        && !trimmed.starts_with("EXPLAIN")
+    {
+        let affected = conn.execute(sql, [])
+            .map_err(|e| format!("Execution failed: {e}"))?;
+        return Ok(format!("OK, {affected} row(s) affected."));
+    }
+
+    // SELECT / PRAGMA / WITH: return rows as markdown table
     let mut stmt = conn.prepare(sql)
         .map_err(|e| format!("Failed to prepare query: {e}"))?;
 
@@ -224,19 +217,16 @@ fn run_query(db_path: &str, sql: &str) -> Result<String, String> {
     let total_fetched = result_rows.len();
     let truncated = total_fetched >= MAX_ROWS;
 
-    // Build markdown table
     let mut md = String::new();
     md.push_str("| ");
     md.push_str(&col_names.join(" | "));
-    md.push_str(" |\n");
-    md.push_str("| ");
+    md.push_str(" |\n| ");
     md.push_str(&col_names.iter().map(|_| "---".to_string()).collect::<Vec<_>>().join(" | "));
     md.push_str(" |\n");
 
     for cols in &result_rows {
         md.push_str("| ");
         let escaped: Vec<String> = cols.iter().map(|c| {
-            // Escape pipe chars in cell content
             c.replace('|', "\\|").replace('\n', " ").replace('\r', "")
         }).collect();
         md.push_str(&escaped.join(" | "));
@@ -353,8 +343,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_sqlite_query_end_to_end() {
-        // Create a temp db in the current dir (tests run from workspace root)
+    async fn test_sqlite_query_select() {
         let db_path = std::path::PathBuf::from("test-tmp-sqlite.db");
         let _ = std::fs::remove_file(&db_path);
         {
@@ -372,6 +361,57 @@ mod tests {
         let output = result.unwrap();
         assert!(output.contains("Alice"), "Missing Alice: {}", output);
         assert!(output.contains("Bob"), "Missing Bob: {}", output);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_query_insert() {
+        let db_path = std::path::PathBuf::from("test-tmp-insert.db");
+        let _ = std::fs::remove_file(&db_path);
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)", []).unwrap();
+        }
+
+        let input = serde_json::json!({
+            "db_path": db_path.to_str().unwrap(),
+            "sql": "INSERT INTO t (v) VALUES ('hello')"
+        });
+        let result = tool_sqlite_query(&input, None).await;
+        assert!(result.is_ok(), "Insert failed: {:?}", result);
+        assert!(result.unwrap().contains("1 row(s) affected"), "Wrong message");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_query_update_delete() {
+        let db_path = std::path::PathBuf::from("test-tmp-dml.db");
+        let _ = std::fs::remove_file(&db_path);
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)", []).unwrap();
+            conn.execute("INSERT INTO t (v) VALUES ('a'), ('b'), ('c')", []).unwrap();
+        }
+
+        // UPDATE
+        let input = serde_json::json!({
+            "db_path": db_path.to_str().unwrap(),
+            "sql": "UPDATE t SET v = 'x' WHERE id > 1"
+        });
+        let result = tool_sqlite_query(&input, None).await;
+        assert!(result.is_ok(), "Update failed: {:?}", result);
+        assert!(result.unwrap().contains("2 row(s) affected"));
+
+        // DELETE
+        let input = serde_json::json!({
+            "db_path": db_path.to_str().unwrap(),
+            "sql": "DELETE FROM t WHERE v = 'x'"
+        });
+        let result = tool_sqlite_query(&input, None).await;
+        assert!(result.is_ok(), "Delete failed: {:?}", result);
+        assert!(result.unwrap().contains("2 row(s) affected"));
 
         let _ = std::fs::remove_file(&db_path);
     }
@@ -398,17 +438,18 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_readonly_sql_accepts_select() {
-        assert!(validate_readonly_sql("SELECT * FROM t").is_ok());
-        assert!(validate_readonly_sql("WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
-        assert!(validate_readonly_sql("PRAGMA table_info(t)").is_ok());
+    fn test_validate_sql_allows_dml() {
+        assert!(validate_sql("SELECT * FROM t").is_ok());
+        assert!(validate_sql("INSERT INTO t VALUES (1)").is_ok());
+        assert!(validate_sql("UPDATE t SET x=1").is_ok());
+        assert!(validate_sql("DELETE FROM t").is_ok());
+        assert!(validate_sql("CREATE TABLE t (id INTEGER)").is_ok());
+        assert!(validate_sql("DROP TABLE t").is_ok());
     }
 
     #[test]
-    fn test_validate_readonly_sql_rejects_dml() {
-        assert!(validate_readonly_sql("INSERT INTO t VALUES (1)").is_err());
-        assert!(validate_readonly_sql("UPDATE t SET x=1").is_err());
-        assert!(validate_readonly_sql("DELETE FROM t").is_err());
-        assert!(validate_readonly_sql("DROP TABLE t").is_err());
+    fn test_validate_sql_blocks_attach() {
+        assert!(validate_sql("ATTACH DATABASE '/etc/passwd' AS x").is_err());
+        assert!(validate_sql("DETACH x").is_err());
     }
 }
