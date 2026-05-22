@@ -112,8 +112,4 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
     use axum::routing;
     axum::Router::new()
         .route("/api/hub/templates", routing::get(list_hub_templates))
-        .route(
-            "/api/hub/templates/{name}/install",
-            routing::post(install_hub_template),
-        )
 }
