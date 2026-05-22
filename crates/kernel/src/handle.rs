@@ -616,6 +616,7 @@ impl KernelHandle for CarrierKernel {
             .collect();
         let mut scored: Vec<(usize, String, types::tool::ToolDefinition)> = Vec::new();
 
+        // Search builtin toolsets
         for (ts_name, tools) in registry.iter() {
             let ts_lower = ts_name.to_lowercase();
             for tool in tools {
@@ -628,6 +629,31 @@ impl KernelHandle for CarrierKernel {
                 if score > 0 {
                     scored.push((score, ts_name.clone(), tool.clone()));
                 }
+            }
+        }
+
+        // Search MCP servers by server name — return one summary result per server
+        for entry in self.plugins.mcp_connections.iter() {
+            let conn = entry.value();
+            let config = conn.config();
+            let server_name = config.name.to_lowercase();
+            let server_desc = config.description.to_lowercase();
+            let server_score = CarrierKernel::score_tool(
+                &query_lower, &keywords,
+                &server_name, &server_desc, &server_name,
+            );
+            if server_score > 0 {
+                let tool_names: Vec<&str> = conn.tools().iter().map(|t| t.name.as_str()).collect();
+                let ts = format!("mcp_{}", runtime::mcp::normalize_name(&config.name));
+                scored.push((server_score + 50, ts, types::tool::ToolDefinition {
+                    name: format!("mcp_{}", runtime::mcp::normalize_name(&config.name)),
+                    description: format!(
+                        "MCP server '{}'. Available tools (use directly): {}",
+                        config.name,
+                        tool_names.join(", "),
+                    ),
+                    input_schema: serde_json::json!({"type": "object", "properties": {}}),
+                }));
             }
         }
 
