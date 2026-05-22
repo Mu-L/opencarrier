@@ -870,7 +870,7 @@ mod tests {
                 // Verify the input includes tool call information
                 let input_text = req.messages[0].content.text_content();
                 assert!(
-                    input_text.contains("web_search"),
+                    input_text.contains("test_query"),
                     "Should include tool name"
                 );
                 assert!(
@@ -903,7 +903,7 @@ mod tests {
             role: Role::Assistant,
             content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
                 id: "tu-1".to_string(),
-                name: "web_search".to_string(),
+                name: "test_query".to_string(),
                 input: serde_json::json!({"query": "test"}),
                 provider_metadata: None,
             }]),
@@ -1253,7 +1253,7 @@ mod tests {
                     },
                     ContentBlock::ToolUse {
                         id: "tu-1".to_string(),
-                        name: "web_search".to_string(),
+                        name: "test_query".to_string(),
                         input: serde_json::json!({"query": "rust"}),
                         provider_metadata: None,
                     },
@@ -1280,7 +1280,7 @@ mod tests {
         let text = build_conversation_text(&messages, &config);
         assert!(text.contains("User: Hello"));
         assert!(text.contains("Assistant: Let me search"));
-        assert!(text.contains("web_search"));
+        assert!(text.contains("test_query"));
         assert!(text.contains("Tool result (OK)"));
         assert!(text.contains("[Image: image/png]"));
     }
@@ -1329,7 +1329,7 @@ mod tests {
         use types::tool::ToolDefinition;
         let messages = vec![Message::user("hi")];
         let tools = vec![ToolDefinition {
-            name: "web_search".into(),
+            name: "test_query".into(),
             description: "Search the web for information".into(),
             input_schema: serde_json::json!({"type": "object", "properties": {"query": {"type": "string"}}}),
         }];

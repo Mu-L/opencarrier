@@ -459,7 +459,6 @@ const REMOVED_TOOLS: &[&str] = &[
     "process_write",
     "process_kill",
     "process_list",
-    "memory_store",
     "memory_recall",
     "memory_list",
     "knowledge_add_entity",
@@ -1012,7 +1011,6 @@ mod tests {
         assert!(section.contains("Recalled memories"));
         assert!(section.contains("[pref] User likes dark mode"));
         assert!(section.contains("[ctx] Working on Rust project"));
-        assert!(!section.contains("memory_store"));
     }
 
     #[test]

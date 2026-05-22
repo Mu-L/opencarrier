@@ -488,14 +488,14 @@ mod tests {
             },
             StreamEvent::ToolUseStart {
                 id: "t1".to_string(),
-                name: "web_search".to_string(),
+                name: "test_query".to_string(),
             },
             StreamEvent::ToolInputDelta {
                 text: "{\"q".to_string(),
             },
             StreamEvent::ToolUseEnd {
                 id: "t1".to_string(),
-                name: "web_search".to_string(),
+                name: "test_query".to_string(),
                 input: serde_json::json!({"query": "rust"}),
             },
             StreamEvent::ContentComplete {

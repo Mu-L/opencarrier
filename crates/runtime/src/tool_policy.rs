@@ -279,14 +279,14 @@ mod tests {
     #[test]
     fn test_glob_match_exact() {
         assert!(glob_match("shell_exec", "shell_exec"));
-        assert!(!glob_match("shell_exec", "web_search"));
+        assert!(!glob_match("shell_exec", "test_query"));
     }
 
     #[test]
     fn test_glob_match_wildcard() {
         assert!(glob_match("shell_*", "shell_exec"));
         assert!(glob_match("shell_*", "shell_write"));
-        assert!(!glob_match("shell_*", "web_search"));
+        assert!(!glob_match("shell_*", "test_query"));
         assert!(glob_match("*", "anything"));
     }
 
@@ -324,17 +324,17 @@ mod tests {
     fn test_agent_rules_override_global() {
         let policy = ToolPolicy {
             agent_rules: vec![ToolPolicyRule {
-                pattern: "web_search".to_string(),
+                pattern: "test_query".to_string(),
                 effect: PolicyEffect::Deny,
             }],
             global_rules: vec![ToolPolicyRule {
-                pattern: "web_search".to_string(),
+                pattern: "test_query".to_string(),
                 effect: PolicyEffect::Allow,
             }],
             ..Default::default()
         };
 
-        let result = resolve_tool_access("web_search", &policy, 0);
+        let result = resolve_tool_access("test_query", &policy, 0);
         assert!(matches!(result, ToolAccessResult::Denied { .. }));
     }
 
@@ -352,7 +352,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = resolve_tool_access("web_search", &policy, 0);
+        let result = resolve_tool_access("test_query", &policy, 0);
         assert!(matches!(result, ToolAccessResult::Denied { .. }));
 
         let result = resolve_tool_access("shell_exec", &policy, 0);
@@ -390,7 +390,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = resolve_tool_access("web_search", &policy, 0);
+        let result = resolve_tool_access("test_query", &policy, 0);
         assert_eq!(result, ToolAccessResult::Allowed);
 
         let result = resolve_tool_access("shell_exec", &policy, 0);
@@ -401,7 +401,7 @@ mod tests {
 
     #[test]
     fn test_depth_0_allows_all() {
-        let tools: Vec<String> = vec!["cron_create", "agent_spawn", "web_search", "file_read"]
+        let tools: Vec<String> = vec!["cron_create", "agent_spawn", "test_query", "file_read"]
             .into_iter()
             .map(String::from)
             .collect();
@@ -417,7 +417,7 @@ mod tests {
             "schedule_create",
             "schedule_delete",
             "process_start",
-            "web_search",
+            "test_query",
             "file_read",
             "agent_spawn",
         ]
@@ -427,27 +427,27 @@ mod tests {
         let filtered = filter_tools_by_depth(&tools, 1, 5);
         // Should keep: web_search, file_read, agent_spawn (not leaf)
         assert_eq!(filtered.len(), 3);
-        assert!(filtered.contains(&"web_search".to_string()));
+        assert!(filtered.contains(&"test_query".to_string()));
         assert!(filtered.contains(&"file_read".to_string()));
         assert!(filtered.contains(&"agent_spawn".to_string()));
     }
 
     #[test]
     fn test_leaf_depth_denies_spawn() {
-        let tools: Vec<String> = vec!["agent_spawn", "agent_kill", "web_search", "file_read"]
+        let tools: Vec<String> = vec!["agent_spawn", "agent_kill", "test_query", "file_read"]
             .into_iter()
             .map(String::from)
             .collect();
         // max_depth=5, depth=4 -> leaf (4 >= 5-1)
         let filtered = filter_tools_by_depth(&tools, 4, 5);
         assert_eq!(filtered.len(), 2);
-        assert!(filtered.contains(&"web_search".to_string()));
+        assert!(filtered.contains(&"test_query".to_string()));
         assert!(filtered.contains(&"file_read".to_string()));
     }
 
     #[test]
     fn test_preserves_non_denied() {
-        let tools: Vec<String> = vec!["web_search", "file_read", "shell_exec", "agent_list"]
+        let tools: Vec<String> = vec!["test_query", "file_read", "shell_exec", "agent_list"]
             .into_iter()
             .map(String::from)
             .collect();

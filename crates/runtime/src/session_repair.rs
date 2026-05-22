@@ -609,7 +609,7 @@ mod tests {
                 role: Role::Assistant,
                 content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
                     id: "tu-1".to_string(),
-                    name: "web_search".to_string(),
+                    name: "test_query".to_string(),
                     input: serde_json::json!({"query": "rust"}),
                     provider_metadata: None,
                 }]),
