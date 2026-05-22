@@ -59,7 +59,7 @@ impl ToolModule for MediaTools {
             // --- Image generation tool ---
             ToolDefinition {
                 name: "image_generate".to_string(),
-                description: "Generate images from a text prompt. Uses the configured image modality (MiniMax image-01, Wan2.7, DALL-E, etc.). Generated images are saved to the user's output directory.".to_string(),
+                description: "Generate images from a text prompt. Uses the configured image modality (MiniMax image-01, Wan2.7, DALL-E, etc.). Generated images are saved to the user's output directory. Response includes base64 data for the first image — pass it directly to upload tools.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -724,10 +724,14 @@ async fn tool_image_generate(
         }
     }
 
+    // Include base64 of the first image so downstream tools (e.g. upload) can use it directly.
+    let base64_data = images.first().map(|img| &img.data_base64).cloned().unwrap_or_default();
+
     let response = serde_json::json!({
         "images_generated": images.len(),
         "saved_to": saved_paths,
         "image_urls": image_urls,
+        "base64": base64_data,
         "provider": "brain",
     });
 
