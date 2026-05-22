@@ -1,5 +1,6 @@
 //! Session management — load/save conversation history.
 
+use dashmap::DashMap;
 use types::agent::SessionId;
 use types::error::{CarrierError, CarrierResult};
 use types::message::{ContentBlock, Message, MessageContent, Role};
@@ -28,12 +29,17 @@ pub struct Session {
 #[derive(Clone)]
 pub struct SessionStore {
     conn: Arc<Mutex<Connection>>,
+    /// Per-session write locks for concurrency-safe append operations.
+    session_locks: Arc<DashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl SessionStore {
     /// Create a new session store wrapping the given connection.
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            session_locks: Arc::new(DashMap::new()),
+        }
     }
 
     /// Load a session from the database.
@@ -94,6 +100,51 @@ impl SessionStore {
             ],
         )
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Append messages to a session (concurrency-safe).
+    ///
+    /// Acquires a per-session write lock, loads current state from DB,
+    /// appends new messages, and saves back. This allows multiple agent
+    /// loops to run in parallel for the same agent — each appends its
+    /// own new messages without overwriting the other's.
+    pub async fn save_session_append(
+        &self,
+        session_id: SessionId,
+        agent_id: &str,
+        new_messages: &[Message],
+        context_window_tokens: u64,
+        label: Option<&str>,
+    ) -> CarrierResult<()> {
+        let key = session_id.0.to_string();
+        let lock = self
+            .session_locks
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        let _guard = lock.lock().await;
+
+        let mut session = match self.get_session(session_id)? {
+            Some(s) => s,
+            None => Session {
+                id: session_id,
+                agent_id: agent_id.to_string(),
+                messages: Vec::new(),
+                context_window_tokens: 0,
+                label: None,
+            },
+        };
+        session.messages.extend_from_slice(new_messages);
+        session.context_window_tokens = context_window_tokens;
+        if let Some(l) = label {
+            session.label = Some(l.to_string());
+        }
+        self.save_session(&session)?;
+
+        // Clean up lock entry if no one else is waiting
+        drop(_guard);
+        self.session_locks.retain(|k, v| Arc::strong_count(v) > 1 || k != &key);
         Ok(())
     }
 

@@ -15,6 +15,7 @@ use crate::usage::UsageStore;
 
 use types::agent::{AgentEntry, AgentId, SessionId};
 use types::error::{CarrierError, CarrierResult};
+use types::message::Message;
 use types::memory_tree::{
     EntityMatch, IngestRequest, IngestResult, QueryResponse, TreeSummary,
     DrillDownQuery, EntitySearch, FetchLeavesQuery, GlobalQuery, SourceQuery, TopicQuery,
@@ -194,6 +195,23 @@ impl MemorySubstrate {
         tokio::task::spawn_blocking(move || sessions.save_session(&session))
             .await
             .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Append new messages to a session (concurrency-safe).
+    ///
+    /// Acquires a per-session write lock, loads current state, appends
+    /// messages, and saves. Safe for concurrent agent loops.
+    pub async fn save_session_append_async(
+        &self,
+        session_id: SessionId,
+        agent_id: &str,
+        new_messages: &[Message],
+        context_window_tokens: u64,
+        label: Option<&str>,
+    ) -> CarrierResult<()> {
+        self.sessions
+            .save_session_append(session_id, agent_id, new_messages, context_window_tokens, label)
+            .await
     }
 
     /// Create a new empty session for an agent.

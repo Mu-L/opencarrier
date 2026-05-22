@@ -125,6 +125,10 @@ const TOOL_TIMEOUT_SECS: u64 = 120;
 /// execution easily exceed 300s with 30+ iterations.
 const AGENT_LOOP_TIMEOUT_SECS: u64 = 1200;
 
+/// Timeout for a single LLM API call (seconds).
+/// Catches mid-stream hangs where the server goes silent after connection.
+const PER_LLM_CALL_TIMEOUT_SECS: u64 = 180;
+
 /// Maximum consecutive MaxTokens continuations before returning partial response.
 /// Raised from 3 to 5 to allow longer-form generation.
 const MAX_CONTINUATIONS: u32 = 5;
@@ -317,9 +321,34 @@ async fn call_with_retry(
     let mut last_error = None;
 
     for attempt in 0..=MAX_RETRIES {
-        let result = match &stream_tx {
-            Some(tx) => driver.stream(request.clone(), tx.clone()).await,
-            None => driver.complete(request.clone()).await,
+        let call = async {
+            match &stream_tx {
+                Some(tx) => driver.stream(request.clone(), tx.clone()).await,
+                None => driver.complete(request.clone()).await,
+            }
+        };
+        let result = match tokio::time::timeout(
+            std::time::Duration::from_secs(PER_LLM_CALL_TIMEOUT_SECS),
+            call,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => {
+                warn!(attempt, "LLM call timed out after {PER_LLM_CALL_TIMEOUT_SECS}s");
+                last_error = Some("LLM call timed out".to_string());
+                if attempt == MAX_RETRIES {
+                    return Err(CarrierError::LlmDriver(format!(
+                        "LLM call timed out after {}s — server may be unresponsive",
+                        PER_LLM_CALL_TIMEOUT_SECS
+                    )));
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    BASE_RETRY_DELAY_MS * 2u64.pow(attempt),
+                ))
+                .await;
+                continue;
+            }
         };
         match result {
             Ok(response) => {
@@ -523,6 +552,23 @@ async fn run_agent_loop_impl(
     // Build the system prompt — base prompt comes from kernel (prompt_builder).
     let system_prompt = manifest.model.system_prompt.clone();
 
+    // Track which messages existed before this agent loop started.
+    // Used by merge-writes to append only our new messages to the session.
+    let session_base_len = session.messages.len();
+
+    // Helper for concurrency-safe session saves.
+    macro_rules! save_new {
+        () => {
+            memory.save_session_append_async(
+                session.id,
+                &session.agent_id,
+                &session.messages[session_base_len..],
+                session.context_window_tokens,
+                session.label.as_deref(),
+            )
+        };
+    }
+
     // Add the user message to session history.
     // When content blocks are provided (e.g. text + image from a channel),
     // use multimodal message format so the LLM receives the image for vision.
@@ -722,8 +768,9 @@ async fn run_agent_loop_impl(
                     session
                         .messages
                         .push(Message::assistant("[no reply needed]".to_string()));
+                    let new_msgs = &session.messages[session_base_len..];
                     memory
-                        .save_session_async(session)
+                        .save_session_append_async(session.id, &session.agent_id, new_msgs, session.context_window_tokens, session.label.as_deref())
                         .await
                         .map_err(|e| CarrierError::Memory(e.to_string()))?;
                     return Ok(AgentLoopResult {
@@ -790,8 +837,9 @@ async fn run_agent_loop_impl(
                 // Prune NO_REPLY heartbeat turns to save context budget
                 crate::session_repair::prune_heartbeat_turns(&mut session.messages, 10);
 
+                let new_msgs = &session.messages[session_base_len..];
                 memory
-                    .save_session_async(session)
+                    .save_session_append_async(session.id, &session.agent_id, new_msgs, session.context_window_tokens, session.label.as_deref())
                     .await
                     .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
@@ -1197,7 +1245,7 @@ async fn run_agent_loop_impl(
                     }
                 }
 
-                if let Err(e) = memory.save_session_async(session).await {
+                if let Err(e) = save_new!().await {
                     warn!("Failed to interim-save session: {e}");
                 }
 
@@ -1223,7 +1271,7 @@ async fn run_agent_loop_impl(
                         );
                         detected_plan = Some(TaskPlan { title, steps });
                         // Save session before breaking
-                        if let Err(e) = memory.save_session_async(session).await {
+                        if let Err(e) = save_new!().await {
                             warn!("Failed to save session before plan break: {e}");
                         }
                         break;
@@ -1240,7 +1288,7 @@ async fn run_agent_loop_impl(
                         text
                     };
                     session.messages.push(Message::assistant(&text));
-                    if let Err(e) = memory.save_session_async(session).await {
+                    if let Err(e) = save_new!().await {
                         warn!("Failed to save session on max continuations: {e}");
                     }
                     warn!(
@@ -1280,7 +1328,7 @@ async fn run_agent_loop_impl(
         }
     }
 
-    if let Err(e) = memory.save_session_async(session).await {
+    if let Err(e) = save_new!().await {
         warn!("Failed to save session on max iterations: {e}");
     }
 

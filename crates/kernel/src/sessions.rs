@@ -611,7 +611,6 @@ impl CarrierKernel {
         let _ = self.memory.remove_agent(agent_id);
 
         // Clean up per-agent runtime resources to prevent leaks
-        self.runtime.agent_msg_locks.retain(|k, _| k.0 != agent_id);
         self.runtime.running_tasks.remove(&agent_id);
         if let Ok(mut bindings) = self.coordination.bindings.lock() {
             bindings.retain(|b| b.agent != entry.name);

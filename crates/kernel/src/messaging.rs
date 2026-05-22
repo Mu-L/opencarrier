@@ -89,31 +89,10 @@ impl CarrierKernel {
         owner_id: Option<String>,
         channel_type: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
-        // Acquire per-(agent, owner) lock to serialize concurrent messages for the same
-        // agent+owner combination. This prevents session corruption when the same user
-        // sends messages in quick succession. Different owners of the same agent run in
-        // parallel — each has an independent lock. Messages for different agents are also
-        // not blocked.
-        //
-        // Subagent delegation (channel_type starts with "subagent:") skips the lock because
-        // it's already running inside the parent's tool execution (which holds the lock).
-        let is_subagent_delegate = channel_type.as_ref().is_some_and(|ct| ct.starts_with("subagent:"));
-        // Clean up stale per-agent locks (no one is waiting on them)
-        self.runtime.agent_msg_locks.retain(|_, v| Arc::strong_count(v) > 1);
-        let _lock_arc;
-        let _guard = if !is_subagent_delegate {
-            let lock_key = (agent_id, owner_id.clone());
-            _lock_arc = self
-                .runtime
-                .agent_msg_locks
-                .entry(lock_key)
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-                .clone();
-            Some(_lock_arc.lock().await)
-        } else {
-            _lock_arc = Arc::new(tokio::sync::Mutex::new(()));
-            None
-        };
+        // NOTE: The per-owner execution lock has been removed. Concurrent messages
+        // for the same agent+owner now run in parallel (like nginx). Session
+        // consistency is maintained by `save_session_append_async` which uses
+        // per-session write locks and merge-writes.
 
         // Acquire concurrency permit — limits parallel LLM requests to protect the API.
         // This is held until the function returns (permit dropped with _permit).

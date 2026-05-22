@@ -95,9 +95,6 @@ pub struct KernelRuntime {
     /// WASM sandbox engine (shared across all WASM agent executions).
     pub(crate) wasm_sandbox: WasmSandbox,
     /// Per-(agent, owner) message locks — serializes LLM calls for the same agent+owner
-    /// to prevent session corruption when multiple messages arrive concurrently.
-    /// Different owners of the same agent run in parallel; same owner is serialized.
-    pub(crate) agent_msg_locks: dashmap::DashMap<(AgentId, Option<String>), Arc<tokio::sync::Mutex<()>>>,
     /// Concurrency limit for LLM requests — prevents overwhelming the API.
     pub(crate) llm_concurrency_limit: Arc<tokio::sync::Semaphore>,
     /// File watcher handles for clone agents (stopped when dropped).
@@ -600,7 +597,6 @@ impl CarrierKernel {
                 background,
                 running_tasks: dashmap::DashMap::new(),
                 wasm_sandbox,
-                agent_msg_locks: dashmap::DashMap::new(),
                 llm_concurrency_limit: Arc::new(tokio::sync::Semaphore::new(llm_concurrency)),
                 watcher_handles: std::sync::Mutex::new(Vec::new()),
             },
