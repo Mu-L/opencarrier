@@ -486,19 +486,40 @@ pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, Vec<Stri
     if let Some(rest) = content.strip_prefix("---") {
         if let Some(end) = rest.find("---") {
             let frontmatter = &rest[..end];
+            let mut collecting_tools = false;
             for line in frontmatter.lines() {
-                let line = line.trim();
-                if let Some(val) = line.strip_prefix("name:") {
+                let trimmed = line.trim();
+                if let Some(val) = trimmed.strip_prefix("name:") {
                     name = val.trim().trim_matches('"').trim_matches('\'').to_string();
-                } else if let Some(val) = line.strip_prefix("description:") {
+                    collecting_tools = false;
+                } else if let Some(val) = trimmed.strip_prefix("description:") {
                     description = val.trim().trim_matches('"').trim_matches('\'').to_string();
-                } else if let Some(val) = line.strip_prefix("max_iterations:") {
+                    collecting_tools = false;
+                } else if let Some(val) = trimmed.strip_prefix("max_iterations:") {
                     max_iterations = val.trim().parse().ok();
-                } else if let Some(val) = line.strip_prefix("tools:") {
-                    tools = parse_yaml_string_list(val.trim());
-                } else if let Some(val) = line.strip_prefix("allowed_tools:") {
-                    // Legacy alias — skill files may still use `allowed_tools:`
-                    tools = parse_yaml_string_list(val.trim());
+                    collecting_tools = false;
+                } else if let Some(val) = trimmed.strip_prefix("tools:") {
+                    let inline = parse_yaml_string_list(val.trim());
+                    if !inline.is_empty() {
+                        tools = inline;
+                        collecting_tools = false;
+                    } else {
+                        collecting_tools = true;
+                    }
+                } else if let Some(val) = trimmed.strip_prefix("allowed_tools:") {
+                    let inline = parse_yaml_string_list(val.trim());
+                    if !inline.is_empty() {
+                        tools = inline;
+                        collecting_tools = false;
+                    } else {
+                        collecting_tools = true;
+                    }
+                } else if collecting_tools {
+                    if let Some(item) = trimmed.strip_prefix("- ") {
+                        tools.push(item.trim().trim_matches('"').trim_matches('\'').to_string());
+                    } else if !trimmed.starts_with('-') && !trimmed.is_empty() {
+                        collecting_tools = false;
+                    }
                 }
             }
             let body = rest[end + 3..].trim();
