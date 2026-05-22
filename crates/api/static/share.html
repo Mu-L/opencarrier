@@ -762,12 +762,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC
   };
 
   function beginAuth(platform) {
-    // Ensure clone is installed before any channel auth
-    var alreadyInstalled = allAgents.some(function(a){ return a.name === targetAgentName; });
-    if (alreadyInstalled) {
+    // Ensure clone is locally installed before any channel auth.
+    // allAgents includes hub templates (source='hub'), so check source='local'.
+    var localAgent = allAgents.find(function(a){ return a.name === targetAgentName && a.source === 'local'; });
+    if (localAgent) {
       proceedAuth(platform);
       return;
     }
+    showView('auth');
+    document.getElementById('auth-polling').classList.remove('hidden');
     document.getElementById('auth-status-text').textContent = '正在安装分身...';
     api('POST', '/api/hub/templates/' + encodeURIComponent(targetAgentName) + '/install', {}).then(function(res){
       if (res.error) throw new Error(res.error);
