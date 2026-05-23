@@ -769,6 +769,7 @@ mod tests {
             agent_id: "test-agent".to_string(),
             messages: vec![Message::user("hello")],
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let config = CompactionConfig::default();
@@ -785,6 +786,7 @@ mod tests {
             agent_id: "test-agent".to_string(),
             messages,
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let config = CompactionConfig::default();
@@ -835,6 +837,7 @@ mod tests {
             agent_id: "test-agent".to_string(),
             messages: vec![Message::user("hello"), Message::assistant("hi")],
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let config = CompactionConfig {
@@ -923,6 +926,7 @@ mod tests {
             agent_id: "test-agent".to_string(),
             messages,
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let config = CompactionConfig {
@@ -1001,6 +1005,7 @@ mod tests {
             agent_id: "test-agent".to_string(),
             messages,
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let config = CompactionConfig {
@@ -1134,6 +1139,7 @@ mod tests {
             agent_id: "test-agent".to_string(),
             messages,
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         // With 59 messages and keep_recent=5, split_at starts at 54.

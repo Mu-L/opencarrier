@@ -83,6 +83,7 @@ pub fn inject_attachments_into_session(
             id: entry.session_id,
             agent_id: entry.name.clone(),
             messages: Vec::new(),
+            turn_summaries: Vec::new(),
             context_window_tokens: 0,
             label: None,
         },

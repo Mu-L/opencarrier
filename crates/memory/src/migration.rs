@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 19;
+const SCHEMA_VERSION: u32 = 20;
 
 /// Run all migrations to bring the database up to date.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -85,6 +85,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
 
     if current_version < 19 {
         migrate_v19(conn)?;
+    }
+
+    if current_version < 20 {
+        migrate_v20(conn)?;
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
@@ -877,6 +881,19 @@ fn migrate_v19(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![19, "Agents: add session_id and identity columns (from hot-path to migration)"],
+    )?;
+    Ok(())
+}
+
+/// Version 20: Add turn_summaries column to sessions for turn-level context layering.
+fn migrate_v20(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "sessions", "turn_summaries") {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN turn_summaries BLOB DEFAULT NULL")?;
+    }
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![20, "Sessions: add turn_summaries column for turn-level context layering"],
     )?;
     Ok(())
 }

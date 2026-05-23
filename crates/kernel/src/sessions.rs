@@ -374,6 +374,7 @@ impl CarrierKernel {
                 agent_id: entry.name.clone(),
                 messages: Vec::new(),
                 context_window_tokens: 0,
+                    turn_summaries: Vec::new(),
                 label: None,
             });
 
@@ -567,6 +568,7 @@ impl CarrierKernel {
                 agent_id: entry.name.clone(),
                 messages: Vec::new(),
                 context_window_tokens: 0,
+                    turn_summaries: Vec::new(),
                 label: None,
             });
 

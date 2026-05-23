@@ -23,6 +23,21 @@ pub enum Role {
     Assistant,
 }
 
+/// A summary of a single conversation turn — replaces full messages in long-term context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TurnSummary {
+    /// Sequential turn number within this session.
+    pub turn_number: u32,
+    /// When this turn occurred (RFC3339).
+    pub timestamp: String,
+    /// What the user asked (condensed to intent).
+    pub user_intent: String,
+    /// What the assistant accomplished (outcome only).
+    pub assistant_outcome: String,
+    /// Tool names used this turn (for metadata, not content).
+    pub tools_used: Vec<String>,
+}
+
 /// Content of a message — can be simple text or structured blocks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]

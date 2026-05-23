@@ -201,6 +201,8 @@ impl MemorySubstrate {
     ///
     /// Acquires a per-session write lock, loads current state, appends
     /// messages, and saves. Safe for concurrent agent loops.
+    ///
+    /// If `turn_summaries` is provided, it replaces the existing summaries.
     pub async fn save_session_append_async(
         &self,
         session_id: SessionId,
@@ -208,9 +210,10 @@ impl MemorySubstrate {
         new_messages: &[Message],
         context_window_tokens: u64,
         label: Option<&str>,
+        turn_summaries: Option<&[types::message::TurnSummary]>,
     ) -> CarrierResult<()> {
         self.sessions
-            .save_session_append(session_id, agent_id, new_messages, context_window_tokens, label)
+            .save_session_append(session_id, agent_id, new_messages, context_window_tokens, label, turn_summaries)
             .await
     }
 

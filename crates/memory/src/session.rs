@@ -3,7 +3,7 @@
 use dashmap::DashMap;
 use types::agent::SessionId;
 use types::error::{CarrierError, CarrierResult};
-use types::message::{ContentBlock, Message, MessageContent, Role};
+use types::message::{ContentBlock, Message, MessageContent, Role, TurnSummary};
 use chrono::Utc;
 use rusqlite::Connection;
 use std::io::Write;
@@ -19,6 +19,8 @@ pub struct Session {
     pub agent_id: String,
     /// Conversation messages.
     pub messages: Vec<Message>,
+    /// Summaries of older turns (L1 context layer).
+    pub turn_summaries: Vec<TurnSummary>,
     /// Estimated token count for the context window.
     pub context_window_tokens: u64,
     /// Optional human-readable session label.
@@ -49,25 +51,32 @@ impl SessionStore {
             .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         let mut stmt = conn
-            .prepare("SELECT agent_id, messages, context_window_tokens, label FROM sessions WHERE id = ?1")
+            .prepare("SELECT agent_id, messages, turn_summaries, context_window_tokens, label FROM sessions WHERE id = ?1")
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let result = stmt.query_row(rusqlite::params![session_id.0.to_string()], |row| {
             let agent_str: String = row.get(0)?;
             let messages_blob: Vec<u8> = row.get(1)?;
-            let tokens: i64 = row.get(2)?;
-            let label: Option<String> = row.get(3).unwrap_or(None);
-            Ok((agent_str, messages_blob, tokens, label))
+            let summaries_blob: Option<Vec<u8>> = row.get(2)?;
+            let tokens: i64 = row.get(3)?;
+            let label: Option<String> = row.get(4).unwrap_or(None);
+            Ok((agent_str, messages_blob, summaries_blob, tokens, label))
         });
 
         match result {
-            Ok((agent_str, messages_blob, tokens, label)) => {
+            Ok((agent_str, messages_blob, summaries_blob, tokens, label)) => {
                 let messages: Vec<Message> = rmp_serde::from_slice(&messages_blob)
                     .map_err(|e| CarrierError::Serialization(e.to_string()))?;
+                let turn_summaries: Vec<TurnSummary> = match summaries_blob {
+                    Some(blob) => rmp_serde::from_slice(&blob)
+                        .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+                    None => Vec::new(),
+                };
                 Ok(Some(Session {
                     id: session_id,
                     agent_id: agent_str,
                     messages,
+                    turn_summaries,
                     context_window_tokens: tokens as u64,
                     label,
                 }))
@@ -90,15 +99,18 @@ impl SessionStore {
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         let messages_blob = rmp_serde::to_vec_named(&clean_messages)
             .map_err(|e| CarrierError::Serialization(e.to_string()))?;
+        let summaries_blob = rmp_serde::to_vec_named(&session.turn_summaries)
+            .map_err(|e| CarrierError::Serialization(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO sessions (id, agent_id, messages, context_window_tokens, label, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
-             ON CONFLICT(id) DO UPDATE SET messages = ?3, context_window_tokens = ?4, label = ?5, updated_at = ?6",
+            "INSERT INTO sessions (id, agent_id, messages, turn_summaries, context_window_tokens, label, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+             ON CONFLICT(id) DO UPDATE SET messages = ?3, turn_summaries = ?4, context_window_tokens = ?5, label = ?6, updated_at = ?7",
             rusqlite::params![
                 session.id.0.to_string(),
                 &session.agent_id,
                 messages_blob,
+                summaries_blob,
                 session.context_window_tokens as i64,
                 session.label.as_deref(),
                 now,
@@ -114,6 +126,9 @@ impl SessionStore {
     /// appends new messages, and saves back. This allows multiple agent
     /// loops to run in parallel for the same agent — each appends its
     /// own new messages without overwriting the other's.
+    ///
+    /// If `turn_summaries` is provided, it replaces the existing summaries
+    /// (used when the agent loop has generated new turn summaries).
     pub async fn save_session_append(
         &self,
         session_id: SessionId,
@@ -121,6 +136,7 @@ impl SessionStore {
         new_messages: &[Message],
         context_window_tokens: u64,
         label: Option<&str>,
+        turn_summaries: Option<&[TurnSummary]>,
     ) -> CarrierResult<()> {
         let key = session_id.0.to_string();
         let lock = self
@@ -136,6 +152,7 @@ impl SessionStore {
                 id: session_id,
                 agent_id: agent_id.to_string(),
                 messages: Vec::new(),
+                turn_summaries: Vec::new(),
                 context_window_tokens: 0,
                 label: None,
             },
@@ -144,6 +161,9 @@ impl SessionStore {
         session.context_window_tokens = context_window_tokens;
         if let Some(l) = label {
             session.label = Some(l.to_string());
+        }
+        if let Some(summaries) = turn_summaries {
+            session.turn_summaries = summaries.to_vec();
         }
         self.save_session(&session)?;
 
@@ -271,6 +291,7 @@ impl SessionStore {
             id: SessionId::new(),
             agent_id,
             messages: Vec::new(),
+            turn_summaries: Vec::new(),
             context_window_tokens: 0,
             label: None,
         };
@@ -328,10 +349,13 @@ impl SessionStore {
                     .map_err(|e| CarrierError::Memory(e.to_string()))?;
                 let messages: Vec<Message> = rmp_serde::from_slice(&messages_blob)
                     .map_err(|e| CarrierError::Serialization(e.to_string()))?;
+                // find_session_by_label does not read turn_summaries (legacy path);
+                // summaries will be loaded on next full get_session if needed.
                 Ok(Some(Session {
                     id: session_id,
                     agent_id: agent_id.to_string(),
                     messages,
+                    turn_summaries: Vec::new(),
                     context_window_tokens: tokens as u64,
                     label: lbl,
                 }))
@@ -427,6 +451,7 @@ impl SessionStore {
             id: SessionId::new(),
             agent_id,
             messages: Vec::new(),
+            turn_summaries: Vec::new(),
             context_window_tokens: 0,
             label: label.map(|s| s.to_string()),
         };

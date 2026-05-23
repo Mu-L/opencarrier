@@ -21,7 +21,7 @@ use memory::session::Session;
 use memory::MemorySubstrate;
 use types::agent::AgentManifest;
 use types::error::{CarrierError, CarrierResult};
-use types::message::{ContentBlock, Message, MessageContent, Role, StopReason, TokenUsage};
+use types::message::{ContentBlock, Message, MessageContent, Role, StopReason, TokenUsage, TurnSummary};
 use types::tool::ToolDefinition;
 use std::path::Path;
 use std::sync::Arc;
@@ -31,6 +31,15 @@ use tracing::{debug, info, warn};
 
 /// Maximum iterations in the agent loop before giving up.
 const MAX_ITERATIONS: u32 = 25;
+
+/// Maximum full messages to retain in session (3 turns × 2 = 6).
+const MAX_RETAINED_MESSAGES: usize = 6;
+
+/// Max tokens for turn summary generation.
+const SUMMARY_MAX_TOKENS: u32 = 100;
+
+/// Summary modality (fast/cheap).
+const SUMMARY_MODALITY: &str = "fast";
 
 /// Tool search recall limit (stage 1: how many candidates to retrieve).
 const TOOL_SEARCH_RECALL_LIMIT: usize = 10;
@@ -550,7 +559,29 @@ async fn run_agent_loop_impl(
     }
 
     // Build the system prompt — base prompt comes from kernel (prompt_builder).
-    let system_prompt = manifest.model.system_prompt.clone();
+    let mut system_prompt = manifest.model.system_prompt.clone();
+
+    // Inject turn summaries into system prompt (L1 context layer)
+    if !session.turn_summaries.is_empty() {
+        let summaries_text = session
+            .turn_summaries
+            .iter()
+            .map(|s| {
+                format!(
+                    "- Turn {}: {} → {} (tools: {})",
+                    s.turn_number,
+                    s.user_intent,
+                    s.assistant_outcome,
+                    s.tools_used.join(", ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        system_prompt.push_str(&format!(
+            "\n\n## Previous conversation turns\n{}",
+            summaries_text
+        ));
+    }
 
     // Track which messages existed before this agent loop started.
     // Used by merge-writes to append only our new messages to the session.
@@ -565,6 +596,7 @@ async fn run_agent_loop_impl(
                 &session.messages[session_base_len..],
                 session.context_window_tokens,
                 session.label.as_deref(),
+                None,
             )
         };
     }
@@ -770,7 +802,7 @@ async fn run_agent_loop_impl(
                         .push(Message::assistant("[no reply needed]".to_string()));
                     let new_msgs = &session.messages[session_base_len..];
                     memory
-                        .save_session_append_async(session.id, &session.agent_id, new_msgs, session.context_window_tokens, session.label.as_deref())
+                        .save_session_append_async(session.id, &session.agent_id, new_msgs, session.context_window_tokens, session.label.as_deref(), None)
                         .await
                         .map_err(|e| CarrierError::Memory(e.to_string()))?;
                     return Ok(AgentLoopResult {
@@ -837,9 +869,28 @@ async fn run_agent_loop_impl(
                 // Prune NO_REPLY heartbeat turns to save context budget
                 crate::session_repair::prune_heartbeat_turns(&mut session.messages, 10);
 
+                // Generate turn summary for this conversation turn
+                let turn_msgs = &session.messages[session_base_len..];
+                if let Some(ref brain_ref) = brain {
+                    if let Some(mut summary) = generate_turn_summary(turn_msgs, brain_ref).await {
+                        summary.turn_number = session.turn_summaries.len() as u32 + 1;
+                        session.turn_summaries.push(summary);
+                    }
+                }
+
+                // Trim old messages if over retention threshold
+                trim_oldest_turns(&mut session.messages, MAX_RETAINED_MESSAGES);
+
                 let new_msgs = &session.messages[session_base_len..];
                 memory
-                    .save_session_append_async(session.id, &session.agent_id, new_msgs, session.context_window_tokens, session.label.as_deref())
+                    .save_session_append_async(
+                        session.id,
+                        &session.agent_id,
+                        new_msgs,
+                        session.context_window_tokens,
+                        session.label.as_deref(),
+                        Some(&session.turn_summaries),
+                    )
                     .await
                     .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
@@ -1343,6 +1394,7 @@ async fn run_agent_loop_impl(
         if let Err(e) = memory.save_session_append_async(
             session.id, &session.agent_id, &fail_msgs,
             session.context_window_tokens, session.label.as_deref(),
+            Some(&session.turn_summaries),
         ).await {
             warn!("Failed to save failure summary: {e}");
         }
@@ -1450,6 +1502,130 @@ fn record_tool_gaps(
     } else {
         info!(queries = ?queries, "Recorded tool gap report");
     }
+}
+
+/// Generate a TurnSummary from the messages of a single conversation turn.
+///
+/// Extracts the user's intent and the assistant's outcome, then uses a
+/// fast LLM call to produce a concise 1-2 sentence summary.
+async fn generate_turn_summary(
+    turn_msgs: &[Message],
+    brain: &Arc<dyn Brain>,
+) -> Option<TurnSummary> {
+    // Helper to extract text from a message
+    fn extract_text(msg: &Message) -> String {
+        match &msg.content {
+            MessageContent::Text(t) => t.clone(),
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        }
+    }
+
+    // Extract user message (first in the slice)
+    let user_text = turn_msgs
+        .iter()
+        .find(|m| m.role == Role::User)
+        .map(extract_text)
+        .unwrap_or_default();
+
+    // Extract assistant response (last assistant message)
+    let assistant_text = turn_msgs
+        .iter()
+        .rfind(|m| m.role == Role::Assistant)
+        .map(extract_text)
+        .unwrap_or_default();
+
+    // Collect tool names used this turn
+    let mut tools_used = Vec::new();
+    for msg in turn_msgs {
+        if let MessageContent::Blocks(blocks) = &msg.content {
+            for block in blocks {
+                if let ContentBlock::ToolUse { name, .. } = block {
+                    if !tools_used.contains(name) {
+                        tools_used.push(name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let prompt = format!(
+        "Summarize this conversation turn in 1-2 sentences. \
+         Focus on what was accomplished, not how.\n\n\
+         User: {}\nAssistant: {}\n\n\
+         Format: User wanted X → Agent did Y",
+        user_text, assistant_text
+    );
+
+    let request = CompletionRequest {
+        model: String::new(),
+        messages: vec![Message {
+            role: Role::User,
+            content: MessageContent::Text(prompt),
+        }],
+        tools: Vec::new(),
+        max_tokens: SUMMARY_MAX_TOKENS,
+        temperature: 0.3,
+        system: Some(
+            "You are a conversation summarizer. Be concise.".to_string(),
+        ),
+        thinking: None,
+        extra: Default::default(),
+    };
+
+    match brain.complete(SUMMARY_MODALITY, request).await {
+        Ok(response) => {
+            let text = response.text().trim().to_string();
+            if text.is_empty() {
+                return None;
+            }
+            // Parse "User wanted X → Agent did Y" format
+            let parts: Vec<&str> = text.split("→").collect();
+            let (user_intent, assistant_outcome) = if parts.len() >= 2 {
+                (parts[0].trim().to_string(), parts[1].trim().to_string())
+            } else {
+                (user_text.clone(), text)
+            };
+            Some(TurnSummary {
+                turn_number: 0, // filled in by caller
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                user_intent,
+                assistant_outcome,
+                tools_used,
+            })
+        }
+        Err(e) => {
+            warn!("Turn summary generation failed: {}", e);
+            None
+        }
+    }
+}
+
+/// Trim old messages from the session, keeping only the most recent N.
+///
+/// Messages are removed from the front of the list (oldest first).
+/// The caller is responsible for having already generated TurnSummaries
+/// for the turns being removed.
+fn trim_oldest_turns(messages: &mut Vec<Message>, max_retained: usize) {
+    if messages.len() <= max_retained {
+        return;
+    }
+    // Drain from the front until we're at the threshold.
+    // We drain in pairs (user + assistant) to keep whole turns.
+    let excess = messages.len() - max_retained;
+    // Round up to the nearest even number to preserve turn boundaries
+    let drain_count = if excess % 2 == 0 {
+        excess
+    } else {
+        excess + 1
+    };
+    messages.drain(..drain_count.min(messages.len()));
 }
 
 #[cfg(test)]
@@ -1707,6 +1883,7 @@ mod tests {
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let manifest = test_manifest();
@@ -1760,6 +1937,7 @@ mod tests {
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let manifest = test_manifest();
@@ -1815,6 +1993,7 @@ mod tests {
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let manifest = test_manifest();
@@ -1868,6 +2047,7 @@ mod tests {
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let manifest = test_manifest();
@@ -1912,6 +2092,7 @@ mod tests {
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let manifest = test_manifest();
@@ -2040,6 +2221,7 @@ mod tests {
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let manifest = test_manifest();
@@ -2087,6 +2269,7 @@ mod tests {
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let manifest = test_manifest();
@@ -2140,6 +2323,7 @@ mod tests {
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let manifest = test_manifest();
@@ -3019,6 +3203,7 @@ mod tests {
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let manifest = test_manifest();
@@ -3092,6 +3277,7 @@ mod tests {
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let manifest = test_manifest();
@@ -3147,6 +3333,7 @@ mod tests {
             agent_id,
             messages: Vec::new(),
             context_window_tokens: 0,
+            turn_summaries: Vec::new(),
             label: None,
         };
         let manifest = test_manifest();
