@@ -84,7 +84,13 @@ async fn review_tools_with_llm(
     match brain.complete("text", request).await {
         Ok(response) => {
             let text = response.text().to_string();
-            parse_tool_selection(&text)
+            let selected = parse_tool_selection(&text);
+            if selected.is_empty() {
+                // LLM returned empty or unparseable — fall back to all candidates
+                candidates.iter().map(|def| def.name.clone()).collect()
+            } else {
+                selected
+            }
         }
         Err(e) => {
             warn!("Tool review LLM call failed (falling back to all candidates): {}", e);
