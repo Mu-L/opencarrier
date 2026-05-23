@@ -25,10 +25,11 @@ use tracing::{info, warn};
 /// 12. `tool_name\n{"key":"value"}` — bare name + JSON on next line (Llama 4 Scout)
 /// 13. `<tool_use>{"name":"tool","arguments":{...}}</tool_use>` — Llama 3.1+ variant
 ///
-/// Validates tool names against available tools and returns synthetic `ToolCall` entries.
-pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -> Vec<ToolCall> {
+/// Tool names are NOT validated against a known list — `execute_tool` handles
+/// permission checks at execution time. This allows recovery of tools not in
+/// the initial CompletionRequest.tools list (e.g. discovered via tool_search).
+pub fn recover_text_tool_calls(text: &str, _available_tools: &[ToolDefinition]) -> Vec<ToolCall> {
     let mut calls = Vec::new();
-    let tool_names: Vec<&str> = available_tools.iter().map(|t| t.name.as_str()).collect();
 
     // Pattern 1: <function=TOOL_NAME>JSON_BODY</function>
     let mut search_from = 0;
@@ -52,12 +53,8 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
         let json_body = text[json_start..json_start + close_offset].trim();
         search_from = json_start + close_offset + "</function>".len();
 
-        // Validate: tool name must be in available_tools
-        if !tool_names.contains(&tool_name) {
-            warn!(
-                tool = tool_name,
-                "Text-based tool call for unknown tool — skipping"
-            );
+        // Validate: tool name must look like a valid identifier
+        if tool_name.is_empty() || tool_name.contains(' ') {
             continue;
         }
 
@@ -107,12 +104,8 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
             continue;
         }
 
-        // Validate: tool name must be in available_tools
-        if !tool_names.contains(&tool_name) {
-            warn!(
-                tool = tool_name,
-                "Text-based tool call (variant 2) for unknown tool — skipping"
-            );
+        // Validate: tool name must look like a valid identifier
+        if tool_name.is_empty() || tool_name.contains(' ') {
             continue;
         }
 
@@ -163,7 +156,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
         let tool_name = inner[..brace_pos].trim();
         let json_body = inner[brace_pos..].trim();
 
-        if tool_name.is_empty() || !tool_names.contains(&tool_name) {
+        if tool_name.is_empty() || tool_name.contains(' ') {
             continue;
         }
 
@@ -203,7 +196,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
                     let content = block_content.trim();
                     if let Some(brace_pos) = content.find('{') {
                         let potential_tool = content[..brace_pos].trim();
-                        if tool_names.contains(&potential_tool) {
+                        if !potential_tool.is_empty() && !potential_tool.contains(' ') {
                             if let Ok(input) = serde_json::from_str::<serde_json::Value>(
                                 content[brace_pos..].trim(),
                             ) {
@@ -249,7 +242,6 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
                 let potential_tool = trimmed[..brace_pos].trim();
                 if !potential_tool.is_empty()
                     && !potential_tool.contains(' ')
-                    && tool_names.contains(&potential_tool)
                 {
                     if let Ok(input) =
                         serde_json::from_str::<serde_json::Value>(trimmed[brace_pos..].trim())
@@ -289,7 +281,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
         search_from = after_tag + close_offset + "[/TOOL_CALL]".len();
 
         // Try standard JSON first: {"name":"tool","arguments":{...}}
-        if let Some((tool_name, input)) = parse_json_tool_call_object(inner, &tool_names) {
+        if let Some((tool_name, input)) = parse_json_tool_call_object(inner, &[]) {
             if !calls
                 .iter()
                 .any(|c| c.name == tool_name && c.input == input)
@@ -308,7 +300,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
         }
 
         // Custom arrow syntax: {tool => "name", args => {--key "value"}}
-        if let Some((tool_name, input)) = parse_arrow_syntax_tool_call(inner, &tool_names) {
+        if let Some((tool_name, input)) = parse_arrow_syntax_tool_call(inner, &[]) {
             if !calls
                 .iter()
                 .any(|c| c.name == tool_name && c.input == input)
@@ -339,7 +331,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
         let inner = text[after_tag..after_tag + close_offset].trim();
         search_from = after_tag + close_offset + "üşgûcü".len();
 
-        if let Some((tool_name, input)) = parse_json_tool_call_object(inner, &tool_names) {
+        if let Some((tool_name, input)) = parse_json_tool_call_object(inner, &[]) {
             if !calls
                 .iter()
                 .any(|c| c.name == tool_name && c.input == input)
@@ -369,11 +361,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
             let tool_name = caps.get(1).unwrap().as_str();
             let raw_params = caps.get(2).unwrap().as_str();
 
-            if !tool_names.contains(&tool_name) {
-                warn!(
-                    tool = tool_name,
-                    "XML-attribute tool call for unknown tool — skipping"
-                );
+            if tool_name.is_empty() || tool_name.contains(' ') {
                 continue;
             }
 
@@ -426,7 +414,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
         let inner = text[after_tag..after_tag + close_offset].trim();
         search_from = after_tag + close_offset + close_tag.len();
 
-        if let Some((tool_name, input)) = parse_json_tool_call_object(inner, &tool_names) {
+        if let Some((tool_name, input)) = parse_json_tool_call_object(inner, &[]) {
             if !calls
                 .iter()
                 .any(|c| c.name == tool_name && c.input == input)
@@ -455,7 +443,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
                 .or_else(|| line.strip_prefix("action:"))
             {
                 let tool_name = tool_part.trim();
-                if tool_names.contains(&tool_name) {
+                if !tool_name.is_empty() && !tool_name.contains(' ') {
                     // Look for "Action Input:" on the next line(s)
                     if i + 1 < lines.len() {
                         let next = lines[i + 1].trim();
@@ -500,7 +488,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
             if name_line.contains(' ') || name_line.contains('{') || name_line.is_empty() {
                 continue;
             }
-            if !tool_names.contains(&name_line) {
+            if name_line.contains(' ') {
                 continue;
             }
             // Next line must be valid JSON
@@ -540,7 +528,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
         let inner = text[after_tag..after_tag + close_offset].trim();
         search_from = after_tag + close_offset + "</tool_use>".len();
 
-        if let Some((tool_name, input)) = parse_json_tool_call_object(inner, &tool_names) {
+        if let Some((tool_name, input)) = parse_json_tool_call_object(inner, &[]) {
             if !calls
                 .iter()
                 .any(|c| c.name == tool_name && c.input == input)
@@ -568,7 +556,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
             let abs_brace = scan_from + brace_start;
             // Try to parse a JSON object starting here
             if let Some((tool_name, input)) =
-                try_parse_bare_json_tool_call(&text[abs_brace..], &tool_names)
+                try_parse_bare_json_tool_call(&text[abs_brace..], &[])
             {
                 if !calls
                     .iter()
@@ -600,7 +588,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
 /// - `{"tool":"tool_name","args":{"key":"value"}}`
 pub(crate) fn parse_json_tool_call_object(
     text: &str,
-    tool_names: &[&str],
+    _tool_names: &[&str],
 ) -> Option<(String, serde_json::Value)> {
     let obj: serde_json::Value = serde_json::from_str(text).ok()?;
     let obj = obj.as_object()?;
@@ -612,7 +600,7 @@ pub(crate) fn parse_json_tool_call_object(
         .or_else(|| obj.get("tool"))
         .and_then(|v| v.as_str())?;
 
-    if !tool_names.contains(&name) {
+    if name.is_empty() || name.contains(' ') {
         return None;
     }
 
@@ -639,7 +627,7 @@ pub(crate) fn parse_json_tool_call_object(
 /// `{tool => "name", args => {--key "value"}}` or `{tool => "name", args => {"key":"value"}}`
 pub(crate) fn parse_arrow_syntax_tool_call(
     text: &str,
-    tool_names: &[&str],
+    _tool_names: &[&str],
 ) -> Option<(String, serde_json::Value)> {
     // Extract tool name: look for `tool => "name"` or `tool=>"name"`
     let tool_marker_pos = text.find("tool")?;
@@ -661,7 +649,7 @@ pub(crate) fn parse_arrow_syntax_tool_call(
         &after_arrow[..end]
     };
 
-    if tool_name.is_empty() || !tool_names.contains(&tool_name) {
+    if tool_name.is_empty() || tool_name.contains(' ') {
         return None;
     }
 
