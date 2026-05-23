@@ -632,7 +632,7 @@ impl KernelHandle for CarrierKernel {
             }
         }
 
-        // Search MCP servers by server name — return one summary result per server
+        // Search MCP servers — return individual tools so the agent can call them directly.
         for entry in self.plugins.mcp_connections.iter() {
             let conn = entry.value();
             let config = conn.config();
@@ -642,18 +642,31 @@ impl KernelHandle for CarrierKernel {
                 &query_lower, &keywords,
                 &server_name, &server_desc, &server_name,
             );
-            if server_score > 0 {
-                let tool_names: Vec<&str> = conn.tools().iter().map(|t| t.name.as_str()).collect();
-                let ts = format!("mcp_{}", runtime::mcp::normalize_name(&config.name));
-                scored.push((server_score + 50, ts, types::tool::ToolDefinition {
-                    name: format!("mcp_{}", runtime::mcp::normalize_name(&config.name)),
-                    description: format!(
-                        "MCP server '{}'. Available tools (use directly): {}",
-                        config.name,
-                        tool_names.join(", "),
-                    ),
-                    input_schema: serde_json::json!({"type": "object", "properties": {}}),
-                }));
+            let ts = format!("mcp_{}", runtime::mcp::normalize_name(&config.name));
+            for tool in conn.tools() {
+                let name_lower = tool.name.to_lowercase();
+                let desc_lower = tool.description.to_lowercase();
+                let tool_score = CarrierKernel::score_tool(
+                    &query_lower, &keywords,
+                    &name_lower, &desc_lower, &server_name,
+                );
+                let score = if tool_score > 0 { tool_score } else { server_score };
+                if score > 0 {
+                    let mcp_tool_name = format!(
+                        "mcp_{}_{}",
+                        runtime::mcp::normalize_name(&config.name),
+                        tool.name.replace('-', "_"),
+                    );
+                    scored.push((score + 50, ts.clone(), types::tool::ToolDefinition {
+                        name: mcp_tool_name,
+                        description: format!(
+                            "[MCP:{}] {}",
+                            config.name,
+                            tool.description,
+                        ),
+                        input_schema: tool.input_schema.clone(),
+                    }));
+                }
             }
         }
 
