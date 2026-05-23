@@ -376,10 +376,6 @@ pub struct AgentManifest {
     /// MCP server allowlist (empty = all connected MCP servers available).
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub mcp_servers: Vec<String>,
-    /// Toolsets that are active by default (no tool_search call needed).
-    /// When non-empty, only core tools + listed toolsets are shown to the LLM.
-    #[serde(default)]
-    pub auto_load_toolsets: Vec<String>,
     /// Maximum tool permission level. Tools above this level are hidden from
     /// tool_search and skill discovery mode. Dangerous-level tools are never
     /// discoverable via search regardless. Default: Write.
@@ -473,6 +469,31 @@ pub struct SubagentConfig {
     pub max_iterations: u32,
 }
 
+/// Build tool definitions for delegate_{name} tools from subagent configs.
+/// Each subagent becomes a single tool the parent agent can call to delegate work.
+pub fn build_subagent_tool_definitions(subagents: &[SubagentConfig]) -> Vec<crate::tool::ToolDefinition> {
+    subagents
+        .iter()
+        .map(|sa| crate::tool::ToolDefinition {
+            name: format!("delegate_{}", sa.name),
+            description: format!(
+                "Delegate to the '{}' subagent. {} Use this tool when the task involves: {}",
+                sa.name, sa.description, sa.trigger
+            ),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": format!("The task or message to delegate to the {} subagent", sa.name)
+                    }
+                },
+                "required": ["message"]
+            }),
+        })
+        .collect()
+}
+
 fn default_subagent_max_iterations() -> u32 {
     10
 }
@@ -499,7 +520,6 @@ impl Default for AgentManifest {
             tools: HashMap::new(),
             skills: Vec::new(),
             mcp_servers: Vec::new(),
-            auto_load_toolsets: Vec::new(),
             max_tool_level: crate::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
             metadata: HashMap::new(),
@@ -713,7 +733,6 @@ mod tests {
             tools: HashMap::new(),
             skills: vec![],
             mcp_servers: vec![],
-            auto_load_toolsets: vec![],
             max_tool_level: crate::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
             metadata: HashMap::new(),

@@ -28,7 +28,6 @@ pub mod registry;
 pub mod scheduler;
 pub mod sessions;
 pub mod supervisor;
-pub mod tool_builder;
 pub mod workspace;
 pub mod wizard;
 pub use runtime::kernel_handle::KernelHandle;

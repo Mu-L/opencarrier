@@ -573,8 +573,21 @@ impl CarrierKernel {
             });
 
         let system_prompt = &entry.manifest.model.system_prompt;
-        // Use the agent's actual filtered tools instead of all builtins
-        let tools = self.available_tools(agent_id, Some(&[]));
+        // Core tool set (same as messaging.rs — other tools found via tool_search)
+        let core_tool_names: &[&str] = &[
+            "tool_search", "skill_load", "session_summarize",
+            "knowledge_read", "knowledge_list",
+            "file_read", "file_list",
+            "cron_create", "cron_list", "cron_cancel",
+            "memory_tree", "task_plan",
+        ];
+        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
+            .into_iter()
+            .filter(|t| core_tool_names.contains(&t.name.as_str()))
+            .collect();
+        if !entry.manifest.subagents.is_empty() {
+            tools.extend(types::agent::build_subagent_tool_definitions(&entry.manifest.subagents));
+        }
         // Use 200K default or the model's known context window
         let context_window = if session.context_window_tokens > 0 {
             session.context_window_tokens

@@ -666,7 +666,7 @@ impl KernelHandle for CarrierKernel {
 
         // Filter by max_level + always exclude Dangerous
         scored.retain(|(_, _, def)| {
-            let level = crate::tool_builder::tool_permission_level(&def.name);
+            let level = types::tool::PermissionLevel::for_tool(&def.name);
             level <= max_level && level != types::tool::PermissionLevel::Dangerous
         });
 

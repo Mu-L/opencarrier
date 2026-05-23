@@ -447,7 +447,7 @@ pub fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
         }
 
         // Parse frontmatter
-        let (name, _, _, _, body) = parse_skill_full(trimmed);
+        let (name, _, _, body) = parse_skill_full(trimmed);
         let section = format!("### {}\n{}", name, body);
         parts.push(section);
     }
@@ -459,76 +459,35 @@ pub fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
     }
 }
 
-/// Parse a YAML-style string array value like `["web", "filesystem"]`.
-fn parse_yaml_string_list(val: &str) -> Vec<String> {
-    let val = val.trim();
-    if !val.starts_with('[') || !val.ends_with(']') {
-        return Vec::new();
-    }
-    let inner = &val[1..val.len() - 1];
-    if inner.is_empty() {
-        return Vec::new();
-    }
-    inner
-        .split(',')
-        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-/// Parse a skill .md file to extract name, description, max_iterations, tools, and body.
-pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, Vec<String>, &str) {
+/// Parse a skill .md file to extract name, description, max_iterations, and body.
+/// The `tools:` field in frontmatter is no longer parsed — tool guidance is
+/// provided via the skill body's natural language instructions.
+pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, &str) {
     let mut name = String::new();
     let mut description = String::new();
     let mut max_iterations: Option<u32> = None;
-    let mut tools: Vec<String> = Vec::new();
 
     if let Some(rest) = content.strip_prefix("---") {
         if let Some(end) = rest.find("---") {
             let frontmatter = &rest[..end];
-            let mut collecting_tools = false;
             for line in frontmatter.lines() {
                 let trimmed = line.trim();
                 if let Some(val) = trimmed.strip_prefix("name:") {
                     name = val.trim().trim_matches('"').trim_matches('\'').to_string();
-                    collecting_tools = false;
                 } else if let Some(val) = trimmed.strip_prefix("description:") {
                     description = val.trim().trim_matches('"').trim_matches('\'').to_string();
-                    collecting_tools = false;
                 } else if let Some(val) = trimmed.strip_prefix("max_iterations:") {
                     max_iterations = val.trim().parse().ok();
-                    collecting_tools = false;
-                } else if let Some(val) = trimmed.strip_prefix("tools:") {
-                    let inline = parse_yaml_string_list(val.trim());
-                    if !inline.is_empty() {
-                        tools = inline;
-                        collecting_tools = false;
-                    } else {
-                        collecting_tools = true;
-                    }
-                } else if let Some(val) = trimmed.strip_prefix("allowed_tools:") {
-                    let inline = parse_yaml_string_list(val.trim());
-                    if !inline.is_empty() {
-                        tools = inline;
-                        collecting_tools = false;
-                    } else {
-                        collecting_tools = true;
-                    }
-                } else if collecting_tools {
-                    if let Some(item) = trimmed.strip_prefix("- ") {
-                        tools.push(item.trim().trim_matches('"').trim_matches('\'').to_string());
-                    } else if !trimmed.starts_with('-') && !trimmed.is_empty() {
-                        collecting_tools = false;
-                    }
                 }
+                // tools: field is ignored — tool guidance comes from skill body
             }
             let body = rest[end + 3..].trim();
-            return (name, description, max_iterations, tools, body);
+            return (name, description, max_iterations, body);
         }
     }
 
     // No frontmatter
-    (String::new(), String::new(), None, Vec::new(), content)
+    (String::new(), String::new(), None, content)
 }
 
 /// Result of automatic skill matching against a user message.
@@ -539,12 +498,9 @@ pub struct SkillMatch {
     pub body: String,
     /// Override max_iterations for the agent loop (from skill frontmatter).
     pub max_iterations: Option<u32>,
-    /// Individual tool names this skill declares (e.g. ["mcp_wechat_oa_create_draft", "file_write"]).
-    pub tools: Vec<String>,
 }
 
 /// Classify which skill (if any) matches the user message using an LLM.
-/// Replaces the keyword-based `match_skill_for_message` with semantic classification.
 pub async fn classify_skill_with_llm(
     message: &str,
     workspace: &std::path::Path,
@@ -576,7 +532,7 @@ pub async fn classify_skill_with_llm(
         let content = std::fs::read_to_string(&skill_path).ok()?;
         let trimmed = content.trim();
 
-        let (name, description, _, _, _) = parse_skill_full(trimmed);
+        let (name, description, _, _) = parse_skill_full(trimmed);
         if description.is_empty() {
             continue;
         }
@@ -666,7 +622,7 @@ pub async fn classify_skill_with_llm(
     // Load full skill content
     let skill_file = skills_dir.join(&matched_name).join("SKILL.md");
     let content = std::fs::read_to_string(&skill_file).ok()?;
-    let (name, _description, max_iterations, tools, body) = parse_skill_full(&content);
+    let (name, _description, max_iterations, body) = parse_skill_full(&content);
 
     tracing::info!(
         skill = %name,
@@ -677,7 +633,6 @@ pub async fn classify_skill_with_llm(
         name,
         body: body.to_string(),
         max_iterations,
-        tools,
     })
 }
 

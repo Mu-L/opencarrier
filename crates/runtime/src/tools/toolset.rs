@@ -51,22 +51,20 @@ impl ToolModule for ToolSearchTools {
             return Some(Ok("No tools found matching your query. All available tools are already loaded.".to_string()));
         }
 
-        let mut entries = Vec::new();
+        let mut out = format!("Found {} tool(s) matching \"{}\":\n\n", results.len(), query);
         for (ts_name, def) in &results {
-            let desc_preview = if def.description.len() > 120 {
-                format!("{}...", &def.description[..117])
+            let desc_preview = if def.description.len() > 200 {
+                format!("{}...", &def.description[..197])
             } else {
                 def.description.clone()
             };
-            entries.push(format!("- {} (from {}): {}", def.name, ts_name, desc_preview));
+            out.push_str(&format!("## {} (from {})\n{}\n\n", def.name, ts_name, desc_preview));
+            // Include input_schema so LLM knows how to call the tool
+            if !def.input_schema.is_null() {
+                out.push_str(&format!("Parameters: {}\n\n", serde_json::to_string(&def.input_schema).unwrap_or_default()));
+            }
         }
-
-        let mut out = format!("Found {} tool(s) matching \"{}\":\n\n", entries.len(), query);
-        for line in &entries {
-            out.push_str(line);
-            out.push('\n');
-        }
-        out.push_str("\nThese tools will be available in your next response.");
+        out.push_str("You can call any of these tools directly. Use the tool name and follow the parameter schema.");
 
         Some(Ok(out))
     }

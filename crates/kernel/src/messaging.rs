@@ -353,7 +353,33 @@ impl CarrierKernel {
             by_messages || by_tokens || by_quota
         };
 
-        // Auto-match skill using LLM classification (replaces keyword matching)
+        // Build agent's core tool set (bootstrap tools + delegate tools)
+        // Other tools are discovered via tool_search when needed.
+        let core_tool_names: &[&str] = &[
+            "session_summarize", "tool_search", "skill_load",
+            "knowledge_read", "knowledge_list",
+            "file_read", "file_list",
+            "cron_create", "cron_list", "cron_cancel",
+            "memory_tree", "task_plan",
+        ];
+
+        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
+            .into_iter()
+            .filter(|t| core_tool_names.contains(&t.name.as_str()))
+            .collect();
+
+        // Add delegate tools for subagents (so LLM can directly call them)
+        if !entry.manifest.subagents.is_empty() {
+            tools.extend(types::agent::build_subagent_tool_definitions(&entry.manifest.subagents));
+        }
+
+        info!(
+            agent = %entry.name,
+            tool_count = tools.len(),
+            "Agent core tool set assembled (streaming)"
+        );
+
+        // Auto-match skill for prompt injection (does NOT affect tool list)
         let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> =
             Some(Arc::clone(&*self.brain.brain.read().unwrap_or_else(|e| {
                 warn!("Brain RwLock poisoned, recovering");
@@ -362,84 +388,46 @@ impl CarrierKernel {
                 as Arc<dyn runtime::llm_driver::Brain>);
 
         let mut matched_skill_name: Option<String> = None;
-        let (tools, auto_matched_skill, skill_max_iterations, skill_tools) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
+        let (auto_matched_skill, skill_max_iterations) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
             match crate::prompt_sources::classify_skill_with_llm(message, ws, brain).await {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
                     matched_skill_name = Some(skill_name.clone());
                     let skill_body = skill.body.clone();
                     let skill_max_iter = skill.max_iterations;
-                    let skill_tools = skill.tools.clone();
 
                     info!(
                         agent = %entry.name,
                         skill = %skill_name,
-                        tools = ?skill_tools,
                         "Skill classified by LLM (streaming)"
                     );
 
-                    let tools = self.available_tools(agent_id, Some(&skill_tools));
-
-                    info!(
-                        agent = %entry.name,
-                        tool_count = tools.len(),
-                        "Tools after skill toolset query (streaming)"
-                    );
                     (
-                        tools,
                         Some(format!("**{}**\n{}", skill_name, skill_body)),
                         skill_max_iter,
-                        Some(skill_tools),
                     )
                 }
-                None => {
-                    let tools = self.available_tools(agent_id, None);
-                    info!(
-                        agent = %entry.name,
-                        agent_id = %agent_id,
-                        tool_count = tools.len(),
-                        "Tools selected for LLM request (streaming)"
-                    );
-                    (tools, None, None, None)
-                }
+                None => (None, None)
             }
         } else {
-            let tools = self.available_tools(agent_id, None);
-            info!(
-                agent = %entry.name,
-                agent_id = %agent_id,
-                tool_count = tools.len(),
-                "Tools selected for LLM request (streaming)"
-            );
-            (tools, None, None, None)
+            (None, None)
         };
 
         // Auto-match subagent trigger (only when no skill matched)
-        let (tools, auto_matched_subagent) = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
+        // Delegate tools are already in the tool set — this only does prompt injection.
+        let auto_matched_subagent = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
             if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, &entry.manifest.subagents) {
-                let delegate_tools = crate::tool_builder::build_subagent_tool_definitions(&entry.manifest.subagents);
-                let existing_names: std::collections::HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
-                let mut tools = tools;
-                let mut added = 0;
-                for dt in delegate_tools {
-                    if !existing_names.contains(&dt.name) {
-                        tools.push(dt);
-                        added += 1;
-                    }
-                }
                 info!(
                     agent = %entry.name,
                     subagent = %sa_match.name,
-                    tool_count = tools.len(),
-                    added = added,
                     "Subagent trigger matched (streaming)"
                 );
-                (tools, Some(sa_match.name.clone()))
+                Some(sa_match.name.clone())
             } else {
-                (tools, None)
+                None
             }
         } else {
-            (tools, None)
+            None
         };
 
         // Subagent delegation from channel_type
@@ -490,7 +478,7 @@ impl CarrierKernel {
 
         // Build the structured system prompt via prompt_builder
         {
-            self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match, skill_tools);
+            self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match);
         }
 
         let memory = Arc::clone(&self.memory);
@@ -931,89 +919,81 @@ impl CarrierKernel {
 
         let messages_before = session.messages.len();
 
-        // Auto-match skill using LLM classification (replaces keyword matching)
+        // Build agent's complete tool set (all capabilities, always available)
+        let mut tools = runtime::tool_runner::builtin_tool_definitions();
+
+        // Add MCP tools for agents that declare mcp_servers
+        if !entry.manifest.mcp_servers.is_empty() {
+            if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
+                let mcp_servers = &entry.manifest.mcp_servers;
+                for tool in mcp_tools.iter() {
+                    if tools.iter().any(|t| t.name == tool.name) {
+                        continue;
+                    }
+                    for server in mcp_servers {
+                        let prefix = format!("mcp_{}_", runtime::mcp::normalize_name(server));
+                        if tool.name.starts_with(&prefix) {
+                            tools.push(tool.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add delegate tools for subagents
+        if !entry.manifest.subagents.is_empty() {
+            tools.extend(types::agent::build_subagent_tool_definitions(&entry.manifest.subagents));
+        }
+
+        info!(
+            agent = %entry.name,
+            tool_count = tools.len(),
+            "Agent tool set assembled"
+        );
+
+        // Auto-match skill for prompt injection (does NOT affect tool list)
         let mut matched_skill_name: Option<String> = None;
-        let (tools, auto_matched_skill, skill_max_iterations, skill_tools) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
+        let (auto_matched_skill, skill_max_iterations) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
             match crate::prompt_sources::classify_skill_with_llm(message, ws, brain).await {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
                     matched_skill_name = Some(skill_name.clone());
                     let skill_body = skill.body.clone();
                     let skill_max_iter = skill.max_iterations;
-                    let skill_tools = skill.tools.clone();
 
                     info!(
                         agent = %entry.name,
                         skill = %skill_name,
-                        tools = ?skill_tools,
                         "Skill classified by LLM"
                     );
 
-                    let tools = self.available_tools(agent_id, Some(&skill_tools));
-
-                    info!(
-                        agent = %entry.name,
-                        tool_count = tools.len(),
-                        tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
-                        "Tools after skill toolset query"
-                    );
                     (
-                        tools,
                         Some(format!("**{}**\n{}", skill_name, skill_body)),
                         skill_max_iter,
-                        Some(skill_tools),
                     )
                 }
-                None => {
-                    let tools = self.available_tools(agent_id, None);
-                    info!(
-                        agent = %entry.name,
-                        agent_id = %agent_id,
-                        tool_count = tools.len(),
-                        tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
-                        "Tools selected for LLM request"
-                    );
-                    (tools, None, None, None)
-                }
+                None => (None, None)
             }
         } else {
-            let tools = self.available_tools(agent_id, None);
-            info!(
-                agent = %entry.name,
-                agent_id = %agent_id,
-                tool_count = tools.len(),
-                tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
-                "Tools selected for LLM request"
-            );
-            (tools, None, None, None)
+            (None, None)
         };
 
         // Auto-match subagent trigger (only when no skill matched)
-        let (tools, auto_matched_subagent) = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
+        // Delegate tools are already in the tool set — this only does prompt injection.
+        let auto_matched_subagent = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
             if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, &entry.manifest.subagents) {
-                let delegate_tools = crate::tool_builder::build_subagent_tool_definitions(&entry.manifest.subagents);
-                let existing_names: std::collections::HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
-                let mut tools = tools;
-                let mut added = 0;
-                for dt in delegate_tools {
-                    if !existing_names.contains(&dt.name) {
-                        tools.push(dt);
-                        added += 1;
-                    }
-                }
                 info!(
                     agent = %entry.name,
                     subagent = %sa_match.name,
-                    tool_count = tools.len(),
-                    added = added,
-                    "Subagent trigger matched, delegate tools added"
+                    "Subagent trigger matched"
                 );
-                (tools, Some(sa_match.name.clone()))
+                Some(sa_match.name.clone())
             } else {
-                (tools, None)
+                None
             }
         } else {
-            (tools, None)
+            None
         };
 
         // Subagent delegation from channel_type
@@ -1057,7 +1037,7 @@ impl CarrierKernel {
         let prompt_auto_match = auto_matched_skill.or_else(|| {
             auto_matched_subagent.map(|name| format!("**Auto-delegation: {}**\nThe user message matches the '{}' subagent. Call delegate_{} to handle this task.", name, name, name))
         });
-        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match, skill_tools);
+        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match);
 
         // Model routing is handled by Brain
 

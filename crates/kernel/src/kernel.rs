@@ -852,6 +852,315 @@ impl CarrierKernel {
         info!(signer = %signed.signer_id, hash = %signed.content_hash, "Signed manifest verified");
         Ok(signed.manifest)
     }
+
+    /// Build the toolset registry from builtin modules only.
+    /// MCP tools are stored separately in mcp_tools and loaded by agent config.
+    /// Must be called after MCP connections are established (for logging purposes).
+    pub(crate) fn build_toolset_registry(&self) {
+        let mut registry: std::collections::HashMap<String, Vec<ToolDefinition>> =
+            std::collections::HashMap::new();
+
+        // Group builtin tools by toolset
+        let all_builtins = runtime::tool_runner::builtin_tool_definitions();
+        for tool in &all_builtins {
+            if let Some(ts_name) = Self::tool_to_toolset(&tool.name) {
+                registry
+                    .entry(ts_name.to_string())
+                    .or_default()
+                    .push(tool.clone());
+            }
+        }
+
+        let mcp_count = self.plugins.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
+        tracing::info!(
+            builtin_toolsets = registry.len(),
+            mcp_tools = mcp_count,
+            toolsets = ?registry.keys().collect::<Vec<_>>(),
+            "Built toolset registry (builtins only, MCP tools separate)"
+        );
+
+        if let Ok(mut reg) = self.plugins.toolset_registry.write() {
+            *reg = registry;
+        }
+    }
+
+    /// Map a builtin tool name to its toolset. Returns None for core tools.
+    fn tool_to_toolset(name: &str) -> Option<&'static str> {
+        match name {
+            "session_summarize"
+            | "tool_search"
+            | "skill_load"
+            | "knowledge_read" | "knowledge_list"
+            | "file_read" | "file_list"
+            | "cron_create" | "cron_list" | "cron_cancel"
+            | "memory_tree"
+            | "task_plan" => None,
+            n if n.starts_with("file_") => Some("filesystem"),
+            "shell_exec" => Some("shell"),
+            n if n.starts_with("knowledge_") || n.starts_with("skill_") || n == "clone_evaluate" => Some("knowledge"),
+            n if n.starts_with("memory_") => Some("memory"),
+            n if n.starts_with("media_") || n.starts_with("image_") || n == "text_to_speech" || n == "speech_to_text" => Some("media"),
+            n if n.starts_with("web_") => Some("web"),
+            n if n.starts_with("agent_") || n.starts_with("train_") => Some("agent"),
+            n if n.starts_with("location_") || n.starts_with("system_") || n == "user_profile" => Some("misc"),
+            n if n.starts_with("process_") => Some("process"),
+            "apply_patch" => Some("filesystem"),
+            _ => Some("misc"),
+        }
+    }
+
+    /// Build a compact toolset summary for the system prompt.
+    /// All tools are active (always visible), so no ACTIVE/available distinction.
+    fn build_toolset_summary(&self) -> String {
+        let mut summary = String::new();
+
+        // --- Built-in toolsets ---
+        let registry = match self.plugins.toolset_registry.read() {
+            Ok(r) => r.clone(),
+            Err(_) => return String::new(),
+        };
+
+        if !registry.is_empty() {
+            summary.push_str("\n\n--- Built-in Toolsets ---\nAll tools are available directly.\n\n");
+
+            let mut entries: Vec<_> = registry.iter().collect();
+            entries.sort_by_key(|(name, _)| name.as_str());
+
+            for (name, tools) in &entries {
+                let examples: Vec<&str> = tools.iter().take(3).map(|t| t.name.as_str()).collect();
+                let example_str = if tools.len() > 3 {
+                    format!("{}, ... ({} total)", examples.join(", "), tools.len())
+                } else {
+                    examples.join(", ")
+                };
+
+                summary.push_str(&format!("- {}: {} tools ({})\n", name, tools.len(), example_str));
+            }
+        }
+
+        // --- MCP Servers ---
+        let mcp_entries: Vec<_> = self.plugins.mcp_connections.iter().collect();
+        if !mcp_entries.is_empty() {
+            summary.push_str("\n--- MCP Servers ---\nThese servers are configured and their tools are available directly.\n");
+            for entry in &mcp_entries {
+                let conn = entry.value();
+                let config = conn.config();
+                let desc = if config.description.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", config.description)
+                };
+                let tool_names: Vec<&str> = conn.tools().iter().take(3).map(|t| t.name.as_str()).collect();
+                let tool_str = if conn.tools().len() > 3 {
+                    format!("{}, ... ({} total)", tool_names.join(", "), conn.tools().len())
+                } else {
+                    tool_names.join(", ")
+                };
+                summary.push_str(&format!("- {}{} — {}\n", config.name, desc, tool_str));
+            }
+        }
+
+        // Filesystem MCP guidance
+        if registry.keys().any(|s| s.contains("filesystem")) {
+            summary.push_str(
+                "\nIMPORTANT: For accessing files OUTSIDE your workspace directory, you MUST use \
+                 the MCP filesystem tools (e.g. mcp_filesystem_read_file, mcp_filesystem_list_directory) \
+                 instead of the built-in file_read/file_list/file_write tools, which are restricted to \
+                 the workspace. The MCP filesystem server has been granted access to specific directories \
+                 by the user.\n",
+            );
+        }
+
+        summary
+    }
+
+    /// Format a millisecond timestamp for display in memory hits.
+    fn format_time_ms(ms: i64) -> String {
+        chrono::DateTime::from_timestamp_millis(ms)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| ms.to_string())
+    }
+
+    /// Prefetch 7-day global digest for prompt injection.
+    fn prefetch_tree_memories(&self, owner_id: &str) -> Vec<runtime::prompt_builder::TreeMemoryHit> {
+        use types::memory_tree::GlobalQuery;
+
+        let req = GlobalQuery {
+            owner_id,
+            time_window_days: Some(7),
+            query: None,
+            limit: 3,
+        };
+
+        match self.memory.tree_query_global(&req) {
+            Ok(resp) => resp
+                .hits
+                .iter()
+                .take(3)
+                .map(|h| runtime::prompt_builder::TreeMemoryHit {
+                    scope: h.tree_scope.clone(),
+                    kind: h.tree_kind.to_string(),
+                    content: h.content.chars().take(500).collect(),
+                    time_range: format!("{} — {}", Self::format_time_ms(h.time_range_start_ms), Self::format_time_ms(h.time_range_end_ms)),
+                })
+                .collect(),
+            Err(e) => {
+                tracing::debug!("Tree memory prefetch failed (non-fatal): {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Build PromptContext and apply it to the manifest's system prompt.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_and_apply_prompt(
+        &self,
+        agent_id: &AgentId,
+        manifest: &mut AgentManifest,
+        tools: &[types::tool::ToolDefinition],
+        sender_id: &Option<String>,
+        sender_name: Option<String>,
+        owner_id: &Option<String>,
+        auto_matched_skill: Option<String>,
+    ) {
+        let sid = sender_id.as_deref().unwrap_or("");
+        let oid = owner_id.as_deref().unwrap_or(sid);
+        let user_name = self
+            .memory
+            .system_kv_get(*agent_id, sid, sid, "user_name")
+            .ok()
+            .flatten()
+            .and_then(|v| v.as_str().map(String::from))
+            .or_else(|| sender_name.clone());
+
+        let peer_agents: Vec<(String, String, String)> = self
+            .registry
+            .list()
+            .iter()
+            .map(|a| {
+                (
+                    a.name.clone(),
+                    format!("{:?}", a.state),
+                    a.manifest.model.modality.clone(),
+                )
+            })
+            .collect();
+
+        let prompt_ctx = runtime::prompt_builder::PromptContext {
+            agent_name: manifest.name.clone(),
+            agent_description: manifest.description.clone(),
+            base_system_prompt: manifest.model.system_prompt.clone(),
+            granted_tools: tools.iter().map(|t| t.name.clone()).collect(),
+            recalled_memories: vec![],
+            tree_memories: self.prefetch_tree_memories(oid),
+            skill_summary: String::new(),
+            skill_prompt_context: String::new(),
+            mcp_summary: self.build_toolset_summary(),
+            workspace_path: manifest.workspace.as_ref().map(|p| p.display().to_string()),
+            soul_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_identity_file(w, "SOUL.md")),
+            user_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_identity_file(w, "USER.md")),
+            memory_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_identity_file(w, "MEMORY.md")),
+            user_name,
+            channel_type: None,
+            is_subagent: manifest
+                .metadata
+                .get("is_subagent")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+            is_autonomous: manifest.autonomous.is_some(),
+            agents_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_identity_file(w, "AGENTS.md")),
+            bootstrap_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_identity_file(w, "BOOTSTRAP.md")),
+            workspace_context: manifest.workspace.as_ref().map(|w| {
+                let mut ws_ctx = runtime::workspace_context::WorkspaceContext::detect(w);
+                ws_ctx.build_context_section()
+            }),
+            identity_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_identity_file(w, "IDENTITY.md")),
+            heartbeat_md: if manifest.autonomous.is_some() {
+                manifest
+                    .workspace
+                    .as_ref()
+                    .and_then(|w| crate::prompt_sources::read_identity_file(w, "HEARTBEAT.md"))
+            } else {
+                None
+            },
+            peer_agents,
+            current_date: Some(
+                chrono::Local::now()
+                    .format("%A, %B %d, %Y (%Y-%m-%d %H:%M %Z)")
+                    .to_string(),
+            ),
+            sender_id: sender_id.clone(),
+            sender_name,
+            user_profile_summary: sender_id.as_ref().and_then(|sid| {
+                crate::prompt_sources::read_user_profile_summary(&self.config.home_dir, oid, &manifest.name, Some(sid))
+            }),
+            clone_system_prompt_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_identity_file(w, "system_prompt.md")),
+            clone_skills_catalog: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_skills_catalog(w)),
+            clone_style_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_style_samples(w)),
+            clone_skills_prompts: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_workspace_skills_prompts(w)),
+            knowledge_content: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_knowledge_content(w, Some(oid), sender_id.as_deref(), Some(&self.config.home_dir), Some(&manifest.name))),
+            clone_agents_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_agents_directory(w)),
+            evolution_rules_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_evolution_rules(w)),
+            mental_models_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_identity_file(w, "MENTAL-MODELS.md")),
+            decision_heuristics_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_identity_file(w, "DECISION-HEURISTICS.md")),
+            expression_dna_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_identity_file(w, "EXPRESSION-DNA.md")),
+            timeline_md: manifest
+                .workspace
+                .as_ref()
+                .and_then(|w| crate::prompt_sources::read_identity_file(w, "TIMELINE.md")),
+            auto_matched_skill,
+        };
+        manifest.model.system_prompt =
+            runtime::prompt_builder::build_system_prompt(&prompt_ctx);
+    }
 }
 
 
@@ -880,7 +1189,6 @@ mod tests {
             tools: HashMap::new(),
             skills: vec![],
             mcp_servers: vec![],
-            auto_load_toolsets: vec![],
             max_tool_level: types::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
             metadata: HashMap::new(),
@@ -919,7 +1227,6 @@ mod tests {
             tools: HashMap::new(),
             skills: vec![],
             mcp_servers: vec![],
-            auto_load_toolsets: vec![],
             max_tool_level: types::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
             metadata: HashMap::new(),

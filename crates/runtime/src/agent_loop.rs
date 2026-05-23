@@ -44,84 +44,6 @@ const SUMMARY_MODALITY: &str = "fast";
 /// Tool search recall limit (stage 1: how many candidates to retrieve).
 const TOOL_SEARCH_RECALL_LIMIT: usize = 10;
 
-/// Use a lightweight LLM call to review tool_search candidates and select relevant ones.
-/// Returns a list of tool names the LLM confirmed as relevant.
-/// Falls back to returning all candidates on LLM failure.
-async fn review_tools_with_llm(
-    query: &str,
-    candidates: &[types::tool::ToolDefinition],
-    brain: &Arc<dyn Brain>,
-) -> Vec<String> {
-    let mut prompt = String::from(
-        "You are a tool selector. Given a search query and candidate tools, \
-         return ONLY a JSON array of tool names that are relevant to the query. \
-         If none match, return [].\n\nCandidates:\n",
-    );
-    for def in candidates {
-        let desc = if def.description.len() > 100 {
-            format!("{}...", &def.description[..97])
-        } else {
-            def.description.clone()
-        };
-        prompt.push_str(&format!("- {}: {}\n", def.name, desc));
-    }
-    prompt.push_str(&format!("\nQuery: {}\n\nSelected tools:", query));
-
-    let request = CompletionRequest {
-        model: String::new(),
-        messages: vec![Message {
-            role: Role::User,
-            content: MessageContent::Text(prompt),
-        }],
-        tools: Vec::new(),
-        max_tokens: 200,
-        temperature: 0.0,
-        system: None,
-        thinking: None,
-        extra: Default::default(),
-    };
-
-    match brain.complete("text", request).await {
-        Ok(response) => {
-            let text = response.text().to_string();
-            let selected = parse_tool_selection(&text);
-            if selected.is_empty() {
-                // LLM returned empty or unparseable — fall back to all candidates
-                candidates.iter().map(|def| def.name.clone()).collect()
-            } else {
-                selected
-            }
-        }
-        Err(e) => {
-            warn!("Tool review LLM call failed (falling back to all candidates): {}", e);
-            candidates.iter().map(|def| def.name.clone()).collect()
-        }
-    }
-}
-
-/// Parse LLM response for tool selection. Expects a JSON array of strings.
-fn parse_tool_selection(raw: &str) -> Vec<String> {
-    let cleaned = raw
-        .trim_matches('`')
-        .trim_start_matches("json")
-        .trim();
-
-    if let Ok(arr) = serde_json::from_str::<Vec<String>>(cleaned) {
-        return arr.into_iter().filter(|s| !s.is_empty()).collect();
-    }
-
-    // Try to extract array from surrounding text
-    if let Some(start) = cleaned.find('[') {
-        if let Some(end) = cleaned.rfind(']') {
-            if let Ok(arr) = serde_json::from_str::<Vec<String>>(&cleaned[start..=end]) {
-                return arr.into_iter().filter(|s| !s.is_empty()).collect();
-            }
-        }
-    }
-
-    Vec::new()
-}
-
 /// Maximum retries for rate-limited or overloaded API calls.
 const MAX_RETRIES: u32 = 3;
 
@@ -254,7 +176,7 @@ pub async fn run_agent_loop(
     session: &mut Session,
     memory: &MemorySubstrate,
     driver: Arc<dyn LlmDriver>,
-    available_tools: &[ToolDefinition],
+    tools: &[ToolDefinition],
     kernel: Option<Arc<dyn KernelHandle>>,
     stream_tx: Option<mpsc::Sender<StreamEvent>>,
     mcp_connections: Option<&dashmap::DashMap<String, McpConnection>>,
@@ -275,7 +197,7 @@ pub async fn run_agent_loop(
     match tokio::time::timeout(
         timeout,
         run_agent_loop_impl(
-            manifest, user_message, session, memory, driver, available_tools,
+            manifest, user_message, session, memory, driver, tools,
             kernel, stream_tx, mcp_connections, fetch_engine, workspace_root,
             on_phase, hooks, context_window_tokens, process_manager,
             user_content_blocks, brain, sender_id, owner_id, channel_type,
@@ -522,7 +444,7 @@ async fn run_agent_loop_impl(
     session: &mut Session,
     memory: &MemorySubstrate,
     driver: Arc<dyn LlmDriver>,
-    available_tools: &[ToolDefinition],
+    tools: &[ToolDefinition],
     kernel: Option<Arc<dyn KernelHandle>>,
     stream_tx: Option<mpsc::Sender<StreamEvent>>,
     mcp_connections: Option<&dashmap::DashMap<String, McpConnection>>,
@@ -673,29 +595,16 @@ async fn run_agent_loop_impl(
     // Track recent (tool_name, input_hash) for loop detection
     let mut recent_tool_calls: Vec<(String, u64)> = Vec::new();
 
-
-    // Shadow with an owned Vec so we can refresh mid-loop when skills are installed
-    let mut tools_owned: Vec<ToolDefinition> = available_tools.to_vec();
-    let mut available_tools: &[ToolDefinition] = &tools_owned;
-
-    // Track original tool names for discovery-vs-declared comparison
-    let original_tool_names: std::collections::HashSet<String> =
-        available_tools.iter().map(|t| t.name.clone()).collect();
-    // Tool names discovered via tool_search this turn (not in original set)
-    let mut discovered_tool_names: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    // Tool names from discovered set that executed successfully (for skill write-back)
-    let mut successful_discovered_tools: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    // Tool queries that found no suitable tools (for gap reporting)
-    let mut unsatisfied_tool_queries: Vec<String> = Vec::new();
+    // Owned copy for loop detection tool removal
+    let mut tools_owned: Vec<ToolDefinition> = tools.to_vec();
+    let mut tools: &[ToolDefinition] = &tools_owned;
 
     for iteration in 0..max_iterations {
         debug!(iteration, "Streaming agent loop iteration");
 
         // Context overflow recovery pipeline (replaces emergency_trim_messages)
         let recovery =
-            recover_from_overflow(&mut messages, &system_prompt, available_tools, ctx_window);
+            recover_from_overflow(&mut messages, &system_prompt, tools, ctx_window);
         match &recovery {
             RecoveryStage::None => {}
             RecoveryStage::FinalError => {
@@ -722,12 +631,12 @@ async fn run_agent_loop_impl(
         }
 
         // Context guard: compact oversized tool results before LLM call
-        apply_context_guard(&mut messages, &context_budget, available_tools);
+        apply_context_guard(&mut messages, &context_budget, tools);
 
         let request = CompletionRequest {
             model: String::new(), // Model set by Brain/endpoint, not agent
             messages: messages.clone(),
-            tools: available_tools.to_vec(),
+            tools: tools.to_vec(),
             max_tokens: manifest.model.max_tokens,
             temperature: manifest.model.temperature,
             system: Some(system_prompt.clone()),
@@ -770,7 +679,7 @@ async fn run_agent_loop_impl(
             StopReason::EndTurn | StopReason::StopSequence
         ) && response.tool_calls.is_empty()
         {
-            let recovered = recover_text_tool_calls(&response.text(), available_tools);
+            let recovered = recover_text_tool_calls(&response.text(), tools);
             if !recovered.is_empty() {
                 info!(
                     count = recovered.len(),
@@ -1008,7 +917,7 @@ async fn run_agent_loop_impl(
                     );
                     // Remove the looping tool from available tools
                     tools_owned.retain(|t| t.name != looping_name);
-                    available_tools = &tools_owned;
+                    tools = &tools_owned;
                     recent_tool_calls.clear();
                     // Inject a system message telling the LLM to stop using this tool
                     let warning = format!(
@@ -1155,30 +1064,6 @@ async fn run_agent_loop_impl(
                         content: final_content,
                         is_error: result.is_error,
                     });
-
-                    // Track successful execution of newly-discovered tools for skill write-back
-                    if !result.is_error && discovered_tool_names.contains(&tool_call.name) {
-                        successful_discovered_tools.insert(tool_call.name.clone());
-                    }
-                }
-
-                // Write-back: persist successfully-used discovered tools to the matched skill
-                if let (Some(skill_name), Some(ws)) = (matched_skill, manifest.workspace.as_ref()) {
-                    if !successful_discovered_tools.is_empty() {
-                        let to_write: Vec<String> = successful_discovered_tools.iter().cloned().collect();
-                        info!(
-                            skill = %skill_name,
-                            tools = ?to_write,
-                            "Writing discovered tools back to skill"
-                        );
-                        if let Err(e) = crate::tools::knowledge::write_skill_tools(
-                            ws, skill_name, &to_write,
-                        ) {
-                            warn!(skill = %skill_name, error = %e, "Failed to write discovered tools to skill");
-                        }
-                        // Clear after write so we don't duplicate on subsequent iterations
-                        successful_discovered_tools.clear();
-                    }
                 }
 
                 // Detect tool errors and inject guidance to prevent fabrication
@@ -1235,7 +1120,7 @@ async fn run_agent_loop_impl(
                     if let Some(ref kernel) = kernel {
                         let _agent_id_str = session.agent_id.to_string();
 
-                        // Log skill_load calls (no allowed_tools parsing needed)
+                        // Log skill_load calls
                         let skill_load_count = response.tool_calls.iter()
                             .filter(|tc| tc.name == "skill_load")
                             .count();
@@ -1243,7 +1128,11 @@ async fn run_agent_loop_impl(
                             info!(count = skill_load_count, "Skill(s) loaded");
                         }
 
-                        // --- tool_search: two-stage search (recall 10 + LLM review) ---
+                        // tool_search: add found tools to the tools list so the LLM API
+                        // allows outputting tool_use for them on the next iteration.
+                        // The LLM already saw the tool definitions in the tool_search result,
+                        // but the API requires tools to be in CompletionRequest.tools for
+                        // structured tool_use output.
                         let search_queries: Vec<&str> = response.tool_calls.iter()
                             .filter(|tc| tc.name == "tool_search")
                             .filter_map(|tc| tc.input.get("query").and_then(|v| v.as_str()))
@@ -1253,59 +1142,25 @@ async fn run_agent_loop_impl(
                         let mut found_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
                         for q in &search_queries {
-                            // Stage 1: recall top candidates
                             let results = kernel.search_tools(q, TOOL_SEARCH_RECALL_LIMIT, manifest.max_tool_level);
-                            let candidates: Vec<types::tool::ToolDefinition> = results
-                                .into_iter()
-                                .map(|(_, def)| def)
-                                .collect();
-
-                            if candidates.is_empty() {
-                                unsatisfied_tool_queries.push(q.to_string());
-                                continue;
-                            }
-
-                            // Stage 2: LLM review (if brain available)
-                            let confirmed_names = if let Some(ref brain) = brain {
-                                review_tools_with_llm(q, &candidates, brain).await
-                            } else {
-                                // No brain: fall back to all candidates
-                                candidates.iter().map(|def| def.name.clone()).collect()
-                            };
-
-                            if confirmed_names.is_empty() {
-                                unsatisfied_tool_queries.push(q.to_string());
-                                continue;
-                            }
-
-                            // Only keep confirmed tools
-                            for def in candidates {
-                                if confirmed_names.contains(&def.name) && found_names.insert(def.name.clone()) {
+                            for (_, def) in results {
+                                if found_names.insert(def.name.clone()) {
                                     found_tools.push(def);
                                 }
                             }
                         }
 
-                        let is_dynamic_activation = !found_tools.is_empty();
-                        if is_dynamic_activation {
-                            // Track newly discovered tools (not in original skill-declared set)
-                            for t in &found_tools {
-                                if !original_tool_names.contains(&t.name) {
-                                    discovered_tool_names.insert(t.name.clone());
-                                }
-                            }
-
-                            // Append only the specific matched tools (按需加载)
+                        if !found_tools.is_empty() {
                             let existing_names: std::collections::HashSet<String> =
-                                available_tools.iter().map(|t| t.name.clone()).collect();
+                                tools.iter().map(|t| t.name.clone()).collect();
                             let fresh: Vec<_> = found_tools.into_iter()
                                 .filter(|t| !existing_names.contains(&t.name))
                                 .collect();
                             if !fresh.is_empty() {
-                                info!(added = fresh.len(), total = available_tools.len() + fresh.len(), "Tools added from tool_search");
-                                tools_owned = available_tools.to_vec();
+                                info!(added = fresh.len(), total = tools.len() + fresh.len(), "Tools from tool_search added to CompletionRequest.tools");
+                                tools_owned = tools.to_vec();
                                 tools_owned.extend(fresh);
-                                available_tools = &tools_owned;
+                                tools = &tools_owned;
                             }
                         }
                     }
@@ -1441,11 +1296,6 @@ async fn run_agent_loop_impl(
         });
     }
 
-    // Record tool gap reports for unsatisfied tool_search queries
-    if !unsatisfied_tool_queries.is_empty() {
-        record_tool_gaps(workspace_root, &manifest.name, user_message, &unsatisfied_tool_queries);
-    }
-
     Err(CarrierError::MaxIterationsExceeded(max_iterations))
 }
 
@@ -1460,7 +1310,7 @@ pub async fn run_agent_loop_streaming(
     session: &mut Session,
     memory: &MemorySubstrate,
     driver: Arc<dyn LlmDriver>,
-    available_tools: &[ToolDefinition],
+    tools: &[ToolDefinition],
     kernel: Option<Arc<dyn KernelHandle>>,
     stream_tx: mpsc::Sender<StreamEvent>,
     mcp_connections: Option<&dashmap::DashMap<String, McpConnection>>,
@@ -1478,7 +1328,7 @@ pub async fn run_agent_loop_streaming(
     matched_skill: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     run_agent_loop(
-        manifest, user_message, session, memory, driver, available_tools,
+        manifest, user_message, session, memory, driver, tools,
         kernel, Some(stream_tx), mcp_connections, fetch_engine, workspace_root,
         on_phase, hooks, context_window_tokens, process_manager,
         user_content_blocks, brain, sender_id, owner_id, channel_type,
