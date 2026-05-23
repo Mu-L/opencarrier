@@ -1198,17 +1198,7 @@ async fn run_agent_loop_impl(
                         }
 
                         if !found_tools.is_empty() {
-                            let existing_names: std::collections::HashSet<String> =
-                                tools.iter().map(|t| t.name.clone()).collect();
-                            let fresh: Vec<_> = found_tools.into_iter()
-                                .filter(|t| !existing_names.contains(&t.name))
-                                .collect();
-                            if !fresh.is_empty() {
-                                info!(added = fresh.len(), total = tools.len() + fresh.len(), "Tools from tool_search added to CompletionRequest.tools");
-                                tools_owned = tools.to_vec();
-                                tools_owned.extend(fresh);
-                                tools = &tools_owned;
-                            }
+                            info!(found = found_tools.len(), "tool_search found tools — LLM can call them directly without adding to tools list");
                         }
                     }
                 }
