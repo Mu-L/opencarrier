@@ -92,10 +92,16 @@ impl super::ToolModule for MemoryTools {
             return None;
         }
 
-        let kernel = ctx.kernel?;
+        let kernel = match ctx.kernel {
+            Some(k) => k,
+            None => return Some(Err("memory_tree: kernel not available".to_string())),
+        };
         let owner_id = ctx.owner_id.unwrap_or("default");
 
-        let mode = input.get("mode")?.as_str()?;
+        let mode = match input.get("mode").and_then(|v| v.as_str()) {
+            Some(m) => m,
+            None => return Some(Err("memory_tree: 'mode' parameter is required. Valid modes: search_entities, query_topic, query_source, query_global, drill_down, fetch_leaves".to_string())),
+        };
         match mode {
             "search_entities" => Some(handle_search_entities(input, kernel, owner_id).await),
             "query_topic" => Some(handle_query_topic(input, kernel, owner_id).await),
