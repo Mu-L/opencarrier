@@ -191,7 +191,6 @@ pub async fn run_agent_loop(
     sender_id: Option<&str>,
     owner_id: Option<&str>,
     channel_type: Option<&str>,
-    matched_skill: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     let timeout = std::time::Duration::from_secs(AGENT_LOOP_TIMEOUT_SECS);
     match tokio::time::timeout(
@@ -201,7 +200,6 @@ pub async fn run_agent_loop(
             kernel, stream_tx, mcp_connections, fetch_engine, workspace_root,
             on_phase, hooks, context_window_tokens, process_manager,
             user_content_blocks, brain, sender_id, owner_id, channel_type,
-            matched_skill,
         ),
     )
     .await
@@ -459,7 +457,6 @@ async fn run_agent_loop_impl(
     sender_id: Option<&str>,
     owner_id: Option<&str>,
     channel_type: Option<&str>,
-    matched_skill: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
 
@@ -1325,48 +1322,13 @@ pub async fn run_agent_loop_streaming(
     sender_id: Option<&str>,
     owner_id: Option<&str>,
     channel_type: Option<&str>,
-    matched_skill: Option<&str>,
 ) -> CarrierResult<AgentLoopResult> {
     run_agent_loop(
         manifest, user_message, session, memory, driver, tools,
         kernel, Some(stream_tx), mcp_connections, fetch_engine, workspace_root,
         on_phase, hooks, context_window_tokens, process_manager,
         user_content_blocks, brain, sender_id, owner_id, channel_type,
-        matched_skill,
     ).await
-}
-
-/// Append a tool gap report to `{workspace}/tool-gaps.jsonl`.
-/// Each line is a JSON object with the agent name, original user message,
-/// unsatisfied queries, and timestamp. Non-fatal on write failure.
-fn record_tool_gaps(
-    workspace_root: Option<&Path>,
-    agent_name: &str,
-    user_message: &str,
-    queries: &[String],
-) {
-    let Some(workspace) = workspace_root else { return };
-
-    let entry = serde_json::json!({
-        "agent": agent_name,
-        "message": user_message.chars().take(200).collect::<String>(),
-        "queries": queries,
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-    });
-
-    let path = workspace.join("tool-gaps.jsonl");
-    let line = format!("{}\n", entry);
-
-    if let Err(e) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()))
-    {
-        warn!(path = %path.display(), error = %e, "Failed to write tool gap report");
-    } else {
-        info!(queries = ?queries, "Recorded tool gap report");
-    }
 }
 
 /// Generate a TurnSummary from the messages of a single conversation turn.
@@ -1775,7 +1737,6 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
-        None, // matched_skill
         )
         .await
         .expect("Loop should complete without error");
@@ -1829,7 +1790,6 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
-        None, // matched_skill
         )
         .await
         .expect("Loop should complete without error");
@@ -1885,7 +1845,6 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
-        None, // matched_skill
         )
         .await
         .expect("Loop should complete without error");
@@ -1939,7 +1898,6 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
-        None, // matched_skill
         )
         .await
         .expect("Loop should complete without error");
@@ -1985,7 +1943,6 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
-        None, // matched_skill
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -2113,7 +2070,6 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
-        None, // matched_skill
         )
         .await
         .expect("Loop should recover via retry");
@@ -2161,7 +2117,6 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
-        None, // matched_skill
         )
         .await
         .expect("Loop should complete with fallback");
@@ -2216,7 +2171,6 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
-        None, // matched_skill
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -2966,10 +2920,8 @@ mod tests {
 
     #[test]
     fn test_parse_json_tool_call_object_standard() {
-        let tool_names = vec!["shell_exec"];
         let result = parse_json_tool_call_object(
             "{\"name\": \"shell_exec\", \"arguments\": {\"command\": \"ls\"}}",
-            &tool_names,
         );
         assert!(result.is_some());
         let (name, args) = result.unwrap();
@@ -2979,10 +2931,8 @@ mod tests {
 
     #[test]
     fn test_parse_json_tool_call_object_function_field() {
-        let tool_names = vec!["web_fetch"];
         let result = parse_json_tool_call_object(
             "{\"function\": \"web_fetch\", \"parameters\": {\"url\": \"https://x.com\"}}",
-            &tool_names,
         );
         assert!(result.is_some());
         let (name, args) = result.unwrap();
@@ -2991,10 +2941,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_json_tool_call_object_unknown_tool() {
-        let tool_names = vec!["shell_exec"];
+    fn test_parse_json_tool_call_object_empty_name() {
         let result =
-            parse_json_tool_call_object("{\"name\": \"unknown\", \"arguments\": {}}", &tool_names);
+            parse_json_tool_call_object("{\"name\": \"\", \"arguments\": {}}");
         assert!(result.is_none());
     }
 
@@ -3107,7 +3056,6 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
-        None, // matched_skill
         )
         .await
         .expect("Agent loop should complete");
@@ -3175,7 +3123,6 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
-        None, // matched_skill
         )
         .await
         .expect("Normal loop should complete");
@@ -3238,7 +3185,6 @@ mod tests {
             None, // sender_id
             None, // owner_id
             None, // channel_type
-        None, // matched_skill
         )
         .await
         .expect("Streaming loop should complete");

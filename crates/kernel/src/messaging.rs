@@ -355,17 +355,9 @@ impl CarrierKernel {
 
         // Build agent's core tool set (bootstrap tools + delegate tools)
         // Other tools are discovered via tool_search when needed.
-        let core_tool_names: &[&str] = &[
-            "session_summarize", "tool_search", "skill_load",
-            "knowledge_read", "knowledge_list",
-            "file_read", "file_list",
-            "cron_create", "cron_list", "cron_cancel",
-            "memory_tree", "task_plan",
-        ];
-
         let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
             .into_iter()
-            .filter(|t| core_tool_names.contains(&t.name.as_str()))
+            .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
             .collect();
 
         // Add delegate tools for subagents (so LLM can directly call them)
@@ -387,12 +379,10 @@ impl CarrierKernel {
             }))
                 as Arc<dyn runtime::llm_driver::Brain>);
 
-        let mut matched_skill_name: Option<String> = None;
         let (auto_matched_skill, skill_max_iterations) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
             match crate::prompt_sources::classify_skill_with_llm(message, ws, brain).await {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
-                    matched_skill_name = Some(skill_name.clone());
                     let skill_body = skill.body.clone();
                     let skill_max_iter = skill.max_iterations;
 
@@ -562,7 +552,6 @@ impl CarrierKernel {
                 sender_id.as_deref(),
                 owner_id.as_deref(),
                 channel_type.as_deref(),
-                matched_skill_name.as_deref(),
             )
             .await;
 
@@ -921,17 +910,9 @@ impl CarrierKernel {
 
         // Build agent's core tool set (bootstrap tools + delegate tools)
         // Other tools are discovered via tool_search when needed.
-        let core_tool_names: &[&str] = &[
-            "tool_search", "skill_load", "session_summarize",
-            "knowledge_read", "knowledge_list",
-            "file_read", "file_list",
-            "cron_create", "cron_list", "cron_cancel",
-            "memory_tree", "task_plan",
-        ];
-
         let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
             .into_iter()
-            .filter(|t| core_tool_names.contains(&t.name.as_str()))
+            .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
             .collect();
 
         // Add delegate tools for subagents (so LLM can directly call them)
@@ -946,12 +927,10 @@ impl CarrierKernel {
         );
 
         // Auto-match skill for prompt injection (does NOT affect tool list)
-        let mut matched_skill_name: Option<String> = None;
         let (auto_matched_skill, skill_max_iterations) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
             match crate::prompt_sources::classify_skill_with_llm(message, ws, brain).await {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
-                    matched_skill_name = Some(skill_name.clone());
                     let skill_body = skill.body.clone();
                     let skill_max_iter = skill.max_iterations;
 
@@ -1086,7 +1065,6 @@ impl CarrierKernel {
             sender_id.as_deref(),
             owner_id.as_deref(),
             channel_type.as_deref(),
-            matched_skill_name.as_deref(),
         )
         .await
         .map_err(KernelError::Carrier)?;
@@ -1307,7 +1285,6 @@ impl CarrierKernel {
                         brain_clone,
                         sid.as_deref(), oid.as_deref(),
                         ct.as_deref(),
-                        None,   // matched_skill: plan steps don't write back
                     ).await;
                     (step_id, result, session)
                 });

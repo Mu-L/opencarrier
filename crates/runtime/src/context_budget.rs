@@ -186,7 +186,7 @@ pub fn apply_context_guard(
 ) -> usize {
     // Pass 0: Strip base64 blobs from tool results.
     // This removes large image/file data that the LLM doesn't need to see again.
-    let mut compacted = 0;
+    let mut _compacted = 0;
     for msg in messages.iter_mut() {
         if let MessageContent::Blocks(blocks) = &mut msg.content {
             for block in blocks.iter_mut() {
@@ -194,7 +194,7 @@ pub fn apply_context_guard(
                     let stripped = strip_base64_content(content);
                     if stripped.len() < content.len() {
                         *content = stripped;
-                        compacted += 1;
+                        _compacted += 1;
                     }
                 }
             }
