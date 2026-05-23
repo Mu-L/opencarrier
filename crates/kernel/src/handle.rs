@@ -652,18 +652,10 @@ impl KernelHandle for CarrierKernel {
                 );
                 let score = if tool_score > 0 { tool_score } else { server_score };
                 if score > 0 {
-                    let mcp_tool_name = format!(
-                        "mcp_{}_{}",
-                        runtime::mcp::normalize_name(&config.name),
-                        tool.name.replace('-', "_"),
-                    );
+                    // conn.tools() already returns namespaced names (e.g. mcp_wechat_oa_create_draft)
                     scored.push((score + 50, ts.clone(), types::tool::ToolDefinition {
-                        name: mcp_tool_name,
-                        description: format!(
-                            "[MCP:{}] {}",
-                            config.name,
-                            tool.description,
-                        ),
+                        name: tool.name.clone(),
+                        description: tool.description.clone(),
                         input_schema: tool.input_schema.clone(),
                     }));
                 }
