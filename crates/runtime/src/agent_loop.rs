@@ -874,6 +874,13 @@ async fn run_agent_loop_impl(
                 if let Some(ref brain_ref) = brain {
                     if let Some(mut summary) = generate_turn_summary(turn_msgs, brain_ref).await {
                         summary.turn_number = session.turn_summaries.len() as u32 + 1;
+                        info!(
+                            agent = %manifest.name,
+                            turn = summary.turn_number,
+                            intent = %summary.user_intent,
+                            outcome = %summary.assistant_outcome,
+                            "Turn summary generated"
+                        );
                         session.turn_summaries.push(summary);
                     }
                 }
