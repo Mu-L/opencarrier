@@ -535,17 +535,8 @@ pub fn build_memory_section(memories: &[(String, String)], tree_hits: &[TreeMemo
         out.push('\n');
     }
 
-    // Tool usage guide
-    out.push_str("`memory_tree` queries the user's already-ingested conversation, email, and document history.\n");
-    out.push_str("It is a retrospective index, NOT a live API for connected services.\n\n");
-    out.push_str("Modes:\n");
-    out.push_str("- `mode: \"search_entities\"` — resolve a name to a canonical entity_id. Call this first when the user mentions someone by name.\n");
-    out.push_str("- `mode: \"query_topic\"` — all cross-source mentions of an entity_id.\n");
-    out.push_str("- `mode: \"query_source\"` — filter by source_kind + time_window_days. Use for \"in my email last week...\" intents.\n");
-    out.push_str("- `mode: \"query_global\"` — cross-source daily digest.\n");
-    out.push_str("- `mode: \"drill_down\"` — expand a coarse summary node_id one level. Returns child nodes with their IDs.\n");
-    out.push_str("- `mode: \"fetch_leaves\"` — pull raw chunks by chunk_ids for citation.\n\n");
-    out.push_str("Start cheap (query_* summaries), only drill_down/fetch_leaves when you need verbatim content.\n");
+    // Tool usage guide — memory_tree is available via tool_search when needed
+    out.push_str("`memory_tree` is available for querying past conversation/email/document history. Use `tool_search(\"memory_tree\")` to discover it when the user asks about past interactions.\n");
 
     // Legacy flat memories (if any)
     if !memories.is_empty() {

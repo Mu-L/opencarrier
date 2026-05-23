@@ -828,5 +828,5 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "knowledge_read", "knowledge_list",
     "file_read", "file_list",
     "cron_create", "cron_list", "cron_cancel",
-    "memory_tree", "task_plan",
+    "task_plan",
 ];
