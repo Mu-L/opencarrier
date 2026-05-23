@@ -481,7 +481,13 @@ pub fn build_tools_section(granted_tools: &[String]) -> String {
         groups.entry(cat).or_default().push((name.as_str(), hint));
     }
 
-    let mut out = String::from("## Your Tools\nYou have access to these capabilities:\n");
+    let mut out = String::from(
+        "## Your Tools\n\
+         You have access to these capabilities. This is your starting tool set.\n\
+         If you need a tool that is NOT listed below, call `tool_search(\"what you need\")` \
+         to discover it. tool_search returns the tool's name, description, and parameter schema — \
+         you can then call that tool directly.\n"
+    );
     for (category, tools) in &groups {
         out.push_str(&format!("\n**{}**: ", capitalize(category)));
         let descs: Vec<String> = tools
