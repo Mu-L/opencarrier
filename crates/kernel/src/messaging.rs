@@ -919,29 +919,22 @@ impl CarrierKernel {
 
         let messages_before = session.messages.len();
 
-        // Build agent's complete tool set (all capabilities, always available)
-        let mut tools = runtime::tool_runner::builtin_tool_definitions();
+        // Build agent's core tool set (bootstrap tools + delegate tools)
+        // Other tools are discovered via tool_search when needed.
+        let core_tool_names: &[&str] = &[
+            "tool_search", "skill_load", "session_summarize",
+            "knowledge_read", "knowledge_list",
+            "file_read", "file_list",
+            "cron_create", "cron_list", "cron_cancel",
+            "memory_tree", "task_plan",
+        ];
 
-        // Add MCP tools for agents that declare mcp_servers
-        if !entry.manifest.mcp_servers.is_empty() {
-            if let Ok(mcp_tools) = self.plugins.mcp_tools.lock() {
-                let mcp_servers = &entry.manifest.mcp_servers;
-                for tool in mcp_tools.iter() {
-                    if tools.iter().any(|t| t.name == tool.name) {
-                        continue;
-                    }
-                    for server in mcp_servers {
-                        let prefix = format!("mcp_{}_", runtime::mcp::normalize_name(server));
-                        if tool.name.starts_with(&prefix) {
-                            tools.push(tool.clone());
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
+            .into_iter()
+            .filter(|t| core_tool_names.contains(&t.name.as_str()))
+            .collect();
 
-        // Add delegate tools for subagents
+        // Add delegate tools for subagents (so LLM can directly call them)
         if !entry.manifest.subagents.is_empty() {
             tools.extend(types::agent::build_subagent_tool_definitions(&entry.manifest.subagents));
         }
@@ -949,7 +942,7 @@ impl CarrierKernel {
         info!(
             agent = %entry.name,
             tool_count = tools.len(),
-            "Agent tool set assembled"
+            "Agent core tool set assembled"
         );
 
         // Auto-match skill for prompt injection (does NOT affect tool list)
