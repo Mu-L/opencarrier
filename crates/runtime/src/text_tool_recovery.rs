@@ -577,59 +577,6 @@ pub fn recover_text_tool_calls(text: &str, _available_tools: &[ToolDefinition]) 
         }
     }
 
-    // Pattern 14: [Called tool_name] or [Called tool_name(args)] — LLM text description
-    // When the LLM wants to call a tool but can't (not in tools list), it may
-    // output a text description like "[Called web_fetch]" or "[Called web_fetch: ...]"
-    {
-        for line in text.lines() {
-            let trimmed = line.trim();
-            let Some(after) = trimmed.strip_prefix("[Called ") else {
-                continue;
-            };
-            // Find closing bracket
-            let Some(close) = after.find(']') else {
-                continue;
-            };
-            let inner = &after[..close];
-            // Extract tool name (stop at first space, colon, or parenthesis)
-            let tool_name = inner
-                .find(|c: char| c == ' ' || c == ':' || c == '(' || c == '{')
-                .map(|pos| &inner[..pos])
-                .unwrap_or(inner);
-
-            if tool_name.is_empty() || tool_name.contains(' ') {
-                continue;
-            }
-
-            // Try to extract arguments if present after tool name
-            let input = if let Some(json_start) = inner.find('{') {
-                if let Some(json_end) = inner.rfind('}') {
-                    serde_json::from_str::<serde_json::Value>(&inner[json_start..=json_end])
-                        .unwrap_or(serde_json::json!({}))
-                } else {
-                    serde_json::json!({})
-                }
-            } else {
-                serde_json::json!({})
-            };
-
-            if !calls
-                .iter()
-                .any(|c| c.name == tool_name)
-            {
-                info!(
-                    tool = tool_name,
-                    "Recovered tool call from [Called ...] pattern"
-                );
-                calls.push(ToolCall {
-                    id: format!("recovered_{}", uuid::Uuid::new_v4()),
-                    name: tool_name.to_string(),
-                    input,
-                });
-            }
-        }
-    }
-
     calls
 }
 

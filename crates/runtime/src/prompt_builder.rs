@@ -484,9 +484,11 @@ pub fn build_tools_section(granted_tools: &[String]) -> String {
     let mut out = String::from(
         "## Your Tools\n\
          You have access to these capabilities. This is your starting tool set.\n\
-         If you need a tool that is NOT listed below, call `tool_search(\"what you need\")` \
-         to discover it. tool_search returns the tool's name, description, and parameter schema — \
-         you can then call that tool directly.\n"
+         \n\
+         **IMPORTANT**: You can ONLY use tools listed below OR tools discovered via `tool_search`. \
+         Do NOT guess or invent tool names. If you need a capability not listed below, you MUST \
+         call `tool_search(\"what you need\")` first — it returns the tool's name, description, \
+         and parameter schema. Then you can call that tool directly.\n"
     );
     for (category, tools) in &groups {
         out.push_str(&format!("\n**{}**: ", capitalize(category)));
