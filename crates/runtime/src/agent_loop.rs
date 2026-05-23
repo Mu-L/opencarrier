@@ -885,15 +885,17 @@ async fn run_agent_loop_impl(
                     }
                 }
 
+                // Capture new messages BEFORE trim — session_base_len becomes invalid after trim.
+                let new_msgs: Vec<Message> = session.messages[session_base_len..].to_vec();
+
                 // Trim old messages if over retention threshold
                 trim_oldest_turns(&mut session.messages, MAX_RETAINED_MESSAGES);
 
-                let new_msgs = &session.messages[session_base_len..];
                 memory
                     .save_session_append_async(
                         session.id,
                         &session.agent_id,
-                        new_msgs,
+                        &new_msgs,
                         session.context_window_tokens,
                         session.label.as_deref(),
                         Some(&session.turn_summaries),
