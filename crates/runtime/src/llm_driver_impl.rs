@@ -355,6 +355,31 @@ impl LlmDriver for UnifiedHttpDriver {
 // Simple format implementations
 // ===========================================================================
 
+/// Maximum idle time (no bytes received) before aborting a streaming response.
+const STREAM_IDLE_TIMEOUT_SECS: u64 = 120;
+
+/// Read the next chunk from a byte stream with an idle timeout.
+///
+/// If no data arrives within `STREAM_IDLE_TIMEOUT_SECS`, returns an error
+/// instead of hanging indefinitely. This prevents stuck SSE connections from
+/// blocking the agent loop forever.
+async fn next_chunk_with_idle_timeout(
+    stream: &mut (impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin),
+) -> Result<Option<bytes::Bytes>, LlmError> {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(STREAM_IDLE_TIMEOUT_SECS),
+        stream.next(),
+    )
+    .await
+    {
+        Ok(Some(chunk_result)) => chunk_result.map(Some).map_err(|e| LlmError::Http(e.to_string())),
+        Ok(None) => Ok(None),
+        Err(_) => Err(LlmError::Http(format!(
+            "Streaming idle timeout: no data received in {STREAM_IDLE_TIMEOUT_SECS}s"
+        ))),
+    }
+}
+
 impl UnifiedHttpDriver {
     // --- OpenAI Images ---
     async fn complete_openai_images(&self, request: CompletionRequest) -> Result<CompletionResponse, LlmError> {
@@ -1864,8 +1889,7 @@ impl UnifiedHttpDriver {
         let mut usage = TokenUsage::default();
 
         let mut byte_stream = resp.bytes_stream();
-        while let Some(chunk_result) = byte_stream.next().await {
-            let chunk = chunk_result.map_err(|e| LlmError::Http(e.to_string()))?;
+        while let Some(chunk) = next_chunk_with_idle_timeout(&mut byte_stream).await? {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
@@ -2070,8 +2094,7 @@ impl UnifiedHttpDriver {
         let mut stop_reason = StopReason::EndTurn;
 
         let mut byte_stream = resp.bytes_stream();
-        while let Some(chunk_result) = byte_stream.next().await {
-            let chunk = chunk_result.map_err(|e| LlmError::Http(e.to_string()))?;
+        while let Some(chunk) = next_chunk_with_idle_timeout(&mut byte_stream).await? {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find("\n\n") {
@@ -2253,8 +2276,7 @@ impl UnifiedHttpDriver {
         let mut thought_signature: Option<String> = None;
 
         let mut byte_stream = resp.bytes_stream();
-        while let Some(chunk_result) = byte_stream.next().await {
-            let chunk = chunk_result.map_err(|e| LlmError::Http(e.to_string()))?;
+        while let Some(chunk) = next_chunk_with_idle_timeout(&mut byte_stream).await? {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find("\n\n") {
