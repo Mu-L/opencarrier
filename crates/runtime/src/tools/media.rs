@@ -739,7 +739,38 @@ async fn tool_image_generate(
     }
 
     // Include base64 of the first image so downstream tools (e.g. upload) can use it directly.
-    let base64_data = images.first().map(|img| &img.data_base64).cloned().unwrap_or_default();
+    // For URL-only providers (DashScope), download and encode to base64 on the fly.
+    let base64_data = if let Some(first) = images.first() {
+        if !first.data_base64.is_empty() {
+            first.data_base64.clone()
+        } else if let Some(ref url) = first.url {
+            match reqwest::Client::new()
+                .get(url)
+                .timeout(std::time::Duration::from_secs(60))
+                .send()
+                .await
+            {
+                Ok(resp) => match resp.bytes().await {
+                    Ok(bytes) => {
+                        use base64::Engine;
+                        base64::engine::general_purpose::STANDARD.encode(&bytes)
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to read image bytes for base64 encoding");
+                        String::new()
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to download image for base64 encoding");
+                    String::new()
+                }
+            }
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
 
     let response = serde_json::json!({
         "images_generated": images.len(),
