@@ -478,18 +478,27 @@ impl UnifiedHttpDriver {
         }
 
         let mut images = Vec::new();
-        if let Some(results) = result.pointer("/output/results").and_then(|r| r.as_array()) {
-            for item in results {
-                let url = item.get("url").and_then(|u| u.as_str()).map(|s| s.to_string());
-                let b64 = item.get("b64_image").and_then(|b| b.as_str()).unwrap_or("").to_string();
-                images.push(GeneratedImage { data_base64: b64, url });
+
+        // DashScope multimodal generation format: output.choices[].message.content[].image
+        if let Some(choices) = result.pointer("/output/choices").and_then(|r| r.as_array()) {
+            for choice in choices {
+                if let Some(content) = choice.pointer("/message/content").and_then(|c| c.as_array()) {
+                    for block in content {
+                        if let Some(url) = block.get("image").and_then(|i| i.as_str()) {
+                            images.push(GeneratedImage {
+                                data_base64: String::new(),
+                                url: Some(url.to_string()),
+                            });
+                        }
+                    }
+                }
             }
         }
 
-        // Fallback: try /output/choices format (some providers use this)
+        // Fallback: /output/results (legacy format)
         if images.is_empty() {
-            if let Some(choices) = result.pointer("/output/choices").and_then(|r| r.as_array()) {
-                for item in choices {
+            if let Some(results) = result.pointer("/output/results").and_then(|r| r.as_array()) {
+                for item in results {
                     let url = item.get("url").and_then(|u| u.as_str()).map(|s| s.to_string());
                     let b64 = item.get("b64_image").and_then(|b| b.as_str()).unwrap_or("").to_string();
                     images.push(GeneratedImage { data_base64: b64, url });
@@ -497,7 +506,7 @@ impl UnifiedHttpDriver {
             }
         }
 
-        // Fallback: try /output/data format (OpenAI-style)
+        // Fallback: /output/data (OpenAI-style)
         if images.is_empty() {
             if let Some(data) = result.pointer("/output/data").and_then(|r| r.as_array()) {
                 for item in data {
