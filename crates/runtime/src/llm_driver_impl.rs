@@ -468,6 +468,8 @@ impl UnifiedHttpDriver {
         let resp = self.send_request(&self.base_url, &body, &[]).await?;
         let result: serde_json::Value = resp.json().await.map_err(|e| LlmError::Parse(e.to_string()))?;
 
+        tracing::debug!(response = %result, "DashScope image raw response");
+
         if let Some(code) = result.get("code").and_then(|c| c.as_str()) {
             if code != "Success" && code != "200" {
                 let msg = result.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
@@ -484,7 +486,30 @@ impl UnifiedHttpDriver {
             }
         }
 
+        // Fallback: try /output/choices format (some providers use this)
         if images.is_empty() {
+            if let Some(choices) = result.pointer("/output/choices").and_then(|r| r.as_array()) {
+                for item in choices {
+                    let url = item.get("url").and_then(|u| u.as_str()).map(|s| s.to_string());
+                    let b64 = item.get("b64_image").and_then(|b| b.as_str()).unwrap_or("").to_string();
+                    images.push(GeneratedImage { data_base64: b64, url });
+                }
+            }
+        }
+
+        // Fallback: try /output/data format (OpenAI-style)
+        if images.is_empty() {
+            if let Some(data) = result.pointer("/output/data").and_then(|r| r.as_array()) {
+                for item in data {
+                    let url = item.get("url").and_then(|u| u.as_str()).map(|s| s.to_string());
+                    let b64 = item.get("b64_json").and_then(|b| b.as_str()).unwrap_or("").to_string();
+                    images.push(GeneratedImage { data_base64: b64, url });
+                }
+            }
+        }
+
+        if images.is_empty() {
+            tracing::warn!(response = %result, "DashScope image response has no recognized image format");
             return Err(LlmError::Parse("No images in DashScope response".to_string()));
         }
 
