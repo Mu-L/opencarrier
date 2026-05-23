@@ -577,6 +577,63 @@ pub fn recover_text_tool_calls(text: &str, _available_tools: &[ToolDefinition]) 
         }
     }
 
+    // Pattern 14: [Called tool_name] — LLM text description of a tool call.
+    // Only recovers tools that are in the current tools list — this prevents
+    // infinite loops where LLM invents tool names (e.g. "[Called memory_tree]")
+    // that aren't available. For tools not in the list, LLM must use tool_search.
+    {
+        let tool_name_set: std::collections::HashSet<&str> = _available_tools
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            let Some(after) = trimmed.strip_prefix("[Called ") else {
+                continue;
+            };
+            let Some(close) = after.find(']') else {
+                continue;
+            };
+            let inner = &after[..close];
+            let tool_name = inner
+                .find(|c: char| c == ' ' || c == ':' || c == '(' || c == '{')
+                .map(|pos| &inner[..pos])
+                .unwrap_or(inner);
+
+            if tool_name.is_empty() || tool_name.contains(' ') {
+                continue;
+            }
+
+            // Only recover if the tool is actually in the current tools list
+            if !tool_name_set.contains(tool_name) {
+                continue;
+            }
+
+            let input = if let Some(json_start) = inner.find('{') {
+                if let Some(json_end) = inner.rfind('}') {
+                    serde_json::from_str::<serde_json::Value>(&inner[json_start..=json_end])
+                        .unwrap_or(serde_json::json!({}))
+                } else {
+                    serde_json::json!({})
+                }
+            } else {
+                serde_json::json!({})
+            };
+
+            if !calls.iter().any(|c| c.name == tool_name) {
+                info!(
+                    tool = tool_name,
+                    "Recovered tool call from [Called ...] pattern"
+                );
+                calls.push(ToolCall {
+                    id: format!("recovered_{}", uuid::Uuid::new_v4()),
+                    name: tool_name.to_string(),
+                    input,
+                });
+            }
+        }
+    }
+
     calls
 }
 
