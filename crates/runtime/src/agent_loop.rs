@@ -1198,7 +1198,26 @@ async fn run_agent_loop_impl(
                         }
 
                         if !found_tools.is_empty() {
-                            info!(found = found_tools.len(), "tool_search found tools — LLM can call them directly without adding to tools list");
+                            // Add discovered tools to tools_owned so the LLM API allows
+                            // structured tool_use output for them. Cap the total to prevent
+                            // unbounded inflation (e.g. 12 core → 12 core + 20 discovered max).
+                            const MAX_TOTAL_TOOLS: usize = 32;
+                            let current_count = tools_owned.len();
+                            let remaining_capacity = MAX_TOTAL_TOOLS.saturating_sub(current_count);
+                            let to_add: Vec<_> = found_tools
+                                .into_iter()
+                                .filter(|t| !tools_owned.iter().any(|existing| existing.name == t.name))
+                                .take(remaining_capacity)
+                                .collect();
+                            if !to_add.is_empty() {
+                                info!(
+                                    found = to_add.len(),
+                                    total = current_count + to_add.len(),
+                                    "tool_search: adding discovered tools to CompletionRequest.tools"
+                                );
+                                tools_owned.extend(to_add);
+                                tools = &tools_owned;
+                            }
                         }
                     }
                 }
