@@ -64,7 +64,7 @@ impl ToolModule for MediaTools {
                     "type": "object",
                     "properties": {
                         "prompt": { "type": "string", "description": "Text description of the image to generate" },
-                        "size": { "type": "string", "description": "Image size: '1024x1024' (default), '1024x1792', '1792x1024'" },
+                        "size": { "type": "string", "description": "Image size. Minimum 768x768 (589824 pixels). Common values: '1024x1024' (default), '1024x1792', '1792x1024', '768x768'. Smaller sizes will be auto-upscaled to 768x768." },
                         "count": { "type": "integer", "description": "Number of images to generate (1-4, default: 1)" },
                         "aspect_ratio": { "type": "string", "description": "Image aspect ratio (MiniMax only): '1:1', '16:9', '4:3', '3:2', '2:3', '3:4', '9:16', '21:9'" },
                         "prompt_optimizer": { "type": "boolean", "description": "Whether to auto-optimize the prompt (MiniMax only, default: false)" }
@@ -586,7 +586,21 @@ async fn tool_image_generate(
         .ok_or("Missing 'prompt' parameter")?;
 
     let model = input["model"].as_str().unwrap_or("dall-e-3");
-    let size = input["size"].as_str().unwrap_or("1024x1024");
+    let mut size = input["size"].as_str().unwrap_or("1024x1024").to_string();
+
+    // Enforce minimum pixel count for providers that require it (e.g. DashScope: 589824 = 768x768)
+    const MIN_PIXELS: u32 = 589824;
+    if let Some((w, h)) = size.split_once('x').and_then(|(w, h)| {
+        let w = w.parse::<u32>().ok()?;
+        let h = h.parse::<u32>().ok()?;
+        Some((w, h))
+    }) {
+        if w.saturating_mul(h) < MIN_PIXELS {
+            tracing::warn!(requested = %size, "Image size below provider minimum; upscaling to 1024x1024");
+            size = "1024x1024".to_string();
+        }
+    }
+
     let quality = input["quality"].as_str().unwrap_or("hd");
     let count = input["count"].as_u64().unwrap_or(1).min(4) as u8;
 
