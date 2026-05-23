@@ -592,6 +592,10 @@ async fn run_agent_loop_impl(
     // Track recent (tool_name, input_hash) for loop detection
     let mut recent_tool_calls: Vec<(String, u64)> = Vec::new();
 
+    // Track consecutive tool errors: tool_name → count of consecutive errors
+    let mut consecutive_tool_errors: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    const MAX_CONSECUTIVE_TOOL_ERRORS: u32 = 3;
+
     // Owned copy for loop detection tool removal
     let mut tools_owned: Vec<ToolDefinition> = tools.to_vec();
     let mut tools: &[ToolDefinition] = &tools_owned;
@@ -1068,6 +1072,19 @@ async fn run_agent_loop_impl(
                     .iter()
                     .filter(|b| matches!(b, ContentBlock::ToolResult { is_error: true, .. }))
                     .count();
+
+                // Track which tools succeeded this iteration (to reset their error counter)
+                let succeeded_tools: std::collections::HashSet<&str> = tool_result_blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::ToolResult { is_error: false, tool_name, .. } => Some(tool_name.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                for name in &succeeded_tools {
+                    consecutive_tool_errors.remove(*name);
+                }
+
                 if error_count > 0 {
                     // Collect failed tool names to detect repeated failures
                     let failed_tools: Vec<&str> = tool_result_blocks
@@ -1079,6 +1096,31 @@ async fn run_agent_loop_impl(
                             _ => None,
                         })
                         .collect();
+
+                    // Increment consecutive error counters
+                    for name in &failed_tools {
+                        *consecutive_tool_errors.entry(name.to_string()).or_insert(0) += 1;
+                    }
+
+                    // Remove tools that have failed too many times consecutively
+                    let mut removed_tools = Vec::new();
+                    for (name, count) in &consecutive_tool_errors {
+                        if *count >= MAX_CONSECUTIVE_TOOL_ERRORS && tools_owned.iter().any(|t| t.name == *name) {
+                            warn!(
+                                agent = %manifest.name,
+                                tool = %name,
+                                consecutive_errors = count,
+                                "Tool failed {MAX_CONSECUTIVE_TOOL_ERRORS} times consecutively — removing"
+                            );
+                            tools_owned.retain(|t| t.name != *name);
+                            tools = &tools_owned;
+                            removed_tools.push(name.clone());
+                        }
+                    }
+                    for name in &removed_tools {
+                        consecutive_tool_errors.remove(name);
+                    }
+
                     info!(
                         agent = %manifest.name,
                         iteration,
@@ -1086,15 +1128,23 @@ async fn run_agent_loop_impl(
                         failed_tools = ?failed_tools,
                         "Tool errors in agent loop iteration"
                     );
+
+                    let mut guidance = format!(
+                        "[System: {} tool(s) returned errors. Report the error honestly \
+                         to the user. Do NOT fabricate results or pretend the tool succeeded. \
+                         Do NOT retry the same failed tool call. \
+                         If a search or fetch failed, tell the user it failed and suggest \
+                         alternatives instead of making up data.]",
+                        error_count
+                    );
+                    if !removed_tools.is_empty() {
+                        guidance.push_str(&format!(
+                            " 工具 {} 连续失败已被移除，请勿再调用。",
+                            removed_tools.join(", ")
+                        ));
+                    }
                     tool_result_blocks.push(ContentBlock::Text {
-                        text: format!(
-                            "[System: {} tool(s) returned errors. Report the error honestly \
-                             to the user. Do NOT fabricate results or pretend the tool succeeded. \
-                             Do NOT retry the same failed tool call. \
-                             If a search or fetch failed, tell the user it failed and suggest \
-                             alternatives instead of making up data.]",
-                            error_count
-                        ),
+                        text: guidance,
                         provider_metadata: None,
                     });
                 }
