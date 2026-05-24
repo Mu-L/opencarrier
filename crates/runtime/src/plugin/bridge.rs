@@ -445,7 +445,11 @@ impl PluginBridgeManager {
                 format!("[用户发送了一张图片{}]: {}", cap, url)
             }
             PluginContent::File { url, filename } => {
-                format!("[用户发送了一个文件]: {} ({})", filename, url)
+                if url.is_empty() {
+                    format!("[用户发送了一个文件]: {} (文件未能下载)", filename)
+                } else {
+                    format!("[用户发送了一个文件]: {}，已保存到 {}，可用 file_read 读取", filename, url)
+                }
             }
             PluginContent::Voice {
                 url,

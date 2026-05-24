@@ -191,6 +191,40 @@ async fn download_cdn_as_data_uri(
     Ok(format!("data:{mime};base64,{b64}"))
 }
 
+/// Download a CDN media file, AES-decrypt it, and save to the workspace inbox.
+/// Returns the saved file path on success.
+async fn download_cdn_file(
+    http: &reqwest::Client,
+    media: &CDNMedia,
+    filename: &str,
+) -> Result<String, String> {
+    let eqp = media.encrypt_query_param.as_deref().ok_or("No encrypt_query_param")?;
+    let aes_key_b64 = media.aes_key.as_deref().ok_or("No aes_key")?;
+    let key = crypto::parse_aes_key(aes_key_b64).ok_or("Invalid AES key")?;
+
+    let url = crypto::cdn_download_url(eqp);
+    let data = crypto::cdn_download(http, &url, &key).await?;
+
+    // Save to workspace inbox directory
+    let inbox = std::path::PathBuf::from("/home/ubuntu/.opencarrier/inbox");
+    tokio::fs::create_dir_all(&inbox)
+        .await
+        .map_err(|e| format!("Failed to create inbox dir: {e}"))?;
+
+    // Sanitize filename and ensure no path traversal
+    let safe_name = std::path::Path::new(filename)
+        .file_name()
+        .unwrap_or(std::ffi::OsStr::new("file"))
+        .to_string_lossy()
+        .to_string();
+    let dest = inbox.join(&safe_name);
+    tokio::fs::write(&dest, &data)
+        .await
+        .map_err(|e| format!("Failed to write file: {e}"))?;
+
+    Ok(dest.to_string_lossy().to_string())
+}
+
 async fn process_inbound_message(
     bot_id: &str,
     session_key: &str,
@@ -257,12 +291,23 @@ async fn process_inbound_message(
                     }
                 }
                 ITEM_TYPE_FILE => {
-                    let filename = item
-                        .file_item
-                        .as_ref()
+                    let file_item = item.file_item.as_ref();
+                    let filename = file_item
                         .and_then(|f| f.file_name.clone())
                         .unwrap_or_default();
-                    PluginContent::File { url: String::new(), filename }
+                    let url = match file_item.and_then(|f| f.media.as_ref()) {
+                        Some(media) => {
+                            match download_cdn_file(http, media, &filename).await {
+                                Ok(path) => path,
+                                Err(e) => {
+                                    warn!(error = %e, "Failed to download WeChat file from CDN");
+                                    String::new()
+                                }
+                            }
+                        }
+                        None => String::new(),
+                    };
+                    PluginContent::File { url, filename }
                 }
                 ITEM_TYPE_VIDEO => {
                     PluginContent::Video {
