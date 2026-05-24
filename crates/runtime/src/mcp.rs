@@ -598,7 +598,12 @@ impl McpConnection {
                 let reader = tokio::io::BufReader::new(stderr);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::info!(mcp_server = %cmd_name, "stderr: {line}");
+                    // INFO for errors/warnings from MCP server, DEBUG for routine output
+                    if line.contains("ERROR") || line.contains("WARN") || line.contains("error") || line.contains("panic") {
+                        tracing::warn!(mcp_server = %cmd_name, "stderr: {line}");
+                    } else {
+                        tracing::debug!(mcp_server = %cmd_name, "stderr: {line}");
+                    }
                 }
             });
         }
