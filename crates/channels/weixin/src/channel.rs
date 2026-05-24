@@ -125,6 +125,16 @@ async fn poll_loop_inner(
                 }
 
                 if let Some(msgs) = resp.msgs {
+                    // Log raw item types for debugging
+                    for msg in &msgs {
+                        if let Some(items) = &msg.item_list {
+                            for item in items {
+                                info!(session_key = session_key, item_type = item.type_.unwrap_or(-1i32 as u32), has_file = item.file_item.is_some(), has_image = item.image_item.is_some(), has_text = item.text_item.is_some(), "Raw WeChat item");
+                            }
+                        } else {
+                            info!(session_key = session_key, "WeChat message with no item_list");
+                        }
+                    }
                     // Renew session expiry on every successful getUpdates
                     if let Some(state) = WEIXIN_STATE.bots.get(session_key) {
                         let now = std::time::SystemTime::now()
@@ -233,7 +243,8 @@ async fn process_inbound_message(
     let content = match msg.item_list.as_ref() {
         Some(items) if !items.is_empty() => {
             let item = &items[0];
-            match item.type_.unwrap_or(0) {
+            let item_type = item.type_.unwrap_or(0);
+            match item_type {
                 ITEM_TYPE_TEXT => {
                     let text = item
                         .text_item
@@ -274,14 +285,16 @@ async fn process_inbound_message(
                     let filename = file_item
                         .and_then(|f| f.file_name.clone())
                         .unwrap_or_default();
-                    // Download CDN content and attach as raw bytes; bridge layer
-                    // will save to the correct sender/agent/user/input directory.
+                    info!(filename = %filename, has_media = file_item.and_then(|f| f.media.as_ref()).is_some(), "WeChat file message received");
                     let data = match file_item.and_then(|f| f.media.as_ref()) {
                         Some(media) => {
                             match download_cdn_raw(http, media).await {
-                                Ok(bytes) => Some(bytes),
+                                Ok(bytes) => {
+                                    info!(filename = %filename, size = bytes.len(), "WeChat file downloaded from CDN");
+                                    Some(bytes)
+                                }
                                 Err(e) => {
-                                    warn!(error = %e, "Failed to download WeChat file from CDN");
+                                    warn!(filename = %filename, error = %e, "Failed to download WeChat file from CDN");
                                     None
                                 }
                             }
@@ -297,7 +310,10 @@ async fn process_inbound_message(
                         caption: None,
                     }
                 }
-                _ => PluginContent::Text(String::new()),
+                _ => {
+                    warn!(item_type, "Unknown WeChat item type, treating as empty text");
+                    PluginContent::Text(String::new())
+                }
             }
         }
         _ => PluginContent::Text(String::new()),
@@ -306,6 +322,10 @@ async fn process_inbound_message(
     info!(
         bot_id = bot_id,
         from = %from_user_id,
+        item_type = match msg.item_list.as_ref() {
+            Some(items) if !items.is_empty() => items[0].type_.unwrap_or(0),
+            _ => 0,
+        },
         "Inbound WeChat message"
     );
 

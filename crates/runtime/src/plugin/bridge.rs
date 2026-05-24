@@ -266,6 +266,7 @@ impl PluginBridgeManager {
                 let input_dir = types::config::sender_data_dir(
                     &home, &rk, &agent_id, Some(&msg.sender_id),
                 ).join("input");
+                info!(filename, agent = %agent_id, dir = %input_dir.display(), size = file_data.len(), "Saving uploaded file to input directory");
                 if tokio::fs::create_dir_all(&input_dir).await.is_ok() {
                     let safe = std::path::Path::new(filename)
                         .file_name()
@@ -274,6 +275,8 @@ impl PluginBridgeManager {
                     let dest = input_dir.join(safe.as_ref());
                     if let Err(e) = tokio::fs::write(&dest, file_data).await {
                         warn!(filename, error = %e, "Failed to save uploaded file");
+                    } else {
+                        info!(filename, path = %dest.display(), "File saved successfully");
                     }
                 }
             }
