@@ -125,8 +125,8 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
         if !skill.trim().is_empty() {
             sections.push(format!(
                 "## Active Skill (auto-matched)\n\
-                 The user's message was matched to the following skill. \
-                 Follow these instructions exactly — do NOT call skill_load or tool_search for this.\n\n{}",
+                 The skill instructions below are already loaded and active. \
+                 Execute them directly — skill_load is not available because the skill is already injected.\n\n{}",
                 cap_str(skill, 4000)
             ));
         }
