@@ -331,7 +331,7 @@ impl DingTalkWsClient {
                     .and_then(|f| f.file_name.as_deref())
                     .unwrap_or("")
                     .to_string();
-                PluginContent::File { url: download_code, filename: file_name }
+                PluginContent::File { url: download_code, filename: file_name, data: None }
             }
             _ => {
                 info!(tenant = %self.bot_id, msg_type, "Ignoring unsupported message type");

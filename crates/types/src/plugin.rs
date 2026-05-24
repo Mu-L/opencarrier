@@ -60,7 +60,7 @@ pub struct ChannelDescriptor {
 pub enum PluginContent {
     Text(String),
     Image { url: String, caption: Option<String> },
-    File { url: String, filename: String },
+    File { url: String, filename: String, #[serde(default)] data: Option<Vec<u8>> },
     Voice { url: String, duration_seconds: u32 },
     Video { url: String, duration_seconds: Option<u32>, caption: Option<String> },
     Location { lat: f64, lon: f64 },

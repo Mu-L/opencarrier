@@ -404,7 +404,7 @@ impl FeishuWsClient {
                     .and_then(|v| v.get("file_name").and_then(|n| n.as_str()))
                     .unwrap_or("")
                     .to_string();
-                PluginContent::File { url: file_key, filename: file_name }
+                PluginContent::File { url: file_key, filename: file_name, data: None }
             }
             _ => {
                 info!(tenant = %self.bot_id, msg_type, "Ignoring unsupported message type");
