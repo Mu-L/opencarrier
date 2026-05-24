@@ -8,6 +8,7 @@ use runtime::kernel_handle::KernelHandle;
 use runtime::llm_driver::StreamEvent;
 use runtime::python_runtime::{self, PythonConfig};
 use runtime::sandbox::SandboxConfig;
+use runtime::llm_driver::LlmDriver;
 use types::agent::*;
 use types::error::CarrierError;
 use std::path::{Path, PathBuf};
@@ -20,7 +21,235 @@ use crate::kernel::CarrierKernel;
 use crate::prompt_sources::touch_user_profile;
 use crate::workspace::append_daily_memory_log;
 
+/// Shared preparation context for LLM agent execution.
+///
+/// Both `send_message_streaming` and `execute_llm_agent` perform the same
+/// session loading, compaction check, tool assembly, skill/subagent matching,
+/// and manifest mutation steps before diverging at the actual LLM call.
+/// This struct holds the results of that shared preparation.
+struct PreparedContext {
+    session: memory::session::Session,
+    needs_compact: bool,
+    tools: Vec<types::tool::ToolDefinition>,
+    manifest: AgentManifest,
+    driver: Arc<dyn LlmDriver>,
+    ctx_window: Option<usize>,
+}
+
 impl CarrierKernel {
+    /// Shared preparation for LLM agent execution: session loading, compaction
+    /// check, core tool set assembly, skill/subagent classification, and manifest
+    /// mutation. Returns a `PreparedContext` that both streaming and non-streaming
+    /// paths consume before diverging at the actual LLM invocation.
+    async fn prepare_agent_context(
+        &self,
+        agent_id: AgentId,
+        message: &str,
+        entry: &AgentEntry,
+        sender_id: &Option<String>,
+        sender_name: Option<String>,
+        owner_id: &Option<String>,
+        channel_type: &Option<String>,
+    ) -> KernelResult<PreparedContext> {
+        // Load session: per-user when sender_id is present (multi-tenancy),
+        // otherwise use the agent's default session.
+        let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
+        let session = if let Some(ref sid) = sender_id {
+            let user_label = format!("user:{}", sid);
+            match self
+                .memory
+                .find_session_by_label(&agent_name, &user_label)
+                .map_err(KernelError::Carrier)?
+            {
+                Some(s) => s,
+                None => self
+                    .memory
+                    .create_session_with_label(agent_name.clone(), Some(&user_label))
+                    .map_err(KernelError::Carrier)?,
+            }
+        } else {
+            self.memory
+                .get_session(entry.session_id)
+                .map_err(KernelError::Carrier)?
+                .unwrap_or_else(|| memory::session::Session {
+                    id: entry.session_id,
+                    agent_id: agent_name.clone(),
+                    messages: Vec::new(),
+                    context_window_tokens: 0,
+                    turn_summaries: Vec::new(),
+                    label: None,
+                })
+        };
+
+        // Check if auto-compaction is needed
+        let needs_compact = {
+            use runtime::compactor::{
+                estimate_token_count, needs_compaction as check_compact,
+                needs_compaction_by_tokens, CompactionConfig,
+            };
+            let config = CompactionConfig::default();
+            let by_messages = check_compact(&session, &config);
+            let estimated = estimate_token_count(
+                &session.messages,
+                Some(&entry.manifest.model.system_prompt),
+                None,
+            );
+            let by_tokens = needs_compaction_by_tokens(estimated, &config);
+            if by_tokens && !by_messages {
+                info!(
+                    agent_id = %agent_id,
+                    estimated_tokens = estimated,
+                    messages = session.messages.len(),
+                    "Token-based compaction triggered (messages below threshold but tokens above)"
+                );
+            }
+            let by_quota = if let Some(headroom) = self.runtime.scheduler.token_headroom(agent_id) {
+                let threshold = (headroom as f64 * 0.8) as u64;
+                if estimated as u64 > threshold && session.messages.len() > 4 {
+                    info!(
+                        agent_id = %agent_id,
+                        estimated_tokens = estimated,
+                        quota_headroom = headroom,
+                        "Quota-headroom compaction triggered (session would consume >80% of remaining quota)"
+                    );
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            by_messages || by_tokens || by_quota
+        };
+
+        // Build agent's core tool set (bootstrap tools + delegate tools)
+        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
+            .into_iter()
+            .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
+            .collect();
+
+        if !entry.manifest.subagents.is_empty() {
+            tools.extend(types::agent::build_subagent_tool_definitions(&entry.manifest.subagents));
+        }
+
+        info!(
+            agent = %entry.name,
+            tool_count = tools.len(),
+            "Agent core tool set assembled"
+        );
+
+        // Auto-match skill for prompt injection
+        let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> =
+            Some(Arc::clone(&*self.brain.brain.read().unwrap_or_else(|e| {
+                warn!("Brain RwLock poisoned, recovering");
+                e.into_inner()
+            }))
+                as Arc<dyn runtime::llm_driver::Brain>);
+
+        let (auto_matched_skill, skill_max_iterations) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
+            match crate::prompt_sources::classify_skill_with_llm(message, ws, brain).await {
+                Some(skill) => {
+                    let skill_name = skill.name.clone();
+                    let skill_body = skill.body.clone();
+                    let skill_max_iter = skill.max_iterations;
+
+                    // Auto-discover skill-declared tools
+                    for t in &skill.tools {
+                        if !tools.iter().any(|d| d.name == *t) {
+                            if let Some((_, def)) = self.search_tools(t, 1, entry.manifest.max_tool_level).into_iter().next() {
+                                tools.push(def);
+                            }
+                        }
+                    }
+
+                    info!(
+                        agent = %entry.name,
+                        skill = %skill_name,
+                        "Skill classified by LLM"
+                    );
+
+                    (
+                        Some(format!("**{}**\n{}", skill_name, skill_body)),
+                        skill_max_iter,
+                    )
+                }
+                None => (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
+        // Auto-match subagent trigger (only when no skill matched)
+        let auto_matched_subagent = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
+            if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, &entry.manifest.subagents) {
+                info!(
+                    agent = %entry.name,
+                    subagent = %sa_match.name,
+                    "Subagent trigger matched"
+                );
+                Some(sa_match.name.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Subagent delegation from channel_type
+        let subagent_config = if let Some(ref ct) = channel_type {
+            if let Some(sa_name) = ct.strip_prefix("subagent:") {
+                entry.manifest.subagents.iter().find(|s| s.name == sa_name).cloned()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let driver = self.resolve_driver(&entry.manifest)?;
+        let ctx_window: Option<usize> = None;
+
+        let mut manifest = entry.manifest.clone();
+
+        // Apply skill's max_iterations override
+        if let Some(max_iter) = skill_max_iterations {
+            manifest.autonomous.get_or_insert_with(Default::default).max_iterations = max_iter;
+            info!(
+                agent = %entry.name,
+                max_iterations = max_iter,
+                "Skill overrides max_iterations"
+            );
+        }
+
+        // Apply subagent's max_iterations override
+        if let Some(ref sa) = subagent_config {
+            manifest.autonomous.get_or_insert_with(Default::default).max_iterations = sa.max_iterations;
+            manifest.metadata.insert("is_subagent".to_string(), serde_json::json!(true));
+            info!(
+                agent = %entry.name,
+                subagent = %sa.name,
+                max_iterations = sa.max_iterations,
+                "Subagent overrides max_iterations"
+            );
+        }
+
+        // Combine skill and subagent auto-match for prompt injection
+        let prompt_auto_match = auto_matched_skill.or_else(|| {
+            auto_matched_subagent.map(|name| format!("**Auto-delegation: {}**\nThe user message matches the '{}' subagent. Call delegate_{} to handle this task.", name, name, name))
+        });
+
+        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, sender_id, sender_name, owner_id, prompt_auto_match.clone());
+
+        Ok(PreparedContext {
+            session,
+            needs_compact,
+            tools,
+            manifest,
+            driver,
+            ctx_window,
+        })
+    }
+
     /// Send a message to an agent and get a response.
     ///
     /// Automatically upgrades the kernel handle from `self_handle` so that
@@ -289,203 +518,12 @@ impl CarrierKernel {
         }
 
         // LLM agent: true streaming via agent loop
-        // Load session: use per-user session when sender_id is present (multi-tenancy),
-        // otherwise use the agent's default session.
-        let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
-        let mut session = if let Some(ref sid) = sender_id {
-            let user_label = format!("user:{}", sid);
-            match self
-                .memory
-                .find_session_by_label(&agent_name, &user_label)
-                .map_err(KernelError::Carrier)?
-            {
-                Some(s) => s,
-                None => self
-                    .memory
-                    .create_session_with_label(agent_name.clone(), Some(&user_label))
-                    .map_err(KernelError::Carrier)?,
-            }
-        } else {
-            self.memory
-                .get_session(entry.session_id)
-                .map_err(KernelError::Carrier)?
-                .unwrap_or_else(|| memory::session::Session {
-                    id: entry.session_id,
-                    agent_id: agent_name.clone(),
-                    messages: Vec::new(),
-                    context_window_tokens: 0,
-                    turn_summaries: Vec::new(),
-                    label: None,
-                })
-        };
-
-        // Check if auto-compaction is needed: message-count OR token-count OR quota-headroom trigger
-        let needs_compact = {
-            use runtime::compactor::{
-                estimate_token_count, needs_compaction as check_compact,
-                needs_compaction_by_tokens, CompactionConfig,
-            };
-            let config = CompactionConfig::default();
-            let by_messages = check_compact(&session, &config);
-            let estimated = estimate_token_count(
-                &session.messages,
-                Some(&entry.manifest.model.system_prompt),
-                None,
-            );
-            let by_tokens = needs_compaction_by_tokens(estimated, &config);
-            if by_tokens && !by_messages {
-                info!(
-                    agent_id = %agent_id,
-                    estimated_tokens = estimated,
-                    messages = session.messages.len(),
-                    "Token-based compaction triggered (messages below threshold but tokens above)"
-                );
-            }
-            let by_quota = if let Some(headroom) = self.runtime.scheduler.token_headroom(agent_id) {
-                let threshold = (headroom as f64 * 0.8) as u64;
-                if estimated as u64 > threshold && session.messages.len() > 4 {
-                    info!(
-                        agent_id = %agent_id,
-                        estimated_tokens = estimated,
-                        quota_headroom = headroom,
-                        "Quota-headroom compaction triggered (session would consume >80% of remaining quota)"
-                    );
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            by_messages || by_tokens || by_quota
-        };
-
-        // Build agent's core tool set (bootstrap tools + delegate tools)
-        // Other tools are discovered via tool_search or auto-discovered on skill match.
-        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
-            .into_iter()
-            .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
-            .collect();
-
-        // Add delegate tools for subagents (so LLM can directly call them)
-        if !entry.manifest.subagents.is_empty() {
-            tools.extend(types::agent::build_subagent_tool_definitions(&entry.manifest.subagents));
-        }
-
-        info!(
-            agent = %entry.name,
-            tool_count = tools.len(),
-            "Agent core tool set assembled (streaming)"
-        );
-
-        // Auto-match skill for prompt injection (does NOT affect tool list)
-        let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> =
-            Some(Arc::clone(&*self.brain.brain.read().unwrap_or_else(|e| {
-                warn!("Brain RwLock poisoned, recovering");
-                e.into_inner()
-            }))
-                as Arc<dyn runtime::llm_driver::Brain>);
-
-        let (auto_matched_skill, skill_max_iterations) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
-            match crate::prompt_sources::classify_skill_with_llm(message, ws, brain).await {
-                Some(skill) => {
-                    let skill_name = skill.name.clone();
-                    let skill_body = skill.body.clone();
-                    let skill_max_iter = skill.max_iterations;
-
-                    // Auto-discover skill-declared tools
-                    for t in &skill.tools {
-                        if !tools.iter().any(|d| d.name == *t) {
-                            if let Some((_, def)) = self.search_tools(t, 1, entry.manifest.max_tool_level).into_iter().next() {
-                                tools.push(def);
-                            }
-                        }
-                    }
-
-                    info!(
-                        agent = %entry.name,
-                        skill = %skill_name,
-                        "Skill classified by LLM (streaming)"
-                    );
-
-                    (
-                        Some(format!("**{}**\n{}", skill_name, skill_body)),
-                        skill_max_iter,
-                    )
-                }
-                None => (None, None)
-            }
-        } else {
-            (None, None)
-        };
-
-        // Auto-match subagent trigger (only when no skill matched)
-        // Delegate tools are already in the tool set — this only does prompt injection.
-        let auto_matched_subagent = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
-            if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, &entry.manifest.subagents) {
-                info!(
-                    agent = %entry.name,
-                    subagent = %sa_match.name,
-                    "Subagent trigger matched (streaming)"
-                );
-                Some(sa_match.name.clone())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // Subagent delegation from channel_type
-        let subagent_config = if let Some(ref ct) = channel_type {
-            if let Some(sa_name) = ct.strip_prefix("subagent:") {
-                entry.manifest.subagents.iter().find(|s| s.name == sa_name).cloned()
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let driver = self.resolve_driver(&entry.manifest)?;
-
-        // Context window lookup disabled — model name managed by Brain
-        let ctx_window: Option<usize> = None;
+        let ctx = self.prepare_agent_context(
+            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type,
+        ).await?;
+        let PreparedContext { mut session, needs_compact, tools, manifest, driver, ctx_window, .. } = ctx;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
-        let mut manifest = entry.manifest.clone();
-
-        // Apply skill's max_iterations override to the manifest
-        if let Some(max_iter) = skill_max_iterations {
-            manifest.autonomous.get_or_insert_with(Default::default).max_iterations = max_iter;
-            info!(
-                agent = %entry.name,
-                max_iterations = max_iter,
-                "Skill overrides max_iterations (streaming)"
-            );
-        }
-
-        // Apply subagent's max_iterations override
-        if let Some(ref sa) = subagent_config {
-            manifest.autonomous.get_or_insert_with(Default::default).max_iterations = sa.max_iterations;
-            manifest.metadata.insert("is_subagent".to_string(), serde_json::json!(true));
-            info!(
-                agent = %entry.name,
-                subagent = %sa.name,
-                max_iterations = sa.max_iterations,
-                "Subagent overrides max_iterations (streaming)"
-            );
-        }
-
-        // Combine skill and subagent auto-match for prompt injection
-        let prompt_auto_match = auto_matched_skill.or_else(|| {
-            auto_matched_subagent.map(|name| format!("**Auto-delegation: {}**\nThe user message matches the '{}' subagent. Call delegate_{} to handle this task.", name, name, name))
-        });
-
-        // Build the structured system prompt via prompt_builder
-        {
-            self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match);
-        }
 
         let memory = Arc::clone(&self.memory);
         // Build link context from user message (auto-extract URLs for the agent)
@@ -844,192 +882,34 @@ impl CarrierKernel {
         owner_id: Option<String>,
         channel_type: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
-        // Clone Brain Arc early so the RwLockReadGuard is dropped before any .await.
+        // Prepare shared context (session, tools, skill/subagent matching, manifest)
+        let ctx = self.prepare_agent_context(
+            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type,
+        ).await?;
+        let PreparedContext { mut session, needs_compact, tools, manifest, .. } = ctx;
+
+        // Execute compaction if needed
+        if needs_compact {
+            match self.compact_agent_session(agent_id, session.id).await {
+                Ok(msg) => {
+                    info!(agent_id = %agent_id, "{msg}");
+                    if let Ok(Some(reloaded)) = self.memory.get_session(session.id) {
+                        session = reloaded;
+                    }
+                }
+                Err(e) => {
+                    warn!(agent_id = %agent_id, "Pre-emptive compaction failed: {e}");
+                }
+            }
+        }
+
+        // Re-acquire Brain reference for LLM call and plan execution
         let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> =
             Some(Arc::clone(&*self.brain.brain.read().unwrap_or_else(|e| {
                 warn!("Brain RwLock poisoned, recovering");
                 e.into_inner()
             }))
                 as Arc<dyn runtime::llm_driver::Brain>);
-
-        // Load session: use per-user session when sender_id is present (multi-tenancy),
-        // otherwise use the agent's default session.
-        let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
-        let mut session = if let Some(ref sid) = sender_id {
-            let user_label = format!("user:{}", sid);
-            match self
-                .memory
-                .find_session_by_label(&agent_name, &user_label)
-                .map_err(KernelError::Carrier)?
-            {
-                Some(s) => s,
-                None => self
-                    .memory
-                    .create_session_with_label(agent_name.clone(), Some(&user_label))
-                    .map_err(KernelError::Carrier)?,
-            }
-        } else {
-            self.memory
-                .get_session(entry.session_id)
-                .map_err(KernelError::Carrier)?
-                .unwrap_or_else(|| memory::session::Session {
-                    id: entry.session_id,
-                    agent_id: agent_name.clone(),
-                    messages: Vec::new(),
-                    context_window_tokens: 0,
-                    turn_summaries: Vec::new(),
-                    label: None,
-                })
-        };
-
-        // Pre-emptive compaction: compact before LLM call if session is large or quota headroom is low
-        {
-            use runtime::compactor::{
-                estimate_token_count, needs_compaction as check_compact,
-                needs_compaction_by_tokens, CompactionConfig,
-            };
-            let config = CompactionConfig::default();
-            let by_messages = check_compact(&session, &config);
-            let estimated = estimate_token_count(
-                &session.messages,
-                Some(&entry.manifest.model.system_prompt),
-                None,
-            );
-            let by_tokens = needs_compaction_by_tokens(estimated, &config);
-            let by_quota = if let Some(headroom) = self.runtime.scheduler.token_headroom(agent_id) {
-                let threshold = (headroom as f64 * 0.8) as u64;
-                estimated as u64 > threshold && session.messages.len() > 4
-            } else {
-                false
-            };
-            if by_messages || by_tokens || by_quota {
-                info!(agent_id = %agent_id, messages = session.messages.len(), estimated_tokens = estimated, "Pre-emptive compaction before LLM call");
-                match self.compact_agent_session(agent_id, session.id).await {
-                    Ok(msg) => {
-                        info!(agent_id = %agent_id, "{msg}");
-                        if let Ok(Some(reloaded)) = self.memory.get_session(session.id) {
-                            session = reloaded;
-                        }
-                    }
-                    Err(e) => {
-                        warn!(agent_id = %agent_id, "Pre-emptive compaction failed: {e}");
-                    }
-                }
-            }
-        }
-
-        // Build agent's core tool set (bootstrap tools + delegate tools)
-        // Other tools are discovered via tool_search or auto-discovered on skill match.
-        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
-            .into_iter()
-            .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
-            .collect();
-
-        // Add delegate tools for subagents (so LLM can directly call them)
-        if !entry.manifest.subagents.is_empty() {
-            tools.extend(types::agent::build_subagent_tool_definitions(&entry.manifest.subagents));
-        }
-
-        info!(
-            agent = %entry.name,
-            tool_count = tools.len(),
-            "Agent core tool set assembled"
-        );
-
-        // Auto-match skill for prompt injection (does NOT affect tool list)
-        let (auto_matched_skill, skill_max_iterations) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
-            match crate::prompt_sources::classify_skill_with_llm(message, ws, brain).await {
-                Some(skill) => {
-                    let skill_name = skill.name.clone();
-                    let skill_body = skill.body.clone();
-                    let skill_max_iter = skill.max_iterations;
-
-                    // Auto-discover skill-declared tools
-                    for t in &skill.tools {
-                        if !tools.iter().any(|d| d.name == *t) {
-                            if let Some((_, def)) = self.search_tools(t, 1, entry.manifest.max_tool_level).into_iter().next() {
-                                tools.push(def);
-                            }
-                        }
-                    }
-
-                    info!(
-                        agent = %entry.name,
-                        skill = %skill_name,
-                        "Skill classified by LLM"
-                    );
-
-                    (
-                        Some(format!("**{}**\n{}", skill_name, skill_body)),
-                        skill_max_iter,
-                    )
-                }
-                None => (None, None)
-            }
-        } else {
-            (None, None)
-        };
-
-        // Auto-match subagent trigger (only when no skill matched)
-        // Delegate tools are already in the tool set — this only does prompt injection.
-        let auto_matched_subagent = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
-            if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, &entry.manifest.subagents) {
-                info!(
-                    agent = %entry.name,
-                    subagent = %sa_match.name,
-                    "Subagent trigger matched"
-                );
-                Some(sa_match.name.clone())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // Subagent delegation from channel_type
-        let subagent_config = if let Some(ref ct) = channel_type {
-            if let Some(sa_name) = ct.strip_prefix("subagent:") {
-                entry.manifest.subagents.iter().find(|s| s.name == sa_name).cloned()
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        // Apply model routing if configured (disabled in Stable mode)
-        let mut manifest = entry.manifest.clone();
-
-        // Apply skill's max_iterations override to the manifest
-        if let Some(max_iter) = skill_max_iterations {
-            manifest.autonomous.get_or_insert_with(Default::default).max_iterations = max_iter;
-            info!(
-                agent = %entry.name,
-                max_iterations = max_iter,
-                "Skill overrides max_iterations"
-            );
-        }
-
-        // Apply subagent's max_iterations override
-        if let Some(ref sa) = subagent_config {
-            manifest.autonomous.get_or_insert_with(Default::default).max_iterations = sa.max_iterations;
-            // Mark as subagent for simplified prompt
-            manifest.metadata.insert("is_subagent".to_string(), serde_json::json!(true));
-            info!(
-                agent = %entry.name,
-                subagent = %sa.name,
-                max_iterations = sa.max_iterations,
-                "Subagent overrides max_iterations"
-            );
-        }
-
-        // Combine skill and subagent auto-match for prompt injection
-        let prompt_auto_match = auto_matched_skill.or_else(|| {
-            auto_matched_subagent.map(|name| format!("**Auto-delegation: {}**\nThe user message matches the '{}' subagent. Call delegate_{} to handle this task.", name, name, name))
-        });
-
-        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, &sender_id, sender_name, &owner_id, prompt_auto_match);
 
         // Model routing is handled by Brain
 
