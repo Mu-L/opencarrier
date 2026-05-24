@@ -249,11 +249,12 @@ impl McpConnection {
         arguments: &serde_json::Value,
     ) -> Result<String, String> {
         // Look up the original tool name from the server (preserves hyphens etc.)
+        let server_name = self.config.name.clone();
         let raw_name = self
             .original_names
             .get(name)
             .map(|s| s.as_str())
-            .or_else(|| strip_mcp_prefix(&self.config.name, name))
+            .or_else(|| strip_mcp_prefix(&server_name, name))
             .unwrap_or(name);
 
         let params = serde_json::json!({
@@ -262,7 +263,7 @@ impl McpConnection {
         });
 
         let response = self.send_request("tools/call", Some(params)).await.map_err(|e| {
-            tracing::warn!(server = %self.config.name, tool = raw_name, error = %e, "MCP call_tool failed");
+            tracing::warn!(server = %server_name, tool = raw_name, error = %e, "MCP call_tool failed");
             e
         })?;
 
