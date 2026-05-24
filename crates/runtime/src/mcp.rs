@@ -253,17 +253,18 @@ impl McpConnection {
         let raw_name = self
             .original_names
             .get(name)
-            .map(|s| s.as_str())
-            .or_else(|| strip_mcp_prefix(&server_name, name))
-            .unwrap_or(name);
+            .map(|s| s.clone())
+            .or_else(|| strip_mcp_prefix(&server_name, name).to_string())
+            .unwrap_or_else(|| name.to_string());
 
         let params = serde_json::json!({
             "name": raw_name,
             "arguments": arguments,
         });
 
+        let raw_name_log = raw_name.clone();
         let response = self.send_request("tools/call", Some(params)).await.map_err(|e| {
-            tracing::warn!(server = %server_name, tool = raw_name, error = %e, "MCP call_tool failed");
+            tracing::warn!(server = %server_name, tool = %raw_name_log, error = %e, "MCP call_tool failed");
             e
         })?;
 
