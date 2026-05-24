@@ -259,12 +259,15 @@ impl PluginBridgeManager {
             "Routing plugin message to agent"
         );
 
-        // Save file data to the correct sender/agent/user/input directory
+        // Save file data to the agent's workspace sender directory
         // so file_read can access it via relative path "input/<filename>"
         if let PluginContent::File { data: Some(file_data), filename, .. } = &msg.content {
-            if let Some(home) = self.kernel.home_dir() {
+            let base_dir = self.kernel.resolve_agent_workspace(&agent_id)
+                .map(std::path::PathBuf::from)
+                .or_else(|| self.kernel.home_dir());
+            if let Some(base) = base_dir {
                 let input_dir = types::config::sender_data_dir(
-                    &home, &rk, &agent_id, Some(&msg.sender_id),
+                    &base, &rk, &agent_id, Some(&msg.sender_id),
                 ).join("input");
                 info!(filename, agent = %agent_id, dir = %input_dir.display(), size = file_data.len(), "Saving uploaded file to input directory");
                 if tokio::fs::create_dir_all(&input_dir).await.is_ok() {
