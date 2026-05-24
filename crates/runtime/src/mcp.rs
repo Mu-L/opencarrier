@@ -179,7 +179,7 @@ impl McpConnection {
         let response = self.send_request("initialize", Some(params)).await?;
 
         if let Some(result) = response {
-            debug!(
+            info!(
                 server = %self.config.name,
                 server_info = %result,
                 "MCP initialize response"
@@ -598,7 +598,7 @@ impl McpConnection {
                 let reader = tokio::io::BufReader::new(stderr);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    tracing::debug!(mcp_server = %cmd_name, "stderr: {line}");
+                    tracing::info!(mcp_server = %cmd_name, "stderr: {line}");
                 }
             });
         }

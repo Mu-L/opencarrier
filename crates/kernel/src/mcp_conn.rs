@@ -5,14 +5,37 @@
 
 use std::sync::Arc;
 use tracing::{info, warn};
+use runtime::mcp::{McpServerConfig, McpTransport};
+use types::config::McpTransportEntry;
+
+/// Convert a config transport entry to the runtime transport enum.
+fn transport_entry_to_config(entry: &McpTransportEntry) -> McpTransport {
+    match entry {
+        McpTransportEntry::Stdio { command, args } => McpTransport::Stdio {
+            command: command.clone(),
+            args: args.clone(),
+        },
+        McpTransportEntry::Sse { url } => McpTransport::Sse { url: url.clone() },
+    }
+}
+
+/// Build an McpServerConfig from a config entry.
+fn build_mcp_config(server_config: &types::config::McpServerConfigEntry) -> McpServerConfig {
+    McpServerConfig {
+        name: server_config.name.clone(),
+        description: server_config.description.clone(),
+        transport: transport_entry_to_config(&server_config.transport),
+        timeout_secs: server_config.timeout_secs,
+        env: server_config.env.clone(),
+    }
+}
 
 use crate::kernel::CarrierKernel;
 
 impl CarrierKernel {
     /// Connect to all configured MCP servers and cache their tool definitions.
     pub(crate) async fn connect_mcp_servers(self: &Arc<Self>) {
-        use runtime::mcp::{McpConnection, McpServerConfig, McpTransport};
-        use types::config::McpTransportEntry;
+        use runtime::mcp::McpConnection;
 
         let servers = self
             .plugins
@@ -22,21 +45,7 @@ impl CarrierKernel {
             .unwrap_or_default();
 
         for server_config in &servers {
-            let transport = match &server_config.transport {
-                McpTransportEntry::Stdio { command, args } => McpTransport::Stdio {
-                    command: command.clone(),
-                    args: args.clone(),
-                },
-                McpTransportEntry::Sse { url } => McpTransport::Sse { url: url.clone() },
-            };
-
-            let mcp_config = McpServerConfig {
-                name: server_config.name.clone(),
-                description: server_config.description.clone(),
-                transport,
-                timeout_secs: server_config.timeout_secs,
-                env: server_config.env.clone(),
-            };
+            let mcp_config = build_mcp_config(server_config);
 
             match McpConnection::connect(mcp_config).await {
                 Ok(conn) => {
@@ -160,25 +169,9 @@ impl CarrierKernel {
                         .collect();
 
                     for server_config in &missing {
-                        use runtime::mcp::{McpConnection, McpServerConfig, McpTransport};
-                        use types::config::McpTransportEntry;
+                        use runtime::mcp::McpConnection;
 
-                        let transport = match &server_config.transport {
-                            McpTransportEntry::Stdio { command, args } => McpTransport::Stdio {
-                                command: command.clone(),
-                                args: args.clone(),
-                            },
-                            McpTransportEntry::Sse { url } => {
-                                McpTransport::Sse { url: url.clone() }
-                            }
-                        };
-                        let mcp_config = McpServerConfig {
-                            name: server_config.name.clone(),
-                            description: server_config.description.clone(),
-                            transport,
-                            timeout_secs: server_config.timeout_secs,
-                            env: server_config.env.clone(),
-                        };
+                        let mcp_config = build_mcp_config(server_config);
                         info!(server = %server_config.name, "Connecting MCP server (found in config but not connected)");
                         match McpConnection::connect(mcp_config).await {
                             Ok(conn) => {
