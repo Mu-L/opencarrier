@@ -701,6 +701,45 @@ async fn run_agent_loop_impl(
                     });
                 }
                 response.content = new_blocks;
+            } else if let Some(ref kernel) = kernel {
+                // LLM referenced a tool not in the current tools list (e.g. "[Called sqlite_query]").
+                // Auto-discover those tools so the LLM can call them properly next iteration.
+                let tool_name_set: std::collections::HashSet<&str> =
+                    tools.iter().map(|t| t.name.as_str()).collect();
+                let mut undiscovered: Vec<String> = Vec::new();
+                for line in response.text().lines() {
+                    let trimmed = line.trim();
+                    let Some(after) = trimmed.strip_prefix("[Called ") else { continue };
+                    let Some(close) = after.find(']') else { continue };
+                    let inner = &after[..close];
+                    let tool_name = inner
+                        .find(|c: char| c == ' ' || c == ':' || c == '(' || c == '{')
+                        .map(|pos| &inner[..pos])
+                        .unwrap_or(inner);
+                    if !tool_name.is_empty() && !tool_name.contains(' ') && !tool_name_set.contains(tool_name) {
+                        undiscovered.push(tool_name.to_string());
+                    }
+                }
+                if !undiscovered.is_empty() {
+                    let mut found: Vec<types::tool::ToolDefinition> = Vec::new();
+                    for name in &undiscovered {
+                        if let Some((_, def)) = kernel.search_tools(name, 1, manifest.max_tool_level).into_iter().next() {
+                            found.push(def);
+                        }
+                    }
+                    if !found.is_empty() {
+                        for def in &found {
+                            discovered_tool_names.insert(def.name.clone());
+                        }
+                        info!(
+                            found = found.len(),
+                            requested = undiscovered.len(),
+                            "Auto-discovered tools from [Called ...] pattern"
+                        );
+                        tools_owned.extend(found);
+                        tools = &tools_owned;
+                    }
+                }
             }
         }
 
