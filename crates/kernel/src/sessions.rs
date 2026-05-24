@@ -26,7 +26,9 @@ impl CarrierKernel {
         }
 
         // Delete the old session
-        let _ = self.memory.delete_session(entry.session_id);
+        if let Err(e) = self.memory.delete_session(entry.session_id) {
+            warn!(agent_id = %agent_id, error = %e, "Failed to delete old session");
+        }
 
         // Create a fresh session
         let agent_name = entry.name.clone();
@@ -56,7 +58,9 @@ impl CarrierKernel {
         })?;
 
         // Delete all regular sessions
-        let _ = self.memory.delete_agent_sessions(&entry.name);
+        if let Err(e) = self.memory.delete_agent_sessions(&entry.name) {
+            warn!(agent = %entry.name, error = %e, "Failed to delete agent sessions");
+        }
 
         // Delete canonical (cross-channel) session
 
@@ -222,19 +226,23 @@ impl CarrierKernel {
 
         // Save to structured memory store (key = "session_{date}_{slug}")
         let key = format!("session_{date}_{slug}");
-        let _ = self.memory.system_kv_set(
+        if let Err(e) = self.memory.system_kv_set(
             agent_id,
             "",
             "",
             &key,
             serde_json::Value::String(summary.clone()),
-        );
+        ) {
+            warn!(agent_id = %agent_id, error = %e, "Failed to save session summary to KV store");
+        }
 
         // Also write to workspace memory/ dir if workspace exists
         if let Some(ref workspace) = entry.manifest.workspace {
             let mem_dir = workspace.join("memory");
             let filename = format!("{date}-{slug}.md");
-            let _ = std::fs::write(mem_dir.join(&filename), &summary);
+            if let Err(e) = std::fs::write(mem_dir.join(&filename), &summary) {
+                warn!(agent_id = %agent_id, error = %e, "Failed to write session summary to workspace");
+            }
         }
 
         debug!(
@@ -261,7 +269,9 @@ impl CarrierKernel {
 
         // Persist the updated entry
         if let Some(entry) = self.registry.get(agent_id) {
-            let _ = self.memory.save_agent(&entry);
+            if let Err(e) = self.memory.save_agent(&entry) {
+                warn!(agent_id = %agent_id, error = %e, "Failed to persist agent after modality update");
+            }
         }
 
         // Clear canonical session to prevent memory poisoning from old model's responses
@@ -277,7 +287,9 @@ impl CarrierKernel {
             .map_err(KernelError::Carrier)?;
 
         if let Some(entry) = self.registry.get(agent_id) {
-            let _ = self.memory.save_agent(&entry);
+            if let Err(e) = self.memory.save_agent(&entry) {
+                warn!(agent_id = %agent_id, error = %e, "Failed to persist agent after skills update");
+            }
         }
 
         info!(agent_id = %agent_id, skills = ?skills, "Agent skills updated");
@@ -312,7 +324,9 @@ impl CarrierKernel {
             .map_err(KernelError::Carrier)?;
 
         if let Some(entry) = self.registry.get(agent_id) {
-            let _ = self.memory.save_agent(&entry);
+            if let Err(e) = self.memory.save_agent(&entry) {
+                warn!(agent_id = %agent_id, error = %e, "Failed to persist agent update");
+            }
         }
 
         info!(agent_id = %agent_id, servers = ?servers, "Agent MCP servers updated");
@@ -331,7 +345,9 @@ impl CarrierKernel {
             .map_err(KernelError::Carrier)?;
 
         if let Some(entry) = self.registry.get(agent_id) {
-            let _ = self.memory.save_agent(&entry);
+            if let Err(e) = self.memory.save_agent(&entry) {
+                warn!(agent_id = %agent_id, error = %e, "Failed to persist agent update");
+            }
         }
 
         info!(
@@ -616,7 +632,9 @@ impl CarrierKernel {
         }
 
         // Remove from persistent storage
-        let _ = self.memory.remove_agent(agent_id);
+        if let Err(e) = self.memory.remove_agent(agent_id) {
+            warn!(agent_id = %agent_id, error = %e, "Failed to remove agent from persistent storage");
+        }
 
         // Clean up per-agent runtime resources to prevent leaks
         self.runtime.running_tasks.remove(&agent_id);

@@ -214,10 +214,11 @@ impl CarrierKernel {
             .map_err(|e| format!("Failed to write agent.toml: {e}"))?;
 
         // 7. Update registry entry
-        let updated_cs = new_manifest.clone_source.clone().unwrap();
-        self.registry
-            .update_clone_source(entry.id, updated_cs)
-            .map_err(|e| format!("Failed to update registry: {e}"))?;
+        if let Some(updated_cs) = new_manifest.clone_source.clone() {
+            self.registry
+                .update_clone_source(entry.id, updated_cs)
+                .map_err(|e| format!("Failed to update registry: {e}"))?;
+        }
 
         // 8. Restart the agent so it picks up new files
         let _ = self.restart_agent(&entry.id.to_string());

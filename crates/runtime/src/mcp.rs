@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 // ---------------------------------------------------------------------------
 // Configuration types
@@ -270,8 +270,14 @@ impl McpConnection {
 
         match response {
             Some(result) => {
+                // Check MCP protocol isError flag
+                let is_error = result
+                    .get("isError")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
                 // Extract text content from the response
-                if let Some(content) = result.get("content").and_then(|c| c.as_array()) {
+                let text = if let Some(content) = result.get("content").and_then(|c| c.as_array()) {
                     let texts: Vec<&str> = content
                         .iter()
                         .filter_map(|item| {
@@ -282,12 +288,22 @@ impl McpConnection {
                             }
                         })
                         .collect();
-                    Ok(texts.join("\n"))
+                    texts.join("\n")
                 } else {
-                    Ok(result.to_string())
+                    result.to_string()
+                };
+
+                if is_error {
+                    warn!(server = %self.config.name, tool = %raw_name_log, "MCP tool returned isError=true");
+                    Err(format!("MCP tool error: {text}"))
+                } else {
+                    Ok(text)
                 }
             }
-            None => Err("No result from MCP tools/call".to_string()),
+            None => {
+                warn!(server = %self.config.name, "No result from MCP tools/call");
+                Err("No result from MCP tools/call".to_string())
+            }
         }
     }
 
@@ -355,16 +371,29 @@ impl McpConnection {
                 let mut line = String::new();
                 let timeout = tokio::time::Duration::from_secs(self.config.timeout_secs);
                 match tokio::time::timeout(timeout, stdout.read_line(&mut line)).await {
-                    Ok(Ok(0)) => return Err("MCP server closed connection".to_string()),
+                    Ok(Ok(0)) => {
+                        warn!(server = %self.config.name, "MCP server closed connection");
+                        return Err("MCP server closed connection".to_string());
+                    }
                     Ok(Ok(_)) => {}
-                    Ok(Err(e)) => return Err(format!("Failed to read MCP response: {e}")),
-                    Err(_) => return Err("MCP request timed out".to_string()),
+                    Ok(Err(e)) => {
+                        warn!(server = %self.config.name, error = %e, "Failed to read MCP response");
+                        return Err(format!("Failed to read MCP response: {e}"));
+                    }
+                    Err(_) => {
+                        warn!(server = %self.config.name, method, "MCP request timed out");
+                        return Err("MCP request timed out".to_string());
+                    }
                 }
 
                 let response: JsonRpcResponse = serde_json::from_str(line.trim())
-                    .map_err(|e| format!("Invalid MCP JSON-RPC response: {e}"))?;
+                    .map_err(|e| {
+                        warn!(server = %self.config.name, error = %e, "Invalid MCP JSON-RPC response");
+                        format!("Invalid MCP JSON-RPC response: {e}")
+                    })?;
 
                 if let Some(err) = response.error {
+                    warn!(server = %self.config.name, method, error = %err, "MCP JSON-RPC error");
                     return Err(format!("{err}"));
                 }
 
@@ -388,10 +417,15 @@ impl McpConnection {
                 let response = req
                     .send()
                     .await
-                    .map_err(|e| format!("MCP SSE request failed: {e}"))?;
+                    .map_err(|e| {
+                        warn!(server = %self.config.name, error = %e, "MCP SSE request failed");
+                        format!("MCP SSE request failed: {e}")
+                    })?;
 
                 if !response.status().is_success() {
-                    return Err(format!("MCP SSE returned {}", response.status()));
+                    let status = response.status();
+                    warn!(server = %self.config.name, %status, "MCP SSE non-2xx response");
+                    return Err(format!("MCP SSE returned {status}"));
                 }
 
                 // Persist session ID from server for subsequent requests.
@@ -404,7 +438,10 @@ impl McpConnection {
                 let body = response
                     .text()
                     .await
-                    .map_err(|e| format!("Failed to read SSE response: {e}"))?;
+                    .map_err(|e| {
+                        warn!(server = %self.config.name, error = %e, "Failed to read SSE response");
+                        format!("Failed to read SSE response: {e}")
+                    })?;
 
                 // Handle both plain JSON and SSE format (Streamable-HTTP).
                 // SSE format: "event: message\ndata: {...}\n\n"
@@ -418,9 +455,13 @@ impl McpConnection {
                 };
 
                 let rpc_response: JsonRpcResponse = serde_json::from_str(&json_str)
-                    .map_err(|e| format!("Invalid MCP SSE JSON-RPC response: {e}"))?;
+                    .map_err(|e| {
+                        warn!(server = %self.config.name, error = %e, "Invalid MCP SSE JSON-RPC response");
+                        format!("Invalid MCP SSE JSON-RPC response: {e}")
+                    })?;
 
                 if let Some(err) = rpc_response.error {
+                    warn!(server = %self.config.name, method, error = %err, "MCP SSE JSON-RPC error");
                     return Err(format!("{err}"));
                 }
 
@@ -468,7 +509,9 @@ impl McpConnection {
                 if let Some(sid) = session_id.as_deref() {
                     req = req.header("mcp-session-id", sid);
                 }
-                let _ = req.send().await;
+                if let Err(e) = req.send().await {
+                    warn!(server = %self.config.name, error = %e, "MCP SSE notification send failed");
+                }
             }
         }
 
@@ -598,7 +641,9 @@ impl Drop for McpConnection {
         match &mut self.transport {
             McpTransportHandle::Stdio { ref mut child, .. } => {
                 // Best-effort kill of the subprocess
-                let _ = child.start_kill();
+                if let Err(e) = child.start_kill() {
+                    warn!(server = %self.config.name, error = %e, "Failed to kill MCP subprocess");
+                }
             }
             McpTransportHandle::Sse { client, .. } => {
                 // reqwest Client uses a connection pool; this clears it.

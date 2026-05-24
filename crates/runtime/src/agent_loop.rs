@@ -881,7 +881,9 @@ async fn run_agent_loop_impl(
                     };
                     let kh = Arc::clone(kh);
                     tokio::spawn(async move {
-                        let _ = kh.tree_ingest(req).await;
+                        if let Err(e) = kh.tree_ingest(req).await {
+                            tracing::warn!(error = %e, "tree_ingest failed");
+                        }
                     });
                 }
 

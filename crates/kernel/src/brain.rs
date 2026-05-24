@@ -505,7 +505,7 @@ fn generate_jwt_token(access_key: &str, secret_key: &str) -> String {
     type HmacSha256 = Hmac<Sha256>;
 
     let header = serde_json::json!({"alg": "HS256", "typ": "JWT"});
-    let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&header).unwrap());
+    let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&header).expect("JWT header serialization cannot fail"));
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -516,7 +516,7 @@ fn generate_jwt_token(access_key: &str, secret_key: &str) -> String {
         "exp": now + 1800,
         "nbf": now.saturating_sub(5),
     });
-    let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&payload).unwrap());
+    let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&payload).expect("JWT payload serialization cannot fail"));
 
     let signing_input = format!("{}.{}", header_b64, payload_b64);
     let mut mac =

@@ -131,7 +131,9 @@ impl CarrierKernel {
                     // Fallback: open new session on classifier error.
                     let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
                     if let Ok(new_session) = self.memory.create_session(agent_name) {
-                        let _ = self.registry.update_session_id(agent_id, new_session.id);
+                        if let Err(e) = self.registry.update_session_id(agent_id, new_session.id) {
+                            tracing::warn!(agent_id = %agent_id, error = %e, "Failed to update session ID in registry");
+                        }
                     }
                 }
             }
@@ -162,7 +164,9 @@ impl CarrierKernel {
                     .record_usage(agent_id, &result.total_usage);
 
                 // Update last active time
-                let _ = self.registry.set_state(agent_id, AgentState::Running);
+                if let Err(e) = self.registry.set_state(agent_id, AgentState::Running) {
+                    tracing::warn!(agent_id = %agent_id, error = %e, "Failed to set agent state to Running");
+                }
 
                 // SECURITY: Record successful message in audit trail
                 self.audit_log.record(
@@ -265,9 +269,12 @@ impl CarrierKernel {
                             .runtime
                             .scheduler
                             .record_usage(agent_id, &result.total_usage);
-                        let _ = kernel_clone
+                        if let Err(e) = kernel_clone
                             .registry
-                            .set_state(agent_id, AgentState::Running);
+                            .set_state(agent_id, AgentState::Running)
+                        {
+                            tracing::warn!(agent_id = %agent_id, error = %e, "Failed to set agent state to Running");
+                        }
                         Ok(result)
                     }
                     Err(e) => {
@@ -517,8 +524,6 @@ impl CarrierKernel {
                 }
             }
 
-            let messages_before = session.messages.len();
-
             // Create a phase callback that emits PhaseChange events to WS/SSE clients
             let phase_tx = tx.clone();
             let phase_cb: runtime::agent_loop::PhaseCallback =
@@ -595,11 +600,6 @@ impl CarrierKernel {
                         touch_user_profile(&kernel_clone.config.home_dir, owner_id.as_deref().unwrap_or(sid), &manifest.name, Some(sid));
                     }
 
-                    // Append new messages to canonical session for cross-channel memory
-                    if session.messages.len() > messages_before {
-                        let _ = session.messages[messages_before..].to_vec();
-                    }
-
                     // Write JSONL session mirror to workspace
                     if let Some(ref workspace) = manifest.workspace {
                         if let Err(e) = memory.write_jsonl_mirror(
@@ -637,9 +637,12 @@ impl CarrierKernel {
                         _ => {}
                     }
 
-                    let _ = kernel_clone
+                    if let Err(e) = kernel_clone
                         .registry
-                        .set_state(agent_id, AgentState::Running);
+                        .set_state(agent_id, AgentState::Running)
+                    {
+                        tracing::warn!(agent_id = %agent_id, error = %e, "Failed to set agent state to Running");
+                    }
 
                     // Post-loop compaction check: if session now exceeds token threshold,
                     // trigger compaction in background for the next call.
@@ -915,8 +918,6 @@ impl CarrierKernel {
             }
         }
 
-        let messages_before = session.messages.len();
-
         // Build agent's core tool set (bootstrap tools + delegate tools)
         // Other tools are discovered via tool_search or auto-discovered on skill match.
         let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
@@ -1147,9 +1148,6 @@ impl CarrierKernel {
         }
 
         // Append new messages to canonical session for cross-channel memory
-        if session.messages.len() > messages_before {
-            let _ = session.messages[messages_before..].to_vec();
-        }
 
         // Write JSONL session mirror to workspace
         if let Some(ref workspace) = manifest.workspace {
