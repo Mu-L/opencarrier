@@ -461,13 +461,6 @@ impl CarrierKernel {
             );
         }
 
-        // When a skill is auto-matched, remove skill_load from tools so the LLM
-        // follows the already-injected instructions instead of trying to call it.
-        let has_auto_matched_skill = auto_matched_skill.is_some();
-        if has_auto_matched_skill {
-            tools.retain(|t| t.name != "skill_load");
-        }
-
         // Combine skill and subagent auto-match for prompt injection
         let prompt_auto_match = auto_matched_skill.or_else(|| {
             auto_matched_subagent.map(|name| format!("**Auto-delegation: {}**\nThe user message matches the '{}' subagent. Call delegate_{} to handle this task.", name, name, name))
@@ -1010,13 +1003,6 @@ impl CarrierKernel {
                 max_iterations = sa.max_iterations,
                 "Subagent overrides max_iterations"
             );
-        }
-
-        // When a skill is auto-matched, remove skill_load from tools so the LLM
-        // follows the already-injected instructions instead of trying to call it.
-        let has_auto_matched_skill = auto_matched_skill.is_some();
-        if has_auto_matched_skill {
-            tools.retain(|t| t.name != "skill_load");
         }
 
         // Combine skill and subagent auto-match for prompt injection

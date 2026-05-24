@@ -126,7 +126,7 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             sections.push(format!(
                 "## Active Skill (auto-matched)\n\
                  The skill instructions below are already loaded and active. \
-                 Execute them directly — skill_load is not available because the skill is already injected.\n\n{}",
+                 Follow these instructions directly — do not call skill_load again for this skill.\n\n{}",
                 cap_str(skill, 4000)
             ));
         }
@@ -186,10 +186,18 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
         // skills/ → 技能目录（name + description，始终注入，很短）
         if let Some(ref catalog) = ctx.clone_skills_catalog {
             if !catalog.trim().is_empty() {
-                sections.push(format!(
-                    "## 技能目录\n当用户的请求匹配某个技能时，使用 skill_load 加载该技能的详细指令，然后严格按指令执行。\n\n{}",
-                    catalog
-                ));
+                let section = if ctx.auto_matched_skill.is_some() {
+                    format!(
+                        "## 技能目录\n当用户的请求匹配某个技能时，使用 skill_load 加载该技能的详细指令。\n如果某个技能已被自动加载（见上方 Active Skill 部分），直接执行，无需再次调用 skill_load。\n\n{}",
+                        catalog
+                    )
+                } else {
+                    format!(
+                        "## 技能目录\n当用户的请求匹配某个技能时，使用 skill_load 加载该技能的详细指令，然后严格按指令执行。\n\n{}",
+                        catalog
+                    )
+                };
+                sections.push(section);
             }
         }
 
