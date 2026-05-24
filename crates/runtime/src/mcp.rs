@@ -261,7 +261,10 @@ impl McpConnection {
             "arguments": arguments,
         });
 
-        let response = self.send_request("tools/call", Some(params)).await?;
+        let response = self.send_request("tools/call", Some(params)).await.map_err(|e| {
+            tracing::warn!(server = %self.config.name, tool = raw_name, error = %e, "MCP call_tool failed");
+            e
+        })?;
 
         match response {
             Some(result) => {

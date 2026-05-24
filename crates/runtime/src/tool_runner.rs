@@ -216,10 +216,13 @@ pub async fn execute_tool(
             content: truncate_tool_result(tool_name, content),
             is_error: false,
         },
-        Err(err) => ToolResult {
-            tool_use_id: tool_use_id.to_string(),
-            content: format!("Error: {err}"),
-            is_error: true,
+        Err(err) => {
+            warn!(tool_name, error = %err, "Tool execution failed");
+            ToolResult {
+                tool_use_id: tool_use_id.to_string(),
+                content: format!("Error: {err}"),
+                is_error: true,
+            }
         },
     }
 }
