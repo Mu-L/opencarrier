@@ -407,3 +407,33 @@ mod tests {
         assert_eq!(tools, vec!["sqlite_query", "web_fetch"]);
     }
 }
+
+#[test]
+fn test_parse_gaokao_skill_tools() {
+    let content = std::fs::read_to_string(
+        "/Users/sophiehe/Documents/opencarrier/opencarrier-clones/generated/gaokao-advisor/skills/gaokao-advisor-voice/SKILL.md"
+    ).unwrap();
+    let tools = parse_skill_tools(&content);
+    println!("Parsed tools: {:?}", tools);
+    assert!(tools.contains(&"sqlite_query".to_string()), "should contain sqlite_query, got: {:?}", tools);
+    assert!(tools.contains(&"sqlite_schema".to_string()), "should contain sqlite_schema, got: {:?}", tools);
+    assert!(tools.contains(&"web_fetch".to_string()), "should contain web_fetch, got: {:?}", tools);
+    assert_eq!(tools.len(), 3, "should have exactly 3 tools, got: {:?}", tools);
+}
+
+#[test]
+fn test_build_gaokao_manifest() {
+    let workspace = std::path::Path::new("/Users/sophiehe/Documents/opencarrier/opencarrier-clones/generated/gaokao-advisor");
+    let manifest = build_manifest_from_workspace(workspace, "gaokao-advisor", None).unwrap();
+    println!("tools: {:?}", manifest.capabilities.tools);
+    assert!(manifest.capabilities.tools.contains(&"sqlite_query".to_string()), 
+        "tools should contain sqlite_query, got: {:?}", manifest.capabilities.tools);
+    
+    let toml_str = toml::to_string_pretty(&manifest).unwrap();
+    println!("\n--- agent.toml tools section ---");
+    for line in toml_str.lines() {
+        if line.contains("sqlite") || line.contains("web_fetch") {
+            println!("{}", line);
+        }
+    }
+}

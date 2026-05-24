@@ -78,6 +78,9 @@ pub async fn install_hub_template(
                 }
             }
             let serial = allocate_serial_number(&state.kernel.config.data_dir);
+            let share_url = state.kernel.config.external_url.as_ref().map(|url| {
+                format!("{}/share?clone={}", url.trim_end_matches('/'), agent_name)
+            });
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!({
@@ -85,6 +88,7 @@ pub async fn install_hub_template(
                     "name": agent_name,
                     "size": agx_bytes.len(),
                     "serial_number": serial,
+                    "share_url": share_url,
                 })),
             )
         }

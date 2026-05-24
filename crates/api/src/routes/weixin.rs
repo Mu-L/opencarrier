@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Try to auto-install a Hub template when the agent is not found locally.
-/// Returns (agent_id, display_name) on success, or None if install fails.
-async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<(String, String)> {
+/// Returns (agent_id, display_name, share_url) on success, or None if install fails.
+async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<(String, String, Option<String>)> {
     let hub_url = state.kernel.config.hub.url.trim_end_matches('/').to_string();
     if hub_url.is_empty() {
         return None;
@@ -39,7 +39,10 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<(Stri
     match state.kernel.clone_install(name, &agx_bytes).await {
         Ok((agent_id, agent_name, display_name)) => {
             tracing::info!(%agent_id, %agent_name, "Hub template auto-installed for QR binding");
-            Some((agent_id, display_name))
+            let share_url = state.kernel.config.external_url.as_ref().map(|url| {
+                format!("{}/share?clone={}", url.trim_end_matches('/'), agent_name)
+            });
+            Some((agent_id, display_name, share_url))
         }
         Err(e) => {
             tracing::warn!(error = %e, "Hub template install failed");
@@ -218,16 +221,16 @@ pub async fn weixin_qrcode_status(
 
         // Resolve agent_name early so both rebind and new-user paths can use it
         let agent_name_param = params.get("agent_name").map(|s| s.as_str()).unwrap_or("");
-        let resolved_agent: Option<(String, String)> = if !agent_name_param.is_empty() {
+        let resolved_agent: Option<(String, String, Option<String>)> = if !agent_name_param.is_empty() {
             if uuid::Uuid::parse_str(agent_name_param).is_ok() {
-                Some((agent_name_param.to_string(), String::new()))
+                Some((agent_name_param.to_string(), String::new(), None))
             } else {
                 let agents = state.kernel.list_agents();
                 if let Some(agent) = agents.iter().find(|a| a.name == agent_name_param) {
                     let display = state.kernel.registry.find_by_name(agent_name_param)
                         .map(|e| e.manifest.display_name.clone())
                         .unwrap_or_default();
-                    Some((agent.id.clone(), display))
+                    Some((agent.id.clone(), display, None))
                 } else {
                     try_install_from_hub(&state, agent_name_param).await
                 }
@@ -275,7 +278,7 @@ pub async fn weixin_qrcode_status(
 
                             let effective_agent = resolved_agent
                                 .as_ref()
-                                .map(|(id, _display)| {
+                                .map(|(id, _display, _share_url)| {
                                     // Resolve UUID to agent name for routing
                                     if let Ok(aid) = id.parse::<types::agent::AgentId>() {
                                         state.kernel.registry.get(aid)
@@ -288,7 +291,7 @@ pub async fn weixin_qrcode_status(
                                 .or(existing_bind.clone())
                                 .filter(|a| !a.is_empty());
 
-                            if let Some((ref new_agent_id, _)) = resolved_agent {
+                            if let Some((ref new_agent_id, _, _)) = resolved_agent {
                                 tf["bind_agent"] = serde_json::Value::String(new_agent_id.clone());
                             }
 
@@ -312,6 +315,9 @@ pub async fn weixin_qrcode_status(
                                 }
                             }
 
+                            let share_url = resolved_agent
+                                .as_ref()
+                                .and_then(|(_, _, url)| url.clone());
                             return (
                                 StatusCode::OK,
                                 Json(serde_json::json!({
@@ -323,6 +329,7 @@ pub async fn weixin_qrcode_status(
                                     "ilink_user_id": ilink_user_id,
                                     "bot_token": bot_token,
                                     "baseurl": raw_baseurl,
+                                    "share_url": share_url,
                                     "data": data,
                                 })),
                             );
@@ -348,7 +355,7 @@ pub async fn weixin_qrcode_status(
             "ilink_bot_id": ilink_bot_id,
             "user_id": ilink_user_id,
             "expires_at": now + 86400,
-            "bind_agent": resolved_agent.as_ref().map(|(id, _)| id.as_str()).unwrap_or(""),
+            "bind_agent": resolved_agent.as_ref().map(|(id, _, _)| id.as_str()).unwrap_or(""),
         });
 
         let sender_id = ilink_user_id.unwrap_or(bot);
@@ -360,7 +367,7 @@ pub async fn weixin_qrcode_status(
         }
 
         // Register dynamic binding + start sender
-        if let Some((ref agent_id, _)) = resolved_agent {
+        if let Some((ref agent_id, _, _)) = resolved_agent {
             // Resolve UUID to agent name for routing
             let agent_name = if let Ok(aid) = agent_id.parse::<types::agent::AgentId>() {
                 state.kernel.registry.get(aid)
@@ -382,11 +389,15 @@ pub async fn weixin_qrcode_status(
             }
         }
 
+        let share_url = resolved_agent
+            .as_ref()
+            .and_then(|(_, _, url)| url.clone());
+
         tracing::info!(
             bot,
             ilink_bot_id,
             user_id = ?ilink_user_id,
-            agent = ?resolved_agent.as_ref().map(|(id, _)| id),
+            agent = ?resolved_agent.as_ref().map(|(id, _, _)| id),
             "WeChat iLink QR scan confirmed — new user, token saved"
         );
 
@@ -401,7 +412,8 @@ pub async fn weixin_qrcode_status(
                 "ilink_user_id": ilink_user_id,
                 "bot_token": bot_token,
                 "baseurl": baseurl,
-                "bind_agent": resolved_agent.map(|(id, _)| id),
+                "bind_agent": resolved_agent.map(|(id, _, _)| id),
+                "share_url": share_url,
                 "data": data,
             })),
         );
