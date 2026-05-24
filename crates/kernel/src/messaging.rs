@@ -353,11 +353,19 @@ impl CarrierKernel {
             by_messages || by_tokens || by_quota
         };
 
-        // Build agent's core tool set (bootstrap tools + delegate tools)
-        // Other tools are discovered via tool_search when needed.
-        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
-            .into_iter()
-            .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
+        // Build agent's core tool set (bootstrap tools + manifest-declared tools + delegate tools)
+        // Core tools are always included. Tools declared in capabilities.tools that are
+        // builtins (but not core) are also added so the LLM can use them immediately
+        // without needing tool_search first.
+        let builtin_defs = runtime::tool_runner::builtin_tool_definitions();
+        let declared_tools = &entry.manifest.capabilities.tools;
+        let mut tools: Vec<types::tool::ToolDefinition> = builtin_defs
+            .iter()
+            .filter(|t| {
+                types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str())
+                    || declared_tools.contains(&t.name)
+            })
+            .cloned()
             .collect();
 
         // Add delegate tools for subagents (so LLM can directly call them)
@@ -908,11 +916,19 @@ impl CarrierKernel {
 
         let messages_before = session.messages.len();
 
-        // Build agent's core tool set (bootstrap tools + delegate tools)
-        // Other tools are discovered via tool_search when needed.
-        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
-            .into_iter()
-            .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
+        // Build agent's core tool set (bootstrap tools + manifest-declared tools + delegate tools)
+        // Core tools are always included. Tools declared in capabilities.tools that are
+        // builtins (but not core) are also added so the LLM can use them immediately
+        // without needing tool_search first.
+        let builtin_defs = runtime::tool_runner::builtin_tool_definitions();
+        let declared_tools = &entry.manifest.capabilities.tools;
+        let mut tools: Vec<types::tool::ToolDefinition> = builtin_defs
+            .iter()
+            .filter(|t| {
+                types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str())
+                    || declared_tools.contains(&t.name)
+            })
+            .cloned()
             .collect();
 
         // Add delegate tools for subagents (so LLM can directly call them)
