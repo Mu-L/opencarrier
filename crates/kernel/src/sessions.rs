@@ -573,16 +573,10 @@ impl CarrierKernel {
             });
 
         let system_prompt = &entry.manifest.model.system_prompt;
-        // Core tool set (same as messaging.rs — includes manifest-declared builtin tools)
-        let builtin_defs = runtime::tool_runner::builtin_tool_definitions();
-        let declared_tools = &entry.manifest.capabilities.tools;
-        let mut tools: Vec<types::tool::ToolDefinition> = builtin_defs
-            .iter()
-            .filter(|t| {
-                types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str())
-                    || declared_tools.contains(&t.name)
-            })
-            .cloned()
+        // Core tool set (same as messaging.rs — other tools found via tool_search)
+        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
+            .into_iter()
+            .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
             .collect();
         if !entry.manifest.subagents.is_empty() {
             tools.extend(types::agent::build_subagent_tool_definitions(&entry.manifest.subagents));
