@@ -272,10 +272,29 @@ fn parse_skill_tools(content: &str) -> Vec<String> {
     let Some(rest) = content.strip_prefix("---") else { return Vec::new() };
     let Some(end) = rest.find("---") else { return Vec::new() };
     let frontmatter = &rest[..end];
-    for line in frontmatter.lines() {
-        let line = line.trim();
-        if let Some(val) = line.strip_prefix("tools:") {
-            return parse_yaml_string_list(val.trim());
+    let lines: Vec<&str> = frontmatter.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if let Some(val) = trimmed.strip_prefix("tools:") {
+            let inline = val.trim();
+            // Inline array on same line: tools: ["a", "b"]
+            if inline.starts_with('[') {
+                return parse_yaml_string_list(inline);
+            }
+            // tools: followed by block list on subsequent indented lines
+            let mut block = inline.to_string();
+            for subsequent in &lines[i + 1..] {
+                let sub = subsequent.trim();
+                // Stop at next top-level key (no leading whitespace after trim, ends with ':')
+                // or non-list, non-empty line that isn't indented
+                if sub.is_empty() { continue; }
+                if !sub.starts_with('-') && !subsequent.starts_with(' ') && !subsequent.starts_with('\t') {
+                    break;
+                }
+                block.push('\n');
+                block.push_str(sub);
+            }
+            return parse_yaml_string_list(&block);
         }
     }
     Vec::new()
@@ -347,4 +366,44 @@ fn extract_mcp_server(tool_name: &str) -> Option<String> {
         return None;
     }
     Some(server.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_skill_tools_inline_array() {
+        let md = "---\nname: test\ntools: [\"sqlite_query\", \"web_fetch\"]\n---\nbody";
+        let tools = parse_skill_tools(md);
+        assert_eq!(tools, vec!["sqlite_query", "web_fetch"]);
+    }
+
+    #[test]
+    fn test_parse_skill_tools_block_list() {
+        let md = "---\nname: test\ntools:\n  - \"sqlite_query\"\n  - \"sqlite_schema\"\n  - \"web_fetch\"\n---\nbody";
+        let tools = parse_skill_tools(md);
+        assert_eq!(tools, vec!["sqlite_query", "sqlite_schema", "web_fetch"]);
+    }
+
+    #[test]
+    fn test_parse_skill_tools_block_list_unquoted() {
+        let md = "---\nname: test\ntools:\n  - sqlite_query\n  - web_fetch\n---\nbody";
+        let tools = parse_skill_tools(md);
+        assert_eq!(tools, vec!["sqlite_query", "web_fetch"]);
+    }
+
+    #[test]
+    fn test_parse_skill_tools_empty() {
+        let md = "---\nname: test\n---\nbody";
+        let tools = parse_skill_tools(md);
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn test_parse_skill_tools_stops_at_next_key() {
+        let md = "---\nname: test\ntools:\n  - sqlite_query\n  - web_fetch\nother_key: value\n---\nbody";
+        let tools = parse_skill_tools(md);
+        assert_eq!(tools, vec!["sqlite_query", "web_fetch"]);
+    }
 }
