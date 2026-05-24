@@ -253,8 +253,8 @@ impl McpConnection {
         let raw_name = self
             .original_names
             .get(name)
-            .map(|s| s.clone())
-            .or_else(|| strip_mcp_prefix(&server_name, name).to_string())
+            .cloned()
+            .or_else(|| strip_mcp_prefix(&server_name, name).map(|s| s.to_string()))
             .unwrap_or_else(|| name.to_string());
 
         let params = serde_json::json!({
