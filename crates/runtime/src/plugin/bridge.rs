@@ -259,6 +259,26 @@ impl PluginBridgeManager {
             "Routing plugin message to agent"
         );
 
+        // Save file data to the correct sender/agent/user/input directory
+        // so file_read can access it via relative path "input/<filename>"
+        if let PluginContent::File { data: Some(file_data), filename, .. } = &msg.content {
+            if let Some(home) = self.kernel.home_dir() {
+                let input_dir = types::config::sender_data_dir(
+                    &home, &rk, &agent_id, Some(&msg.sender_id),
+                ).join("input");
+                if tokio::fs::create_dir_all(&input_dir).await.is_ok() {
+                    let safe = std::path::Path::new(filename)
+                        .file_name()
+                        .unwrap_or(std::ffi::OsStr::new("file"))
+                        .to_string_lossy();
+                    let dest = input_dir.join(safe.as_ref());
+                    if let Err(e) = tokio::fs::write(&dest, file_data).await {
+                        warn!(filename, error = %e, "Failed to save uploaded file");
+                    }
+                }
+            }
+        }
+
         match self
             .kernel
             .send_to_agent(
@@ -432,10 +452,10 @@ impl PluginBridgeManager {
                 }
             }
         }
-        self.describe_non_text_content(msg).await
+        self.describe_non_text_content(msg)
     }
 
-    async fn describe_non_text_content(&self, msg: &PluginMessage) -> String {
+    fn describe_non_text_content(&self, msg: &PluginMessage) -> String {
         match &msg.content {
             PluginContent::Image { url, caption } => {
                 let cap = caption
@@ -445,38 +465,12 @@ impl PluginBridgeManager {
                 format!("[用户发送了一张图片{}]: {}", cap, url)
             }
             PluginContent::File { url, filename, data } => {
-                // If raw file data is attached, save to senders/{sender_id}/input/
-                let saved_path = if let Some(file_data) = data {
-                    if let Some(home) = self.kernel.home_dir() {
-                        let input_dir = home.join("senders").join(&msg.sender_id).join("input");
-                        if tokio::fs::create_dir_all(&input_dir).await.is_ok() {
-                            let safe = std::path::Path::new(filename)
-                                .file_name()
-                                .unwrap_or(std::ffi::OsStr::new("file"))
-                                .to_string_lossy();
-                            let dest = input_dir.join(safe.as_ref());
-                            if tokio::fs::write(&dest, file_data).await.is_ok() {
-                                Some(dest.to_string_lossy().to_string())
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
+                if data.is_some() {
+                    format!("[用户发送了一个文件]: {}，请用 file_read 读取 input/{}", filename, filename)
                 } else if !url.is_empty() {
-                    // URL-based file (feishu file_key, dingtalk download_code, etc.)
-                    None
+                    format!("[用户发送了一个文件]: {} ({})", filename, url)
                 } else {
-                    None
-                };
-
-                match saved_path {
-                    Some(path) => format!("[用户发送了一个文件]: {}，已保存到 {}，可用 file_read 读取", filename, path),
-                    None if url.is_empty() => format!("[用户发送了一个文件]: {} (文件未能下载)", filename),
-                    None => format!("[用户发送了一个文件]: {} ({})", filename, url),
+                    format!("[用户发送了一个文件]: {} (文件未能下载)", filename)
                 }
             }
             PluginContent::Voice {
