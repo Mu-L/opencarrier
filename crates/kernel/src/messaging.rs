@@ -394,6 +394,15 @@ impl CarrierKernel {
                     let skill_body = skill.body.clone();
                     let skill_max_iter = skill.max_iterations;
 
+                    // Auto-discover skill-declared tools
+                    for t in &skill.tools {
+                        if !tools.iter().any(|d| d.name == *t) {
+                            if let Some((_, def)) = self.search_tools(t, 1, entry.manifest.max_tool_level).into_iter().next() {
+                                tools.push(def);
+                            }
+                        }
+                    }
+
                     info!(
                         agent = %entry.name,
                         skill = %skill_name,
@@ -949,6 +958,15 @@ impl CarrierKernel {
                     let skill_name = skill.name.clone();
                     let skill_body = skill.body.clone();
                     let skill_max_iter = skill.max_iterations;
+
+                    // Auto-discover skill-declared tools
+                    for t in &skill.tools {
+                        if !tools.iter().any(|d| d.name == *t) {
+                            if let Some((_, def)) = self.search_tools(t, 1, entry.manifest.max_tool_level).into_iter().next() {
+                                tools.push(def);
+                            }
+                        }
+                    }
 
                     info!(
                         agent = %entry.name,
