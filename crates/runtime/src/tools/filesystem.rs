@@ -108,6 +108,7 @@ async fn tool_file_read(
 ) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
     let resolved = super::resolve_file_path_for_read(raw_path, workspace_root, sender_id, agent_name)?;
+    tracing::info!(raw_path, resolved = %resolved.display(), sender_id = ?sender_id, agent_name = ?agent_name, workspace_root = ?workspace_root, "file_read resolved path");
     tokio::fs::read_to_string(&resolved)
         .await
         .map_err(|e| format!("Failed to read file: {e}"))
