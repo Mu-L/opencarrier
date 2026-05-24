@@ -599,6 +599,9 @@ async fn run_agent_loop_impl(
     // Owned copy for loop detection tool removal
     let mut tools_owned: Vec<ToolDefinition> = tools.to_vec();
     let mut tools: &[ToolDefinition] = &tools_owned;
+    // Track which tools were added by tool_search (not in the initial core set).
+    // On a new tool_search, previous discovered tools are evicted before adding new ones.
+    let mut discovered_tool_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for iteration in 0..max_iterations {
         debug!(iteration, "Streaming agent loop iteration");
@@ -1198,9 +1201,21 @@ async fn run_agent_loop_impl(
                         }
 
                         if !found_tools.is_empty() {
-                            // Add discovered tools to tools_owned so the LLM API allows
-                            // structured tool_use output for them. Cap the total to prevent
-                            // unbounded inflation (e.g. 12 core → 12 core + 20 discovered max).
+                            // Evict previously discovered tools before adding new ones.
+                            // Each tool_search represents a new intent — old discoveries
+                            // are stale and waste tokens in CompletionRequest.tools.
+                            if !discovered_tool_names.is_empty() {
+                                let before = tools_owned.len();
+                                let stale: std::collections::HashSet<String> = discovered_tool_names.drain().collect();
+                                tools_owned.retain(|t| !stale.contains(&t.name));
+                                let evicted = before - tools_owned.len();
+                                if evicted > 0 {
+                                    info!(evicted, "tool_search: evicted previous discovered tools");
+                                }
+                            }
+
+                            // Add discovered tools so the LLM API allows structured
+                            // tool_use output. Cap total to prevent unbounded inflation.
                             const MAX_TOTAL_TOOLS: usize = 32;
                             let current_count = tools_owned.len();
                             let remaining_capacity = MAX_TOTAL_TOOLS.saturating_sub(current_count);
@@ -1210,14 +1225,17 @@ async fn run_agent_loop_impl(
                                 .take(remaining_capacity)
                                 .collect();
                             if !to_add.is_empty() {
+                                for t in &to_add {
+                                    discovered_tool_names.insert(t.name.clone());
+                                }
                                 info!(
                                     found = to_add.len(),
                                     total = current_count + to_add.len(),
                                     "tool_search: adding discovered tools to CompletionRequest.tools"
                                 );
                                 tools_owned.extend(to_add);
-                                tools = &tools_owned;
                             }
+                            tools = &tools_owned;
                         }
                     }
                 }
