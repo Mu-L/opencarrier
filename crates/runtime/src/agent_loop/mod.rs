@@ -702,6 +702,11 @@ async fn run_agent_loop_impl(
             if has_discovered {
                 for def in &result.discovered_tools {
                     discovered_tool_names.insert(def.name.clone());
+                    info!(
+                        tool = %def.name,
+                        schema = %def.input_schema,
+                        "Discovered tool schema"
+                    );
                 }
                 info!(
                     found = result.discovered_tools.len(),
