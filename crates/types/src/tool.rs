@@ -210,19 +210,20 @@ fn normalize_schema_recursive(schema: &serde_json::Value) -> serde_json::Value {
             continue;
         }
 
-        // Flatten type arrays like ["string", "null"] to single type + nullable
+        // Flatten type arrays like ["string", "null"] to single type.
+        // Note: we do NOT emit "nullable": true because many OpenAI-compatible
+        // providers (Kimi, etc.) don't support it and return parse errors.
         if key == "type" {
             if let Some(arr) = value.as_array() {
                 let types: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
                 let has_null = types.contains(&"null");
                 let non_null: Vec<&&str> = types.iter().filter(|&&t| t != "null").collect();
                 if has_null && non_null.len() == 1 {
-                    // ["string", "null"] → type: "string", nullable: true
+                    // ["string", "null"] → type: "string"
                     result.insert(
                         "type".to_string(),
                         serde_json::Value::String(non_null[0].to_string()),
                     );
-                    result.insert("nullable".to_string(), serde_json::Value::Bool(true));
                     continue;
                 } else if non_null.len() == 1 {
                     // ["string"] → type: "string"
@@ -237,9 +238,6 @@ fn normalize_schema_recursive(schema: &serde_json::Value) -> serde_json::Value {
                         "type".to_string(),
                         serde_json::Value::String(non_null[0].to_string()),
                     );
-                    if has_null {
-                        result.insert("nullable".to_string(), serde_json::Value::Bool(true));
-                    }
                     continue;
                 }
             }
@@ -353,27 +351,24 @@ fn try_flatten_any_of(any_of: &serde_json::Value) -> Option<Vec<(String, serde_j
         }
     }
 
-    // If it's a nullable pattern (type + null), emit the non-null type
+    // If it's a nullable pattern (type + null), emit the non-null type only.
+    // We do NOT emit "nullable": true — many OpenAI-compatible providers
+    // (e.g. Kimi) reject it with parse errors.
     if has_null && types.len() == 1 {
-        let mut result = vec![(
+        let result = vec![(
             "type".to_string(),
             serde_json::Value::String(non_null_type.unwrap()),
         )];
-        // Mark as nullable via description hint (since JSON Schema nullable isn't universal)
-        result.push(("nullable".to_string(), serde_json::Value::Bool(true)));
         return Some(result);
     }
 
     // If all items are simple types, pick the first non-null type (best effort).
     // Gemini rejects type arrays, so we can't emit ["string", "number"].
     if types.len() == items.len() && types.len() > 1 {
-        let mut result = vec![(
+        let result = vec![(
             "type".to_string(),
             serde_json::Value::String(types[0].clone()),
         )];
-        if has_null {
-            result.push(("nullable".to_string(), serde_json::Value::Bool(true)));
-        }
         return Some(result);
     }
 
@@ -500,7 +495,7 @@ mod tests {
         let result = normalize_schema_for_provider(&schema, "gemini");
         let value_prop = &result["properties"]["value"];
         assert_eq!(value_prop["type"], "string");
-        assert_eq!(value_prop["nullable"], true);
+        assert!(value_prop.get("nullable").is_none());
         assert!(value_prop.get("anyOf").is_none());
     }
 
@@ -702,7 +697,7 @@ mod tests {
         let result = normalize_schema_for_provider(&schema, "gemini");
         let value_prop = &result["properties"]["value"];
         assert_eq!(value_prop["type"], "string");
-        assert_eq!(value_prop["nullable"], true);
+        assert!(value_prop.get("nullable").is_none());
         assert!(value_prop.get("oneOf").is_none());
     }
 
@@ -736,7 +731,8 @@ mod tests {
         let result = normalize_schema_for_provider(&schema, "gemini");
         let name_prop = &result["properties"]["name"];
         assert_eq!(name_prop["type"], "string");
-        assert_eq!(name_prop["nullable"], true);
+        // nullable is not emitted — many OpenAI-compatible providers don't support it
+        assert!(name_prop.get("nullable").is_none());
     }
 
     #[test]
@@ -751,7 +747,7 @@ mod tests {
         let value_prop = &result["properties"]["value"];
         // Should pick first non-null type
         assert_eq!(value_prop["type"], "string");
-        assert_eq!(value_prop["nullable"], true);
+        assert!(value_prop.get("nullable").is_none());
     }
 
     #[test]
@@ -809,13 +805,13 @@ mod tests {
         assert!(result["properties"]["api_version"].get("const").is_none());
         assert!(result["properties"]["api_version"].get("format").is_none());
         assert!(result["properties"]["timestamp"].get("format").is_none());
-        // oneOf flattened
+        // oneOf flattened — nullable removed for provider compatibility
         assert_eq!(result["properties"]["label"]["type"], "string");
-        assert_eq!(result["properties"]["label"]["nullable"], true);
+        assert!(result["properties"]["label"].get("nullable").is_none());
         assert!(result["properties"]["label"].get("oneOf").is_none());
         // type array flattened
         assert_eq!(result["properties"]["tags"]["type"], "string");
-        assert_eq!(result["properties"]["tags"]["nullable"], true);
+        assert!(result["properties"]["tags"].get("nullable").is_none());
     }
 }
 
