@@ -16,7 +16,7 @@ use crate::mcp::McpConnection;
 use crate::tool_context::ToolContext;
 use crate::tool_runner;
 use crate::web_fetch::WebFetchEngine;
-use crate::text_tool_recovery::recover_text_tool_calls;
+use crate::text_tool_recovery::{recover_text_tool_calls, ToolSearchFn};
 use memory::session::Session;
 use memory::MemorySubstrate;
 use types::agent::AgentManifest;
@@ -688,13 +688,35 @@ async fn run_agent_loop_impl(
             StopReason::EndTurn | StopReason::StopSequence
         ) && response.tool_calls.is_empty()
         {
-            let recovered = recover_text_tool_calls(&response.text(), tools);
-            if !recovered.is_empty() {
+            let tool_search_fn: Option<ToolSearchFn> = kernel.as_ref().map(|k| {
+                let k = k.clone();
+                let max_level = manifest.max_tool_level;
+                Box::new(move |name: &str| -> Option<ToolDefinition> {
+                    k.search_tools(name, 1, max_level).into_iter().next().map(|(_, def)| def)
+                }) as ToolSearchFn
+            });
+            let result = recover_text_tool_calls(&response.text(), tools, tool_search_fn);
+
+            // Add discovered tools to the tools list
+            let has_discovered = !result.discovered_tools.is_empty();
+            if has_discovered {
+                for def in &result.discovered_tools {
+                    discovered_tool_names.insert(def.name.clone());
+                }
                 info!(
-                    count = recovered.len(),
-                    "Recovered text-based tool calls  → promoting to ToolUse"
+                    found = result.discovered_tools.len(),
+                    "Auto-discovered tools from text-based tool call recovery"
                 );
-                response.tool_calls = recovered;
+                tools_owned.extend(result.discovered_tools);
+                tools = &tools_owned;
+            }
+
+            if !result.calls.is_empty() {
+                info!(
+                    count = result.calls.len(),
+                    "Recovered text-based tool calls → promoting to ToolUse"
+                );
+                response.tool_calls = result.calls;
                 response.stop_reason = StopReason::ToolUse;
                 let mut new_blocks: Vec<ContentBlock> = Vec::new();
                 for tc in &response.tool_calls {
@@ -706,61 +728,20 @@ async fn run_agent_loop_impl(
                     });
                 }
                 response.content = new_blocks;
-            } else if let Some(ref kernel) = kernel {
-                // LLM referenced a tool not in the current tools list (e.g. "[Called sqlite_query]").
-                // Auto-discover those tools so the LLM can call them properly next iteration.
-                let tool_name_set: std::collections::HashSet<&str> =
-                    tools.iter().map(|t| t.name.as_str()).collect();
-                let mut undiscovered: Vec<String> = Vec::new();
-                for line in response.text().lines() {
-                    let trimmed = line.trim();
-                    let Some(after) = trimmed.strip_prefix("[Called ") else { continue };
-                    let Some(close) = after.find(']') else { continue };
-                    let inner = &after[..close];
-                    let tool_name = inner
-                        .find(|c: char| c == ' ' || c == ':' || c == '(' || c == '{')
-                        .map(|pos| &inner[..pos])
-                        .unwrap_or(inner);
-                    if !tool_name.is_empty() && !tool_name.contains(' ') && !tool_name_set.contains(tool_name) {
-                        undiscovered.push(tool_name.to_string());
-                    }
-                }
-                if !undiscovered.is_empty() {
-                    let mut found: Vec<types::tool::ToolDefinition> = Vec::new();
-                    for name in &undiscovered {
-                        if let Some((_, def)) = kernel.search_tools(name, 1, manifest.max_tool_level).into_iter().next() {
-                            found.push(def);
-                        }
-                    }
-                    if !found.is_empty() {
-                        for def in &found {
-                            discovered_tool_names.insert(def.name.clone());
-                        }
-                        info!(
-                            found = found.len(),
-                            requested = undiscovered.len(),
-                            "Auto-discovered tools from [Called ...] pattern"
-                        );
-                        tools_owned.extend(found);
-                        tools = &tools_owned;
-
-                        // The LLM wrote "[Called tool_name]" as text instead of using
-                        // structured tool_use. Now that the tools are discovered and
-                        // in the tools list, retry — the LLM should use proper
-                        // structured tool_use on the next iteration.
-                        warn!(
-                            agent = %manifest.name,
-                            tools = ?undiscovered,
-                            iteration,
-                            "LLM described tool calls as text — retrying with discovered tools"
-                        );
-                        messages.push(Message::assistant(format!("[Called {}]", undiscovered.join(", "))));
-                        messages.push(Message::system(
-                            "你刚才用文本描述了工具调用，但用户看到的是原始文本。这些工具已添加到你的可用工具列表中，请用结构化的 tool_use 格式重新调用，带上完整的参数。"
-                        ));
-                        continue;
-                    }
-                }
+            } else if has_discovered || !result.needs_retry.is_empty() {
+                // No calls could be recovered, but tools were discovered or need retry.
+                // Inject system message asking the LLM to use structured tool_use.
+                warn!(
+                    agent = %manifest.name,
+                    tools = ?result.needs_retry,
+                    iteration,
+                    "LLM described tool calls as text — retrying with discovered tools"
+                );
+                messages.push(Message::assistant(format!("[Called {}]", result.needs_retry.join(", "))));
+                messages.push(Message::system(
+                    "你刚才用文本描述了工具调用，但用户看到的是原始文本。这些工具已添加到你的可用工具列表中，请用结构化的 tool_use 格式重新调用，带上完整的参数。"
+                ));
+                continue;
             }
         }
 

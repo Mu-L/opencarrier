@@ -738,7 +738,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         }];
         let text =
             r#"Let me search for that. <function=test_query>{"query":"rust async"}</function>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[0].input["query"], "rust async");
@@ -753,7 +753,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"<function=hack_system>{"cmd":"rm -rf /"}</function>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty(), "Unknown tools should be rejected");
     }
 
@@ -765,7 +765,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"<function=test_query>not valid json</function>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty(), "Invalid JSON should be skipped");
     }
 
@@ -784,7 +784,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             },
         ];
         let text = r#"<function=test_query>{"query":"hello"}</function> then <function=read_file>{"path":"a.txt"}</function>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[1].name, "read_file");
@@ -798,14 +798,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "Just a normal response with no tool calls.";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty());
     }
 
     #[test]
     fn test_recover_text_tool_calls_empty_tools() {
         let text = r#"<function=test_query>{"query":"hello"}</function>"#;
-        let calls = recover_text_tool_calls(text, &[]);
+        let calls = recover_text_tool_calls(text, &[], None).calls;
         assert!(calls.is_empty(), "No tools = no recovery");
     }
 
@@ -819,7 +819,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"<function=test_query>{"query":"rust","filters":{"lang":"en","year":2024}}</function>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].input["filters"]["lang"], "en");
     }
@@ -832,7 +832,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "Sure, let me search that for you.\n\n<function=test_query>{\"query\":\"rust async programming\"}</function>\n\nI'll get back to you with results.";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].input["query"], "rust async programming");
     }
@@ -846,7 +846,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         }];
         // Some models emit pretty-printed JSON
         let text = "<function=test_query>\n  {\"query\": \"hello world\"}\n</function>";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].input["query"], "hello world");
     }
@@ -860,7 +860,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         }];
         // Missing </function> — should gracefully skip
         let text = r#"<function=test_query>{"query":"test"}"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty(), "Unclosed tag should be skipped");
     }
 
@@ -873,7 +873,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         }];
         // Missing > after tool name
         let text = r#"<function=test_query{"query":"test"}</function>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         // The parser finds > inside JSON, will likely produce invalid tool name
         // or invalid JSON — either way, should not panic
         // (just verifying no panic / no bad behavior)
@@ -888,7 +888,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"<function=list_files>{}</function>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "list_files");
         assert_eq!(calls[0].input, serde_json::json!({}));
@@ -910,7 +910,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         ];
         // First: valid, second: unknown tool, third: valid
         let text = r#"<function=test_query>{"q":"a"}</function> <function=unknown>{"x":1}</function> <function=read_file>{"path":"b"}</function>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 2, "Should recover 2 valid, skip 1 unknown");
         assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[1].name, "read_file");
@@ -926,7 +926,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"<function>web_fetch{"url":"https://example.com"}</function>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "web_fetch");
         assert_eq!(calls[0].input["url"], "https://example.com");
@@ -940,7 +940,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"<function>unknown_tool{"q":"test"}</function>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 0);
     }
 
@@ -952,7 +952,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"Let me search for that. <function>test_query{"query":"rust lang"}</function> I'll find the answer."#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
     }
@@ -973,7 +973,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         ];
         // Mix of variant 1 and variant 2
         let text = r#"<function=test_query>{"q":"a"}</function> <function>web_fetch{"url":"https://x.com"}</function>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[1].name, "web_fetch");
@@ -987,7 +987,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"I'll run that for you. <tool>exec{"command":"ls -la"}</tool>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "exec");
         assert_eq!(calls[0].input["command"], "ls -la");
@@ -1001,7 +1001,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "I'll execute that command:\n```\nexec {\"command\": \"ls -la\"}\n```";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "exec");
         assert_eq!(calls[0].input["command"], "ls -la");
@@ -1015,7 +1015,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "```json\ntest_query {\"query\": \"rust\"}\n```";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
     }
@@ -1028,7 +1028,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"Let me run `exec {"command":"pwd"}` for you."#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "exec");
         assert_eq!(calls[0].input["command"], "pwd");
@@ -1042,7 +1042,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"Try `unknown_tool {"key":"val"}` instead."#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty());
     }
 
@@ -1056,7 +1056,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         // Same call in both function tag and tool tag — should only appear once
         let text =
             r#"<function=exec>{"command":"ls"}</function> <tool>exec{"command":"ls"}</tool>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
     }
 
@@ -1070,7 +1070,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "[TOOL_CALL]\n{\"name\": \"shell_exec\", \"arguments\": {\"command\": \"ls -la\"}}\n[/TOOL_CALL]";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell_exec");
         assert_eq!(calls[0].input["command"], "ls -la");
@@ -1085,7 +1085,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         }];
         // Exact format from issue #354
         let text = "[TOOL_CALL]\n{tool => \"shell_exec\", args => {\n--command \"ls -F /\"\n}}\n[/TOOL_CALL]";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell_exec");
         assert_eq!(calls[0].input["command"], "ls -F /");
@@ -1099,7 +1099,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "[TOOL_CALL]\n{\"name\": \"hack_system\", \"arguments\": {\"cmd\": \"rm -rf /\"}}\n[/TOOL_CALL]";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty());
     }
 
@@ -1118,7 +1118,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             },
         ];
         let text = "[TOOL_CALL]\n{\"name\": \"shell_exec\", \"arguments\": {\"command\": \"ls\"}}\n[/TOOL_CALL]\nSome text.\n[TOOL_CALL]\n{\"name\": \"file_read\", \"arguments\": {\"path\": \"/tmp/test.txt\"}}\n[/TOOL_CALL]";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "shell_exec");
         assert_eq!(calls[1].name, "file_read");
@@ -1134,7 +1134,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         // Unclosed [TOOL_CALL] — pattern 6 skips it, but pattern 8 (bare JSON)
         // still finds the valid JSON tool call object.
         let text = "[TOOL_CALL]\n{\"name\": \"shell_exec\", \"arguments\": {\"command\": \"ls\"}}";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1, "Bare JSON fallback should recover this");
         assert_eq!(calls[0].name, "shell_exec");
     }
@@ -1149,7 +1149,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "<tool_call>\n{\"name\": \"shell_exec\", \"arguments\": {\"command\": \"ls -la\"}}\n</tool_call>";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell_exec");
         assert_eq!(calls[0].input["command"], "ls -la");
@@ -1163,7 +1163,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "I'll search for that.\n\n<tool_call>\n{\"name\": \"test_query\", \"arguments\": {\"query\": \"rust async\"}}\n</tool_call>\n\nLet me get results.";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[0].input["query"], "rust async");
@@ -1177,7 +1177,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "<tool_call>{\"function\": \"file_read\", \"arguments\": {\"path\": \"/etc/hosts\"}}</tool_call>";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "file_read");
     }
@@ -1190,7 +1190,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "<tool_call>{\"name\": \"web_fetch\", \"parameters\": {\"url\": \"https://example.com\"}}</tool_call>";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "web_fetch");
         assert_eq!(calls[0].input["url"], "https://example.com");
@@ -1204,7 +1204,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "<tool_call>{\"name\": \"shell_exec\", \"arguments\": \"{\\\"command\\\": \\\"pwd\\\"}\"}</tool_call>";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell_exec");
         assert_eq!(calls[0].input["command"], "pwd");
@@ -1218,7 +1218,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "<tool_call>{\"name\": \"hack_system\", \"arguments\": {\"cmd\": \"rm -rf /\"}}</tool_call>";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty());
     }
 
@@ -1237,7 +1237,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             },
         ];
         let text = "<tool_call>{\"name\": \"shell_exec\", \"arguments\": {\"command\": \"ls\"}}</tool_call>\n<tool_call>{\"name\": \"test_query\", \"arguments\": {\"query\": \"rust\"}}</tool_call>";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].name, "shell_exec");
         assert_eq!(calls[1].name, "test_query");
@@ -1254,7 +1254,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         }];
         let text =
             "I'll run that: {\"name\": \"shell_exec\", \"arguments\": {\"command\": \"ls -la\"}}";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell_exec");
         assert_eq!(calls[0].input["command"], "ls -la");
@@ -1268,7 +1268,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "The config looks like {\"debug\": true, \"level\": \"info\"}";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty());
     }
 
@@ -1280,7 +1280,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "<function=shell_exec>{\"command\":\"ls\"}</function> {\"name\": \"shell_exec\", \"arguments\": {\"command\": \"pwd\"}}";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].input["command"], "ls");
     }
@@ -1295,7 +1295,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"<function name="test_query" parameters="{&quot;query&quot;: &quot;best crypto 2024&quot;}" />"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[0].input["query"], "best crypto 2024");
@@ -1309,7 +1309,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"<function name="unknown_tool" parameters="{&quot;x&quot;: 1}" />"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty());
     }
 
@@ -1321,7 +1321,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = r#"<function name="shell_exec" parameters="{&quot;command&quot;: &quot;ls&quot;}"></function>"#;
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell_exec");
     }
@@ -1336,7 +1336,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "<|plugin|>\n{\"name\": \"test_query\", \"arguments\": {\"query\": \"rust\"}}\n<|endofblock|>";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[0].input["query"], "rust");
@@ -1351,7 +1351,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         }];
         let text =
             "<|plugin|>\n{\"name\": \"hack\", \"arguments\": {\"cmd\": \"rm\"}}\n<|endofblock|>";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty());
     }
 
@@ -1365,7 +1365,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "Action: test_query\nAction Input: {\"query\": \"rust programming\"}";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
         assert_eq!(calls[0].input["query"], "rust programming");
@@ -1379,7 +1379,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "Action: unknown_tool\nAction Input: {\"key\": \"value\"}";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty());
     }
 
@@ -1393,7 +1393,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "shell_exec\n{\"command\": \"ls -la\"}";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell_exec");
         assert_eq!(calls[0].input["command"], "ls -la");
@@ -1407,7 +1407,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "unknown_tool\n{\"command\": \"ls\"}";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty());
     }
 
@@ -1422,7 +1422,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         }];
         let text =
             "<tool_use>{\"name\": \"test_query\", \"arguments\": {\"query\": \"test\"}}</tool_use>";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "test_query");
     }
@@ -1435,7 +1435,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             input_schema: serde_json::json!({}),
         }];
         let text = "<tool_use>{\"name\": \"hack\", \"arguments\": {\"cmd\": \"rm\"}}</tool_use>";
-        let calls = recover_text_tool_calls(text, &tools);
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
         assert!(calls.is_empty());
     }
 

@@ -7,6 +7,26 @@
 use types::tool::{ToolCall, ToolDefinition};
 use tracing::{info, warn};
 
+/// Result of text-based tool call recovery, including any newly discovered
+/// tool definitions that should be added to the agent's tool list.
+pub struct RecoveryResult {
+    /// Recovered tool calls ready for execution.
+    pub calls: Vec<ToolCall>,
+    /// Tool definitions discovered via tool_search that were not in the
+    /// original available_tools. The caller should add these to the
+    /// CompletionRequest.tools list.
+    pub discovered_tools: Vec<ToolDefinition>,
+    /// Tool names that were referenced in text but could not be recovered
+    /// because they had required params missing from the text. The caller
+    /// should inject a system message asking the LLM to retry with
+    /// structured tool_use.
+    pub needs_retry: Vec<String>,
+}
+
+/// Callback type for tool_search when a tool name is not in available_tools.
+/// Returns an optional ToolDefinition if found.
+pub type ToolSearchFn = Box<dyn Fn(&str) -> Option<ToolDefinition> + Send + Sync>;
+
 /// Recover tool calls that LLMs output as plain text instead of the proper
 /// `tool_calls` API field. Covers Groq/Llama, DeepSeek, Qwen, and Ollama models.
 ///
@@ -25,27 +45,34 @@ use tracing::{info, warn};
 /// 12. `tool_name\n{"key":"value"}` — bare name + JSON on next line (Llama 4 Scout)
 /// 13. `<tool_use>{"name":"tool","arguments":{...}}</tool_use>` — Llama 3.1+ variant
 ///
-/// Tool names are validated against `available_tools` — only tools present in
-/// the current `CompletionRequest.tools` list are recovered. This prevents
-/// infinite loops where the LLM invents tool names not actually available.
-/// For tools not in the list, the LLM must use `tool_search` to discover them.
-pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -> Vec<ToolCall> {
+/// Tool names are validated against `available_tools`. If a tool name is not
+/// found and a `tool_search_fn` is provided, it will be called to discover
+/// the tool. Discovered tools are included in the result for the caller to
+/// add to the tools list, and their required params are checked the same way
+/// as known tools.
+pub fn recover_text_tool_calls(
+    text: &str,
+    available_tools: &[ToolDefinition],
+    tool_search_fn: Option<ToolSearchFn>,
+) -> RecoveryResult {
     let mut calls = Vec::new();
+    let mut discovered_tools: Vec<ToolDefinition> = Vec::new();
+    let mut needs_retry: Vec<String> = Vec::new();
+
     let tool_name_set: std::collections::HashSet<&str> =
         available_tools.iter().map(|t| t.name.as_str()).collect();
 
     // Build a map of tool_name -> required fields from input_schema.
-    // Used to reject recoveries that produce empty input for tools with required params.
-    let required_map: std::collections::HashMap<&str, Vec<&str>> = available_tools
+    let mut required_map: std::collections::HashMap<String, Vec<String>> = available_tools
         .iter()
         .filter_map(|t| {
             let required = t.input_schema
                 .get("required")
                 .and_then(|r| r.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>());
-            if let Some(req) = required {
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>());
+            if let Some(ref req) = required {
                 if !req.is_empty() {
-                    return Some((t.name.as_str(), req));
+                    return Some((t.name.clone(), req.clone()));
                 }
             }
             None
@@ -613,14 +640,9 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
     }
 
     // Pattern 14: [Called tool_name] — LLM text description of a tool call.
-    // Only recovers tools that are in the current tools list — this prevents
-    // infinite loops where LLM invents tool names (e.g. "[Called memory_tree]")
-    // that aren't available. For tools not in the list, LLM must use tool_search.
+    // For tools in available_tools: recover directly.
+    // For tools NOT in available_tools: try tool_search_fn to discover them.
     {
-        let tool_name_set: std::collections::HashSet<&str> = available_tools
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect();
         for line in text.lines() {
             let trimmed = line.trim();
             let Some(after) = trimmed.strip_prefix("[Called ") else {
@@ -639,8 +661,8 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
                 continue;
             }
 
-            // Only recover if the tool is actually in the current tools list
-            if !tool_name_set.contains(tool_name) {
+            // Skip if already recovered by an earlier pattern
+            if calls.iter().any(|c| c.name == tool_name) {
                 continue;
             }
 
@@ -655,7 +677,7 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
                 serde_json::json!({})
             };
 
-            if !calls.iter().any(|c| c.name == tool_name) {
+            if tool_name_set.contains(tool_name) {
                 info!(
                     tool = tool_name,
                     "Recovered tool call from [Called ...] pattern"
@@ -665,16 +687,41 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
                     name: tool_name.to_string(),
                     input,
                 });
+            } else if let Some(ref search_fn) = tool_search_fn {
+                // Tool not in available_tools — try tool_search
+                if let Some(def) = search_fn(tool_name) {
+                    info!(
+                        tool = tool_name,
+                        "Discovered tool via tool_search from [Called ...] pattern"
+                    );
+                    // Add to required_map for unified param filtering
+                    if let Some(required) = def.input_schema
+                        .get("required")
+                        .and_then(|r| r.as_array())
+                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+                    {
+                        if !required.is_empty() {
+                            required_map.insert(def.name.clone(), required);
+                        }
+                    }
+                    discovered_tools.push(def);
+                    calls.push(ToolCall {
+                        id: format!("recovered_{}", uuid::Uuid::new_v4()),
+                        name: tool_name.to_string(),
+                        input,
+                    });
+                }
             }
         }
     }
 
-    // Filter out recovered calls that have empty input but the tool requires parameters.
-    // This prevents executing MCP tools (e.g. mcp_wechat_oa_get_article_total) with
-    // no arguments when the LLM just described calling the tool in prose
-    // (e.g. "[Called mcp_wechat_oa_get_article_total]") without providing args.
-    calls.retain(|call| {
-        if let Some(required) = required_map.get(call.name.as_str()) {
+    // Unified required-params filtering for all recovered calls.
+    // Calls missing required params are removed; their tool names are collected
+    // into needs_retry so the caller can inject a system message asking the LLM
+    // to retry with structured tool_use.
+    let mut filtered_calls = Vec::new();
+    for call in calls {
+        if let Some(required) = required_map.get(&call.name) {
             if !required.is_empty() {
                 let input_is_empty = call.input.as_object()
                     .map(|obj| obj.is_empty())
@@ -685,12 +732,15 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
                         required = ?required,
                         "Skipping text-recovered tool call: input is empty but tool has required params"
                     );
-                    return false;
+                    if !needs_retry.iter().any(|n| n == &call.name) {
+                        needs_retry.push(call.name.clone());
+                    }
+                    continue;
                 }
                 let input_obj = call.input.as_object();
                 let missing: Vec<&str> = required.iter()
-                    .filter(|r| input_obj.map_or(true, |o| !o.contains_key(**r)))
-                    .copied()
+                    .filter(|r| input_obj.map_or(true, |o| !o.contains_key(r.as_str())))
+                    .map(|s| s.as_str())
                     .collect();
                 if !missing.is_empty() {
                     info!(
@@ -698,14 +748,21 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
                         missing = ?missing,
                         "Skipping text-recovered tool call: missing required params"
                     );
-                    return false;
+                    if !needs_retry.iter().any(|n| n == &call.name) {
+                        needs_retry.push(call.name.clone());
+                    }
+                    continue;
                 }
             }
         }
-        true
-    });
+        filtered_calls.push(call);
+    }
 
-    calls
+    RecoveryResult {
+        calls: filtered_calls,
+        discovered_tools,
+        needs_retry,
+    }
 }
 
 /// Parse a JSON object that represents a tool call.
