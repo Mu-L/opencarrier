@@ -743,6 +743,22 @@ async fn run_agent_loop_impl(
                         );
                         tools_owned.extend(found);
                         tools = &tools_owned;
+
+                        // The LLM wrote "[Called tool_name]" as text instead of using
+                        // structured tool_use. Now that the tools are discovered and
+                        // in the tools list, retry — the LLM should use proper
+                        // structured tool_use on the next iteration.
+                        warn!(
+                            agent = %manifest.name,
+                            tools = ?undiscovered,
+                            iteration,
+                            "LLM described tool calls as text — retrying with discovered tools"
+                        );
+                        messages.push(Message::assistant(format!("[Called {}]", undiscovered.join(", "))));
+                        messages.push(Message::system(
+                            "你刚才用文本描述了工具调用，但用户看到的是原始文本。这些工具已添加到你的可用工具列表中，请用结构化的 tool_use 格式重新调用，带上完整的参数。"
+                        ));
+                        continue;
                     }
                 }
             }
