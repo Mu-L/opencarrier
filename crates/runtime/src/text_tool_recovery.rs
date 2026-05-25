@@ -34,6 +34,24 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
     let tool_name_set: std::collections::HashSet<&str> =
         available_tools.iter().map(|t| t.name.as_str()).collect();
 
+    // Build a map of tool_name -> required fields from input_schema.
+    // Used to reject recoveries that produce empty input for tools with required params.
+    let required_map: std::collections::HashMap<&str, Vec<&str>> = available_tools
+        .iter()
+        .filter_map(|t| {
+            let required = t.input_schema
+                .get("required")
+                .and_then(|r| r.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>());
+            if let Some(req) = required {
+                if !req.is_empty() {
+                    return Some((t.name.as_str(), req));
+                }
+            }
+            None
+        })
+        .collect();
+
     // Pattern 1: <function=TOOL_NAME>JSON_BODY</function>
     let mut search_from = 0;
     while let Some(start) = text[search_from..].find("<function=") {
@@ -650,6 +668,42 @@ pub fn recover_text_tool_calls(text: &str, available_tools: &[ToolDefinition]) -
             }
         }
     }
+
+    // Filter out recovered calls that have empty input but the tool requires parameters.
+    // This prevents executing MCP tools (e.g. mcp_wechat_oa_get_article_total) with
+    // no arguments when the LLM just described calling the tool in prose
+    // (e.g. "[Called mcp_wechat_oa_get_article_total]") without providing args.
+    calls.retain(|call| {
+        if let Some(required) = required_map.get(call.name.as_str()) {
+            if !required.is_empty() {
+                let input_is_empty = call.input.as_object()
+                    .map(|obj| obj.is_empty())
+                    .unwrap_or(true);
+                if input_is_empty {
+                    info!(
+                        tool = %call.name,
+                        required = ?required,
+                        "Skipping text-recovered tool call: input is empty but tool has required params"
+                    );
+                    return false;
+                }
+                let input_obj = call.input.as_object();
+                let missing: Vec<&str> = required.iter()
+                    .filter(|r| input_obj.map_or(true, |o| !o.contains_key(**r)))
+                    .copied()
+                    .collect();
+                if !missing.is_empty() {
+                    info!(
+                        tool = %call.name,
+                        missing = ?missing,
+                        "Skipping text-recovered tool call: missing required params"
+                    );
+                    return false;
+                }
+            }
+        }
+        true
+    });
 
     calls
 }
