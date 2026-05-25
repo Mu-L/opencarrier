@@ -580,6 +580,8 @@ async fn run_agent_loop_impl(
         .unwrap_or(MAX_ITERATIONS);
 
     let mut consecutive_max_tokens: u32 = 0;
+    let mut text_recovery_retries: u32 = 0;
+    const MAX_TEXT_RECOVERY_RETRIES: u32 = 2;
 
     // Build context budget from model's actual context window (or fallback to default)
     let ctx_window = context_window_tokens.unwrap_or(DEFAULT_CONTEXT_WINDOW);
@@ -736,17 +738,29 @@ async fn run_agent_loop_impl(
             } else if has_discovered || !result.needs_retry.is_empty() {
                 // No calls could be recovered, but tools were discovered or need retry.
                 // Inject system message asking the LLM to use structured tool_use.
-                warn!(
-                    agent = %manifest.name,
-                    tools = ?result.needs_retry,
-                    iteration,
-                    "LLM described tool calls as text — retrying with discovered tools"
-                );
-                messages.push(Message::assistant(format!("[Called {}]", result.needs_retry.join(", "))));
-                messages.push(Message::system(
-                    "你刚才用文本描述了工具调用，但用户看到的是原始文本。这些工具已添加到你的可用工具列表中，请用结构化的 tool_use 格式重新调用，带上完整的参数。"
-                ));
-                continue;
+                // Guard against infinite retry loops: give up after MAX_TEXT_RECOVERY_RETRIES.
+                if text_recovery_retries >= MAX_TEXT_RECOVERY_RETRIES {
+                    warn!(
+                        agent = %manifest.name,
+                        retries = text_recovery_retries,
+                        iteration,
+                        "Giving up text-based tool recovery — LLM keeps outputting text instead of tool_use"
+                    );
+                } else {
+                    text_recovery_retries += 1;
+                    warn!(
+                        agent = %manifest.name,
+                        tools = ?result.needs_retry,
+                        iteration,
+                        retry = text_recovery_retries,
+                        "LLM described tool calls as text — retrying with discovered tools"
+                    );
+                    messages.push(Message::assistant(format!("[Called {}]", result.needs_retry.join(", "))));
+                    messages.push(Message::system(
+                        "你刚才用文本描述了工具调用，但用户看到的是原始文本。这些工具已添加到你的可用工具列表中，请用结构化的 tool_use 格式重新调用，带上完整的参数。"
+                    ));
+                    continue;
+                }
             }
         }
 
