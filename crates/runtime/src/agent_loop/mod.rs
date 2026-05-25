@@ -603,6 +603,11 @@ async fn run_agent_loop_impl(
     // On a new tool_search, previous discovered tools are evicted before adding new ones.
     let mut discovered_tool_names: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    // Track loaded skills to prevent redundant skill_load calls.
+    // When the same skill is loaded again, return a short "already loaded" hint
+    // instead of re-reading the file, which breaks the LLM out of skill_load loops.
+    let mut loaded_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     for iteration in 0..max_iterations {
         debug!(iteration, "Streaming agent loop iteration");
 
@@ -1081,6 +1086,36 @@ async fn run_agent_loop_impl(
                             }),
                         };
                         let _ = hook_reg.fire(&ctx);
+                    }
+
+                    // Skill load deduplication: if the same skill was already loaded
+                    // in this agent loop, replace the full content with a short hint.
+                    // This prevents the LLM from looping on skill_load without executing.
+                    if tool_call.name == "skill_load" {
+                        let skill_name = tool_call.input["name"].as_str().unwrap_or("").to_lowercase();
+                        if !skill_name.is_empty() {
+                            if loaded_skills.contains(&skill_name) {
+                                warn!(
+                                    agent = %manifest.name,
+                                    skill = %skill_name,
+                                    iteration,
+                                    "skill_load called for already-loaded skill — returning dedup hint"
+                                );
+                                let dedup_msg = format!(
+                                    "Skill '{}' 已经加载过了，请直接按步骤执行，不要再调用 skill_load。",
+                                    skill_name
+                                );
+                                tool_result_blocks.push(ContentBlock::ToolResult {
+                                    tool_use_id: result.tool_use_id,
+                                    tool_name: tool_call.name.clone(),
+                                    content: dedup_msg,
+                                    is_error: false,
+                                });
+                                continue;
+                            } else {
+                                loaded_skills.insert(skill_name);
+                            }
+                        }
                     }
 
                     // Dynamic truncation based on context budget (replaces flat MAX_TOOL_RESULT_CHARS)
