@@ -24,7 +24,8 @@ const SYSTEM_PROMPT: &str = r#"你是一个对话边界判定器。
 判断用户的新消息是不是"开启了一个新的对话/任务"，还是"延续之前的对话"。
 
 判定原则：
-- 如果上一轮助手在等待用户的具体回答（例如"请提供 AppID"、"确认大纲后回复'确认'"等），用户回的是相关内容 → 延续
+- 如果上一轮助手在等待用户确认或提供信息（例如"确认后回复'确定'"、"请提供 AppID"），用户回复"确定"/"好的"/"可以"等 → 延续
+- 用户简短确认词（"确定"、"确认"、"好的"、"可以"、"行"、"嗯"）几乎总是延续上一轮对话
 - 用户明显切换主题、问完全无关的问题 → 新对话
 - 用户说"重新开始"、"换个话题"、"新任务" → 新对话
 - 用户简短回应（"嗯"、"好的"、"在吗"、"继续"）在已有对话里 → 延续；在空白处 → 新对话
@@ -34,15 +35,25 @@ const SYSTEM_PROMPT: &str = r#"你是一个对话边界判定器。
 不要输出其他任何内容（不要 ```json 标记，不要解释）。
 "#;
 
-const PROMPT_MAX_PREV_CHARS: usize = 200;
+const PROMPT_MAX_PREV_CHARS: usize = 500;
 const PROMPT_MAX_NEW_CHARS: usize = 200;
 
 /// Build the user prompt with truncated previous + new messages.
+/// For the previous assistant message, take both the head and tail so that
+/// confirmation requests (which typically appear at the end) are preserved.
 fn build_prompt(last_assistant: Option<&str>, new_user: &str) -> String {
     let prev: String = last_assistant
         .map(|s| {
-            let truncated: String = s.chars().take(PROMPT_MAX_PREV_CHARS).collect();
-            format!("上一轮助手回复：{truncated}")
+            let chars: Vec<char> = s.chars().collect();
+            let total = chars.len();
+            if total <= PROMPT_MAX_PREV_CHARS {
+                format!("上一轮助手回复：{}", s)
+            } else {
+                let half = PROMPT_MAX_PREV_CHARS / 2;
+                let head: String = chars[..half].iter().collect();
+                let tail: String = chars[total - half..].iter().collect();
+                format!("上一轮助手回复：{head}…{tail}")
+            }
         })
         .unwrap_or_else(|| "（没有上一轮助手回复，这是用户的第一条消息）".to_string());
     let new_text: String = new_user.chars().take(PROMPT_MAX_NEW_CHARS).collect();
