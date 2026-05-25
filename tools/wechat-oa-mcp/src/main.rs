@@ -1242,7 +1242,7 @@ impl WeChatOaServer {
         }
     }
 
-    #[tool(description = "Get article read summary (datacube). Max date range: 1 day.")]
+    #[tool(description = "Get article total detail stats (datacube). Replaces the deprecated getarticlesummary and getarticletotal. Max date range: 1 day.")]
     async fn get_article_summary(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
         let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
         match self
@@ -1250,7 +1250,7 @@ impl WeChatOaServer {
             .api_post(
                 &params.app_id,
                 &params.app_secret,
-                "/datacube/getarticlesummary",
+                "/datacube/getarticletotaldetail",
                 &body,
             )
             .await
@@ -1260,7 +1260,7 @@ impl WeChatOaServer {
         }
     }
 
-    #[tool(description = "Get article total stats (datacube). Max date range: 1 day.")]
+    #[tool(description = "Get article total detail stats (datacube). Replaces the deprecated getarticletotal. Max date range: 1 day.")]
     async fn get_article_total(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
         let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
         match self
@@ -1268,7 +1268,7 @@ impl WeChatOaServer {
             .api_post(
                 &params.app_id,
                 &params.app_secret,
-                "/datacube/getarticletotal",
+                "/datacube/getarticletotaldetail",
                 &body,
             )
             .await
@@ -1278,7 +1278,7 @@ impl WeChatOaServer {
         }
     }
 
-    #[tool(description = "Get user read stats (datacube). Max date range: 3 days.")]
+    #[tool(description = "Get article read analytics (datacube). Replaces the deprecated getuserread. Max date range: 3 days.")]
     async fn get_user_read(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
         let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
         match self
@@ -1286,7 +1286,7 @@ impl WeChatOaServer {
             .api_post(
                 &params.app_id,
                 &params.app_secret,
-                "/datacube/getuserread",
+                "/datacube/getarticleread",
                 &body,
             )
             .await
@@ -1296,7 +1296,7 @@ impl WeChatOaServer {
         }
     }
 
-    #[tool(description = "Get user read hourly stats (datacube). Max date range: 1 day.")]
+    #[tool(description = "Get article read analytics (datacube). Replaces the deprecated getuserreadhour. Max date range: 1 day.")]
     async fn get_user_read_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
         let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
         match self
@@ -1304,7 +1304,7 @@ impl WeChatOaServer {
             .api_post(
                 &params.app_id,
                 &params.app_secret,
-                "/datacube/getuserreadhour",
+                "/datacube/getarticleread",
                 &body,
             )
             .await
@@ -1314,7 +1314,7 @@ impl WeChatOaServer {
         }
     }
 
-    #[tool(description = "Get user share stats (datacube). Max date range: 7 days.")]
+    #[tool(description = "Get article share analytics (datacube). Replaces the deprecated getusershare. Max date range: 7 days.")]
     async fn get_user_share(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
         let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
         match self
@@ -1322,7 +1322,7 @@ impl WeChatOaServer {
             .api_post(
                 &params.app_id,
                 &params.app_secret,
-                "/datacube/getusershare",
+                "/datacube/getarticleshare",
                 &body,
             )
             .await
@@ -1332,7 +1332,7 @@ impl WeChatOaServer {
         }
     }
 
-    #[tool(description = "Get user share hourly stats (datacube). Max date range: 1 day.")]
+    #[tool(description = "Get article share analytics (datacube). Replaces the deprecated getusersharehour. Max date range: 1 day.")]
     async fn get_user_share_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
         let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
         match self
@@ -1340,7 +1340,7 @@ impl WeChatOaServer {
             .api_post(
                 &params.app_id,
                 &params.app_secret,
-                "/datacube/getusersharehour",
+                "/datacube/getarticleshare",
                 &body,
             )
             .await
@@ -1578,7 +1578,7 @@ impl WeChatOaServer {
         }
     }
 
-    #[tool(description = "Get article total detail stats (datacube). Max date range: 1 day.")]
+    #[tool(description = "Get article total detail stats (datacube). Same as get_article_total (new API). Max date range: 1 day.")]
     async fn get_article_total_detail(
         &self,
         Parameters(params): Parameters<DatacubeParams>,
