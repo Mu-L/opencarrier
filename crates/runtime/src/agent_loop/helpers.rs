@@ -105,6 +105,7 @@ pub(in crate::agent_loop) async fn call_with_retry(
     stream_tx: Option<mpsc::Sender<StreamEvent>>,
     provider: Option<&str>,
     cooldown: Option<&ProviderCooldown>,
+    deadline: Option<std::time::Instant>,
 ) -> CarrierResult<CompletionResponse> {
     let is_stream = stream_tx.is_some();
 
@@ -132,26 +133,36 @@ pub(in crate::agent_loop) async fn call_with_retry(
     let mut last_error = None;
 
     for attempt in 0..=MAX_RETRIES {
+        // Compute per-call timeout: min(remaining budget, 180s)
+        let per_call_timeout = match deadline {
+            Some(dl) => {
+                let remaining = dl.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    warn!(attempt, "Time budget exhausted before LLM attempt");
+                    return Err(CarrierError::LlmDriver(
+                        "Agent loop time budget exhausted".to_string(),
+                    ));
+                }
+                std::cmp::min(remaining, std::time::Duration::from_secs(PER_LLM_CALL_TIMEOUT_SECS))
+            }
+            None => std::time::Duration::from_secs(PER_LLM_CALL_TIMEOUT_SECS),
+        };
+
         let call = async {
             match &stream_tx {
                 Some(tx) => driver.stream(request.clone(), tx.clone()).await,
                 None => driver.complete(request.clone()).await,
             }
         };
-        let result = match tokio::time::timeout(
-            std::time::Duration::from_secs(PER_LLM_CALL_TIMEOUT_SECS),
-            call,
-        )
-        .await
-        {
+        let result = match tokio::time::timeout(per_call_timeout, call).await {
             Ok(r) => r,
             Err(_) => {
-                warn!(attempt, "LLM call timed out after {PER_LLM_CALL_TIMEOUT_SECS}s");
+                warn!(attempt, timeout_secs = per_call_timeout.as_secs(), "LLM call timed out");
                 last_error = Some("LLM call timed out".to_string());
                 if attempt == MAX_RETRIES {
                     return Err(CarrierError::LlmDriver(format!(
                         "LLM call timed out after {}s — server may be unresponsive",
-                        PER_LLM_CALL_TIMEOUT_SECS
+                        per_call_timeout.as_secs()
                     )));
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(
@@ -253,9 +264,10 @@ pub(in crate::agent_loop) async fn call_with_fallback(
     modality: &str,
     request: CompletionRequest,
     stream_tx: Option<mpsc::Sender<StreamEvent>>,
+    deadline: Option<std::time::Instant>,
 ) -> CarrierResult<CompletionResponse> {
     let Some(brain) = brain else {
-        return call_with_retry(fallback_driver, request, stream_tx, None, None).await;
+        return call_with_retry(fallback_driver, request, stream_tx, None, None, deadline).await;
     };
 
     let endpoints = brain.endpoints_for(modality);
@@ -267,12 +279,27 @@ pub(in crate::agent_loop) async fn call_with_fallback(
 
     let mut last_error: Option<CarrierError> = None;
     for ep in &endpoints {
+        // Skip endpoint if insufficient time budget remains (need at least 30s)
+        if let Some(dl) = deadline {
+            let remaining = dl.saturating_duration_since(std::time::Instant::now());
+            if remaining.as_secs() < 30 {
+                tracing::warn!(
+                    endpoint = %ep.id,
+                    remaining_secs = remaining.as_secs(),
+                    "Skipping endpoint: insufficient time budget"
+                );
+                last_error = Some(CarrierError::LlmDriver(
+                    "Agent loop time budget exhausted".to_string(),
+                ));
+                continue;
+            }
+        }
         if let Some(driver) = brain.driver_for_endpoint(&ep.id) {
             let mut req = request.clone();
             req.model = ep.model.clone();
             let start = std::time::Instant::now();
             let tx_arg = stream_tx.clone();
-            match call_with_retry(&*driver, req, tx_arg, Some(&ep.provider), None).await {
+            match call_with_retry(&*driver, req, tx_arg, Some(&ep.provider), None, deadline).await {
                 Ok(response) => {
                     let latency = start.elapsed().as_millis() as u64;
                     brain.report(types::brain::EndpointReport {

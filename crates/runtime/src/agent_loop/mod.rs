@@ -226,6 +226,12 @@ async fn run_agent_loop_impl(
 ) -> CarrierResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
 
+    // Compute a deadline for all LLM calls within this loop, so that
+    // call_with_fallback respects the overall time budget even when
+    // multiple endpoints and retries are involved.
+    let loop_deadline = std::time::Instant::now()
+        + std::time::Duration::from_secs(AGENT_LOOP_TIMEOUT_SECS);
+
     // Extract hand-allowed env vars from manifest metadata (set by kernel for hand settings)
     let hand_allowed_env: Vec<String> = manifest
         .metadata
@@ -404,6 +410,7 @@ async fn run_agent_loop_impl(
             modality,
             request,
             stream_tx.clone(),
+            Some(loop_deadline),
         )
         .await?;
 
