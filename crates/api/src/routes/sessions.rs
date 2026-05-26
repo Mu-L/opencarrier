@@ -158,7 +158,7 @@ pub async fn get_agent_session(
                 StatusCode::OK,
                 Json(serde_json::json!({
                     "session_id": session.id.0.to_string(),
-                    "agent_id": session.agent_id.clone(),
+                    "agent_id": session.agent_name.clone(),
                     "message_count": session.messages.len(),
                     "context_window_tokens": session.context_window_tokens,
                     "label": session.label,
@@ -314,7 +314,7 @@ pub async fn find_session_by_label(
             StatusCode::OK,
             Json(serde_json::json!({
                 "session_id": session.id.0.to_string(),
-                "agent_id": session.agent_id.clone(),
+                "agent_id": session.agent_name.clone(),
                 "label": session.label,
                 "message_count": session.messages.len(),
             })),

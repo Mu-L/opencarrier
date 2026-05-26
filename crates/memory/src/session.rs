@@ -16,7 +16,7 @@ pub struct Session {
     /// Session ID.
     pub id: SessionId,
     /// Owning agent name (stable across restarts).
-    pub agent_id: String,
+    pub agent_name: String,
     /// Conversation messages.
     pub messages: Vec<Message>,
     /// Summaries of older turns (L1 context layer).
@@ -74,7 +74,7 @@ impl SessionStore {
                 };
                 Ok(Some(Session {
                     id: session_id,
-                    agent_id: agent_str,
+                    agent_name: agent_str,
                     messages,
                     turn_summaries,
                     context_window_tokens: tokens as u64,
@@ -108,7 +108,7 @@ impl SessionStore {
              ON CONFLICT(id) DO UPDATE SET messages = ?3, turn_summaries = ?4, context_window_tokens = ?5, label = ?6, updated_at = ?7",
             rusqlite::params![
                 session.id.0.to_string(),
-                &session.agent_id,
+                &session.agent_name,
                 messages_blob,
                 summaries_blob,
                 session.context_window_tokens as i64,
@@ -150,7 +150,7 @@ impl SessionStore {
             Some(s) => s,
             None => Session {
                 id: session_id,
-                agent_id: agent_id.to_string(),
+                agent_name: agent_id.to_string(),
                 messages: Vec::new(),
                 turn_summaries: Vec::new(),
                 context_window_tokens: 0,
@@ -289,7 +289,7 @@ impl SessionStore {
     pub fn create_session(&self, agent_id: String) -> CarrierResult<Session> {
         let session = Session {
             id: SessionId::new(),
-            agent_id,
+            agent_name: agent_id,
             messages: Vec::new(),
             turn_summaries: Vec::new(),
             context_window_tokens: 0,
@@ -353,7 +353,7 @@ impl SessionStore {
                 // summaries will be loaded on next full get_session if needed.
                 Ok(Some(Session {
                     id: session_id,
-                    agent_id: agent_id.to_string(),
+                    agent_name: agent_id.to_string(),
                     messages,
                     turn_summaries: Vec::new(),
                     context_window_tokens: tokens as u64,
@@ -449,7 +449,7 @@ impl SessionStore {
     ) -> CarrierResult<Session> {
         let session = Session {
             id: SessionId::new(),
-            agent_id,
+            agent_name: agent_id,
             messages: Vec::new(),
             turn_summaries: Vec::new(),
             context_window_tokens: 0,
@@ -692,7 +692,7 @@ mod tests {
         let session = store.create_session(agent_id.clone()).unwrap();
 
         let loaded = store.get_session(session.id).unwrap().unwrap();
-        assert_eq!(loaded.agent_id, agent_id);
+        assert_eq!(loaded.agent_name, agent_id);
         assert!(loaded.messages.is_empty());
     }
 

@@ -157,7 +157,7 @@ impl CarrierKernel {
                 KernelError::Carrier(CarrierError::Internal("Session not found".to_string()))
             })?;
 
-        if session.agent_id != entry.name {
+        if session.agent_name != entry.name {
             return Err(KernelError::Carrier(CarrierError::Internal(
                 "Session belongs to a different agent".to_string(),
             )));
@@ -387,7 +387,7 @@ impl CarrierKernel {
             .map_err(KernelError::Carrier)?
             .unwrap_or_else(|| memory::session::Session {
                 id: session_id,
-                agent_id: entry.name.clone(),
+                agent_name: entry.name.clone(),
                 messages: Vec::new(),
                 context_window_tokens: 0,
                     turn_summaries: Vec::new(),
@@ -581,7 +581,7 @@ impl CarrierKernel {
             .map_err(KernelError::Carrier)?
             .unwrap_or_else(|| memory::session::Session {
                 id: entry.session_id,
-                agent_id: entry.name.clone(),
+                agent_name: entry.name.clone(),
                 messages: Vec::new(),
                 context_window_tokens: 0,
                     turn_summaries: Vec::new(),

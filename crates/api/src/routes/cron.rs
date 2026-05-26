@@ -6,7 +6,6 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use kernel::KernelHandle;
-use types::agent::AgentId;
 use std::collections::HashMap;
 use std::sync::Arc;
 // ---------------------------------------------------------------------------
@@ -19,15 +18,12 @@ pub async fn list_cron_jobs(
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let jobs = if let Some(agent_id_str) = params.get("agent_id") {
-        match uuid::Uuid::parse_str(agent_id_str) {
-            Ok(uuid) => {
-                let aid = AgentId(uuid);
-                state.kernel.cron_scheduler.list_jobs(aid)
-            }
+        match state.kernel.registry.resolve(agent_id_str) {
+            Ok((aid, _)) => state.kernel.cron_scheduler.list_jobs(aid),
             Err(_) => {
                 return (
                     StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "Invalid agent_id"})),
+                    Json(serde_json::json!({"error": format!("Agent not found: {agent_id_str}")})),
                 );
             }
         }

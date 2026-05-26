@@ -473,7 +473,7 @@ async fn run_agent_loop_impl(
 
     // TODO(Phase 13): Tree memory recall will be restored here.
     // Fire BeforePromptBuild hook
-    let agent_id_str = session.agent_id.clone();
+    let agent_id_str = session.agent_name.clone();
     if let Some(hook_reg) = hooks {
         let ctx = crate::hooks::HookContext {
             agent_name: &manifest.name,
@@ -521,7 +521,7 @@ async fn run_agent_loop_impl(
         () => {
             memory.save_session_append_async(
                 session.id,
-                &session.agent_id,
+                &session.agent_name,
                 &session.messages[session_base_len..],
                 session.context_window_tokens,
                 session.label.as_deref(),
@@ -786,7 +786,7 @@ async fn run_agent_loop_impl(
                         .push(Message::assistant("[no reply needed]".to_string()));
                     let new_msgs = &session.messages[session_base_len..];
                     memory
-                        .save_session_append_async(session.id, &session.agent_id, new_msgs, session.context_window_tokens, session.label.as_deref(), None)
+                        .save_session_append_async(session.id, &session.agent_name, new_msgs, session.context_window_tokens, session.label.as_deref(), None)
                         .await
                         .map_err(|e| CarrierError::Memory(e.to_string()))?;
                     return Ok(AgentLoopResult {
@@ -878,7 +878,7 @@ async fn run_agent_loop_impl(
                 memory
                     .save_session_append_async(
                         session.id,
-                        &session.agent_id,
+                        &session.agent_name,
                         &new_msgs,
                         session.context_window_tokens,
                         session.label.as_deref(),
@@ -893,7 +893,7 @@ async fn run_agent_loop_impl(
                 if let Some(kh) = kernel.as_ref() {
                     let req = types::memory_tree::IngestRequest {
                         owner_id: owner_id.unwrap_or("default").to_string(),
-                        agent_id: session.agent_id.to_string(),
+                        agent_id: session.agent_name.to_string(),
                         source_kind: "chat".to_string(),
                         source_id: format!("{}:{}",
                             channel_type.unwrap_or("api"),
@@ -964,7 +964,7 @@ async fn run_agent_loop_impl(
                     content: MessageContent::Blocks(assistant_blocks),
                 });
 
-                let caller_id_str = session.agent_id.to_string();
+                let caller_id_str = session.agent_name.to_string();
 
                 // Track tool calls for loop detection BEFORE execution
                 for tc in &response.tool_calls {
@@ -1270,7 +1270,7 @@ async fn run_agent_loop_impl(
                 });
                 if tools_may_have_changed {
                     if let Some(ref kernel) = kernel {
-                        let _agent_id_str = session.agent_id.to_string();
+                        let _agent_id_str = session.agent_name.to_string();
 
                         // Log skill_load calls
                         let skill_load_count = response.tool_calls.iter()
@@ -1438,7 +1438,7 @@ async fn run_agent_loop_impl(
             .unwrap_or_else(|| Message::user(user_message));
         let fail_msgs = vec![user_msg, Message::assistant(&summary)];
         if let Err(e) = memory.save_session_append_async(
-            session.id, &session.agent_id, &fail_msgs,
+            session.id, &session.agent_name, &fail_msgs,
             session.context_window_tokens, session.label.as_deref(),
             Some(&session.turn_summaries),
         ).await {

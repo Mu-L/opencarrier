@@ -251,7 +251,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
-            agent_id,
+            agent_name: "test-agent".to_string(),
             messages: Vec::new(),
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -304,7 +304,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
-            agent_id,
+            agent_name: "test-agent".to_string(),
             messages: Vec::new(),
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -359,7 +359,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
-            agent_id,
+            agent_name: "test-agent".to_string(),
             messages: Vec::new(),
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -412,7 +412,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
-            agent_id,
+            agent_name: "test-agent".to_string(),
             messages: Vec::new(),
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -456,7 +456,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
-            agent_id,
+            agent_name: "test-agent".to_string(),
             messages: Vec::new(),
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -584,7 +584,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
-            agent_id,
+            agent_name: "test-agent".to_string(),
             messages: Vec::new(),
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -631,7 +631,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
-            agent_id,
+            agent_name: "test-agent".to_string(),
             messages: Vec::new(),
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -684,7 +684,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
-            agent_id,
+            agent_name: "test-agent".to_string(),
             messages: Vec::new(),
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -1558,7 +1558,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
-            agent_id,
+            agent_name: "test-agent".to_string(),
             messages: Vec::new(),
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -1631,7 +1631,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
-            agent_id,
+            agent_name: "test-agent".to_string(),
             messages: Vec::new(),
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -1686,7 +1686,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let agent_id = "test-agent".to_string();
         let mut session = memory::session::Session {
             id: types::agent::SessionId::new(),
-            agent_id,
+            agent_name: "test-agent".to_string(),
             messages: Vec::new(),
             context_window_tokens: 0,
             turn_summaries: Vec::new(),

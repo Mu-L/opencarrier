@@ -73,7 +73,7 @@ impl CarrierKernel {
                 .map_err(KernelError::Carrier)?
                 .unwrap_or_else(|| memory::session::Session {
                     id: entry.session_id,
-                    agent_id: agent_name.clone(),
+                    agent_name: agent_name.clone(),
                     messages: Vec::new(),
                     context_window_tokens: 0,
                     turn_summaries: Vec::new(),

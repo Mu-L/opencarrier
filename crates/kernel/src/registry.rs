@@ -52,6 +52,22 @@ impl AgentRegistry {
             .and_then(|id| self.agents.get(id.value()).map(|e| e.value().clone()))
     }
 
+    /// Resolve a string that is either a UUID or an agent name to an (AgentId, AgentEntry) pair.
+    ///
+    /// This is the single source of truth for agent ID resolution — use it everywhere
+    /// instead of inline `Uuid::parse_str` + `find_by_name` fallback patterns.
+    pub fn resolve(&self, id_or_name: &str) -> CarrierResult<(AgentId, AgentEntry)> {
+        if let Ok(id) = id_or_name.parse::<AgentId>() {
+            self.get(id)
+                .map(|e| (id, e))
+                .ok_or_else(|| CarrierError::AgentNotFound(id.to_string()))
+        } else {
+            let entry = self.find_by_name(id_or_name)
+                .ok_or_else(|| CarrierError::AgentNotFound(id_or_name.to_string()))?;
+            Ok((entry.id, entry))
+        }
+    }
+
     /// Update agent state.
     pub fn set_state(&self, id: AgentId, state: AgentState) -> CarrierResult<()> {
         let mut entry = self

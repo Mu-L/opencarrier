@@ -766,7 +766,7 @@ mod tests {
     fn test_needs_compaction_below_threshold() {
         let session = Session {
             id: types::agent::SessionId::new(),
-            agent_id: "test-agent".to_string(),
+            agent_name: "test-agent".to_string(),
             messages: vec![Message::user("hello")],
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -783,7 +783,7 @@ mod tests {
             .collect();
         let session = Session {
             id: types::agent::SessionId::new(),
-            agent_id: "test-agent".to_string(),
+            agent_name: "test-agent".to_string(),
             messages,
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -834,7 +834,7 @@ mod tests {
 
         let session = Session {
             id: types::agent::SessionId::new(),
-            agent_id: "test-agent".to_string(),
+            agent_name: "test-agent".to_string(),
             messages: vec![Message::user("hello"), Message::assistant("hi")],
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -923,7 +923,7 @@ mod tests {
 
         let session = Session {
             id: types::agent::SessionId::new(),
-            agent_id: "test-agent".to_string(),
+            agent_name: "test-agent".to_string(),
             messages,
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -1002,7 +1002,7 @@ mod tests {
             .collect();
         let session = Session {
             id: types::agent::SessionId::new(),
-            agent_id: "test-agent".to_string(),
+            agent_name: "test-agent".to_string(),
             messages,
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
@@ -1136,7 +1136,7 @@ mod tests {
             .collect();
         let session = Session {
             id: types::agent::SessionId::new(),
-            agent_id: "test-agent".to_string(),
+            agent_name: "test-agent".to_string(),
             messages,
             context_window_tokens: 0,
             turn_summaries: Vec::new(),
