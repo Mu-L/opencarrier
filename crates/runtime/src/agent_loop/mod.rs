@@ -772,7 +772,7 @@ async fn run_agent_loop_impl(
                 // Parse reply directives from the streaming response text
                 let (cleaned_text_s, parsed_directives_s) =
                     crate::reply_directives::parse_directives(&text);
-                let text = cleaned_text_s;
+                let text = crate::text_tool_recovery::strip_tool_call_artifacts(&cleaned_text_s);
 
                 // NO_REPLY: agent intentionally chose not to reply
                 if text.trim() == "NO_REPLY" || parsed_directives_s.silent {

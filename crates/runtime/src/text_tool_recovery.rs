@@ -989,3 +989,59 @@ pub(crate) fn try_parse_bare_json_tool_call(
 
     parse_json_tool_call_object(&text[..end])
 }
+
+/// Strip `[Called ...]` patterns from response text so users never see
+/// raw tool-call syntax, even when text-based recovery gave up.
+pub fn strip_tool_call_artifacts(text: &str) -> String {
+    let mut result = text.to_string();
+    let mut search_from = 0;
+    while let Some(pos) = result[search_from..].find("[Called ") {
+        let abs_pos = search_from + pos;
+        let after = &result[abs_pos + "[Called ".len()..];
+        if let Some(close) = after.find(']') {
+            result.replace_range(abs_pos..abs_pos + "[Called ".len() + close + 1, "");
+            // Don't advance — re-scan from same position since text shifted
+            search_from = abs_pos;
+        } else {
+            break;
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests_strip {
+    use super::*;
+
+    #[test]
+    fn test_strip_single_called() {
+        assert_eq!(
+            strip_tool_call_artifacts("还没，正在执行排版和发布流程。[Called knowledge_read]"),
+            "还没，正在执行排版和发布流程。"
+        );
+    }
+
+    #[test]
+    fn test_strip_multiple_called() {
+        assert_eq!(
+            strip_tool_call_artifacts("我需要先搜索一下。[Called tool_search] 然后再读。[Called knowledge_read]"),
+            "我需要先搜索一下。 然后再读。"
+        );
+    }
+
+    #[test]
+    fn test_strip_no_called() {
+        assert_eq!(
+            strip_tool_call_artifacts("这是一条普通回复，没有工具调用。"),
+            "这是一条普通回复，没有工具调用。"
+        );
+    }
+
+    #[test]
+    fn test_strip_unclosed_bracket_ignored() {
+        assert_eq!(
+            strip_tool_call_artifacts("这里有个 [Called tool 没有闭合"),
+            "这里有个 [Called tool 没有闭合"
+        );
+    }
+}
