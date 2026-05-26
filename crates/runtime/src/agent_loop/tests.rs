@@ -1750,3 +1750,38 @@ use std::sync::atomic::{AtomicU32, Ordering};
         }
         assert!(!events.is_empty(), "Should have received stream events");
     }
+
+    #[test]
+    fn test_recover_called_pattern_inline() {
+        // [Called ...] in the middle of a sentence, not at line start
+        let tools = vec![ToolDefinition {
+            name: "knowledge_read".into(),
+            description: "Read".into(),
+            input_schema: serde_json::json!({}),
+        }];
+        let text = "还没，正在执行排版和发布流程。[Called knowledge_read]";
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "knowledge_read");
+    }
+
+    #[test]
+    fn test_recover_called_pattern_multiple_inline() {
+        let tools = vec![
+            ToolDefinition {
+                name: "knowledge_read".into(),
+                description: "Read".into(),
+                input_schema: serde_json::json!({}),
+            },
+            ToolDefinition {
+                name: "tool_search".into(),
+                description: "Search".into(),
+                input_schema: serde_json::json!({}),
+            },
+        ];
+        let text = "先读知识库。[Called knowledge_read]然后搜索。[Called tool_search]";
+        let calls = recover_text_tool_calls(text, &tools, None).calls;
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "knowledge_read");
+        assert_eq!(calls[1].name, "tool_search");
+    }

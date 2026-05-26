@@ -642,13 +642,13 @@ pub fn recover_text_tool_calls(
     // Pattern 14: [Called tool_name] — LLM text description of a tool call.
     // For tools in available_tools: recover directly.
     // For tools NOT in available_tools: try tool_search_fn to discover them.
+    // Matches [Called ...] anywhere in the text, not just at line start.
     {
-        for line in text.lines() {
-            let trimmed = line.trim();
-            let Some(after) = trimmed.strip_prefix("[Called ") else {
-                continue;
-            };
+        let mut search_from = 0;
+        while let Some(pos) = text[search_from..].find("[Called ") {
+            let after = &text[search_from + pos + "[Called ".len()..];
             let Some(close) = after.find(']') else {
+                search_from += pos + "[Called ".len();
                 continue;
             };
             let inner = &after[..close];
@@ -658,11 +658,13 @@ pub fn recover_text_tool_calls(
                 .unwrap_or(inner);
 
             if tool_name.is_empty() || tool_name.contains(' ') {
+                search_from += pos + "[Called ".len();
                 continue;
             }
 
             // Skip if already recovered by an earlier pattern
             if calls.iter().any(|c| c.name == tool_name) {
+                search_from += pos + "[Called ".len();
                 continue;
             }
 
@@ -712,6 +714,8 @@ pub fn recover_text_tool_calls(
                     });
                 }
             }
+            // Advance past this match to avoid infinite loop
+            search_from += pos + "[Called ".len() + close + 1;
         }
     }
 
