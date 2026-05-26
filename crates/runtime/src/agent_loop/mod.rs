@@ -54,6 +54,10 @@ const BASE_RETRY_DELAY_MS: u64 = 1000;
 /// Raised from 60s to 120s for browser automation and long-running builds.
 const TOOL_TIMEOUT_SECS: u64 = 120;
 
+/// Tools that need a longer timeout (image generation, browser automation).
+const TOOL_TIMEOUT_LONG_SECS: u64 = 300;
+const TOOL_LONG_TIMEOUT_NAMES: &[&str] = &["image_generate", "browser_navigate", "browser_execute"];
+
 /// Overall timeout for the entire agent loop (seconds).
 /// Prevents the agent from hanging indefinitely if the LLM API becomes
 /// unresponsive. After this timeout, the loop is aborted and an error
@@ -1065,8 +1069,13 @@ async fn run_agent_loop_impl(
                     };
 
                     // Timeout-wrapped execution
+                    let timeout_secs = if TOOL_LONG_TIMEOUT_NAMES.contains(&tool_call.name.as_str()) {
+                        TOOL_TIMEOUT_LONG_SECS
+                    } else {
+                        TOOL_TIMEOUT_SECS
+                    };
                     let result = match tokio::time::timeout(
-                        Duration::from_secs(TOOL_TIMEOUT_SECS),
+                        Duration::from_secs(timeout_secs),
                         tool_runner::execute_tool(
                             &tool_call.id,
                             &tool_call.name,
@@ -1078,12 +1087,12 @@ async fn run_agent_loop_impl(
                     {
                         Ok(result) => result,
                         Err(_) => {
-                            warn!(tool = %tool_call.name, "Tool execution timed out after {}s", TOOL_TIMEOUT_SECS);
+                            warn!(tool = %tool_call.name, "Tool execution timed out after {}s", timeout_secs);
                             types::tool::ToolResult {
                                 tool_use_id: tool_call.id.clone(),
                                 content: format!(
                                     "Tool '{}' timed out after {}s.",
-                                    tool_call.name, TOOL_TIMEOUT_SECS
+                                    tool_call.name, timeout_secs
                                 ),
                                 is_error: true,
                             }

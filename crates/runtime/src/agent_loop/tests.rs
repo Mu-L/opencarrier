@@ -59,8 +59,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
     }
 
     #[test]
-    fn test_tool_timeout_constant() {
+    fn test_tool_timeout_constants() {
         assert_eq!(TOOL_TIMEOUT_SECS, 120);
+        assert_eq!(TOOL_TIMEOUT_LONG_SECS, 300);
+        assert!(TOOL_LONG_TIMEOUT_NAMES.contains(&"image_generate"));
     }
 
     #[test]

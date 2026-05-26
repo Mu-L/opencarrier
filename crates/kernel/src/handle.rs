@@ -447,6 +447,7 @@ impl KernelHandle for CarrierKernel {
         };
         let one_shot = job_json["one_shot"].as_bool().unwrap_or(false);
 
+        tracing::debug!(agent_id, "cron_create parsing agent_id");
         let aid = types::agent::AgentId(
             uuid::Uuid::parse_str(agent_id).map_err(|e| format!("Invalid agent ID: {e}"))?,
         );

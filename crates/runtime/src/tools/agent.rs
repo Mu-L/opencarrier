@@ -733,6 +733,7 @@ async fn tool_cron_create(
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Agent ID required for cron_create")?;
+    tracing::debug!(agent_id, ?input, "cron_create called");
     kh.cron_create(agent_id, owner_id, input.clone()).await
 }
 
