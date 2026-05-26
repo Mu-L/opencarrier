@@ -12,7 +12,7 @@ pub async fn get_agent_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err((status, _)) => {
             return (
@@ -170,7 +170,7 @@ pub async fn get_agent_session(
             StatusCode::OK,
             Json(serde_json::json!({
                 "session_id": entry.session_id.0.to_string(),
-                "agent_id": agent_id.to_string(),
+                "agent_id": entry.name.clone(),
                 "message_count": 0,
                 "context_window_tokens": 0,
                 "messages": [],

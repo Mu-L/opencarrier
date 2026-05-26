@@ -14,9 +14,6 @@ use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
 
-/// Maximum inter-agent call depth (used by delegation tools).
-const MAX_AGENT_CALL_DEPTH: u32 = crate::tool_runner::MAX_AGENT_CALL_DEPTH;
-
 // ---------------------------------------------------------------------------
 // User profile tool (multi-tenancy)
 // ---------------------------------------------------------------------------
@@ -131,15 +128,10 @@ async fn tool_delegate_subagent(
     let aid = caller_agent_id.ok_or("delegate_* requires caller_agent_id")?;
 
     // Check + increment inter-agent call depth
+    crate::tools::check_call_depth()?;
     let current_depth = crate::tool_runner::AGENT_CALL_DEPTH
         .try_with(|d| d.get())
         .unwrap_or(0);
-    if current_depth >= MAX_AGENT_CALL_DEPTH {
-        return Err(format!(
-            "Subagent delegation depth exceeded (max {}). The agent call chain is too deep.",
-            MAX_AGENT_CALL_DEPTH
-        ));
-    }
 
     tracing::info!(
         subagent = %subagent_name,

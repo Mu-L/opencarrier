@@ -69,25 +69,9 @@ pub async fn set_sender_route(
     Json(body): Json<SetRouteBody>,
 ) -> impl IntoResponse {
     // Resolve agent_id to agent_name (accept UUID or agent name)
-    let agent_name = if uuid::Uuid::parse_str(&body.agent_id).is_ok() {
-        // Input is UUID — resolve to agent name
-        let agents = state.kernel.list_agents();
-        match agents.iter().find(|a| a.id == body.agent_id) {
-            Some(agent) => agent.name.clone(),
-            None => body.agent_id.clone(), // Fallback: store as-is
-        }
-    } else {
-        // Input is already a name — validate it exists
-        let agents = state.kernel.list_agents();
-        if !agents.iter().any(|a| a.name == body.agent_id) {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({
-                    "error": format!("Agent '{}' not found", body.agent_id)
-                })),
-            );
-        }
-        body.agent_id.clone()
+    let agent_name = match crate::routes::common::resolve_to_name(&body.agent_id, &state.kernel.registry) {
+        Ok(name) => name,
+        Err(e) => return e,
     };
 
     if let Some(ref pm_arc) = state.channel_manager {

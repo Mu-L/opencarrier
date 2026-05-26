@@ -3,36 +3,25 @@
 use axum::http::StatusCode;
 use axum::Json;
 use types::agent::{AgentEntry, AgentId};
-
-/// Parse a path-parameter agent ID (UUID or agent name).
-/// UUIDs are parsed directly; names are resolved via the registry.
-pub fn parse_agent_id(id: &str) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
-    id.parse().map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid agent ID"})),
-        )
-    })
-}
+use types::error::CarrierError;
 
 /// Parse an agent ID or name from a path parameter, returning the resolved AgentId.
-/// Unlike `parse_agent_id`, this also accepts agent names and resolves them to UUIDs.
+/// Accepts both UUID strings and agent names.
 pub fn resolve_agent_id_from_path(
     id: &str,
     registry: &kernel::registry::AgentRegistry,
 ) -> Result<AgentId, (StatusCode, Json<serde_json::Value>)> {
-    // Try UUID first
-    if let Ok(uuid) = id.parse::<AgentId>() {
-        return Ok(uuid);
-    }
-    // Name lookup
-    registry.find_by_name(id)
-        .map(|e| e.id)
-        .ok_or_else(|| {
-            (
+    registry.resolve(id)
+        .map(|(aid, _)| aid)
+        .map_err(|e| match e {
+            CarrierError::AgentNotFound(name) => (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Agent not found: {id}")})),
-            )
+                Json(serde_json::json!({"error": format!("Agent not found: {name}")})),
+            ),
+            _ => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e.to_string()})),
+            ),
         })
 }
 
@@ -60,25 +49,32 @@ pub fn parse_and_get_agent(
 
 /// Resolve an agent by UUID or name.
 ///
-/// - UUID: look up by ID.
-/// - Name: look up globally.
+/// Delegates to `AgentRegistry::resolve()` — the single source of truth.
 pub fn resolve_agent_id(
     id_or_name: &str,
     registry: &kernel::registry::AgentRegistry,
 ) -> Result<(AgentId, AgentEntry), (StatusCode, Json<serde_json::Value>)> {
-    // Try UUID first
-    if let Ok(id) = id_or_name.parse::<AgentId>() {
-        let entry = get_agent_or_404(registry, &id)?;
-        return Ok((id, entry));
-    }
-    // Name lookup
-    let entry = registry.find_by_name(id_or_name).ok_or_else(|| {
-        (
+    registry.resolve(id_or_name).map_err(|e| match e {
+        CarrierError::AgentNotFound(name) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": format!("Agent not found: {id_or_name}")})),
-        )
-    })?;
-    Ok((entry.id, entry))
+            Json(serde_json::json!({"error": format!("Agent not found: {name}")})),
+        ),
+        _ => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    })
+}
+
+/// Resolve an agent UUID or name to just the agent name string.
+///
+/// Convenience wrapper for call sites that only need the name.
+pub fn resolve_to_name(
+    id_or_name: &str,
+    registry: &kernel::registry::AgentRegistry,
+) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    let (_, entry) = resolve_agent_id(id_or_name, registry)?;
+    Ok(entry.name.clone())
 }
 
 /// Look up a clone by name and extract its workspace path.

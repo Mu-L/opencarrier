@@ -72,7 +72,7 @@ pub(in crate::agent_loop) async fn handle_end_turn(
                 new_msgs,
                 session.context_window_tokens,
                 session.label.as_deref(),
-                None,
+                Some(&session.turn_summaries),
             )
             .await
             .map_err(|e| CarrierError::Memory(e.to_string()))?;

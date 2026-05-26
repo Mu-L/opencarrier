@@ -8,9 +8,6 @@ use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
 
-/// Maximum inter-agent call depth (used by agent tools).
-const MAX_AGENT_CALL_DEPTH: u32 = crate::tool_runner::MAX_AGENT_CALL_DEPTH;
-
 // ---------------------------------------------------------------------------
 // Inter-agent tools
 // ---------------------------------------------------------------------------
@@ -31,16 +28,10 @@ async fn tool_agent_send(
         .ok_or("Missing 'message' parameter")?;
 
     // Check + increment inter-agent call depth
+    crate::tools::check_call_depth()?;
     let current_depth = crate::tool_runner::AGENT_CALL_DEPTH
         .try_with(|d| d.get())
         .unwrap_or(0);
-    if current_depth >= MAX_AGENT_CALL_DEPTH {
-        return Err(format!(
-            "Inter-agent call depth exceeded (max {}). \
-             A->B->C chain is too deep. Use the task queue instead.",
-            MAX_AGENT_CALL_DEPTH
-        ));
-    }
 
     crate::tool_runner::AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {

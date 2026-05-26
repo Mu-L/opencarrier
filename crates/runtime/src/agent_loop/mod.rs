@@ -441,6 +441,13 @@ async fn run_agent_loop_impl(
                 response.tool_calls = result.calls;
                 response.stop_reason = StopReason::ToolUse;
                 let mut new_blocks: Vec<ContentBlock> = Vec::new();
+                // Keep existing Text blocks from the LLM response
+                for block in &response.content {
+                    if let ContentBlock::Text { .. } = block {
+                        new_blocks.push(block.clone());
+                    }
+                }
+                // Append the recovered ToolUse blocks
                 for tc in &response.tool_calls {
                     new_blocks.push(ContentBlock::ToolUse {
                         id: tc.id.clone(),

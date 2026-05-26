@@ -543,7 +543,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                     new_msgs,
                     session.context_window_tokens,
                     session.label.as_deref(),
-                    None,
+                    Some(&session.turn_summaries),
                 )
                 .await
             {

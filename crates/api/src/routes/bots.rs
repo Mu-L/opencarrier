@@ -8,7 +8,6 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use kernel::KernelHandle;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -1182,7 +1181,8 @@ pub async fn create_sender(
             )
         }
     };
-    let agent_id = resolve_agent_name(&state, &agent_id_raw);
+    let agent_id = crate::routes::common::resolve_to_name(&agent_id_raw, &state.kernel.registry)
+        .unwrap_or_else(|_| agent_id_raw.clone());
 
     let Some(ref pm) = state.channel_manager else {
         return (
@@ -1249,7 +1249,8 @@ pub async fn bind_sender(
             )
         }
     };
-    let agent_id = resolve_agent_name(&state, &agent_id_raw);
+    let agent_id = crate::routes::common::resolve_to_name(&agent_id_raw, &state.kernel.registry)
+        .unwrap_or_else(|_| agent_id_raw.clone());
 
     let Some(ref pm) = state.channel_manager else {
         return (
@@ -1358,18 +1359,11 @@ async fn register_bot_from_scan(
     agent_name: &str,
 ) -> Result<String, String> {
     // Resolve agent_name: accept name or UUID, store as name
-    let agent_ref = if uuid::Uuid::parse_str(agent_name).is_ok() {
-        // Input is UUID — resolve to name
-        resolve_agent_name(state, agent_name)
-    } else {
-        // Input is name — validate it exists
-        let agents = state.kernel.list_agents();
-        if agents.iter().any(|a| a.name == agent_name) {
-            agent_name.to_string()
-        } else {
-            return Err(format!("分身 '{agent_name}' 不存在"));
-        }
-    };
+    let agent_ref = crate::routes::common::resolve_to_name(agent_name, &state.kernel.registry)
+        .map_err(|(_, json)| {
+            let msg = json.0.get("error").and_then(|v| v.as_str()).unwrap_or("Agent not found");
+            msg.to_string()
+        })?;
 
     // Write session file to senders/{sender_id}/session.json + set route
     match platform {
@@ -1554,19 +1548,4 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
             "/api/senders/dingtalk/device-auth/poll",
             routing::get(dingtalk_device_auth_poll),
         )
-}
-
-/// Resolve an agent_id input to agent name.
-/// Accepts either a UUID or an agent name string.
-/// Returns the agent name if found, or the original input as fallback.
-fn resolve_agent_name(state: &crate::routes::state::AppState, input: &str) -> String {
-    if let Ok(id) = input.parse::<types::agent::AgentId>() {
-        // Input is UUID — look up agent name from registry
-        state.kernel.registry.get(id)
-            .map(|e| e.manifest.name.clone())
-            .unwrap_or_else(|| input.to_string())
-    } else {
-        // Input is already a name
-        input.to_string()
-    }
 }

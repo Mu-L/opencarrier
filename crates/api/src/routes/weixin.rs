@@ -6,7 +6,6 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use kernel::KernelHandle;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -220,18 +219,16 @@ pub async fn weixin_qrcode_status(
             .or_else(|| data.get("user_id").and_then(|v| v.as_str()));
 
         // Resolve agent_name early so both rebind and new-user paths can use it
+        // Stores (agent_name, display_name, share_url) — always agent name, never UUID.
         let agent_name_param = params.get("agent_name").map(|s| s.as_str()).unwrap_or("");
         let resolved_agent: Option<(String, String, Option<String>)> = if !agent_name_param.is_empty() {
-            if uuid::Uuid::parse_str(agent_name_param).is_ok() {
-                Some((agent_name_param.to_string(), String::new(), None))
-            } else {
-                let agents = state.kernel.list_agents();
-                if let Some(agent) = agents.iter().find(|a| a.name == agent_name_param) {
-                    let display = state.kernel.registry.find_by_name(agent_name_param)
-                        .map(|e| e.manifest.display_name.clone())
-                        .unwrap_or_default();
-                    Some((agent.id.clone(), display, None))
-                } else {
+            match crate::routes::common::resolve_agent_id(agent_name_param, &state.kernel.registry) {
+                Ok((_, entry)) => {
+                    let display = entry.manifest.display_name.clone();
+                    Some((entry.name.clone(), display, None))
+                }
+                Err(_) => {
+                    // Agent not found locally — try installing from hub
                     try_install_from_hub(&state, agent_name_param).await
                 }
             }
@@ -278,16 +275,7 @@ pub async fn weixin_qrcode_status(
 
                             let effective_agent = resolved_agent
                                 .as_ref()
-                                .map(|(id, _display, _share_url)| {
-                                    // Resolve UUID to agent name for routing
-                                    if let Ok(aid) = id.parse::<types::agent::AgentId>() {
-                                        state.kernel.registry.get(aid)
-                                            .map(|e| e.manifest.name.clone())
-                                            .unwrap_or_else(|| id.clone())
-                                    } else {
-                                        id.clone()
-                                    }
-                                })
+                                .map(|(name, _display, _share_url)| name.clone())
                                 .or(existing_bind.clone())
                                 .filter(|a| !a.is_empty());
 
@@ -368,14 +356,9 @@ pub async fn weixin_qrcode_status(
 
         // Register dynamic binding + start sender
         if let Some((ref agent_id, _, _)) = resolved_agent {
-            // Resolve UUID to agent name for routing
-            let agent_name = if let Ok(aid) = agent_id.parse::<types::agent::AgentId>() {
-                state.kernel.registry.get(aid)
-                    .map(|e| e.manifest.name.clone())
-                    .unwrap_or_else(|| agent_id.clone())
-            } else {
-                agent_id.clone()
-            };
+            // Resolve to agent name for routing (already resolved above, but agent_id may differ)
+            let agent_name = crate::routes::common::resolve_to_name(&agent_id, &state.kernel.registry)
+                .unwrap_or_else(|_| agent_id.clone());
             if let Some(ref pm_arc) = state.channel_manager {
                 let pm = pm_arc.lock().await;
                 if let Some(uid) = ilink_user_id {
@@ -527,13 +510,8 @@ pub async fn weixin_save_token(
     // Register dynamic bridge binding + start sender
     if !bind_agent.is_empty() {
         // Resolve bind_agent to agent name (accept UUID or name)
-        let agent_name = if let Ok(aid) = bind_agent.parse::<types::agent::AgentId>() {
-            state.kernel.registry.get(aid)
-                .map(|e| e.manifest.name.clone())
-                .unwrap_or_else(|| bind_agent.clone())
-        } else {
-            bind_agent.clone()
-        };
+        let agent_name = crate::routes::common::resolve_to_name(&bind_agent, &state.kernel.registry)
+            .unwrap_or_else(|_| bind_agent.clone());
         if let Some(ref pm_arc) = state.channel_manager {
             let pm = pm_arc.lock().await;
             if let Some(ref uid) = ilink_user_id {
@@ -721,26 +699,14 @@ pub async fn weixin_bind_bot(
     };
 
     // Resolve agent_name: accept name or UUID, store as name
-    let agent_name = if let Ok(id) = agent_input.parse::<types::agent::AgentId>() {
-        // Input is UUID — resolve to agent name
-        state.kernel.registry.get(id)
-            .map(|e| e.manifest.name.clone())
-            .unwrap_or_else(|| {
-                let agents = state.kernel.list_agents();
-                agents.iter().find(|a| a.id == id.to_string())
-                    .map(|a| a.name.clone())
-                    .unwrap_or_else(|| agent_input.clone())
-            })
-    } else {
-        // Input is name — validate it exists
-        let agents = state.kernel.list_agents();
-        if !agents.iter().any(|a| a.name == agent_input) {
+    let agent_name = match crate::routes::common::resolve_to_name(&agent_input, &state.kernel.registry) {
+        Ok(name) => name,
+        Err(_) => {
             return (
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({"error": format!("分身 '{agent_input}' 不存在")})),
             );
         }
-        agent_input.clone()
     };
 
     // Scan senders/ for weixin sessions matching the bot name

@@ -94,6 +94,21 @@ pub(crate) fn require_kernel(
     })
 }
 
+/// Check that the inter-agent call depth has not exceeded the maximum.
+pub(crate) fn check_call_depth() -> Result<(), String> {
+    let current = crate::tool_runner::AGENT_CALL_DEPTH
+        .try_with(|d| d.get())
+        .unwrap_or(0);
+    if current >= crate::tool_runner::MAX_AGENT_CALL_DEPTH {
+        Err(format!(
+            "Agent call depth exceeded (max {}). Use the task queue instead.",
+            crate::tool_runner::MAX_AGENT_CALL_DEPTH
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Resolve a target clone's workspace root via kernel.
 pub(crate) fn resolve_target_workspace(
     input: &serde_json::Value,
