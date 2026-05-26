@@ -755,9 +755,10 @@ async fn run_agent_loop_impl(
                         retry = text_recovery_retries,
                         "LLM described tool calls as text — retrying with discovered tools"
                     );
-                    messages.push(Message::assistant(format!("[Called {}]", result.needs_retry.join(", "))));
+                    let tool_names = result.needs_retry.join("、");
+                    messages.push(Message::assistant(format!("我需要调用工具：{tool_names}。")));
                     messages.push(Message::system(
-                        "你刚才用文本描述了工具调用，但用户看到的是原始文本。这些工具已添加到你的可用工具列表中，请用结构化的 tool_use 格式重新调用，带上完整的参数。"
+                        "你刚才用文本描述了工具调用，但用户看到的是原始文本。这些工具已添加到你的可用工具列表中，请直接用 tool_use 功能调用，带上完整的参数。不要再输出 [Called ...] 格式的文本。"
                     ));
                     continue;
                 }
