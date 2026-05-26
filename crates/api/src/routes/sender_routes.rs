@@ -1,6 +1,5 @@
 //! Sender route management API.
 
-use kernel::KernelHandle;
 use crate::routes::state::AppState;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
