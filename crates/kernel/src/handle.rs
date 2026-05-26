@@ -313,9 +313,12 @@ impl KernelHandle for CarrierKernel {
         key: &str,
         value: serde_json::Value,
     ) -> Result<(), String> {
-        let agent_id = match uuid::Uuid::parse_str(agent_id) {
-            Ok(id) => types::agent::AgentId(id),
-            Err(_) => return Err("Invalid agent ID".to_string()),
+        let agent_id = if let Ok(id) = uuid::Uuid::parse_str(agent_id) {
+            types::agent::AgentId(id)
+        } else {
+            let entry = self.registry.find_by_name(agent_id)
+                .ok_or_else(|| format!("Agent not found: {agent_id}"))?;
+            entry.id
         };
         self.memory.system_kv_set(agent_id, owner_id, user_id, key, value)
             .map_err(|e| e.to_string())
@@ -328,9 +331,12 @@ impl KernelHandle for CarrierKernel {
         user_id: &str,
         key: &str,
     ) -> Result<Option<serde_json::Value>, String> {
-        let agent_id = match uuid::Uuid::parse_str(agent_id) {
-            Ok(id) => types::agent::AgentId(id),
-            Err(_) => return Err("Invalid agent ID".to_string()),
+        let agent_id = if let Ok(id) = uuid::Uuid::parse_str(agent_id) {
+            types::agent::AgentId(id)
+        } else {
+            let entry = self.registry.find_by_name(agent_id)
+                .ok_or_else(|| format!("Agent not found: {agent_id}"))?;
+            entry.id
         };
         self.memory.system_kv_get(agent_id, owner_id, user_id, key)
             .map_err(|e| e.to_string())
@@ -448,9 +454,14 @@ impl KernelHandle for CarrierKernel {
         let one_shot = job_json["one_shot"].as_bool().unwrap_or(false);
 
         tracing::debug!(agent_id, "cron_create parsing agent_id");
-        let aid = types::agent::AgentId(
-            uuid::Uuid::parse_str(agent_id).map_err(|e| format!("Invalid agent ID: {e}"))?,
-        );
+        let aid = if let Ok(uuid) = uuid::Uuid::parse_str(agent_id) {
+            types::agent::AgentId(uuid)
+        } else {
+            // agent_id might be an agent name (e.g. "ai-writer") — resolve to UUID
+            let entry = self.registry.find_by_name(agent_id)
+                .ok_or_else(|| format!("Agent not found: {agent_id}"))?;
+            entry.id
+        };
 
         let job = CronJob {
             id: CronJobId::new(),
@@ -483,9 +494,13 @@ impl KernelHandle for CarrierKernel {
     }
 
     async fn cron_list(&self, agent_id: &str, owner_id: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
-        let aid = types::agent::AgentId(
-            uuid::Uuid::parse_str(agent_id).map_err(|e| format!("Invalid agent ID: {e}"))?,
-        );
+        let aid = if let Ok(uuid) = uuid::Uuid::parse_str(agent_id) {
+            types::agent::AgentId(uuid)
+        } else {
+            let entry = self.registry.find_by_name(agent_id)
+                .ok_or_else(|| format!("Agent not found: {agent_id}"))?;
+            entry.id
+        };
         let mut jobs = self.cron_scheduler.list_jobs(aid);
         if let Some(oid) = owner_id {
             jobs.retain(|j| j.owner_id.as_deref() == Some(oid));
