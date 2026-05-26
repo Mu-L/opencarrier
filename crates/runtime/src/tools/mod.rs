@@ -3,21 +3,28 @@
 //! Each tool category implements `ToolModule` and provides both definitions
 //! (for LLM tool schemas) and execution (the actual logic).
 
+pub mod a2a;
 pub mod agent;
+pub mod agent_mgmt;
+pub mod collaboration;
 pub mod filesystem;
 pub mod knowledge;
 pub mod media;
 pub mod memory;
 pub mod misc;
+pub mod scheduling;
 pub mod shell;
 pub mod sqlite;
 pub mod toolset;
+pub mod training;
 
+use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// A category of related tools.
 ///
@@ -65,8 +72,50 @@ pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
         Box::new(knowledge::KnowledgeTools),
         Box::new(media::MediaTools),
         Box::new(memory::MemoryTools),
-        Box::new(agent::AgentTools),
+        Box::new(agent::DelegationTools),
+        Box::new(agent_mgmt::AgentMgmtTools),
+        Box::new(training::TrainingTools),
+        Box::new(scheduling::SchedulingTools),
+        Box::new(collaboration::CollaborationTools),
+        Box::new(a2a::A2aTools),
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Shared kernel helpers (used by multiple tool modules)
+// ---------------------------------------------------------------------------
+
+/// Require a kernel handle, returning an error if none is available.
+pub(crate) fn require_kernel(
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<&Arc<dyn KernelHandle>, String> {
+    kernel.ok_or_else(|| {
+        "Kernel handle not available. Inter-agent tools require a running kernel.".to_string()
+    })
+}
+
+/// Resolve a target clone's workspace root via kernel.
+pub(crate) fn resolve_target_workspace(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<PathBuf, String> {
+    let kh = kernel.ok_or("train_* tools require kernel access")?;
+    let target = input["target"]
+        .as_str()
+        .ok_or("Missing 'target' parameter (target clone name)")?;
+
+    let target_workspace = kh
+        .resolve_agent_workspace(target)
+        .ok_or_else(|| format!("Agent '{}' not found or has no workspace", target))?;
+
+    let path = PathBuf::from(&target_workspace);
+    if !path.exists() {
+        return Err(format!(
+            "Workspace for '{}' does not exist: {}",
+            target, target_workspace
+        ));
+    }
+    Ok(path)
 }
 
 // ---------------------------------------------------------------------------
