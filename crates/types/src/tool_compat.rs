@@ -23,8 +23,8 @@ pub fn map_tool_name(name: &str) -> Option<&'static str> {
         "sessions_spawn" => Some("agent_send"),
 
         // KV memory aliases
-        "memory_recall" | "system_kv_recall" | "knowledge_read" => Some("kv_get"),
-        "memory_store" | "system_kv_store" | "knowledge_add" => Some("kv_set"),
+        "memory_recall" | "system_kv_recall" => Some("kv_get"),
+        "memory_store" | "system_kv_store" => Some("kv_set"),
 
         // LLM-hallucinated aliases (fs-* style names)
         "fs-read" | "fs_read" | "fsRead" | "readFile" => Some("file_read"),

@@ -85,9 +85,7 @@ pub async fn execute_tool(
     // (e.g. "fs-write" → "file_write") resolve to the canonical Carrier name.
     let tool_name = normalize_tool_name(tool_name);
 
-    // Remap parameters for aliased tools (e.g. knowledge_read.filename → kv_get.key)
-    let remapped = remap_tool_params(&tool_name, input.clone());
-    let input_ref: &serde_json::Value = &remapped;
+    let input_ref = input;
 
     // Permission enforcement: reject tools above max_tool_level or Dangerous
     let modules = crate::tools::builtin_modules();
@@ -702,53 +700,4 @@ mod tests {
         let out = smart_truncate(content, 4096);
         assert_eq!(out, content);
     }
-}
-
-/// Remap parameters for aliased tools where the original tool used different
-/// parameter names than the canonical Carrier tool.
-///
-/// E.g. `knowledge_read` uses `filename` → `kv_get` uses `key`
-fn remap_tool_params(tool_name: &str, input: serde_json::Value) -> serde_json::Value {
-    let Some(obj) = input.as_object() else {
-        return input;
-    };
-
-    match tool_name {
-        "kv_get" => {
-            // knowledge_read.filename / knowledge_read.title / knowledge_read.query → kv_get.key
-            if !obj.contains_key("key") {
-                let from_key = ["filename", "title", "query"]
-                    .iter()
-                    .find(|k| obj.contains_key(**k));
-                if let Some(src) = from_key {
-                    let mut new_obj = obj.clone();
-                    if let Some(v) = new_obj.remove(*src) {
-                        new_obj.insert("key".to_string(), v);
-                    }
-                    return serde_json::Value::Object(new_obj);
-                }
-            }
-        }
-        "kv_set" => {
-            // knowledge_add.filename/title → kv_set.key, knowledge_add.content → kv_set.value
-            if !obj.contains_key("key") {
-                let from_key = ["filename", "title"]
-                    .iter()
-                    .find(|k| obj.contains_key(**k));
-                if let Some(src) = from_key {
-                    let mut new_obj = obj.clone();
-                    if let Some(v) = new_obj.remove(*src) {
-                        new_obj.insert("key".to_string(), v);
-                    }
-                    if let Some(v) = new_obj.remove("content") {
-                        new_obj.insert("value".to_string(), v);
-                    }
-                    return serde_json::Value::Object(new_obj);
-                }
-            }
-        }
-        _ => {}
-    }
-
-    input
 }
