@@ -1017,12 +1017,7 @@ impl CarrierKernel {
     /// Reads all kv keys, filters to drawer prefixes (profile/preference/entity/fact/event),
     /// and builds DrawerEntry structs for injection into the system prompt.
     pub(crate) fn prefetch_drawer_entries(&self, agent_name: &str, owner_id: &str) -> Vec<runtime::prompt_builder::DrawerEntry> {
-        let agent_id = match agent_name.parse::<types::agent::AgentId>() {
-            Ok(id) => id,
-            Err(_) => return Vec::new(),
-        };
-
-        let all_pairs = match self.memory.list_kv(agent_id, owner_id, owner_id) {
+        let all_pairs = match self.memory.list_kv(agent_name, owner_id, owner_id) {
             Ok(pairs) => pairs,
             Err(e) => {
                 tracing::debug!("Drawer prefetch failed (non-fatal): {e}");
@@ -1075,7 +1070,7 @@ impl CarrierKernel {
         let oid = owner_id.as_deref().unwrap_or(sid);
         let user_name = self
             .memory
-            .system_kv_get(*agent_id, sid, sid, "user_name")
+            .system_kv_get(&agent_id.to_string(), sid, sid, "user_name")
             .ok()
             .flatten()
             .and_then(|v| v.as_str().map(String::from))

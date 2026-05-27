@@ -21,7 +21,7 @@ impl SystemKV {
     /// Get a value from the key-value store.
     pub fn get(
         &self,
-        agent_id: AgentId,
+        agent_id: &str,
         owner_id: &str,
         user_id: &str,
         key: &str,
@@ -36,7 +36,7 @@ impl SystemKV {
             )
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
         let result = stmt.query_row(
-            rusqlite::params![agent_id.0.to_string(), owner_id, user_id, key],
+            rusqlite::params![agent_id, owner_id, user_id, key],
             |row| {
                 let blob: Vec<u8> = row.get(0)?;
                 Ok(blob)
@@ -60,7 +60,7 @@ impl SystemKV {
     /// table always holds the latest value for fast lookup.
     pub fn set(
         &self,
-        agent_id: AgentId,
+        agent_id: &str,
         owner_id: &str,
         user_id: &str,
         key: &str,
@@ -82,14 +82,14 @@ impl SystemKV {
         let old: Option<(Vec<u8>, i64)> = conn
             .query_row(
                 "SELECT value, version FROM kv_store WHERE agent_id = ?1 AND owner_id = ?2 AND user_id = ?3 AND key = ?4",
-                rusqlite::params![agent_id.0.to_string(), owner_id, user_id, key],
+                rusqlite::params![agent_id, owner_id, user_id, key],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .ok();
         if let Some((old_blob, old_version)) = old {
             conn.execute(
                 "INSERT INTO kv_history (agent_id, owner_id, user_id, key, value, version, archived_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![agent_id.0.to_string(), owner_id, user_id, key, old_blob, old_version, now],
+                rusqlite::params![agent_id, owner_id, user_id, key, old_blob, old_version, now],
             )
             .map_err(|e| {
                 let _ = conn.execute("ROLLBACK", []);
@@ -100,7 +100,7 @@ impl SystemKV {
         conn.execute(
             "INSERT INTO kv_store (agent_id, owner_id, user_id, key, value, version, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
              ON CONFLICT(agent_id, owner_id, user_id, key) DO UPDATE SET value = ?5, version = version + 1, updated_at = ?6",
-            rusqlite::params![agent_id.0.to_string(), owner_id, user_id, key, blob, now],
+            rusqlite::params![agent_id, owner_id, user_id, key, blob, now],
         )
         .map_err(|e| {
             let _ = conn.execute("ROLLBACK", []);
@@ -116,7 +116,7 @@ impl SystemKV {
     ///
     /// **Immutability guarantee**: the value is archived to `kv_history`
     /// before deletion, so no memory is ever truly lost.
-    pub fn delete(&self, agent_id: AgentId, owner_id: &str, user_id: &str, key: &str) -> CarrierResult<()> {
+    pub fn delete(&self, agent_id: &str, owner_id: &str, user_id: &str, key: &str) -> CarrierResult<()> {
         let conn = self
             .conn
             .lock()
@@ -131,14 +131,14 @@ impl SystemKV {
         let old: Option<(Vec<u8>, i64)> = conn
             .query_row(
                 "SELECT value, version FROM kv_store WHERE agent_id = ?1 AND owner_id = ?2 AND user_id = ?3 AND key = ?4",
-                rusqlite::params![agent_id.0.to_string(), owner_id, user_id, key],
+                rusqlite::params![agent_id, owner_id, user_id, key],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .ok();
         if let Some((old_blob, old_version)) = old {
             conn.execute(
                 "INSERT INTO kv_history (agent_id, owner_id, user_id, key, value, version, archived_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![agent_id.0.to_string(), owner_id, user_id, key, old_blob, old_version, now],
+                rusqlite::params![agent_id, owner_id, user_id, key, old_blob, old_version, now],
             )
             .map_err(|e| {
                 let _ = conn.execute("ROLLBACK", []);
@@ -148,7 +148,7 @@ impl SystemKV {
 
         conn.execute(
             "DELETE FROM kv_store WHERE agent_id = ?1 AND owner_id = ?2 AND user_id = ?3 AND key = ?4",
-            rusqlite::params![agent_id.0.to_string(), owner_id, user_id, key],
+            rusqlite::params![agent_id, owner_id, user_id, key],
         )
         .map_err(|e| {
             let _ = conn.execute("ROLLBACK", []);
@@ -163,7 +163,7 @@ impl SystemKV {
     /// Get the full history of a key (all archived values, oldest first).
     pub fn get_history(
         &self,
-        agent_id: AgentId,
+        agent_id: &str,
         owner_id: &str,
         user_id: &str,
         key: &str,
@@ -179,7 +179,7 @@ impl SystemKV {
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
         let rows = stmt
             .query_map(
-                rusqlite::params![agent_id.0.to_string(), owner_id, user_id, key],
+                rusqlite::params![agent_id, owner_id, user_id, key],
                 |row| {
                     let blob: Vec<u8> = row.get(0)?;
                     let version: i64 = row.get(1)?;
@@ -206,7 +206,7 @@ impl SystemKV {
     /// List all key-value pairs for an agent.
     pub fn list_kv(
         &self,
-        agent_id: AgentId,
+        agent_id: &str,
         owner_id: &str,
         user_id: &str,
     ) -> CarrierResult<Vec<(String, serde_json::Value)>> {
@@ -219,7 +219,7 @@ impl SystemKV {
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
         let rows = stmt
             .query_map(
-                rusqlite::params![agent_id.0.to_string(), owner_id, user_id],
+                rusqlite::params![agent_id, owner_id, user_id],
                 |row| {
                     let key: String = row.get(0)?;
                     let blob: Vec<u8> = row.get(1)?;
@@ -297,7 +297,7 @@ impl SystemKV {
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let col_count = stmt.column_count();
-        let result = stmt.query_row(rusqlite::params![agent_id.0.to_string()], |row| {
+        let result = stmt.query_row(rusqlite::params![agent_id.to_string()], |row| {
             let manifest_blob: Vec<u8> = row.get(2)?;
             let state_str: String = row.get(3)?;
             let created_str: String = row.get(4)?;
@@ -368,7 +368,7 @@ impl SystemKV {
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         conn.execute(
             "DELETE FROM agents WHERE id = ?1",
-            rusqlite::params![agent_id.0.to_string()],
+            rusqlite::params![agent_id.to_string()],
         )
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())

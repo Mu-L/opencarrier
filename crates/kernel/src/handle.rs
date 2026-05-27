@@ -651,7 +651,7 @@ impl MemoryHandle for CarrierKernel {
     ) -> Result<(), String> {
         let (agent_id, _) = self.registry.resolve(agent_id)
             .map_err(|e| e.to_string())?;
-        self.memory.system_kv_set(agent_id, owner_id, user_id, key, value)
+        self.memory.system_kv_set(&agent_id.to_string(), owner_id, user_id, key, value)
             .map_err(|e| e.to_string())
     }
 
@@ -664,7 +664,7 @@ impl MemoryHandle for CarrierKernel {
     ) -> Result<Option<serde_json::Value>, String> {
         let (agent_id, _) = self.registry.resolve(agent_id)
             .map_err(|e| e.to_string())?;
-        self.memory.system_kv_get(agent_id, owner_id, user_id, key)
+        self.memory.system_kv_get(&agent_id.to_string(), owner_id, user_id, key)
             .map_err(|e| e.to_string())
     }
 
@@ -676,7 +676,7 @@ impl MemoryHandle for CarrierKernel {
     ) -> Result<Vec<(String, serde_json::Value)>, String> {
         let (agent_id, _) = self.registry.resolve(agent_id)
             .map_err(|e| e.to_string())?;
-        self.memory.list_kv(agent_id, owner_id, user_id)
+        self.memory.list_kv(&agent_id.to_string(), owner_id, user_id)
             .map_err(|e| e.to_string())
     }
 
@@ -689,7 +689,7 @@ impl MemoryHandle for CarrierKernel {
     ) -> Result<(), String> {
         let (agent_id, _) = self.registry.resolve(agent_id)
             .map_err(|e| e.to_string())?;
-        self.memory.system_kv_delete(agent_id, owner_id, user_id, key)
+        self.memory.system_kv_delete(&agent_id.to_string(), owner_id, user_id, key)
             .map_err(|e| e.to_string())
     }
 
@@ -930,9 +930,7 @@ impl MemoryHandle for MemorySubstrateHandle {
         key: &str,
         value: serde_json::Value,
     ) -> Result<(), String> {
-        let aid = agent_id.parse::<types::agent::AgentId>()
-            .map_err(|e| format!("invalid agent_id: {e}"))?;
-        self.inner.system_kv_set(aid, owner_id, user_id, key, value)
+        self.inner.system_kv_set(agent_id, owner_id, user_id, key, value)
             .map_err(|e| e.to_string())
     }
 
@@ -943,9 +941,7 @@ impl MemoryHandle for MemorySubstrateHandle {
         user_id: &str,
         key: &str,
     ) -> Result<Option<serde_json::Value>, String> {
-        let aid = agent_id.parse::<types::agent::AgentId>()
-            .map_err(|e| format!("invalid agent_id: {e}"))?;
-        self.inner.system_kv_get(aid, owner_id, user_id, key)
+        self.inner.system_kv_get(agent_id, owner_id, user_id, key)
             .map_err(|e| e.to_string())
     }
 
@@ -955,9 +951,7 @@ impl MemoryHandle for MemorySubstrateHandle {
         owner_id: &str,
         user_id: &str,
     ) -> Result<Vec<(String, serde_json::Value)>, String> {
-        let aid = agent_id.parse::<types::agent::AgentId>()
-            .map_err(|e| format!("invalid agent_id: {e}"))?;
-        self.inner.list_kv(aid, owner_id, user_id)
+        self.inner.list_kv(agent_id, owner_id, user_id)
             .map_err(|e| e.to_string())
     }
 
@@ -968,9 +962,7 @@ impl MemoryHandle for MemorySubstrateHandle {
         user_id: &str,
         key: &str,
     ) -> Result<(), String> {
-        let aid = agent_id.parse::<types::agent::AgentId>()
-            .map_err(|e| format!("invalid agent_id: {e}"))?;
-        self.inner.system_kv_delete(aid, owner_id, user_id, key)
+        self.inner.system_kv_delete(agent_id, owner_id, user_id, key)
             .map_err(|e| e.to_string())
     }
 

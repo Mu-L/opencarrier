@@ -132,7 +132,7 @@ impl MemorySubstrate {
     /// Synchronous get from the system KV store.
     pub fn system_kv_get(
         &self,
-        agent_id: AgentId,
+        agent_id: &str,
         owner_id: &str,
         user_id: &str,
         key: &str,
@@ -143,7 +143,7 @@ impl MemorySubstrate {
     /// Synchronous set in the system KV store.
     pub fn system_kv_set(
         &self,
-        agent_id: AgentId,
+        agent_id: &str,
         owner_id: &str,
         user_id: &str,
         key: &str,
@@ -155,7 +155,7 @@ impl MemorySubstrate {
     /// List all KV pairs for an agent (per-user).
     pub fn list_kv(
         &self,
-        agent_id: AgentId,
+        agent_id: &str,
         owner_id: &str,
         user_id: &str,
     ) -> CarrierResult<Vec<(String, serde_json::Value)>> {
@@ -165,7 +165,7 @@ impl MemorySubstrate {
     /// Delete a KV entry for an agent (per-user).
     pub fn system_kv_delete(
         &self,
-        agent_id: AgentId,
+        agent_id: &str,
         owner_id: &str,
         user_id: &str,
         key: &str,

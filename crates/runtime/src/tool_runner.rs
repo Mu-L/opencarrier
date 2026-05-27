@@ -715,26 +715,36 @@ fn remap_tool_params(tool_name: &str, input: serde_json::Value) -> serde_json::V
 
     match tool_name {
         "kv_get" => {
-            // knowledge_read.filename → kv_get.key
-            if !obj.contains_key("key") && obj.contains_key("filename") {
-                let mut new_obj = obj.clone();
-                if let Some(v) = new_obj.remove("filename") {
-                    new_obj.insert("key".to_string(), v);
+            // knowledge_read.filename / knowledge_read.title / knowledge_read.query → kv_get.key
+            if !obj.contains_key("key") {
+                let from_key = ["filename", "title", "query"]
+                    .iter()
+                    .find(|k| obj.contains_key(**k));
+                if let Some(src) = from_key {
+                    let mut new_obj = obj.clone();
+                    if let Some(v) = new_obj.remove(*src) {
+                        new_obj.insert("key".to_string(), v);
+                    }
+                    return serde_json::Value::Object(new_obj);
                 }
-                return serde_json::Value::Object(new_obj);
             }
         }
         "kv_set" => {
-            // knowledge_add.filename → kv_set.key, knowledge_add.content → kv_set.value
-            if !obj.contains_key("key") && obj.contains_key("filename") {
-                let mut new_obj = obj.clone();
-                if let Some(v) = new_obj.remove("filename") {
-                    new_obj.insert("key".to_string(), v);
+            // knowledge_add.filename/title → kv_set.key, knowledge_add.content → kv_set.value
+            if !obj.contains_key("key") {
+                let from_key = ["filename", "title"]
+                    .iter()
+                    .find(|k| obj.contains_key(**k));
+                if let Some(src) = from_key {
+                    let mut new_obj = obj.clone();
+                    if let Some(v) = new_obj.remove(*src) {
+                        new_obj.insert("key".to_string(), v);
+                    }
+                    if let Some(v) = new_obj.remove("content") {
+                        new_obj.insert("value".to_string(), v);
+                    }
+                    return serde_json::Value::Object(new_obj);
                 }
-                if let Some(v) = new_obj.remove("content") {
-                    new_obj.insert("value".to_string(), v);
-                }
-                return serde_json::Value::Object(new_obj);
             }
         }
         _ => {}

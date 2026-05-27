@@ -316,14 +316,9 @@ fn extract_and_merge_knowledge(
     owner_id: &str,
     user_id: &str,
 ) {
-    let agent_id = match agent_name.parse::<types::agent::AgentId>() {
-        Ok(id) => id,
-        Err(_) => return,
-    };
-
     for fact in &summary.key_facts {
         if let Some((key, new_values)) = classify_fact(fact) {
-            merge_drawer_value(memory_handle, &agent_id, agent_name, owner_id, user_id, &key, new_values);
+            merge_drawer_value(memory_handle, agent_name, owner_id, user_id, &key, new_values);
         }
     }
 }
@@ -334,7 +329,6 @@ fn extract_and_merge_knowledge(
 /// - Timeline-type keys (event.*): read existing → append → write back
 fn merge_drawer_value(
     memory_handle: &Arc<dyn crate::memory_handle::MemoryHandle>,
-    agent_id: &types::agent::AgentId,
     agent_name: &str,
     owner_id: &str,
     user_id: &str,
@@ -345,7 +339,7 @@ fn merge_drawer_value(
 
     // Read existing value
     let existing = memory_handle
-        .kv_get(&agent_id.to_string(), owner_id, user_id, key)
+        .kv_get(agent_name, owner_id, user_id, key)
         .ok()
         .flatten();
 
@@ -396,7 +390,7 @@ fn merge_drawer_value(
         merged.into_iter().map(serde_json::Value::String).collect(),
     );
 
-    if let Err(e) = memory_handle.kv_set(&agent_id.to_string(), owner_id, user_id, key, value) {
+    if let Err(e) = memory_handle.kv_set(agent_name, owner_id, user_id, key, value) {
         debug!("Failed to write drawer key '{}': {}", key, e);
     } else {
         info!(agent = agent_name, key = key, "Drawer entry updated");

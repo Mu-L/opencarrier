@@ -227,7 +227,7 @@ impl CarrierKernel {
         // Save to structured memory store (key = "session_{date}_{slug}")
         let key = format!("session_{date}_{slug}");
         if let Err(e) = self.memory.system_kv_set(
-            agent_id,
+            &agent_id.to_string(),
             "",
             "",
             &key,
