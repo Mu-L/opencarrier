@@ -85,6 +85,10 @@ pub async fn execute_tool(
     // (e.g. "fs-write" → "file_write") resolve to the canonical Carrier name.
     let tool_name = normalize_tool_name(tool_name);
 
+    // Remap parameters for aliased tools (e.g. knowledge_read.filename → kv_get.key)
+    let remapped = remap_tool_params(&tool_name, input.clone());
+    let input_ref: &serde_json::Value = &remapped;
+
     // Permission enforcement: reject tools above max_tool_level or Dangerous
     let modules = crate::tools::builtin_modules();
     let mut permission_checked = false;
@@ -129,7 +133,7 @@ pub async fn execute_tool(
     // Phase 1: Try extracted tool modules (filesystem, shell, misc, ...)
     let modules = crate::tools::builtin_modules();
     for module in &modules {
-        if let Some(result) = module.execute(tool_name, input, ctx).await {
+        if let Some(result) = module.execute(tool_name, input_ref, ctx).await {
             return match result {
                 Ok(content) => ToolResult {
                     tool_use_id: tool_use_id.to_string(),
@@ -152,7 +156,7 @@ pub async fn execute_tool(
     let result = match tool_name {
         // Web tools
         "web_fetch" => {
-            let url = input["url"].as_str().unwrap_or("");
+            let url = input_ref["url"].as_str().unwrap_or("");
             if let Some(violation) = check_taint_net_fetch(url) {
                 return ToolResult {
                     tool_use_id: tool_use_id.to_string(),
@@ -162,9 +166,9 @@ pub async fn execute_tool(
             }
             match fetch_engine {
                 Some(engine) => {
-                    let method = input["method"].as_str().unwrap_or("GET");
-                    let headers = input.get("headers").and_then(|v| v.as_object());
-                    let body = input["body"].as_str();
+                    let method = input_ref["method"].as_str().unwrap_or("GET");
+                    let headers = input_ref.get("headers").and_then(|v| v.as_object());
+                    let body = input_ref["body"].as_str();
                     engine
                         .fetch_with_options(url, method, headers, body)
                         .await
@@ -192,7 +196,7 @@ pub async fn execute_tool(
                                 server = server_key,
                                 "Dispatching to MCP server"
                             );
-                            match conn.call_tool(other, input).await {
+                            match conn.call_tool(other, input_ref).await {
                                 Ok(content) => Ok(content),
                                 Err(e) => Err(format!("MCP tool call failed: {e}")),
                             }
@@ -698,4 +702,43 @@ mod tests {
         let out = smart_truncate(content, 4096);
         assert_eq!(out, content);
     }
+}
+
+/// Remap parameters for aliased tools where the original tool used different
+/// parameter names than the canonical Carrier tool.
+///
+/// E.g. `knowledge_read` uses `filename` → `kv_get` uses `key`
+fn remap_tool_params(tool_name: &str, input: serde_json::Value) -> serde_json::Value {
+    let Some(obj) = input.as_object() else {
+        return input;
+    };
+
+    match tool_name {
+        "kv_get" => {
+            // knowledge_read.filename → kv_get.key
+            if !obj.contains_key("key") && obj.contains_key("filename") {
+                let mut new_obj = obj.clone();
+                if let Some(v) = new_obj.remove("filename") {
+                    new_obj.insert("key".to_string(), v);
+                }
+                return serde_json::Value::Object(new_obj);
+            }
+        }
+        "kv_set" => {
+            // knowledge_add.filename → kv_set.key, knowledge_add.content → kv_set.value
+            if !obj.contains_key("key") && obj.contains_key("filename") {
+                let mut new_obj = obj.clone();
+                if let Some(v) = new_obj.remove("filename") {
+                    new_obj.insert("key".to_string(), v);
+                }
+                if let Some(v) = new_obj.remove("content") {
+                    new_obj.insert("value".to_string(), v);
+                }
+                return serde_json::Value::Object(new_obj);
+            }
+        }
+        _ => {}
+    }
+
+    input
 }
