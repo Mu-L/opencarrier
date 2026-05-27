@@ -3,6 +3,7 @@
 
 use super::ToolModule;
 use crate::kernel_handle::KernelHandle;
+use crate::memory_handle::MemoryHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
 use types::tool::{PermissionLevel, ToolDefinition};
@@ -142,10 +143,10 @@ fn parse_time_to_hour(s: &str) -> Result<u32, String> {
 
 async fn tool_schedule_create(
     input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
+    memory: Option<&Arc<dyn MemoryHandle>>,
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+    let mem = memory.ok_or("schedule_create requires memory access")?;
     let aid = caller_agent_id.ok_or("No agent context for schedule_create")?;
     let description = input["description"]
         .as_str()
@@ -169,13 +170,13 @@ async fn tool_schedule_create(
     });
 
     // Load existing schedules from agent's memory
-    let mut schedules: Vec<serde_json::Value> = match kh.system_kv_recall(aid, "", "", SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
 
     schedules.push(entry);
-    kh.system_kv_store(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    mem.kv_set(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
 
     Ok(format!(
         "Schedule created:\n  ID: {schedule_id}\n  Description: {description}\n  Cron: {cron_expr}\n  Original: {schedule_str}"
@@ -183,13 +184,13 @@ async fn tool_schedule_create(
 }
 
 async fn tool_schedule_list(
-    kernel: Option<&Arc<dyn KernelHandle>>,
+    memory: Option<&Arc<dyn MemoryHandle>>,
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+    let mem = memory.ok_or("schedule_list requires memory access")?;
     let aid = caller_agent_id.ok_or("No agent context for schedule_list")?;
 
-    let schedules: Vec<serde_json::Value> = match kh.system_kv_recall(aid, "", "", SCHEDULES_KEY)? {
+    let schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -217,14 +218,14 @@ async fn tool_schedule_list(
 
 async fn tool_schedule_delete(
     input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
+    memory: Option<&Arc<dyn MemoryHandle>>,
     caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+    let mem = memory.ok_or("schedule_delete requires memory access")?;
     let aid = caller_agent_id.ok_or("No agent context for schedule_delete")?;
     let id = input["id"].as_str().ok_or("Missing 'id' parameter")?;
 
-    let mut schedules: Vec<serde_json::Value> = match kh.system_kv_recall(aid, "", "", SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -236,7 +237,7 @@ async fn tool_schedule_delete(
         return Err(format!("Schedule '{id}' not found."));
     }
 
-    kh.system_kv_store(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    mem.kv_set(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
     Ok(format!("Schedule '{id}' deleted."))
 }
 
@@ -388,14 +389,15 @@ impl ToolModule for SchedulingTools {
         ctx: &ToolContext<'_>,
     ) -> Option<Result<String, String>> {
         let kernel = ctx.kernel;
+        let memory = ctx.memory;
         let caller_agent_id = ctx.caller_agent_id;
         let owner_id = ctx.owner_id;
 
         match name {
             // Scheduling tools
-            "schedule_create" => Some(tool_schedule_create(input, kernel, caller_agent_id).await),
-            "schedule_list" => Some(tool_schedule_list(kernel, caller_agent_id).await),
-            "schedule_delete" => Some(tool_schedule_delete(input, kernel, caller_agent_id).await),
+            "schedule_create" => Some(tool_schedule_create(input, memory, caller_agent_id).await),
+            "schedule_list" => Some(tool_schedule_list(memory, caller_agent_id).await),
+            "schedule_delete" => Some(tool_schedule_delete(input, memory, caller_agent_id).await),
 
             // Cron scheduling tools
             "cron_create" => Some(tool_cron_create(input, kernel, caller_agent_id, owner_id).await),

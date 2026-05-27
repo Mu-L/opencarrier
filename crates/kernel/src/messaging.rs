@@ -238,7 +238,13 @@ impl CarrierKernel {
             auto_matched_subagent.map(|name| format!("**Auto-delegation: {}**\nThe user message matches the '{}' subagent. Call delegate_{} to handle this task.", name, name, name))
         });
 
-        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, sender_id, sender_name, owner_id, prompt_auto_match.clone());
+        // L0 turn summaries from session
+        let turn_summaries = session.turn_summaries.clone();
+
+        // Drawer entries from kv memory
+        let drawer_entries = self.prefetch_drawer_entries(&manifest.name, owner_id.as_deref().unwrap_or(sender_id.as_deref().unwrap_or("")));
+
+        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, sender_id, sender_name, owner_id, prompt_auto_match.clone(), turn_summaries, drawer_entries);
 
         Ok(PreparedContext {
             session,
@@ -545,6 +551,11 @@ impl CarrierKernel {
                 }))
                     as Arc<dyn runtime::llm_driver::Brain>);
 
+            // Extract MemoryHandle from kernel.
+            let memory_handle: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
+                Some(Arc::new(crate::handle::MemorySubstrateHandle::new(Arc::clone(&kernel_clone.memory)))
+                    as Arc<dyn runtime::memory_handle::MemoryHandle>);
+
             // Auto-compact if the session is large before running the loop
             if needs_compact {
                 info!(agent_id = %agent_id, messages = session.messages.len(), "Auto-compacting session");
@@ -601,6 +612,7 @@ impl CarrierKernel {
                 Some(&kernel_clone.coordination.process_manager),
                 None,              // content_blocks (streaming path uses text only for now)
                 brain_ref.clone(), // Brain for modality-based routing
+                memory_handle.clone(), // Memory handle for kv/tree operations
                 sender_id.as_deref(),
                 owner_id.as_deref(),
                 channel_type.as_deref(),
@@ -911,6 +923,10 @@ impl CarrierKernel {
             }))
                 as Arc<dyn runtime::llm_driver::Brain>);
 
+        // Extract MemoryHandle from kernel.
+        let memory_handle: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
+            Some(Arc::new(crate::handle::MemorySubstrateHandle::new(Arc::clone(&self.memory))));
+
         // Model routing is handled by Brain
 
         let driver = self.resolve_driver(&manifest)?;
@@ -962,6 +978,7 @@ impl CarrierKernel {
             Some(&self.coordination.process_manager),
             content_blocks,
             brain_ref.clone(), // Brain for modality-based routing
+            memory_handle.clone(), // Memory handle for kv/tree operations
             sender_id.as_deref(),
             owner_id.as_deref(),
             channel_type.as_deref(),
@@ -1150,6 +1167,8 @@ impl CarrierKernel {
                 let kh = kernel_handle.clone();
                 let driver_clone = driver.clone();
                 let brain_clone = brain.map(Arc::clone);
+                let mh_clone: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
+                    Some(Arc::new(crate::handle::MemorySubstrateHandle::new(Arc::clone(&memory))));
                 let tools_owned = tools.to_vec();
                 let manifest_clone = manifest.clone();
                 let sid = sender_id.clone();
@@ -1180,6 +1199,7 @@ impl CarrierKernel {
                         None,   // process_manager
                         None,   // user_content_blocks
                         brain_clone,
+                        mh_clone,
                         sid.as_deref(), oid.as_deref(),
                         ct.as_deref(),
                     ).await;

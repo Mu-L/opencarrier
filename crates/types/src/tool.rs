@@ -75,8 +75,7 @@ impl PermissionLevel {
             | "image_generate" | "text_to_speech" | "canvas_present"
             | "task_post" | "task_claim" | "task_complete"
             | "event_publish" | "schedule_create" | "schedule_delete"
-            | "cron_create" | "cron_cancel"
-            | "memory_ingest" => Self::Write,
+            | "cron_create" | "cron_cancel" => Self::Write,
 
             // Execute — cross-boundary writes
             "process_start" | "process_poll"

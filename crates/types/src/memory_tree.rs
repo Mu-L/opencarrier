@@ -160,6 +160,9 @@ pub struct IngestRequest {
     pub messages: Vec<IngestMessage>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// User ID for per-user isolation. None = shared/owner-level data.
+    #[serde(default)]
+    pub user_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,6 +184,7 @@ pub struct SourceQuery<'a> {
     pub time_window_days: Option<u32>,
     pub query: Option<&'a str>,
     pub limit: usize,
+    pub user_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +193,7 @@ pub struct GlobalQuery<'a> {
     pub time_window_days: Option<u32>,
     pub query: Option<&'a str>,
     pub limit: usize,
+    pub user_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +203,7 @@ pub struct TopicQuery<'a> {
     pub query: Option<&'a str>,
     pub time_window_days: Option<u32>,
     pub limit: usize,
+    pub user_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +212,7 @@ pub struct EntitySearch<'a> {
     pub query: &'a str,
     pub kind: Option<&'a str>,
     pub limit: usize,
+    pub user_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -214,6 +221,7 @@ pub struct DrillDownQuery<'a> {
     pub node_id: &'a str,
     pub max_depth: u32,
     pub limit: usize,
+    pub user_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +229,7 @@ pub struct FetchLeavesQuery<'a> {
     pub owner_id: &'a str,
     pub chunk_ids: Vec<String>,
     pub limit: usize,
+    pub user_id: Option<&'a str>,
 }
 
 // ---------------------------------------------------------------------------

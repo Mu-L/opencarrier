@@ -51,6 +51,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     manifest: &AgentManifest,
     memory: &MemorySubstrate,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    memory_handle: Option<&Arc<dyn crate::memory_handle::MemoryHandle>>,
     brain: Option<&Arc<dyn Brain>>,
     hooks: Option<&HookRegistry>,
     on_phase: Option<&PhaseCallback>,
@@ -176,6 +177,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         let home_dir_buf = kernel.and_then(|k| k.home_dir());
         let tool_ctx = ToolContext {
             kernel,
+            memory: memory_handle,
             caller_agent_id: Some(&caller_id_str),
             mcp_connections,
             fetch_engine,

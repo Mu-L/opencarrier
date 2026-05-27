@@ -15,8 +15,8 @@ use types::error::CarrierError;
 use types::message::{Message, TokenUsage};
 use tracing::{debug, info, warn};
 
-/// Maximum full messages to retain in session (3 turns × 2 = 6).
-pub(in crate::agent_loop) const MAX_RETAINED_MESSAGES: usize = 6;
+/// Maximum full messages to retain in session (6 turns × 2 = 12).
+pub(in crate::agent_loop) const MAX_RETAINED_MESSAGES: usize = 12;
 
 /// Action the main loop should take after handling an EndTurn.
 pub(in crate::agent_loop) enum EndTurnAction {
@@ -37,7 +37,8 @@ pub(in crate::agent_loop) async fn handle_end_turn(
     messages: &mut Vec<Message>,
     manifest: &AgentManifest,
     memory: &MemorySubstrate,
-    kernel: Option<&Arc<dyn KernelHandle>>,
+    _kernel: Option<&Arc<dyn KernelHandle>>,
+    memory_handle: Option<&Arc<dyn crate::memory_handle::MemoryHandle>>,
     brain: Option<&Arc<dyn Brain>>,
     hooks: Option<&HookRegistry>,
     on_phase: Option<&PhaseCallback>,
@@ -156,6 +157,17 @@ pub(in crate::agent_loop) async fn handle_end_turn(
                 outcome = %summary.assistant_outcome,
                 "Turn summary generated"
             );
+
+            // Extract knowledge from turn summary and write to drawer
+            if !summary.key_facts.is_empty() {
+                if let Some(mh) = memory_handle {
+                    let agent_name = &manifest.name;
+                    let oid = owner_id.unwrap_or("");
+                    let uid = sender_id.unwrap_or("");
+                    extract_and_merge_knowledge(&summary, mh, agent_name, oid, uid);
+                }
+            }
+
             session.turn_summaries.push(summary);
         }
     }
@@ -181,7 +193,7 @@ pub(in crate::agent_loop) async fn handle_end_turn(
     // TODO(Phase 13): Tree memory remember will be restored here.
 
     // Fire-and-forget tree ingestion
-    if let Some(kh) = kernel {
+    if let Some(mh) = memory_handle {
         let req = types::memory_tree::IngestRequest {
             owner_id: owner_id.unwrap_or("default").to_string(),
             agent_id: session.agent_name.to_string(),
@@ -197,10 +209,11 @@ pub(in crate::agent_loop) async fn handle_end_turn(
                 timestamp_ms: chrono::Utc::now().timestamp_millis(),
             }],
             tags: vec![channel_type.unwrap_or("api").to_string()],
+            user_id: sender_id.map(|s| s.to_string()),
         };
-        let kh = Arc::clone(kh);
+        let mh = Arc::clone(mh);
         tokio::spawn(async move {
-            if let Err(e) = kh.tree_ingest(req).await {
+            if let Err(e) = mh.tree_ingest(req).await {
                 tracing::warn!(error = %e, "tree_ingest failed");
             }
         });
@@ -240,4 +253,152 @@ pub(in crate::agent_loop) async fn handle_end_turn(
         directives: Default::default(),
         plan: None,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge extraction from turn summaries → drawer (kv)
+// ---------------------------------------------------------------------------
+
+/// Drawer key prefixes for state-type data (merge/dedup).
+const STATE_PREFIXES: &[&str] = &["profile.", "preference.", "entity.", "fact."];
+
+/// Classify a key fact from the turn summary into a drawer key-value pair.
+///
+/// Rules:
+/// - Phone/email → profile.*
+/// - Preference (likes, wants) → preference.*
+/// - Named entities (accounts, projects, orgs) → entity.*
+/// - Facts (rules, constraints) → fact.*
+/// - Decisions, events → event.YYYY-MM-DD.specific
+fn classify_fact(fact: &str) -> Option<(String, Vec<String>)> {
+    let lower = fact.to_lowercase();
+
+    // Profile: personal identifiers
+    if lower.contains("phone") || lower.contains("手机") {
+        return Some(("profile.phone_numbers".to_string(), vec![fact.to_string()]));
+    }
+    if lower.contains("email") || lower.contains("邮箱") {
+        return Some(("profile.email".to_string(), vec![fact.to_string()]));
+    }
+
+    // Preference
+    if lower.contains("prefers") || lower.contains("likes") || lower.contains("wants")
+        || lower.contains("偏好") || lower.contains("喜欢")
+    {
+        return Some(("preference.general".to_string(), vec![fact.to_string()]));
+    }
+
+    // Entity: accounts, projects, organizations
+    if lower.contains("account") || lower.contains("公众号") || lower.contains("workspace")
+        || lower.contains("项目")
+    {
+        return Some(("entity.accounts".to_string(), vec![fact.to_string()]));
+    }
+
+    // Event: decisions, scheduled items
+    if lower.contains("decided") || lower.contains("决定") || lower.contains("scheduled")
+        || lower.contains("计划")
+    {
+        let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let key = format!("event.{}.decision", date);
+        return Some((key, vec![fact.to_string()]));
+    }
+
+    // Default: entity as catch-all for named items
+    Some(("entity.misc".to_string(), vec![fact.to_string()]))
+}
+
+/// Extract knowledge from a turn summary and merge into the drawer.
+fn extract_and_merge_knowledge(
+    summary: &types::message::TurnSummary,
+    memory_handle: &Arc<dyn crate::memory_handle::MemoryHandle>,
+    agent_name: &str,
+    owner_id: &str,
+    user_id: &str,
+) {
+    let agent_id = match agent_name.parse::<types::agent::AgentId>() {
+        Ok(id) => id,
+        Err(_) => return,
+    };
+
+    for fact in &summary.key_facts {
+        if let Some((key, new_values)) = classify_fact(fact) {
+            merge_drawer_value(memory_handle, &agent_id, agent_name, owner_id, user_id, &key, new_values);
+        }
+    }
+}
+
+/// Merge new values into a drawer key.
+///
+/// - State-type keys (profile/preference/entity/fact): read existing → merge dedup → write back
+/// - Timeline-type keys (event.*): read existing → append → write back
+fn merge_drawer_value(
+    memory_handle: &Arc<dyn crate::memory_handle::MemoryHandle>,
+    agent_id: &types::agent::AgentId,
+    agent_name: &str,
+    owner_id: &str,
+    user_id: &str,
+    key: &str,
+    new_values: Vec<String>,
+) {
+    let is_state = STATE_PREFIXES.iter().any(|p| key.starts_with(p));
+
+    // Read existing value
+    let existing = memory_handle
+        .kv_get(&agent_id.to_string(), owner_id, user_id, key)
+        .ok()
+        .flatten();
+
+    let merged = match existing {
+        Some(serde_json::Value::Array(arr)) => {
+            let mut current: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+
+            if is_state {
+                // Merge dedup: add new values that don't already exist
+                for v in new_values {
+                    if !current.contains(&v) {
+                        current.push(v);
+                    }
+                }
+            } else {
+                // Timeline: append all
+                current.extend(new_values);
+            }
+            current
+        }
+        Some(serde_json::Value::String(s)) => {
+            let mut current = vec![s];
+            if is_state {
+                for v in new_values {
+                    if !current.contains(&v) {
+                        current.push(v);
+                    }
+                }
+            } else {
+                current.extend(new_values);
+            }
+            current
+        }
+        Some(_other) => {
+            // Non-array/string existing value — overwrite with new
+            new_values
+        }
+        None => {
+            // No existing value — just write new
+            new_values
+        }
+    };
+
+    let value = serde_json::Value::Array(
+        merged.into_iter().map(serde_json::Value::String).collect(),
+    );
+
+    if let Err(e) = memory_handle.kv_set(&agent_id.to_string(), owner_id, user_id, key, value) {
+        debug!("Failed to write drawer key '{}': {}", key, e);
+    } else {
+        info!(agent = agent_name, key = key, "Drawer entry updated");
+    }
 }

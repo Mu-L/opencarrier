@@ -1,13 +1,12 @@
 //! Dynamic context budget for tool result truncation.
 //!
-//! Replaces the hardcoded MAX_TOOL_RESULT_CHARS with a two-layer system:
-//! - Layer 1: Per-result cap based on context window size (30% of window)
-//! - Layer 2: Context guard that scans all tool results before LLM calls
-//!   and compacts oldest results when total exceeds 75% headroom.
+//! Simplified: strip base64 blobs + cap single tool results that exceed
+//! 50% of the context window. L0 summaries + drawer keep overall context
+//! length controlled, so the multi-pass compaction of oldest results is
+//! no longer needed.
 
 use types::message::{ContentBlock, Message, MessageContent};
 use types::tool::ToolDefinition;
-use tracing::debug;
 
 /// Budget parameters derived from the model's context window.
 #[derive(Debug, Clone)]
@@ -39,12 +38,6 @@ impl ContextBudget {
     /// Single result absolute max: 50% of context window.
     pub fn single_result_max(&self) -> usize {
         let tokens = (self.context_window_tokens as f64 * 0.50) as usize;
-        (tokens as f64 * self.tool_chars_per_token) as usize
-    }
-
-    /// Total tool result headroom: 75% of context window in chars.
-    pub fn total_tool_headroom_chars(&self) -> usize {
-        let tokens = (self.context_window_tokens as f64 * 0.75) as usize;
         (tokens as f64 * self.tool_chars_per_token) as usize
     }
 }
@@ -174,19 +167,17 @@ fn strip_long_base64_runs(s: &str) -> String {
     result
 }
 
-/// Layer 2: Context guard — scan all tool_result blocks in the message history.
+/// Context guard — scan all tool_result blocks in the message history.
 ///
 /// Pass 0: Strip large base64 blobs from all tool results (image data, etc.)
 /// Pass 1: Cap any single result exceeding 50% of context
-/// Pass 2: Compact oldest results until total is under headroom
 pub fn apply_context_guard(
     messages: &mut [Message],
     budget: &ContextBudget,
     _tools: &[ToolDefinition],
 ) -> usize {
     // Pass 0: Strip base64 blobs from tool results.
-    // This removes large image/file data that the LLM doesn't need to see again.
-    let mut _compacted = 0;
+    let mut compacted = 0;
     for msg in messages.iter_mut() {
         if let MessageContent::Blocks(blocks) = &mut msg.content {
             for block in blocks.iter_mut() {
@@ -194,100 +185,24 @@ pub fn apply_context_guard(
                     let stripped = strip_base64_content(content);
                     if stripped.len() < content.len() {
                         *content = stripped;
-                        _compacted += 1;
+                        compacted += 1;
                     }
                 }
             }
         }
     }
 
-    let headroom = budget.total_tool_headroom_chars();
     let single_max = budget.single_result_max();
 
-    // Collect all tool result sizes and locations
-    struct ToolResultLoc {
-        msg_idx: usize,
-        block_idx: usize,
-        char_len: usize,
-    }
-
-    let mut locations: Vec<ToolResultLoc> = Vec::new();
-    let mut total_chars: usize = 0;
-
-    for (msg_idx, msg) in messages.iter().enumerate() {
-        if let MessageContent::Blocks(blocks) = &msg.content {
-            for (block_idx, block) in blocks.iter().enumerate() {
+    // Pass 1: Cap any single result that exceeds 50% of context
+    for msg in messages.iter_mut() {
+        if let MessageContent::Blocks(blocks) = &mut msg.content {
+            for block in blocks.iter_mut() {
                 if let ContentBlock::ToolResult { content, .. } = block {
-                    let len = content.len();
-                    total_chars += len;
-                    locations.push(ToolResultLoc {
-                        msg_idx,
-                        block_idx,
-                        char_len: len,
-                    });
-                }
-            }
-        }
-    }
-
-    if total_chars <= headroom {
-        return 0;
-    }
-
-    debug!(
-        total_chars,
-        headroom,
-        results = locations.len(),
-        "Context guard: tool results exceed headroom, compacting oldest"
-    );
-
-    // First pass: cap any single result that exceeds 50% of context
-    let mut compacted = 0;
-    for loc in &locations {
-        if loc.char_len > single_max {
-            // Bounds check: indices may be stale if messages were modified concurrently
-            if loc.msg_idx >= messages.len() {
-                continue;
-            }
-            if let MessageContent::Blocks(blocks) = &mut messages[loc.msg_idx].content {
-                if loc.block_idx >= blocks.len() {
-                    continue;
-                }
-                if let ContentBlock::ToolResult { content, .. } = &mut blocks[loc.block_idx] {
-                    let old_len = content.len();
-                    *content = truncate_to(content, single_max);
-                    total_chars -= old_len;
-                    total_chars += content.len();
-                    compacted += 1;
-                }
-            }
-        }
-    }
-
-    // Second pass: compact oldest results until under headroom
-    // (locations are already in chronological order)
-    let compact_target = 2000; // compact to 2K chars each
-    for loc in &locations {
-        if total_chars <= headroom {
-            break;
-        }
-        if loc.char_len <= compact_target {
-            continue;
-        }
-        if loc.msg_idx >= messages.len() {
-            continue;
-        }
-        if let MessageContent::Blocks(blocks) = &mut messages[loc.msg_idx].content {
-            if loc.block_idx >= blocks.len() {
-                continue;
-            }
-            if let ContentBlock::ToolResult { content, .. } = &mut blocks[loc.block_idx] {
-                if content.len() > compact_target {
-                    let old_len = content.len();
-                    *content = truncate_to(content, compact_target);
-                    total_chars -= old_len;
-                    total_chars += content.len();
-                    compacted += 1;
+                    if content.len() > single_max {
+                        *content = truncate_to(content, single_max);
+                        compacted += 1;
+                    }
                 }
             }
         }
@@ -372,9 +287,9 @@ mod tests {
     }
 
     #[test]
-    fn test_context_guard_compacts_oldest() {
-        // Use tiny budget to trigger compaction
-        let budget = ContextBudget::new(100); // headroom = 75% of 100 * 2.0 = 150 chars
+    fn test_context_guard_caps_large_results() {
+        // Use tiny budget: single_result_max = 50% of 100 * 2.0 = 100 chars
+        let budget = ContextBudget::new(100);
         let big_result = "x".repeat(500);
         let mut messages = vec![
             Message {
@@ -400,7 +315,7 @@ mod tests {
         let compacted = apply_context_guard(&mut messages, &budget, &[]);
         assert!(compacted > 0);
 
-        // Verify results were actually truncated
+        // Both results should have been capped
         if let MessageContent::Blocks(blocks) = &messages[0].content {
             if let ContentBlock::ToolResult { content, .. } = &blocks[0] {
                 assert!(content.len() < 500);

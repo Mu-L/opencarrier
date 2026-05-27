@@ -30,7 +30,7 @@ pub const BASE_RETRY_DELAY_MS: u64 = 1000;
 pub(in crate::agent_loop) const PER_LLM_CALL_TIMEOUT_SECS: u64 = 180;
 
 /// Max tokens for turn summary generation.
-pub(in crate::agent_loop) const SUMMARY_MAX_TOKENS: u32 = 100;
+pub(in crate::agent_loop) const SUMMARY_MAX_TOKENS: u32 = 150;
 
 /// Summary modality (fast/cheap).
 pub(in crate::agent_loop) const SUMMARY_MODALITY: &str = "fast";
@@ -154,22 +154,33 @@ pub(in crate::agent_loop) async fn call_with_retry(
                 None => driver.complete(request.clone()).await,
             }
         };
-        let result = match tokio::time::timeout(per_call_timeout, call).await {
-            Ok(r) => r,
-            Err(_) => {
-                warn!(attempt, timeout_secs = per_call_timeout.as_secs(), "LLM call timed out");
-                last_error = Some("LLM call timed out".to_string());
-                if attempt == MAX_RETRIES {
-                    return Err(CarrierError::LlmDriver(format!(
-                        "LLM call timed out after {}s — server may be unresponsive",
-                        per_call_timeout.as_secs()
-                    )));
+
+        // For streaming mode, do NOT apply an overall timeout to driver.stream().
+        // stream() reads ALL SSE events before returning; for long generations
+        // (e.g. max_tokens=8192 article writing) total time can exceed 180s even
+        // though the server is actively streaming.  The driver's built-in idle
+        // timeout (120s of silence) is sufficient protection against hangs.
+        // For non-streaming mode, keep the per-call timeout as before.
+        let result = if stream_tx.is_some() {
+            call.await
+        } else {
+            match tokio::time::timeout(per_call_timeout, call).await {
+                Ok(r) => r,
+                Err(_) => {
+                    warn!(attempt, timeout_secs = per_call_timeout.as_secs(), "LLM call timed out");
+                    last_error = Some("LLM call timed out".to_string());
+                    if attempt == MAX_RETRIES {
+                        return Err(CarrierError::LlmDriver(format!(
+                            "LLM call timed out after {}s — server may be unresponsive",
+                            per_call_timeout.as_secs()
+                        )));
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        BASE_RETRY_DELAY_MS * 2u64.pow(attempt),
+                    ))
+                    .await;
+                    continue;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(
-                    BASE_RETRY_DELAY_MS * 2u64.pow(attempt),
-                ))
-                .await;
-                continue;
             }
         };
         match result {
@@ -412,10 +423,15 @@ pub(in crate::agent_loop) async fn generate_turn_summary(
     }
 
     let prompt = format!(
-        "Summarize this conversation turn in 1-2 sentences. \
-         Focus on what was accomplished, not how.\n\n\
+        "Summarize this conversation turn. Extract: user intent, outcome, and key facts.\n\n\
          User: {}\nAssistant: {}\n\n\
-         Format: User wanted X → Agent did Y",
+         Respond in this exact format:\n\
+         INTENT: <what user wanted>\n\
+         OUTCOME: <what was accomplished>\n\
+         FACTS: <comma-separated key facts, or NONE>\n\n\
+         Key facts include: user preferences, personal info (phone, email, accounts), \
+         entity names (projects, organizations), decisions made, or events mentioned. \
+         Omit procedural details and tool mechanics.",
         user_text, assistant_text
     );
 
@@ -428,7 +444,7 @@ pub(in crate::agent_loop) async fn generate_turn_summary(
         tools: Vec::new(),
         max_tokens: SUMMARY_MAX_TOKENS,
         temperature: 0.3,
-        system: Some("You are a conversation summarizer. Be concise.".to_string()),
+        system: Some("You are a conversation summarizer. Be concise and precise. Always follow the requested format.".to_string()),
         thinking: None,
         extra: Default::default(),
     };
@@ -439,19 +455,15 @@ pub(in crate::agent_loop) async fn generate_turn_summary(
             if text.is_empty() {
                 return None;
             }
-            // Parse "User wanted X → Agent did Y" format
-            let parts: Vec<&str> = text.split("→").collect();
-            let (user_intent, assistant_outcome) = if parts.len() >= 2 {
-                (parts[0].trim().to_string(), parts[1].trim().to_string())
-            } else {
-                (user_text.clone(), text)
-            };
+            // Parse structured output
+            let (user_intent, assistant_outcome, key_facts) = parse_summary_output(&text);
             Some(TurnSummary {
                 turn_number: 0, // filled in by caller
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 user_intent,
                 assistant_outcome,
                 tools_used,
+                key_facts,
             })
         }
         Err(e) => {
@@ -459,4 +471,42 @@ pub(in crate::agent_loop) async fn generate_turn_summary(
             None
         }
     }
+}
+
+/// Parse the structured summary output from the LLM.
+fn parse_summary_output(text: &str) -> (String, String, Vec<String>) {
+    let mut intent = String::new();
+    let mut outcome = String::new();
+    let mut facts = Vec::new();
+
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("INTENT:") {
+            intent = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("OUTCOME:") {
+            outcome = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("FACTS:") {
+            let rest = rest.trim();
+            if !rest.eq_ignore_ascii_case("NONE") && !rest.is_empty() {
+                facts = rest
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+        }
+    }
+
+    // Fallback if structured parsing didn't work
+    if intent.is_empty() && outcome.is_empty() {
+        let parts: Vec<&str> = text.split("→").collect();
+        if parts.len() >= 2 {
+            intent = parts[0].trim().to_string();
+            outcome = parts[1].trim().to_string();
+        } else {
+            intent = text.to_string();
+        }
+    }
+
+    (intent, outcome, facts)
 }

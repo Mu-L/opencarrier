@@ -61,6 +61,8 @@ pub struct GuestState {
     pub capabilities: Vec<Capability>,
     /// Handle to kernel for inter-agent operations.
     pub kernel: Option<Arc<dyn KernelHandle>>,
+    /// Handle to memory service for kv operations.
+    pub memory_handle: Option<Arc<dyn crate::memory_handle::MemoryHandle>>,
     /// Agent ID of the calling agent.
     pub agent_id: String,
     /// Tokio runtime handle for async operations in sync host functions.
@@ -162,6 +164,7 @@ impl WasmSandbox {
             GuestState {
                 capabilities: config.capabilities.clone(),
                 kernel,
+                memory_handle: None,
                 agent_id: agent_id.to_string(),
                 tokio_handle,
             },

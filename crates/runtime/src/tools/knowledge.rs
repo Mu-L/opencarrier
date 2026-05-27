@@ -5,7 +5,6 @@
 //! applying patches, and saving session summaries.
 
 use super::ToolModule;
-use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
 use types::tool::ToolDefinition;
@@ -197,7 +196,7 @@ impl ToolModule for KnowledgeTools {
             "skill_update" => Some(tool_skill_update(input, ctx.workspace_root).await),
             "skill_load" => Some(tool_skill_load(input, ctx.workspace_root).await),
             "session_summarize" => Some(
-                tool_session_summarize(input, ctx.kernel, ctx.caller_agent_id, ctx.sender_id).await,
+                tool_session_summarize(input, ctx.memory, ctx.caller_agent_id, ctx.sender_id).await,
             ),
             _ => None,
         }
@@ -615,11 +614,11 @@ async fn tool_skill_load(
 
 async fn tool_session_summarize(
     input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
+    memory: Option<&Arc<dyn crate::memory_handle::MemoryHandle>>,
     caller_agent_id: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
-    let kh = kernel.ok_or("session_summarize requires kernel access")?;
+    let mem = memory.ok_or("session_summarize requires memory access")?;
     let agent_id = caller_agent_id.ok_or("session_summarize requires caller agent ID")?;
     let sid = sender_id.unwrap_or("");
     let summary = input["summary"]
@@ -629,7 +628,7 @@ async fn tool_session_summarize(
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let key = format!("session_summary:{date}");
 
-    kh.system_kv_store(
+    mem.kv_set(
         agent_id,
         sid,
         sid,

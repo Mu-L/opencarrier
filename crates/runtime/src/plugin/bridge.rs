@@ -184,7 +184,19 @@ impl PluginBridgeManager {
             return;
         }
 
-        // 2. Try name-based routing (message starts with an alias)
+        // 2. Detect rename requests (e.g. "以后叫我小趣", "改名叫小趣")
+        if let Some(ref router) = self.sender_router {
+            if let Some(new_name) = Self::parse_rename(&text) {
+                if let Some(agent_id) = router.get_route(&rk) {
+                    router.set_alias(&rk, &new_name, &agent_id);
+                    let confirm = format!("好的，我以后叫{new_name}啦！叫我{new_name}我就出来。");
+                    self.send_response(&msg, &confirm).await;
+                    return;
+                }
+            }
+        }
+
+        // 3. Try name-based routing (message starts with an alias)
         if let Some((agent_id, remaining)) = self.try_route_by_name(&text, &rk) {
             info!(
                 channel = %msg.channel_type,
@@ -222,14 +234,14 @@ impl PluginBridgeManager {
             return;
         }
 
-        // 3. /list command
+        // 4. /list command
         if text.trim().eq_ignore_ascii_case("/list") {
             let response = self.format_agent_list(&rk);
             self.send_response(&msg, &response).await;
             return;
         }
 
-        // 4. Default routing via route_key
+        // 5. Default routing via route_key
         let agent_id = self.resolve_agent(&msg);
         if agent_id.is_empty() {
             warn!(
@@ -241,7 +253,7 @@ impl PluginBridgeManager {
             return;
         }
 
-        // 5. Check if this agent needs a name
+        // 6. Check if this agent needs a name
         if let Some(ref router) = self.sender_router {
             if router.needs_naming(&rk) {
                 info!(route_key = %rk, agent = %agent_id, "Agent needs naming, entering naming flow");
@@ -321,6 +333,38 @@ impl PluginBridgeManager {
     ///   `@名字` or `@名字 你好` — @ prefix triggers agent switch
     ///   `名字 你好` — name at start of text (legacy format)
     /// Returns (agent_id, remaining_text) if matched, None otherwise.
+    /// Parse a rename request from the user's message.
+    /// Matches patterns like "以后叫我小趣", "改名叫小趣", "叫我小趣",
+    /// "以后叫小趣", "换个名字叫小趣", "重新叫小趣".
+    /// Returns the new name if matched, None otherwise.
+    fn parse_rename(text: &str) -> Option<String> {
+        let t = text.trim();
+        let patterns = [
+            "以后叫我",
+            "以后叫",
+            "改名叫",
+            "改名叫我",
+            "叫我",
+            "换个名字叫",
+            "换个名叫",
+            "重新叫",
+            "换个叫法叫",
+            "改个名叫",
+        ];
+        for pat in &patterns {
+            if let Some(rest) = t.strip_prefix(pat) {
+                let name = rest
+                    .trim()
+                    .trim_end_matches(|c: char| c == '吧' || c == '！' || c == '!' || c == '。' || c == '~')
+                    .trim();
+                if !name.is_empty() && name.len() <= 20 {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        None
+    }
+
     fn try_route_by_name(&self, text: &str, route_key: &str) -> Option<(String, String)> {
         let router = self.sender_router.as_ref()?;
         if route_key.is_empty() {

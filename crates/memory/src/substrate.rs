@@ -414,6 +414,165 @@ impl MemorySubstrate {
         Ok(trees)
     }
 
+    /// Async wrapper for tree_query_source (runs in blocking thread).
+    pub async fn tree_query_source_async(&self, req: SourceQuery<'_>) -> CarrierResult<QueryResponse> {
+        let conn = Arc::clone(&self.conn);
+        let owner_id = req.owner_id.to_string();
+        let source_id = req.source_id.map(String::from);
+        let source_kind = req.source_kind.map(String::from);
+        let time_window_days = req.time_window_days;
+        let _query = req.query.map(String::from);
+        let limit = req.limit;
+        tokio::task::spawn_blocking(move || {
+            let source_kind_ref = source_kind.as_deref();
+            let source_kind_val = source_kind_ref.and_then(|k| match k {
+                "chat" => Some(SourceKind::Chat),
+                "email" => Some(SourceKind::Email),
+                "document" => Some(SourceKind::Document),
+                _ => None,
+            });
+            retrieval::source::query_source(
+                &conn,
+                &owner_id,
+                source_id.as_deref(),
+                source_kind_val,
+                time_window_days,
+                limit,
+            )
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Async wrapper for tree_query_global (runs in blocking thread).
+    pub async fn tree_query_global_async(&self, req: GlobalQuery<'_>) -> CarrierResult<QueryResponse> {
+        let conn = Arc::clone(&self.conn);
+        let owner_id = req.owner_id.to_string();
+        let time_window_days = req.time_window_days;
+        let _query = req.query.map(String::from);
+        let limit = req.limit;
+        tokio::task::spawn_blocking(move || {
+            retrieval::global::query_global(
+                &conn,
+                &owner_id,
+                time_window_days,
+                limit,
+            )
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Async wrapper for tree_query_topic (runs in blocking thread).
+    pub async fn tree_query_topic_async(&self, req: TopicQuery<'_>) -> CarrierResult<QueryResponse> {
+        let conn = Arc::clone(&self.conn);
+        let owner_id = req.owner_id.to_string();
+        let entity_id = req.entity_id.to_string();
+        let _query = req.query.map(String::from);
+        let time_window_days = req.time_window_days;
+        let limit = req.limit;
+        tokio::task::spawn_blocking(move || {
+            retrieval::topic::query_topic(
+                &conn,
+                &owner_id,
+                &entity_id,
+                time_window_days,
+                limit,
+            )
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Async wrapper for tree_search_entities (runs in blocking thread).
+    pub async fn tree_search_entities_async(&self, req: EntitySearch<'_>) -> CarrierResult<Vec<EntityMatch>> {
+        let conn = Arc::clone(&self.conn);
+        let owner_id = req.owner_id.to_string();
+        let query = req.query.to_string();
+        let kind = req.kind.map(String::from);
+        let limit = req.limit;
+        tokio::task::spawn_blocking(move || {
+            let parsed_kind = kind.as_deref().map(crate::tree::entity_store::EntityStore::parse_entity_kind);
+            retrieval::search::search_entities(
+                &conn,
+                &owner_id,
+                &query,
+                parsed_kind,
+                limit,
+            )
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Async wrapper for tree_drill_down (runs in blocking thread).
+    pub async fn tree_drill_down_async(&self, req: DrillDownQuery<'_>) -> CarrierResult<QueryResponse> {
+        let conn = Arc::clone(&self.conn);
+        let owner_id = req.owner_id.to_string();
+        let node_id = req.node_id.to_string();
+        let max_depth = req.max_depth.clamp(1, 3);
+        let limit = req.limit;
+        tokio::task::spawn_blocking(move || {
+            let hits = retrieval::drill_down::drill_down(
+                &conn,
+                &owner_id,
+                &node_id,
+                max_depth,
+                Some(limit),
+            )?;
+            let total = hits.len();
+            let truncated = total > limit;
+            Ok(QueryResponse {
+                hits,
+                total,
+                truncated,
+            })
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Async wrapper for tree_fetch_leaves (runs in blocking thread).
+    pub async fn tree_fetch_leaves_async(&self, req: FetchLeavesQuery<'_>) -> CarrierResult<QueryResponse> {
+        let conn = Arc::clone(&self.conn);
+        let owner_id = req.owner_id.to_string();
+        let chunk_ids = req.chunk_ids.clone();
+        let limit = req.limit;
+        tokio::task::spawn_blocking(move || {
+            retrieval::fetch::fetch_leaves(
+                &conn,
+                &owner_id,
+                &chunk_ids,
+                limit,
+            )
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Async wrapper for tree_list_sources (runs in blocking thread).
+    pub async fn tree_list_sources_async(
+        &self,
+        owner_id: &str,
+        source_kind: Option<&str>,
+        limit: usize,
+    ) -> CarrierResult<Vec<TreeSummary>> {
+        let conn = Arc::clone(&self.conn);
+        let owner_id = owner_id.to_string();
+        let source_kind = source_kind.map(String::from);
+        tokio::task::spawn_blocking(move || {
+            use types::memory_tree::TreeKind;
+            let tree_store = crate::tree::tree_store::TreeTreeStore::new(Arc::clone(&conn));
+            let mut trees = tree_store.list_trees(&owner_id, Some(TreeKind::Source), limit)?;
+            if let Some(ref sk) = source_kind {
+                trees.retain(|t| t.scope.starts_with(&format!("{sk}:")));
+            }
+            Ok(trees)
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
     // -----------------------------------------------------------------
     // Task queue operations
     // -----------------------------------------------------------------

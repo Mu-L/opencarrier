@@ -2,7 +2,7 @@
 //! based on the `mode` argument. Reduces tool surface from 7 entries to 1.
 
 use crate::tool_context::ToolContext;
-use crate::kernel_handle::KernelHandle;
+use crate::memory_handle::MemoryHandle;
 use async_trait::async_trait;
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
@@ -92,9 +92,9 @@ impl super::ToolModule for MemoryTools {
             return None;
         }
 
-        let kernel = match ctx.kernel {
-            Some(k) => k,
-            None => return Some(Err("memory_tree: kernel not available".to_string())),
+        let memory = match ctx.memory {
+            Some(m) => m,
+            None => return Some(Err("memory_tree: memory not available".to_string())),
         };
         let owner_id = ctx.owner_id.unwrap_or("default");
 
@@ -103,12 +103,12 @@ impl super::ToolModule for MemoryTools {
             None => return Some(Err("memory_tree: 'mode' parameter is required. Valid modes: search_entities, query_topic, query_source, query_global, drill_down, fetch_leaves".to_string())),
         };
         match mode {
-            "search_entities" => Some(handle_search_entities(input, kernel, owner_id).await),
-            "query_topic" => Some(handle_query_topic(input, kernel, owner_id).await),
-            "query_source" => Some(handle_query_source(input, kernel, owner_id).await),
-            "query_global" => Some(handle_query_global(input, kernel, owner_id).await),
-            "drill_down" => Some(handle_drill_down(input, kernel, owner_id).await),
-            "fetch_leaves" => Some(handle_fetch_leaves(input, kernel, owner_id).await),
+            "search_entities" => Some(handle_search_entities(input, memory, owner_id).await),
+            "query_topic" => Some(handle_query_topic(input, memory, owner_id).await),
+            "query_source" => Some(handle_query_source(input, memory, owner_id).await),
+            "query_global" => Some(handle_query_global(input, memory, owner_id).await),
+            "drill_down" => Some(handle_drill_down(input, memory, owner_id).await),
+            "fetch_leaves" => Some(handle_fetch_leaves(input, memory, owner_id).await),
             other => Some(Err(format!("memory_tree: unknown mode `{other}`. Valid modes: search_entities, query_topic, query_source, query_global, drill_down, fetch_leaves"))),
         }
     }
@@ -127,7 +127,7 @@ impl super::ToolModule for MemoryTools {
 
 async fn handle_search_entities(
     input: &Value,
-    kernel: &Arc<dyn KernelHandle>,
+    memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
 ) -> Result<String, String> {
     let query = input["query"].as_str().ok_or("query is required for search_entities")?;
@@ -145,9 +145,10 @@ async fn handle_search_entities(
         query,
         kind: kinds,
         limit,
+        user_id: None,
     };
 
-    let matches = kernel.tree_search_entities(req).await?;
+    let matches = memory.tree_search_entities(req).await?;
 
     if matches.is_empty() {
         return Ok(format!("No entities matching '{}'.", query));
@@ -165,7 +166,7 @@ async fn handle_search_entities(
 
 async fn handle_query_topic(
     input: &Value,
-    kernel: &Arc<dyn KernelHandle>,
+    memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
 ) -> Result<String, String> {
     let entity_id = input["entity_id"].as_str().ok_or("entity_id is required for query_topic")?;
@@ -179,15 +180,16 @@ async fn handle_query_topic(
         query,
         time_window_days,
         limit,
+        user_id: None,
     };
 
-    let resp = kernel.tree_query_topic(req).await?;
+    let resp = memory.tree_query_topic(req).await?;
     format_hit_response(resp)
 }
 
 async fn handle_query_source(
     input: &Value,
-    kernel: &Arc<dyn KernelHandle>,
+    memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
 ) -> Result<String, String> {
     let source_id = input["source_id"].as_str();
@@ -203,15 +205,16 @@ async fn handle_query_source(
         time_window_days,
         query,
         limit,
+        user_id: None,
     };
 
-    let resp = kernel.tree_query_source(req).await?;
+    let resp = memory.tree_query_source(req).await?;
     format_hit_response(resp)
 }
 
 async fn handle_query_global(
     input: &Value,
-    kernel: &Arc<dyn KernelHandle>,
+    memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
 ) -> Result<String, String> {
     let time_window_days = input["time_window_days"].as_u64().map(|d| d as u32);
@@ -223,15 +226,16 @@ async fn handle_query_global(
         time_window_days,
         query,
         limit,
+        user_id: None,
     };
 
-    let resp = kernel.tree_query_global(req).await?;
+    let resp = memory.tree_query_global(req).await?;
     format_hit_response(resp)
 }
 
 async fn handle_drill_down(
     input: &Value,
-    kernel: &Arc<dyn KernelHandle>,
+    memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
 ) -> Result<String, String> {
     let node_id = input["node_id"].as_str().ok_or("node_id is required for drill_down")?;
@@ -243,9 +247,10 @@ async fn handle_drill_down(
         node_id,
         max_depth,
         limit,
+        user_id: None,
     };
 
-    let resp = kernel.tree_drill_down(req).await?;
+    let resp = memory.tree_drill_down(req).await?;
 
     if resp.hits.is_empty() {
         return Ok(format!("No children found for node '{}'.", node_id));
@@ -268,7 +273,7 @@ async fn handle_drill_down(
 
 async fn handle_fetch_leaves(
     input: &Value,
-    kernel: &Arc<dyn KernelHandle>,
+    memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
 ) -> Result<String, String> {
     let chunk_ids: Vec<String> = input["chunk_ids"]
@@ -288,9 +293,10 @@ async fn handle_fetch_leaves(
         owner_id,
         chunk_ids,
         limit,
+        user_id: None,
     };
 
-    let resp = kernel.tree_fetch_leaves(req).await?;
+    let resp = memory.tree_fetch_leaves(req).await?;
 
     if resp.hits.is_empty() {
         return Ok("No leaf chunks found for the given IDs.".to_string());

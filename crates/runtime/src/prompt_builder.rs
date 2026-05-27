@@ -4,6 +4,8 @@
 //! Replaces the scattered `push_str` prompt injection throughout the codebase
 //! with a single, testable, ordered prompt builder.
 
+use types::message::TurnSummary;
+
 /// A hit from the tree memory system for prompt injection.
 #[derive(Debug, Clone)]
 pub struct TreeMemoryHit {
@@ -11,6 +13,13 @@ pub struct TreeMemoryHit {
     pub kind: String,
     pub content: String,
     pub time_range: String,
+}
+
+/// A drawer entry from the kv memory system for prompt injection.
+#[derive(Debug, Clone)]
+pub struct DrawerEntry {
+    pub key: String,
+    pub value: Vec<String>,
 }
 
 /// All the context needed to build a system prompt for an agent.
@@ -103,6 +112,10 @@ pub struct PromptContext {
     /// Auto-matched skill content — injected at high priority when the system
     /// detects a skill matching the user's message before the LLM call.
     pub auto_matched_skill: Option<String>,
+    /// L0 turn summaries — recent conversation turns in condensed form.
+    pub turn_summaries: Vec<TurnSummary>,
+    /// Drawer entries from kv memory — user profile, preferences, entities, events.
+    pub drawer_entries: Vec<DrawerEntry>,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -270,6 +283,16 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     // Section 4 — Memory Protocol (always present)
     let mem_section = build_memory_section(&ctx.recalled_memories, &ctx.tree_memories);
     sections.push(mem_section);
+
+    // Section 4.1 — Drawer Memory (profile, preferences, entities, events from kv)
+    if !ctx.drawer_entries.is_empty() {
+        sections.push(build_drawer_section(&ctx.drawer_entries));
+    }
+
+    // Section 4.2 — L0 Turn Summaries (recent conversation turns)
+    if !ctx.turn_summaries.is_empty() && !ctx.is_subagent {
+        sections.push(build_turn_summaries_section(&ctx.turn_summaries));
+    }
 
     // Section 5 — Skills (only if skills available)
     if !ctx.skill_summary.is_empty() || !ctx.skill_prompt_context.is_empty() {
@@ -467,8 +490,6 @@ const REMOVED_TOOLS: &[&str] = &[
     "process_write",
     "process_kill",
     "process_list",
-    "memory_recall",
-    "memory_list",
     "knowledge_add_entity",
     "knowledge_add_relation",
     "knowledge_query",
@@ -557,6 +578,67 @@ pub fn build_memory_section(memories: &[(String, String)], tree_hits: &[TreeMemo
                 out.push_str(&format!("- [{key}] {capped}\n"));
             }
         }
+    }
+
+    out
+}
+
+/// Build the drawer section — injected kv memory organized by category.
+fn build_drawer_section(entries: &[DrawerEntry]) -> String {
+    use std::collections::BTreeMap;
+
+    let mut groups: BTreeMap<&str, Vec<&DrawerEntry>> = BTreeMap::new();
+    for entry in entries {
+        let prefix = entry.key.split('.').next().unwrap_or("other");
+        groups.entry(prefix).or_default().push(entry);
+    }
+
+    let mut out = String::from("## Drawer Memory\n");
+
+    // Render each group with a localized header
+    for (prefix, items) in &groups {
+        let header = match *prefix {
+            "profile" => "User profile",
+            "preference" => "Preferences",
+            "entity" => "Entities",
+            "fact" => "Facts",
+            "event" => "Recent events",
+            _ => prefix,
+        };
+        out.push_str(&format!("[{}]\n", header));
+
+        // For event entries, only show last 5
+        let items_to_show: Vec<&&DrawerEntry> = if *prefix == "event" {
+            items.iter().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect()
+        } else {
+            items.iter().collect()
+        };
+
+        for entry in items_to_show {
+            let name = entry.key.split('.').nth(1).unwrap_or(&entry.key);
+            let values = entry.value.join(", ");
+            out.push_str(&format!("- {}: {}\n", name, values));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+/// Build the L0 turn summaries section.
+fn build_turn_summaries_section(summaries: &[TurnSummary]) -> String {
+    let mut out = String::from("## Recent Conversations\n");
+
+    for summary in summaries.iter().take(10) {
+        let tools = if summary.tools_used.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", summary.tools_used.join(","))
+        };
+        out.push_str(&format!(
+            "- {} → {}{}\n",
+            summary.user_intent, summary.assistant_outcome, tools
+        ));
     }
 
     out
@@ -721,10 +803,17 @@ const SAFETY_SECTION: &str = "\
 const EVOLUTION_PROMPT: &str = "\
 ## 自我进化
 你拥有自我学习和改进的能力。在对话中发现有价值的新知识时，主动使用工具保存：
+- **kv_set**: 存储用户的重要信息到抽屉（账号、偏好、决策等）
+- **kv_get**: 在提问前先检查抽屉，避免重复询问用户已提供的信息
 - **knowledge_extract**: 从对话中提取新知识（事实、规则、偏好）并保存到知识库
 - **skill_create**: 创建新技能来扩展你的能力
-- **skill_update**: 改进现有技能的流程和内容
+- **skill_update**: 改进现有技能的流程和内容（如：发现缺少信息时，更新 skill 写入经验）
 - **session_summarize**: 总结长对话的关键信息以备后续回忆
+
+重要学习模式：当你发现执行某个任务缺少关键信息（如公众号名称、API密钥等），
+向用户获取后成功完成任务，你应该：
+1. kv_set 存储这个信息（下次不用再问）
+2. skill_update 在对应的技能中写入经验（如：发公众号前先 kv_get(entity.wechat_accounts)）
 
 不需要每次对话都调用，只在有实质性新知识或改进机会时使用。越用越好。";
 

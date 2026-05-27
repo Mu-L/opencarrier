@@ -324,6 +324,7 @@ mod tests {
                 })
                 .collect(),
             tags: vec![],
+            user_id: None,
         }
     }
 
@@ -386,6 +387,7 @@ mod tests {
                 timestamp_ms: 1_700_000_000_000,
             }],
             tags: vec![],
+            user_id: None,
         };
 
         let first = pipeline.ingest(&req).unwrap();
@@ -438,6 +440,7 @@ mod tests {
                 },
             ],
             tags: vec![],
+            user_id: None,
         };
 
         let result = pipeline.ingest(&req).unwrap();

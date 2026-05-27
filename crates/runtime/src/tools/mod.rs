@@ -9,6 +9,7 @@ pub mod agent_mgmt;
 pub mod collaboration;
 pub mod filesystem;
 pub mod knowledge;
+pub mod kv;
 pub mod media;
 pub mod memory;
 pub mod misc;
@@ -70,6 +71,7 @@ pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
         Box::new(misc::MiscTools),
         Box::new(toolset::ToolSearchTools),
         Box::new(knowledge::KnowledgeTools),
+        Box::new(kv::KvTools),
         Box::new(media::MediaTools),
         Box::new(memory::MemoryTools),
         Box::new(agent::DelegationTools),

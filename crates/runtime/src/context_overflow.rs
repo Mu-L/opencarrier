@@ -1,17 +1,13 @@
 //! Context overflow recovery pipeline.
 //!
-//! Provides a 4-stage recovery pipeline that replaces the brute-force
-//! `emergency_trim_messages()` with structured, progressive recovery:
-//!
-//! 1. Auto-compact via message trimming (keep recent, drop old)
-//! 2. Aggressive overflow compaction (drop all but last N)
-//! 3. Truncate historical tool results to 2K chars each
-//! 4. Return error suggesting /reset or /compact
+//! Simplified from the original 4-stage pipeline. With L0 summaries + drawer
+//! injection keeping context length controlled, only tool result truncation
+//! and the final error fallback are needed.
 
 use types::message::{ContentBlock, Message, MessageContent};
 use types::tool::ToolDefinition;
 use std::collections::HashSet;
-use tracing::{debug, warn};
+use tracing::warn;
 
 /// Drain `count` messages from the front, ensuring no ToolUse/ToolResult pairs
 /// are split at the cut boundary.
@@ -79,13 +75,9 @@ pub fn pair_aware_drain(messages: &mut Vec<Message>, count: usize) {
 pub enum RecoveryStage {
     /// No recovery needed.
     None,
-    /// Stage 1: moderate trim (keep last 10).
-    AutoCompaction { removed: usize },
-    /// Stage 2: aggressive trim (keep last 4).
-    OverflowCompaction { removed: usize },
-    /// Stage 3: truncated tool results.
+    /// Truncated tool results.
     ToolResultTruncation { truncated: usize },
-    /// Stage 4: unrecoverable — suggest /reset.
+    /// Unrecoverable — suggest /reset.
     FinalError,
 }
 
@@ -94,9 +86,10 @@ fn estimate_tokens(messages: &[Message], system_prompt: &str, tools: &[ToolDefin
     crate::compactor::estimate_token_count(messages, Some(system_prompt), Some(tools))
 }
 
-/// Run the 4-stage overflow recovery pipeline.
+/// Run the simplified overflow recovery pipeline.
 ///
-/// Returns the recovery stage applied and the number of messages/results affected.
+/// With L0 summaries + drawer keeping context controlled, only tool result
+/// truncation and the final error fallback are needed.
 pub fn recover_from_overflow(
     messages: &mut Vec<Message>,
     system_prompt: &str,
@@ -104,59 +97,14 @@ pub fn recover_from_overflow(
     context_window: usize,
 ) -> RecoveryStage {
     let estimated = estimate_tokens(messages, system_prompt, tools);
-    let threshold_70 = (context_window as f64 * 0.70) as usize;
-    let threshold_90 = (context_window as f64 * 0.90) as usize;
+    let threshold = (context_window as f64 * 0.90) as usize;
 
     // No recovery needed
-    if estimated <= threshold_70 {
+    if estimated <= threshold {
         return RecoveryStage::None;
     }
 
-    // Stage 1: Moderate trim — keep last 10 messages
-    if estimated <= threshold_90 {
-        let keep = 10.min(messages.len());
-        let remove = messages.len() - keep;
-        if remove > 0 {
-            debug!(
-                estimated_tokens = estimated,
-                removing = remove,
-                "Stage 1: moderate trim to last {keep} messages"
-            );
-            pair_aware_drain(messages, remove);
-            // Re-check after trim
-            let new_est = estimate_tokens(messages, system_prompt, tools);
-            if new_est <= threshold_70 {
-                return RecoveryStage::AutoCompaction { removed: remove };
-            }
-        }
-    }
-
-    // Stage 2: Aggressive trim — keep last 4 messages + summary marker
-    {
-        let keep = 4.min(messages.len());
-        let remove = messages.len() - keep;
-        if remove > 0 {
-            warn!(
-                estimated_tokens = estimate_tokens(messages, system_prompt, tools),
-                removing = remove,
-                "Stage 2: aggressive overflow compaction to last {keep} messages"
-            );
-            let summary = Message::user(format!(
-                "[System: {} earlier messages were removed due to context overflow. \
-                 The conversation continues from here. Use /compact for smarter summarization.]",
-                remove
-            ));
-            pair_aware_drain(messages, remove);
-            messages.insert(0, summary);
-
-            let new_est = estimate_tokens(messages, system_prompt, tools);
-            if new_est <= threshold_90 {
-                return RecoveryStage::OverflowCompaction { removed: remove };
-            }
-        }
-    }
-
-    // Stage 3: Truncate all historical tool results to 2K chars
+    // Truncate tool results to 2K chars
     let tool_truncation_limit = 2000;
     let mut truncated = 0;
     for msg in messages.iter_mut() {
@@ -184,17 +132,17 @@ pub fn recover_from_overflow(
 
     if truncated > 0 {
         let new_est = estimate_tokens(messages, system_prompt, tools);
-        if new_est <= threshold_90 {
+        if new_est <= threshold {
             return RecoveryStage::ToolResultTruncation { truncated };
         }
         warn!(
             estimated_tokens = new_est,
-            "Stage 3 truncated {} tool results but still over threshold", truncated
+            "Truncated {} tool results but still over threshold", truncated
         );
     }
 
-    // Stage 4: Final error — nothing more we can do automatically
-    warn!("Stage 4: all recovery stages exhausted, context still too large");
+    // Final error — nothing more we can do automatically
+    warn!("All recovery stages exhausted, context still too large");
     RecoveryStage::FinalError
 }
 
@@ -227,40 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stage1_moderate_trim() {
-        // Create messages that push us past 70% but not 90%
-        // Context window: 1000 tokens = 4000 chars
-        // 70% = 700 tokens = 2800 chars
-        let mut msgs = make_messages(20, 150); // ~3000 chars total
-        let stage = recover_from_overflow(&mut msgs, "system", &[], 1000);
-        match stage {
-            RecoveryStage::AutoCompaction { removed } => {
-                assert!(removed > 0);
-                assert!(msgs.len() <= 10);
-            }
-            RecoveryStage::OverflowCompaction { .. } => {
-                // Also acceptable if moderate wasn't enough
-            }
-            _ => {} // depends on exact token estimation
-        }
-    }
-
-    #[test]
-    fn test_stage2_aggressive_trim() {
-        // Push past 90%: 1000 tokens = 4000 chars, 90% = 3600 chars
-        let mut msgs = make_messages(30, 200); // ~6000 chars
-        let stage = recover_from_overflow(&mut msgs, "system", &[], 1000);
-        match stage {
-            RecoveryStage::OverflowCompaction { removed } => {
-                assert!(removed > 0);
-            }
-            RecoveryStage::ToolResultTruncation { .. } | RecoveryStage::FinalError => {}
-            _ => {} // acceptable cascading
-        }
-    }
-
-    #[test]
-    fn test_stage3_tool_truncation() {
+    fn test_tool_truncation() {
         let big_result = "x".repeat(5000);
         let mut msgs = vec![
             Message::user("hi"),
@@ -283,30 +198,27 @@ mod tests {
                 }]),
             },
         ];
-        // Tiny context window to force all stages
+        // Tiny context window to force tool truncation
         let stage = recover_from_overflow(&mut msgs, "system", &[], 500);
-        // Should at least reach tool truncation
         match stage {
             RecoveryStage::ToolResultTruncation { truncated } => {
                 assert!(truncated > 0);
             }
-            RecoveryStage::OverflowCompaction { .. } | RecoveryStage::FinalError => {}
+            RecoveryStage::FinalError => {}
             _ => {}
         }
     }
 
     #[test]
-    fn test_cascading_stages() {
-        // Ensure stages cascade: if stage 1 isn't enough, stage 2 kicks in
+    fn test_overwhelmed_context() {
+        // Large messages with no tool results → final error
         let mut msgs = make_messages(50, 500);
         let stage = recover_from_overflow(&mut msgs, "system prompt", &[], 2000);
-        // With 50 messages of 500 chars each (25000 chars), context of 2000 tokens (8000 chars),
-        // we should cascade through stages
         assert_ne!(stage, RecoveryStage::None);
     }
 
     #[test]
-    fn test_stage3_multibyte_tool_truncation() {
+    fn test_multibyte_tool_truncation() {
         // Chinese text (3 bytes per char) in tool results must not panic
         let chinese_result: String = "\u{4f60}\u{597d}\u{4e16}\u{754c}".repeat(1250); // 5000 chars, 15000 bytes
         let mut msgs = vec![
@@ -321,7 +233,7 @@ mod tests {
                 }]),
             },
         ];
-        // Tiny context window to force stage 3 tool truncation
+        // Tiny context window to force tool truncation
         let stage = recover_from_overflow(&mut msgs, "system", &[], 500);
         // Must not panic — the truncation at byte boundaries could split a 3-byte char
         assert_ne!(stage, RecoveryStage::None);

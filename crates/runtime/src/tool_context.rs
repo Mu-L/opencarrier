@@ -2,6 +2,7 @@
 
 use crate::kernel_handle::KernelHandle;
 use crate::llm_driver::Brain;
+use crate::memory_handle::MemoryHandle;
 use crate::mcp::McpConnection;
 use crate::process_manager::ProcessManager;
 use crate::web_fetch::WebFetchEngine;
@@ -22,6 +23,7 @@ use std::sync::Arc;
 #[derive(Copy, Clone)]
 pub struct ToolContext<'a> {
     pub kernel: Option<&'a Arc<dyn KernelHandle>>,
+    pub memory: Option<&'a Arc<dyn MemoryHandle>>,
     pub caller_agent_id: Option<&'a str>,
     pub mcp_connections: Option<&'a DashMap<String, McpConnection>>,
     pub fetch_engine: Option<&'a WebFetchEngine>,

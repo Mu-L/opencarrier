@@ -278,6 +278,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // memory_handle
             None, // sender_id
             None, // owner_id
             None, // channel_type
@@ -331,6 +332,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // memory_handle
             None, // sender_id
             None, // owner_id
             None, // channel_type
@@ -386,6 +388,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // memory_handle
             None, // sender_id
             None, // owner_id
             None, // channel_type
@@ -439,6 +442,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // memory_handle
             None, // sender_id
             None, // owner_id
             None, // channel_type
@@ -484,6 +488,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // memory_handle
             None, // sender_id
             None, // owner_id
             None, // channel_type
@@ -611,6 +616,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // memory_handle
             None, // sender_id
             None, // owner_id
             None, // channel_type
@@ -658,6 +664,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // memory_handle
             None, // sender_id
             None, // owner_id
             None, // channel_type
@@ -712,6 +719,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // memory_handle
             None, // sender_id
             None, // owner_id
             None, // channel_type
@@ -1597,6 +1605,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // memory_handle
             None, // sender_id
             None, // owner_id
             None, // channel_type
@@ -1664,6 +1673,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None,
             None, // user_content_blocks
             None, // brain
+            None, // memory_handle
             None, // sender_id
             None, // owner_id
             None, // channel_type
@@ -1726,6 +1736,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // process_manager
             None, // user_content_blocks
             None, // brain
+            None, // memory_handle
             None, // sender_id
             None, // owner_id
             None, // channel_type

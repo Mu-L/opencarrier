@@ -22,6 +22,10 @@ pub fn map_tool_name(name: &str) -> Option<&'static str> {
         "sessions_list" | "agents_list" | "agent_list" => Some("agent_list"),
         "sessions_spawn" => Some("agent_send"),
 
+        // KV memory aliases
+        "memory_recall" | "system_kv_recall" | "knowledge_read" => Some("kv_get"),
+        "memory_store" | "system_kv_store" | "knowledge_add" => Some("kv_set"),
+
         // LLM-hallucinated aliases (fs-* style names)
         "fs-read" | "fs_read" | "fsRead" | "readFile" => Some("file_read"),
         "fs-write" | "fs_write" | "fsWrite" | "writeFile" => Some("file_write"),
@@ -29,11 +33,6 @@ pub fn map_tool_name(name: &str) -> Option<&'static str> {
         "fs-exec" | "run" | "run_command" | "runCommand" | "execute" | "shell" => {
             Some("shell_exec")
         }
-
-        // Legacy memory tool names → consolidated memory_tree
-        "memory_recall" | "memory_list" | "memory_query_topic"
-        | "memory_search_entities" | "memory_drill_down"
-        | "memory_fetch_leaves" | "memory_ingest" => Some("memory_tree"),
 
         _ => None,
     }
@@ -78,6 +77,9 @@ pub fn is_known_carrier_tool(name: &str) -> bool {
             | "image_analyze"
             | "location_get"
             | "memory_tree"
+            | "kv_get"
+            | "kv_set"
+            | "kv_list"
     )
 }
 

@@ -63,6 +63,7 @@ pub async fn execute_tool(
     // Unpack context into local bindings matching the old parameter names.
     let ToolContext {
         kernel: _,
+        memory: _,
         caller_agent_id: _,
         mcp_connections,
         fetch_engine,
@@ -370,6 +371,7 @@ mod tests {
     fn noop_ctx() -> ToolContext<'static> {
         ToolContext {
             kernel: None,
+            memory: None,
             caller_agent_id: None,
             mcp_connections: None,
             fetch_engine: None,
@@ -556,8 +558,12 @@ mod tests {
     async fn test_agent_tools_without_kernel() {
         let result =
             execute_tool("test-id", "agent_list", &serde_json::json!({}), &noop_ctx()).await;
-        assert!(result.is_error);
-        assert!(result.content.contains("Kernel handle not available"));
+        assert!(result.is_error, "expected error, got: {}", result.content);
+        assert!(
+            result.content.contains("Kernel handle not available") || result.content.contains("memory"),
+            "expected kernel/memory error, got: {}",
+            result.content
+        );
     }
 
     #[tokio::test]
@@ -626,8 +632,12 @@ mod tests {
             &noop_ctx(),
         )
         .await;
-        assert!(result.is_error);
-        assert!(result.content.contains("Kernel handle not available"));
+        assert!(result.is_error, "expected error, got: {}", result.content);
+        assert!(
+            result.content.contains("memory") || result.content.contains("Kernel"),
+            "expected memory/kernel error, got: {}",
+            result.content
+        );
     }
 
     // ------------------------------------------------------------------

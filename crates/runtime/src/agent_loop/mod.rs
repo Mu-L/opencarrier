@@ -131,6 +131,7 @@ pub async fn run_agent_loop(
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
     brain: Option<Arc<dyn Brain>>,
+    memory_handle: Option<Arc<dyn crate::memory_handle::MemoryHandle>>,
     sender_id: Option<&str>,
     owner_id: Option<&str>,
     channel_type: Option<&str>,
@@ -142,7 +143,7 @@ pub async fn run_agent_loop(
             manifest, user_message, session, memory, driver, tools,
             kernel, stream_tx, mcp_connections, fetch_engine, workspace_root,
             on_phase, hooks, context_window_tokens, process_manager,
-            user_content_blocks, brain, sender_id, owner_id, channel_type,
+            user_content_blocks, brain, memory_handle, sender_id, owner_id, channel_type,
         ),
     )
     .await
@@ -185,6 +186,7 @@ pub async fn run_agent_loop_streaming(
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
     brain: Option<Arc<dyn Brain>>,
+    memory_handle: Option<Arc<dyn crate::memory_handle::MemoryHandle>>,
     sender_id: Option<&str>,
     owner_id: Option<&str>,
     channel_type: Option<&str>,
@@ -193,7 +195,7 @@ pub async fn run_agent_loop_streaming(
         manifest, user_message, session, memory, driver, tools,
         kernel, Some(stream_tx), mcp_connections, fetch_engine, workspace_root,
         on_phase, hooks, context_window_tokens, process_manager,
-        user_content_blocks, brain, sender_id, owner_id, channel_type,
+        user_content_blocks, brain, memory_handle, sender_id, owner_id, channel_type,
     ).await
 }
 
@@ -220,6 +222,7 @@ async fn run_agent_loop_impl(
     process_manager: Option<&crate::process_manager::ProcessManager>,
     user_content_blocks: Option<Vec<ContentBlock>>,
     brain: Option<Arc<dyn Brain>>,
+    memory_handle: Option<Arc<dyn crate::memory_handle::MemoryHandle>>,
     sender_id: Option<&str>,
     owner_id: Option<&str>,
     channel_type: Option<&str>,
@@ -255,29 +258,10 @@ async fn run_agent_loop_impl(
     }
 
     // Build the system prompt — base prompt comes from kernel (prompt_builder).
-    let mut system_prompt = manifest.model.system_prompt.clone();
+    let system_prompt = manifest.model.system_prompt.clone();
 
-    // Inject turn summaries into system prompt (L1 context layer)
-    if !session.turn_summaries.is_empty() {
-        let summaries_text = session
-            .turn_summaries
-            .iter()
-            .map(|s| {
-                format!(
-                    "- Turn {}: {} → {} (tools: {})",
-                    s.turn_number,
-                    s.user_intent,
-                    s.assistant_outcome,
-                    s.tools_used.join(", ")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        system_prompt.push_str(&format!(
-            "\n\n## Previous conversation turns\n{}",
-            summaries_text
-        ));
-    }
+    // Turn summaries are now injected via prompt_builder (Section 4.2).
+    // No ad-hoc injection here.
 
     // Track which messages existed before this agent loop started.
     let session_base_len = session.messages.len();
@@ -500,6 +484,7 @@ async fn run_agent_loop_impl(
                     manifest,
                     memory,
                     kernel.as_ref(),
+                    memory_handle.as_ref(),
                     brain.as_ref(),
                     hooks,
                     on_phase,
@@ -527,6 +512,7 @@ async fn run_agent_loop_impl(
                     manifest,
                     memory,
                     kernel.as_ref(),
+                    memory_handle.as_ref(),
                     brain.as_ref(),
                     hooks,
                     on_phase,

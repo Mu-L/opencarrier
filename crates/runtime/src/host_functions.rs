@@ -358,11 +358,11 @@ fn host_kv_get(state: &GuestState, params: &serde_json::Value) -> serde_json::Va
     ) {
         return e;
     }
-    let kernel = match &state.kernel {
-        Some(k) => k,
-        None => return json!({"error": "No kernel handle available"}),
+    let memory = match &state.memory_handle {
+        Some(m) => m,
+        None => return json!({"error": "No memory handle available"}),
     };
-    match kernel.system_kv_recall(&state.agent_id, "", "", key) {
+    match memory.kv_get(&state.agent_id, "", "", key) {
         Ok(Some(val)) => json!({"ok": val}),
         Ok(None) => json!({"ok": null}),
         Err(e) => json!({"error": e}),
@@ -384,11 +384,11 @@ fn host_kv_set(state: &GuestState, params: &serde_json::Value) -> serde_json::Va
     ) {
         return e;
     }
-    let kernel = match &state.kernel {
-        Some(k) => k,
-        None => return json!({"error": "No kernel handle available"}),
+    let memory = match &state.memory_handle {
+        Some(m) => m,
+        None => return json!({"error": "No memory handle available"}),
     };
-    match kernel.system_kv_store(&state.agent_id, "", "", key, value) {
+    match memory.kv_set(&state.agent_id, "", "", key, value) {
         Ok(()) => json!({"ok": true}),
         Err(e) => json!({"error": e}),
     }
@@ -457,6 +457,7 @@ mod tests {
         GuestState {
             capabilities,
             kernel: None,
+            memory_handle: None,
             agent_id: "test-agent".to_string(),
             tokio_handle: tokio::runtime::Handle::current(),
         }
@@ -528,7 +529,7 @@ mod tests {
         let state = test_state(vec![Capability::MemoryRead("*".to_string())]);
         let result = host_kv_get(&state, &json!({"key": "test"}));
         let err = result["error"].as_str().unwrap();
-        assert!(err.contains("kernel"));
+        assert!(err.contains("memory") || err.contains("kernel"));
     }
 
     #[tokio::test]

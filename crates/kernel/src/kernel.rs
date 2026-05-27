@@ -990,6 +990,7 @@ impl CarrierKernel {
             time_window_days: Some(7),
             query: None,
             limit: 3,
+            user_id: None,
         };
 
         match self.memory.tree_query_global(&req) {
@@ -1011,6 +1012,51 @@ impl CarrierKernel {
         }
     }
 
+    /// Prefetch drawer entries from kv memory for prompt injection.
+    ///
+    /// Reads all kv keys, filters to drawer prefixes (profile/preference/entity/fact/event),
+    /// and builds DrawerEntry structs for injection into the system prompt.
+    pub(crate) fn prefetch_drawer_entries(&self, agent_name: &str, owner_id: &str) -> Vec<runtime::prompt_builder::DrawerEntry> {
+        let agent_id = match agent_name.parse::<types::agent::AgentId>() {
+            Ok(id) => id,
+            Err(_) => return Vec::new(),
+        };
+
+        let all_pairs = match self.memory.list_kv(agent_id, owner_id, owner_id) {
+            Ok(pairs) => pairs,
+            Err(e) => {
+                tracing::debug!("Drawer prefetch failed (non-fatal): {e}");
+                return Vec::new();
+            }
+        };
+
+        const DRAWER_PREFIXES: &[&str] = &["profile.", "preference.", "entity.", "fact.", "event."];
+
+        all_pairs
+            .into_iter()
+            .filter(|(key, _)| DRAWER_PREFIXES.iter().any(|p| key.starts_with(p)))
+            .filter_map(|(key, value)| {
+                let values = match value {
+                    serde_json::Value::Array(arr) => {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    }
+                    serde_json::Value::String(s) => vec![s],
+                    other => {
+                        // Fallback: serialize non-array/string as single string
+                        vec![other.to_string()]
+                    }
+                };
+                if values.is_empty() {
+                    None
+                } else {
+                    Some(runtime::prompt_builder::DrawerEntry { key, value: values })
+                }
+            })
+            .collect()
+    }
+
     /// Build PromptContext and apply it to the manifest's system prompt.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_and_apply_prompt(
@@ -1022,6 +1068,8 @@ impl CarrierKernel {
         sender_name: Option<String>,
         owner_id: &Option<String>,
         auto_matched_skill: Option<String>,
+        turn_summaries: Vec<types::message::TurnSummary>,
+        drawer_entries: Vec<runtime::prompt_builder::DrawerEntry>,
     ) {
         let sid = sender_id.as_deref().unwrap_or("");
         let oid = owner_id.as_deref().unwrap_or(sid);
@@ -1157,6 +1205,8 @@ impl CarrierKernel {
                 .as_ref()
                 .and_then(|w| crate::prompt_sources::read_identity_file(w, "TIMELINE.md")),
             auto_matched_skill,
+            turn_summaries,
+            drawer_entries,
         };
         manifest.model.system_prompt =
             runtime::prompt_builder::build_system_prompt(&prompt_ctx);

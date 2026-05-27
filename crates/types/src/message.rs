@@ -36,6 +36,9 @@ pub struct TurnSummary {
     pub assistant_outcome: String,
     /// Tool names used this turn (for metadata, not content).
     pub tools_used: Vec<String>,
+    /// Key facts extracted from this turn (preferences, entities, events, etc.).
+    #[serde(default)]
+    pub key_facts: Vec<String>,
 }
 
 /// Content of a message — can be simple text or structured blocks.
