@@ -47,8 +47,17 @@ impl PermissionLevel {
     /// Uses a centralized mapping of tool names to levels. Falls back to
     /// Dangerous for unknown tools (fail-safe). MCP tools (mcp_*) default
     /// to Write since they are user-configured and trusted by default.
+    ///
+    /// Toolset-prefixed names (e.g. `filesystem__file_write`) are stripped
+    /// to the base name (`file_write`) before matching.
     pub fn for_tool(name: &str) -> Self {
-        match name {
+        // Strip toolset prefix: "filesystem__file_write" → "file_write"
+        let base_name = if let Some(pos) = name.find("__") {
+            &name[pos + 2..]
+        } else {
+            name
+        };
+        match base_name {
             // None — pure queries, no side effects
             "session_summarize"
             | "knowledge_list" | "knowledge_read" | "skill_load"
@@ -90,7 +99,7 @@ impl PermissionLevel {
             "shell_exec" | "process_kill" | "agent_kill" => Self::Dangerous,
 
             // MCP tools default to Write (user-configured, trusted by default)
-            n if n.starts_with("mcp_") => Self::Write,
+            n if n.starts_with("mcp_") || name.starts_with("mcp_") => Self::Write,
 
             // SQLite tools — database queries and writes (agent's own workspace)
             "sqlite_query" | "sqlite_schema" => Self::Write,
