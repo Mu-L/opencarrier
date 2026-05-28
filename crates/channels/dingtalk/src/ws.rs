@@ -307,13 +307,18 @@ impl DingTalkWsClient {
                     .unwrap_or("")
                     .to_string();
                 if download_code.is_empty() {
-                    PluginContent::Image { url: String::new(), caption: None }
+                    PluginContent::Image { url: String::new(), caption: None, data: None }
                 } else {
-                    match self.download_image_as_data_uri(&download_code).await {
-                        Ok(data_uri) => PluginContent::Image { url: data_uri, caption: None },
+                    match self.download_media(&download_code).await {
+                        Ok(raw_data) => {
+                            let mime = types::media::detect_image_mime(&raw_data);
+                            let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &raw_data);
+                            let data_uri = format!("data:{mime};base64,{b64}");
+                            PluginContent::Image { url: data_uri, caption: None, data: Some(raw_data) }
+                        }
                         Err(e) => {
                             warn!(tenant = %self.bot_id, download_code = %download_code, error = %e, "Failed to download image");
-                            PluginContent::Image { url: String::new(), caption: None }
+                            PluginContent::Image { url: String::new(), caption: None, data: None }
                         }
                     }
                 }
@@ -331,7 +336,21 @@ impl DingTalkWsClient {
                     .and_then(|f| f.file_name.as_deref())
                     .unwrap_or("")
                     .to_string();
-                PluginContent::File { url: download_code, filename: file_name, data: None }
+                let file_data = if !download_code.is_empty() {
+                    match self.download_media(&download_code).await {
+                        Ok(bytes) => {
+                            info!(filename = %file_name, size = bytes.len(), "DingTalk file downloaded");
+                            Some(bytes)
+                        }
+                        Err(e) => {
+                            warn!(filename = %file_name, error = %e, "Failed to download DingTalk file");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                PluginContent::File { url: download_code, filename: file_name, data: file_data }
             }
             _ => {
                 info!(tenant = %self.bot_id, msg_type, "Ignoring unsupported message type");
@@ -393,20 +412,15 @@ impl DingTalkWsClient {
         let _ = sender.try_send(plugin_msg);
     }
 
-    /// Download an image by downloadCode and return as data URI (base64).
-    async fn download_image_as_data_uri(&self, download_code: &str) -> Result<String, String> {
+    /// Download media by downloadCode and return raw bytes.
+    async fn download_media(&self, download_code: &str) -> Result<Vec<u8>, String> {
         let token = self.token_cache
             .get_token()
             .await
             .map_err(|e| format!("Token error: {e}"))?;
         let http = self.token_cache.http().clone();
 
-        let data = api::download_media(&http, &token, download_code).await?;
-
-        let mime = types::media::detect_image_mime(&data);
-
-        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-        Ok(format!("data:{mime};base64,{b64}"))
+        api::download_media(&http, &token, download_code).await
     }
 
     fn evict_old_entries(&self) {

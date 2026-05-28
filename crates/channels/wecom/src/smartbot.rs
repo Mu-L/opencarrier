@@ -399,7 +399,18 @@ async fn handle_ws_message(
                         .and_then(|c| c.get("image").and_then(|i| i.get("image_url")).and_then(|v| v.as_str()))
                         .unwrap_or("")
                         .to_string();
-                    PluginContent::Image { url: image_url, caption: None }
+                    let image_data = if !image_url.is_empty() {
+                        match reqwest::Client::new().get(&image_url).send().await {
+                            Ok(resp) => match resp.bytes().await {
+                                Ok(b) => Some(b.to_vec()),
+                                Err(_) => None,
+                            },
+                            Err(_) => None,
+                        }
+                    } else {
+                        None
+                    };
+                    PluginContent::Image { url: image_url, caption: None, data: image_data }
                 }
                 _ => {
                     info!("SmartBot ignoring msgtype: {}", msg_type);

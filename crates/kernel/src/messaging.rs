@@ -154,11 +154,25 @@ impl CarrierKernel {
                     let skill_body = skill.body.clone();
                     let skill_max_iter = skill.max_iterations;
 
-                    // Auto-discover skill-declared tools
+                    // Auto-discover skill-declared tools and collect diagnostics
+                    let mut skill_warnings: Vec<String> = Vec::new();
+                    if skill.tools.is_empty() {
+                        skill_warnings.push(format!(
+                            "Skill '{}' has no declared tools in its frontmatter. \
+                             If this skill requires tools, use skill_update to add a tools: [\"tool1\", \"tool2\"] field.",
+                            skill_name
+                        ));
+                    }
                     for t in &skill.tools {
                         if !tools.iter().any(|d| d.name == *t) {
                             if let Some((_, def)) = self.search_tools(t, 1, entry.manifest.max_tool_level).into_iter().next() {
                                 tools.push(def);
+                            } else {
+                                skill_warnings.push(format!(
+                                    "Skill '{}' declared tool '{}' but it was not found in the tool catalog. \
+                                     Use skill_update to remove or correct this tool declaration.",
+                                    skill_name, t
+                                ));
                             }
                         }
                     }
@@ -169,8 +183,13 @@ impl CarrierKernel {
                         "Skill classified by LLM"
                     );
 
+                    let mut skill_prompt = format!("**{}**\n{}", skill_name, skill_body);
+                    if !skill_warnings.is_empty() {
+                        skill_prompt.push_str(&format!("\n\n⚠️ **Skill Tool Warnings:**\n{}", skill_warnings.iter().map(|w| format!("- {}", w)).collect::<Vec<_>>().join("\n")));
+                    }
+
                     (
-                        Some(format!("**{}**\n{}", skill_name, skill_body)),
+                        Some(skill_prompt),
                         skill_max_iter,
                     )
                 }

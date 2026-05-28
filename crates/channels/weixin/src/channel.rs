@@ -5,7 +5,6 @@ use crate::token::WEIXIN_STATE;
 use crate::models::*;
 use crate::crypto;
 use types::plugin::{PluginContent, PluginMessage};
-use base64::Engine;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -173,24 +172,6 @@ async fn poll_loop_inner(
     }
 }
 
-/// Download a CDN media file, AES-decrypt it, and return as data URI.
-async fn download_cdn_as_data_uri(
-    http: &reqwest::Client,
-    media: &CDNMedia,
-) -> Result<String, String> {
-    let eqp = media.encrypt_query_param.as_deref().ok_or("No encrypt_query_param")?;
-    let aes_key_b64 = media.aes_key.as_deref().ok_or("No aes_key")?;
-    let key = crypto::parse_aes_key(aes_key_b64).ok_or("Invalid AES key")?;
-
-    let url = crypto::cdn_download_url(eqp);
-    let data = crypto::cdn_download(http, &url, &key).await?;
-
-    let mime = types::media::detect_image_mime(&data);
-
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-    Ok(format!("data:{mime};base64,{b64}"))
-}
-
 /// Download a CDN media file, AES-decrypt it, and return raw bytes.
 async fn download_cdn_raw(
     http: &reqwest::Client,
@@ -244,19 +225,24 @@ async fn process_inbound_message(
                     PluginContent::Text(text)
                 }
                 ITEM_TYPE_IMAGE => {
-                    let image_url = match item.image_item.as_ref().and_then(|i| i.media.as_ref()) {
+                    let (image_url, image_data) = match item.image_item.as_ref().and_then(|i| i.media.as_ref()) {
                         Some(media) => {
-                            match download_cdn_as_data_uri(http, media).await {
-                                Ok(uri) => uri,
+                            match download_cdn_raw(http, media).await {
+                                Ok(bytes) => {
+                                    let mime = types::media::detect_image_mime(&bytes);
+                                    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
+                                    let data_uri = format!("data:{mime};base64,{b64}");
+                                    (data_uri, Some(bytes))
+                                }
                                 Err(e) => {
                                     warn!(error = %e, "Failed to download WeChat image from CDN");
-                                    String::new()
+                                    (String::new(), None)
                                 }
                             }
                         }
-                        None => String::new(),
+                        None => (String::new(), None),
                     };
-                    PluginContent::Image { url: image_url, caption: None }
+                    PluginContent::Image { url: image_url, caption: None, data: image_data }
                 }
                 ITEM_TYPE_VOICE => {
                     // If voice has text transcription, use it directly

@@ -617,6 +617,50 @@ pub fn sanitize_filename(input: &str) -> String {
         .to_string()
 }
 
+/// Preserved sections from existing MEMORY.md that should survive rebuild.
+struct PreservedSections {
+    skills: Option<String>,
+    identity_files: Option<String>,
+}
+
+/// Extract V3 preserved sections (## 技能, ## 身份文件) from existing MEMORY.md.
+fn extract_preserved_sections(existing: &str) -> PreservedSections {
+    let mut skills: Option<String> = None;
+    let mut identity_files: Option<String> = None;
+
+    // Section headers to look for
+    let section_headers = ["## 技能", "## 身份文件", "## 知识", "## 知识缺口"];
+
+    for (i, line) in existing.lines().enumerate() {
+        if line.starts_with("## 技能") {
+            skills = Some(extract_section(existing, i, &section_headers));
+        } else if line.starts_with("## 身份文件") {
+            identity_files = Some(extract_section(existing, i, &section_headers));
+        }
+    }
+
+    PreservedSections {
+        skills,
+        identity_files,
+    }
+}
+
+/// Extract a section from line index until the next section header or EOF.
+fn extract_section(text: &str, start_line: usize, stop_headers: &[&str]) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut section_lines = Vec::new();
+
+    for line in lines.iter().skip(start_line) {
+        // Stop if we hit another section header
+        if stop_headers.iter().any(|h| line.starts_with(h)) && !section_lines.is_empty() {
+            break;
+        }
+        section_lines.push(*line);
+    }
+
+    section_lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -809,48 +853,4 @@ mod tests {
         assert!(compiled.contains("Just compiled truth"));
         assert!(timeline.is_empty());
     }
-}
-
-/// Preserved sections from existing MEMORY.md that should survive rebuild.
-struct PreservedSections {
-    skills: Option<String>,
-    identity_files: Option<String>,
-}
-
-/// Extract V3 preserved sections (## 技能, ## 身份文件) from existing MEMORY.md.
-fn extract_preserved_sections(existing: &str) -> PreservedSections {
-    let mut skills: Option<String> = None;
-    let mut identity_files: Option<String> = None;
-
-    // Section headers to look for
-    let section_headers = ["## 技能", "## 身份文件", "## 知识", "## 知识缺口"];
-
-    for (i, line) in existing.lines().enumerate() {
-        if line.starts_with("## 技能") {
-            skills = Some(extract_section(existing, i, &section_headers));
-        } else if line.starts_with("## 身份文件") {
-            identity_files = Some(extract_section(existing, i, &section_headers));
-        }
-    }
-
-    PreservedSections {
-        skills,
-        identity_files,
-    }
-}
-
-/// Extract a section from line index until the next section header or EOF.
-fn extract_section(text: &str, start_line: usize, stop_headers: &[&str]) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let mut section_lines = Vec::new();
-
-    for line in lines.iter().skip(start_line) {
-        // Stop if we hit another section header
-        if stop_headers.iter().any(|h| line.starts_with(h)) && !section_lines.is_empty() {
-            break;
-        }
-        section_lines.push(*line);
-    }
-
-    section_lines.join("\n")
 }

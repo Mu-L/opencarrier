@@ -467,12 +467,22 @@ pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, Vec<Stri
     let mut description = String::new();
     let mut max_iterations: Option<u32> = None;
     let mut tools: Vec<String> = Vec::new();
+    let mut in_tools_list = false;
 
     if let Some(rest) = content.strip_prefix("---") {
         if let Some(end) = rest.find("---") {
             let frontmatter = &rest[..end];
             for line in frontmatter.lines() {
                 let trimmed = line.trim();
+                // Detect new key — ends multi-line tools list
+                if trimmed.starts_with('-') && in_tools_list {
+                    let item = trimmed.strip_prefix('-').unwrap().trim().trim_matches('"').trim_matches('\'');
+                    if !item.is_empty() {
+                        tools.push(item.to_string());
+                    }
+                    continue;
+                }
+                in_tools_list = false;
                 if let Some(val) = trimmed.strip_prefix("name:") {
                     name = val.trim().trim_matches('"').trim_matches('\'').to_string();
                 } else if let Some(val) = trimmed.strip_prefix("description:") {
@@ -487,6 +497,9 @@ pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, Vec<Stri
                             .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
                             .filter(|s| !s.is_empty())
                             .collect();
+                    } else if inline.is_empty() {
+                        // Multi-line list format: tools:\n  - foo\n  - bar
+                        in_tools_list = true;
                     }
                 }
             }
@@ -773,4 +786,46 @@ pub fn parse_skill_frontmatter(path: &Path) -> Option<(String, String)> {
     }
 
     Some((name, description))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_skill_full_inline_tools() {
+        let content = "---\nname: test-skill\ndescription: test\ntools: [\"foo\", \"bar\"]\n---\nBody text";
+        let (name, desc, max_iter, tools, body) = parse_skill_full(content);
+        assert_eq!(name, "test-skill");
+        assert_eq!(desc, "test");
+        assert_eq!(max_iter, None);
+        assert_eq!(tools, vec!["foo", "bar"]);
+        assert_eq!(body, "Body text");
+    }
+
+    #[test]
+    fn test_parse_skill_full_multiline_tools() {
+        let content = "---\nname: test-skill\ndescription: test\ntools:\n  - mcp_searxng_web_search\n  - knowledge_add\n---\nBody text";
+        let (name, desc, _max_iter, tools, body) = parse_skill_full(content);
+        assert_eq!(name, "test-skill");
+        assert_eq!(desc, "test");
+        assert_eq!(tools, vec!["mcp_searxng_web_search", "knowledge_add"]);
+        assert_eq!(body, "Body text");
+    }
+
+    #[test]
+    fn test_parse_skill_full_no_tools() {
+        let content = "---\nname: test-skill\ndescription: test\n---\nBody text";
+        let (name, _, _, tools, _) = parse_skill_full(content);
+        assert_eq!(name, "test-skill");
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn test_parse_skill_full_tools_stops_at_next_key() {
+        let content = "---\nname: test-skill\ntools:\n  - foo\n  - bar\nversion: 2\n---\nBody";
+        let (name, _, _, tools, _) = parse_skill_full(content);
+        assert_eq!(name, "test-skill");
+        assert_eq!(tools, vec!["foo", "bar"]);
+    }
 }

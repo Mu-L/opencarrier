@@ -330,7 +330,18 @@ async fn webhook_post(
         }
         "image" => {
             let pic_url = fields.get("PicUrl").cloned().unwrap_or_default();
-            PluginContent::Image { url: pic_url, caption: None }
+            let image_data = if !pic_url.is_empty() {
+                match reqwest::Client::new().get(&pic_url).send().await {
+                    Ok(resp) => match resp.bytes().await {
+                        Ok(b) => Some(b.to_vec()),
+                        Err(_) => None,
+                    },
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
+            PluginContent::Image { url: pic_url, caption: None, data: image_data }
         }
         "voice" => {
             let recognition = fields.get("Recognition").cloned().unwrap_or_default();

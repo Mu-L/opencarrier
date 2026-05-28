@@ -1337,7 +1337,7 @@ fn cmd_agent_kill(config: Option<PathBuf>, agent_id_str: &str) {
     }
 }
 
-fn cmd_agent_restart(config: Option<PathBuf>, name_or_id: &str) {
+fn cmd_agent_restart(_config: Option<PathBuf>, name_or_id: &str) {
     // 1. Find agent by name or ID prefix via daemon
     let base = find_daemon().unwrap_or_else(|| {
         eprintln!("需要 daemon 运行才能 restart");

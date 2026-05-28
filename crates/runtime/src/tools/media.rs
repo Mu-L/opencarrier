@@ -664,7 +664,8 @@ async fn tool_image_generate(
     let saved_paths = if let (Some(hd), Some(an)) = (home_dir, agent_name) {
         let sid = sender_id.ok_or("Cannot save images: no sender context")?;
         let oid = owner_id.unwrap_or(sid);
-        let output_dir = types::config::sender_data_dir(hd, oid, an, Some(sid)).join("output");
+        let rel_dir = types::config::sender_relative_path(oid, an, Some(sid), "output");
+        let output_dir = hd.join(&rel_dir);
         tokio::fs::create_dir_all(&output_dir)
             .await
             .map_err(|e| format!("Failed to create output dir: {e}"))?;
@@ -705,7 +706,7 @@ async fn tool_image_generate(
                 .await
                 .map_err(|e| format!("Failed to write image: {e}"))?;
 
-            paths.push(path.display().to_string());
+            paths.push(format!("{}/{}", rel_dir, filename));
         }
         paths
     } else {
@@ -841,7 +842,8 @@ async fn tool_text_to_speech(
     let saved_path = if let (Some(hd), Some(an)) = (home_dir, agent_name) {
         let sid = sender_id.ok_or("Cannot save audio: no sender context")?;
         let oid = owner_id.unwrap_or(sid);
-        let output_dir = types::config::sender_data_dir(hd, oid, an, Some(sid)).join("output");
+        let rel_dir = types::config::sender_relative_path(oid, an, Some(sid), "output");
+        let output_dir = hd.join(&rel_dir);
         tokio::fs::create_dir_all(&output_dir)
             .await
             .map_err(|e| format!("Failed to create output dir: {e}"))?;
@@ -854,7 +856,7 @@ async fn tool_text_to_speech(
             .await
             .map_err(|e| format!("Failed to write audio file: {e}"))?;
 
-        Some(path.display().to_string())
+        Some(format!("{}/{}", rel_dir, filename))
     } else {
         None
     };
@@ -1148,10 +1150,11 @@ async fn tool_canvas_present(
     let canvas_id = uuid::Uuid::new_v4().to_string();
 
     // Save to per-sender output directory
-    let output_dir = if let (Some(_root), Some(hd), Some(an)) = (workspace_root, home_dir, agent_name) {
+    let (output_dir, rel_dir) = if let (Some(_root), Some(hd), Some(an)) = (workspace_root, home_dir, agent_name) {
         let sid = sender_id.ok_or("Cannot save canvas: no sender context")?;
         let oid = owner_id.unwrap_or(sid);
-        types::config::sender_data_dir(hd, oid, an, Some(sid)).join("output")
+        let rel = types::config::sender_relative_path(oid, an, Some(sid), "output");
+        (hd.join(&rel), rel)
     } else {
         return Err("Cannot save canvas: no workspace".into());
     };
@@ -1175,7 +1178,7 @@ async fn tool_canvas_present(
     let response = serde_json::json!({
         "canvas_id": canvas_id,
         "title": title,
-        "saved_to": filepath.to_string_lossy(),
+        "saved_to": format!("{}/{}", rel_dir, filename),
         "size_bytes": full_html.len(),
     });
 

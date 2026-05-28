@@ -1081,6 +1081,20 @@ pub fn sender_data_dir(home_dir: &std::path::Path, owner_id: &str, agent_name: &
     }
 }
 
+/// Compute a workspace-relative path under `senders/` for a given subdir (input/output/memory).
+///
+/// Returns a string like `senders/{owner_id}/{agent_name}/{subdir}` or
+/// `senders/{owner_id}/{agent_name}/users/{user_id}/{subdir}` when user_id differs from owner_id.
+pub fn sender_relative_path(owner_id: &str, agent_name: &str, user_id: Option<&str>, subdir: &str) -> String {
+    let safe_owner = sanitize_path_component(owner_id);
+    let safe_agent = sanitize_path_component(agent_name);
+    let base = format!("senders/{}/{}", safe_owner, safe_agent);
+    match user_id {
+        Some(uid) if uid != owner_id => format!("{}/users/{}/{}", base, sanitize_path_component(uid), subdir),
+        _ => format!("{}/{}", base, subdir),
+    }
+}
+
 /// Sanitize a path component to prevent directory traversal.
 /// Returns "_" for empty/unsafe values.
 fn sanitize_path_component(s: &str) -> &str {

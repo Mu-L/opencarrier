@@ -374,13 +374,18 @@ impl FeishuWsClient {
                     .to_string();
 
                 if image_key.is_empty() {
-                    PluginContent::Image { url: String::new(), caption: None }
+                    PluginContent::Image { url: String::new(), caption: None, data: None }
                 } else {
-                    match self.download_image_as_data_uri(&image_key).await {
-                        Ok(data_uri) => PluginContent::Image { url: data_uri, caption: None },
+                    match self.download_media(&image_key, "image").await {
+                        Ok(raw_data) => {
+                            let mime = types::media::detect_image_mime(&raw_data);
+                            let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &raw_data);
+                            let data_uri = format!("data:{mime};base64,{b64}");
+                            PluginContent::Image { url: data_uri, caption: None, data: Some(raw_data) }
+                        }
                         Err(e) => {
                             warn!(tenant = %self.bot_id, image_key = %image_key, error = %e, "Failed to download image");
-                            PluginContent::Image { url: String::new(), caption: None }
+                            PluginContent::Image { url: String::new(), caption: None, data: None }
                         }
                     }
                 }
@@ -404,7 +409,21 @@ impl FeishuWsClient {
                     .and_then(|v| v.get("file_name").and_then(|n| n.as_str()))
                     .unwrap_or("")
                     .to_string();
-                PluginContent::File { url: file_key, filename: file_name, data: None }
+                let file_data = if !file_key.is_empty() {
+                    match self.download_media(&file_key, "file").await {
+                        Ok(bytes) => {
+                            info!(filename = %file_name, size = bytes.len(), "Feishu file downloaded");
+                            Some(bytes)
+                        }
+                        Err(e) => {
+                            warn!(filename = %file_name, error = %e, "Failed to download Feishu file");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                PluginContent::File { url: file_key, filename: file_name, data: file_data }
             }
             _ => {
                 info!(tenant = %self.bot_id, msg_type, "Ignoring unsupported message type");
@@ -466,20 +485,18 @@ impl FeishuWsClient {
         let _ = sender.try_send(plugin_msg);
     }
 
-    /// Download an image by key and return as data URI (base64).
-    async fn download_image_as_data_uri(&self, image_key: &str) -> Result<String, String> {
+    /// Download media by key and return raw bytes.
+    async fn download_media(&self, key: &str, kind: &str) -> Result<Vec<u8>, String> {
         let token = self.token_cache.get_token().await
             .map_err(|e| format!("Token error: {e}"))?;
         let http = self.token_cache.http().clone();
         let base = self.token_cache.api_base().to_string();
 
-        let data = api::download_image(&http, &token, &base, image_key).await?;
-
-        // Detect MIME from first bytes
-        let mime = types::media::detect_image_mime(&data);
-
-        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-        Ok(format!("data:{mime};base64,{b64}"))
+        match kind {
+            "image" => api::download_image(&http, &token, &base, key).await,
+            "file" => api::download_file(&http, &token, &base, key).await,
+            _ => Err(format!("Unknown media kind: {kind}")),
+        }
     }
 
     /// Remove dedup entries older than TTL.

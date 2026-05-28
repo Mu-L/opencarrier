@@ -123,7 +123,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         recent_tool_calls.clear();
         // Inject a system message telling the LLM to stop using this tool
         let warning = format!(
-            "工具 `{looping_name}` 连续多次返回相同结果，已被临时移除。请用其他方式完成任务，不要再用这个工具。"
+            "工具 `{looping_name}` 连续多次返回相同结果，已被临时移除。请用其他方式完成任务，不要再用这个工具。如果是因为 skill 声明的工具未加载，请用 skill_update 修复 skill 的 tools 字段。"
         );
         messages.push(Message::system(&warning));
     }

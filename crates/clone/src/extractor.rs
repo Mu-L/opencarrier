@@ -219,6 +219,11 @@ pub fn pack_workspace_as_agx(workspace: &Path) -> Result<Vec<u8>> {
             let mut header = tar::Header::new_gnu();
             header.set_size(data.len() as u64);
             header.set_mode(0o644);
+            if let Ok(meta) = std::fs::metadata(file_path) {
+                if let Ok(mtime) = meta.modified() {
+                    header.set_mtime(mtime.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs());
+                }
+            }
             header.set_cksum();
             tar.append_data(&mut header, rel_str.as_ref(), data.as_slice())
                 .with_context(|| format!("Failed to add {} to archive", rel_str))?;

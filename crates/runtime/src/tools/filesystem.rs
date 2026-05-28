@@ -215,7 +215,8 @@ async fn tool_file_convert(
             .unwrap_or("converted");
         let sender = sender_id.unwrap_or("unknown");
         let output_dir = if let Some(root) = workspace_root {
-            root.join("senders").join(sender).join(agent_name.unwrap_or("unknown")).join("output")
+            let rel = types::config::sender_relative_path(sender, agent_name.unwrap_or("unknown"), None, "output");
+            root.join(rel)
         } else {
             PathBuf::from("output")
         };

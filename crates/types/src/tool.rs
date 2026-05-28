@@ -443,6 +443,19 @@ impl From<&str> for PluginToolError {
     }
 }
 
+/// Core tool names always included in `CompletionRequest.tools`.
+///
+/// These are the bootstrap tools every agent gets. Other tools are discovered
+/// at runtime via `tool_search` when the LLM needs them.
+pub const CORE_TOOL_NAMES: &[&str] = &[
+    "tool_search", "skill_load", "skill_create", "skill_update",
+    "session_summarize",
+    "knowledge_read", "knowledge_list",
+    "file_read", "file_list",
+    "cron_create", "cron_list", "cron_cancel",
+    "task_plan",
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -813,16 +826,3 @@ mod tests {
         assert!(result["properties"]["tags"].get("nullable").is_none());
     }
 }
-
-/// Core tool names always included in `CompletionRequest.tools`.
-///
-/// These are the bootstrap tools every agent gets. Other tools are discovered
-/// at runtime via `tool_search` when the LLM needs them.
-pub const CORE_TOOL_NAMES: &[&str] = &[
-    "tool_search", "skill_load", "skill_create", "skill_update",
-    "session_summarize",
-    "knowledge_read", "knowledge_list",
-    "file_read", "file_list",
-    "cron_create", "cron_list", "cron_cancel",
-    "task_plan",
-];

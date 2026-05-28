@@ -272,37 +272,20 @@ impl PluginBridgeManager {
             "Routing plugin message to agent"
         );
 
-        // Save file data to the agent's workspace sender directory
-        // so file_read can access it via relative path "input/<filename>"
-        if let PluginContent::File { data: Some(file_data), filename, .. } = &msg.content {
-            let base_dir = self.kernel.resolve_agent_workspace(&agent_id)
-                .map(std::path::PathBuf::from)
-                .or_else(|| self.kernel.home_dir());
-            if let Some(base) = base_dir {
-                let input_dir = types::config::sender_data_dir(
-                    &base, &rk, &agent_id, Some(&msg.sender_id),
-                ).join("input");
-                info!(filename, agent = %agent_id, dir = %input_dir.display(), size = file_data.len(), "Saving uploaded file to input directory");
-                if tokio::fs::create_dir_all(&input_dir).await.is_ok() {
-                    let safe = std::path::Path::new(filename)
-                        .file_name()
-                        .unwrap_or(std::ffi::OsStr::new("file"))
-                        .to_string_lossy();
-                    let dest = input_dir.join(safe.as_ref());
-                    if let Err(e) = tokio::fs::write(&dest, file_data).await {
-                        warn!(filename, error = %e, "Failed to save uploaded file");
-                    } else {
-                        info!(filename, path = %dest.display(), "File saved successfully");
-                    }
-                }
-            }
-        }
+        // Save media data (files and images) to the agent's workspace input/ directory
+        let saved_filename = self.save_media_to_input(&msg, &agent_id, &rk).await;
+
+        // Append file_read hint if media was saved
+        let final_text = match saved_filename {
+            Some(rel_path) => format!("{}\n[文件已保存至 {}，请用 file_read 读取]", text, rel_path),
+            None => text,
+        };
 
         match self
             .kernel
             .send_to_agent(
                 &agent_id,
-                &text,
+                &final_text,
                 Some(&msg.sender_id),
                 Some(&msg.sender_name),
                 None,
@@ -488,7 +471,7 @@ impl PluginBridgeManager {
     /// Resolve non-text content into a text description.
     /// Images go through the vision model; other types use hardcoded fallback.
     async fn resolve_non_text_content(&self, msg: &PluginMessage) -> String {
-        if let PluginContent::Image { url, caption } = &msg.content {
+        if let PluginContent::Image { url, caption, .. } = &msg.content {
             match self
                 .kernel
                 .describe_content("image", url, caption.as_deref())
@@ -508,7 +491,7 @@ impl PluginBridgeManager {
 
     fn describe_non_text_content(&self, msg: &PluginMessage) -> String {
         match &msg.content {
-            PluginContent::Image { url, caption } => {
+            PluginContent::Image { url, caption, .. } => {
                 let cap = caption
                     .as_deref()
                     .map(|c| format!(" ({})", c))
@@ -517,7 +500,7 @@ impl PluginBridgeManager {
             }
             PluginContent::File { url, filename, data } => {
                 if data.is_some() {
-                    format!("[用户发送了一个文件]: {}，请用 file_read 读取 input/{}", filename, filename)
+                    format!("[用户发送了一个文件]: {}", filename)
                 } else if !url.is_empty() {
                     format!("[用户发送了一个文件]: {} ({})", filename, url)
                 } else {
@@ -547,6 +530,62 @@ impl PluginBridgeManager {
                 format!("[用户发送了命令]: {} {:?}", name, args)
             }
             PluginContent::Text(_) => unreachable!(),
+        }
+    }
+
+    /// Save media data (files and images) to the agent's workspace input/ directory.
+    /// Returns the workspace-relative path if saved, None otherwise.
+    async fn save_media_to_input(&self, msg: &PluginMessage, agent_id: &str, rk: &str) -> Option<String> {
+        let (data, filename) = match &msg.content {
+            PluginContent::File { data: Some(d), filename, .. } => (d.clone(), filename.clone()),
+            PluginContent::Image { data: Some(d), .. } => {
+                let ext = types::media::detect_image_mime(d)
+                    .strip_prefix("image/")
+                    .unwrap_or("png")
+                    .to_string();
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis();
+                (d.clone(), format!("image_{ts}.{ext}"))
+            }
+            _ => return None,
+        };
+
+        let base_dir = self.kernel.resolve_agent_workspace(agent_id)
+            .map(std::path::PathBuf::from)
+            .or_else(|| self.kernel.home_dir());
+        let base = match base_dir {
+            Some(b) => b,
+            None => return None,
+        };
+
+        let safe = std::path::Path::new(&filename)
+            .file_name()
+            .unwrap_or(std::ffi::OsStr::new("file"))
+            .to_string_lossy();
+
+        let rel_path = format!(
+            "{}/{}",
+            types::config::sender_relative_path(rk, agent_id, Some(&msg.sender_id), "input"),
+            safe
+        );
+
+        // Create parent directory
+        if let Some(parent) = std::path::Path::new(&rel_path).parent() {
+            if tokio::fs::create_dir_all(base.join(parent)).await.is_err() {
+                return None;
+            }
+        }
+
+        let dest = base.join(&rel_path);
+
+        if let Err(e) = tokio::fs::write(&dest, &data).await {
+            warn!(filename, error = %e, "Failed to save uploaded media");
+            None
+        } else {
+            info!(filename, path = %dest.display(), size = data.len(), "Media saved to input directory");
+            Some(rel_path)
         }
     }
 

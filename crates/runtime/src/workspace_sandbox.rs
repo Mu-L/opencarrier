@@ -5,19 +5,6 @@
 
 use std::path::{Path, PathBuf};
 
-/// Check if a relative path is an internal workspace path that should NOT be
-/// auto-routed to the sender's output directory.
-fn is_internal_path(rel: &str) -> bool {
-    matches!(
-        rel,
-        "agent.toml" | "SOUL.md" | "system_prompt.md" | "profile.md" | "style.md" | "evolution.md"
-    ) || rel.starts_with("knowledge/")
-        || rel.starts_with("skills/")
-        || rel.starts_with("sessions/")
-        || rel.starts_with("senders/")
-        || rel.starts_with("data/")
-}
-
 /// Resolve a user-supplied path within a workspace sandbox.
 ///
 /// - Rejects `..` components outright.
@@ -116,18 +103,15 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
 
 /// Resolve a user-supplied path for write operations within a workspace sandbox.
 ///
-/// Extends `resolve_sandbox_path` with per-directory permission rules:
+/// Enforces:
 /// - **Blocked**: `agent.toml`, `SOUL.md` (only trainer tools may modify these)
-/// - **Allowed (self-evolution)**: `system_prompt.md`, `skills/`, `data/`, `memory/`
-/// - **Per-sender**: `senders/{sender_id}/{agent_name}/` when sender_id matches the current sender
-/// - **Blocked**: `senders/{other_sender_id}/`
-///
-/// When `sender_id` is present, `output/` paths are rewritten to `senders/{sender_id}/{agent_name}/output/`.
+/// - **Blocked**: identity-frozen files when EVOLUTION.md declares identity freeze
+/// - **Per-sender**: `senders/{sender_id}/` paths must match the current sender
 pub fn resolve_sandbox_path_for_write(
     user_path: &str,
     workspace_root: &Path,
     sender_id: Option<&str>,
-    agent_name: Option<&str>,
+    _agent_name: Option<&str>,
 ) -> Result<PathBuf, String> {
     let normalized = user_path.replace('\\', "/");
     let path = Path::new(&normalized);
@@ -151,8 +135,7 @@ pub fn resolve_sandbox_path_for_write(
         ));
     }
 
-    // V3: Block writes to identity-frozen files (MENTAL-MODELS.md, DECISION-HEURISTICS.md, etc.)
-    // Only enforced when EVOLUTION.md contains identity freeze rules.
+    // Block writes to identity-frozen files when EVOLUTION.md declares identity freeze
     const IDENTITY_FILES: &[&str] = &[
         "MENTAL-MODELS.md",
         "DECISION-HEURISTICS.md",
@@ -161,7 +144,6 @@ pub fn resolve_sandbox_path_for_write(
         "system_prompt.md",
     ];
     if IDENTITY_FILES.contains(&rel_str.as_ref()) {
-        // Check if EVOLUTION.md has identity freeze rules
         let evolution_path = workspace_root.join("EVOLUTION.md");
         if let Ok(content) = std::fs::read_to_string(&evolution_path) {
             if content.contains("身份层不可修改") || content.contains("identity_frozen:") {
@@ -173,42 +155,13 @@ pub fn resolve_sandbox_path_for_write(
         }
     }
 
-    // Rewrite output/ and memory/ to per-sender directories when sender_id is present
-    // Non-internal paths are auto-routed to senders/{sender_id}/{agent_name}/output/
-    let effective_path = if let (Some(sid), Some(an)) = (sender_id, agent_name) {
-        if rel_str.starts_with("output/") || rel_str == "output" {
-            let rest = rel_str.strip_prefix("output").unwrap_or("");
-            let rest = rest.strip_prefix('/').unwrap_or(rest);
-            if rest.is_empty() {
-                format!("senders/{}/{}/output", sid, an)
-            } else {
-                format!("senders/{}/{}/output/{}", sid, an, rest)
-            }
-        } else if rel_str.starts_with("memory/") || rel_str == "memory" {
-            let rest = rel_str.strip_prefix("memory").unwrap_or("");
-            let rest = rest.strip_prefix('/').unwrap_or(rest);
-            if rest.is_empty() {
-                format!("senders/{}/{}/memory", sid, an)
-            } else {
-                format!("senders/{}/{}/memory/{}", sid, an, rest)
-            }
-        } else if is_internal_path(&rel_str) {
-            rel_str.to_string()
-        } else {
-            format!("senders/{}/{}/output/{}", sid, an, rel_str)
-        }
-    } else {
-        rel_str.to_string()
-    };
-
     // Check per-sender isolation for senders/ paths
-    let eff_path = Path::new(&effective_path);
+    let eff_path = Path::new(&*rel_str);
     if eff_path.starts_with("senders/") {
         let components: Vec<&str> = eff_path
             .components()
             .filter_map(|c| c.as_os_str().to_str())
             .collect();
-        // components: ["senders", "{sender_id}", "{agent_name}", ...]
         if components.len() >= 2 {
             let path_sender = components[1];
             if let Some(sid) = sender_id {
@@ -228,23 +181,18 @@ pub fn resolve_sandbox_path_for_write(
     }
 
     // Delegate to the existing sandbox for path resolution and traversal checks
-    resolve_sandbox_path(&effective_path, workspace_root)
+    resolve_sandbox_path(&rel_str, workspace_root)
 }
 
 /// Resolve a user-supplied path for read operations within a workspace sandbox.
 ///
-/// When `sender_id` is present, rewrites `input/` and `output/` paths to
-/// per-sender directories:
-/// - `input/xxx`  → `senders/{sender_id}/{agent_name}/input/xxx`
-/// - `output/xxx` → `senders/{sender_id}/{agent_name}/output/xxx`
-///
-/// Also enforces per-sender isolation for direct `senders/` paths (can only
-/// read own sender directory).
+/// Enforces per-sender isolation for `senders/` paths (can only read own sender directory).
+/// No path rewriting — agents use the actual workspace-relative path directly.
 pub fn resolve_sandbox_path_for_read(
     user_path: &str,
     workspace_root: &Path,
     sender_id: Option<&str>,
-    agent_name: Option<&str>,
+    _agent_name: Option<&str>,
 ) -> Result<PathBuf, String> {
     let normalized = user_path.replace('\\', "/");
     let path = Path::new(&normalized);
@@ -259,41 +207,8 @@ pub fn resolve_sandbox_path_for_read(
 
     let rel_str = relative.to_string_lossy();
 
-    // Rewrite input/, output/, and memory/ to per-sender directories when sender_id is present
-    let effective_path = if let (Some(sid), Some(an)) = (sender_id, agent_name) {
-        if rel_str.starts_with("input/") || rel_str == "input" {
-            let rest = rel_str.strip_prefix("input").unwrap_or("");
-            let rest = rest.strip_prefix('/').unwrap_or(rest);
-            if rest.is_empty() {
-                format!("senders/{}/{}/input", sid, an)
-            } else {
-                format!("senders/{}/{}/input/{}", sid, an, rest)
-            }
-        } else if rel_str.starts_with("output/") || rel_str == "output" {
-            let rest = rel_str.strip_prefix("output").unwrap_or("");
-            let rest = rest.strip_prefix('/').unwrap_or(rest);
-            if rest.is_empty() {
-                format!("senders/{}/{}/output", sid, an)
-            } else {
-                format!("senders/{}/{}/output/{}", sid, an, rest)
-            }
-        } else if rel_str.starts_with("memory/") || rel_str == "memory" {
-            let rest = rel_str.strip_prefix("memory").unwrap_or("");
-            let rest = rest.strip_prefix('/').unwrap_or(rest);
-            if rest.is_empty() {
-                format!("senders/{}/{}/memory", sid, an)
-            } else {
-                format!("senders/{}/{}/memory/{}", sid, an, rest)
-            }
-        } else {
-            rel_str.to_string()
-        }
-    } else {
-        rel_str.to_string()
-    };
-
     // Check per-sender isolation for senders/ paths
-    let eff_path = Path::new(&effective_path);
+    let eff_path = Path::new(&*rel_str);
     if eff_path.starts_with("senders/") {
         let components: Vec<&str> = eff_path
             .components()
@@ -319,7 +234,7 @@ pub fn resolve_sandbox_path_for_read(
         }
     }
 
-    resolve_sandbox_path(&effective_path, workspace_root)
+    resolve_sandbox_path(&rel_str, workspace_root)
 }
 
 #[cfg(test)]
