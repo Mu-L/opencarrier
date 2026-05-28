@@ -286,7 +286,29 @@ pub(crate) async fn tool_knowledge_read(
     let path = root.join("knowledge").join(filename);
 
     if !path.exists() {
-        return Err(format!("Knowledge file not found: {}", filename));
+        // List available files so the LLM can correct the filename
+        let knowledge_dir = root.join("knowledge");
+        let available: Vec<String> = std::fs::read_dir(&knowledge_dir)
+            .map(|entries| {
+                let mut names: Vec<String> = entries
+                    .filter_map(|e| e.ok())
+                    .filter_map(|e| {
+                        let name = e.file_name().to_string_lossy().to_string();
+                        if name.ends_with(".md") { Some(name) } else { None }
+                    })
+                    .collect();
+                names.sort();
+                names
+            })
+            .unwrap_or_default();
+        if available.is_empty() {
+            return Ok(format!("Knowledge file '{}' not found. No knowledge files exist yet.", filename));
+        }
+        return Ok(format!(
+            "Knowledge file '{}' not found. Available files: {}",
+            filename,
+            available.join(", ")
+        ));
     }
 
     tokio::fs::read_to_string(&path)

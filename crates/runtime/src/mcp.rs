@@ -663,8 +663,17 @@ impl Drop for McpConnection {
 // ---------------------------------------------------------------------------
 
 /// Format a namespaced MCP tool name: `mcp_{server}_{tool}`.
+///
+/// If the tool name already starts with `{server_}`, the prefix is stripped
+/// to avoid duplication (e.g. server="browser", tool="browser_navigate"
+/// → "mcp_browser_navigate", not "mcp_browser_browser_navigate").
 pub fn format_mcp_tool_name(server: &str, tool: &str) -> String {
-    format!("mcp_{}_{}", normalize_name(server), normalize_name(tool))
+    let norm_server = normalize_name(server);
+    let norm_tool = normalize_name(tool);
+    // Strip redundant server prefix from tool name
+    let server_prefix = format!("{norm_server}_");
+    let tool_part = norm_tool.strip_prefix(&server_prefix).unwrap_or(&norm_tool);
+    format!("mcp_{norm_server}_{tool_part}")
 }
 
 /// Check if a tool name is an MCP-namespaced tool.
@@ -733,6 +742,19 @@ mod tests {
         assert_eq!(
             format_mcp_tool_name("my-server", "do_thing"),
             "mcp_my_server_do_thing"
+        );
+        // Redundant server prefix is stripped
+        assert_eq!(
+            format_mcp_tool_name("browser", "browser_navigate"),
+            "mcp_browser_navigate"
+        );
+        assert_eq!(
+            format_mcp_tool_name("wecom", "wecom_send_message"),
+            "mcp_wecom_send_message"
+        );
+        assert_eq!(
+            format_mcp_tool_name("feishu", "feishu_send_message"),
+            "mcp_feishu_send_message"
         );
     }
 
