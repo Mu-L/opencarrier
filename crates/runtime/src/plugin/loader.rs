@@ -93,10 +93,16 @@ pub struct LoadedChannel {
 
 // SAFETY: LoadedChannel contains an opaque pointer from the plugin.
 // It is only used to pass back to the plugin's own functions.
+// Plugins MUST ensure their channel_start/channel_send implementations
+// are thread-safe if called from multiple threads concurrently.
 unsafe impl Send for LoadedChannel {}
 unsafe impl Sync for LoadedChannel {}
 
 // SAFETY: LoadedPlugin owns the Library and all handles are from that library.
+// The UnsafeCell fields (handle, user_data) are only dereferenced during
+// FFI calls. Plugins MUST ensure their C implementations are thread-safe
+// when their functions are invoked concurrently. If a plugin is not
+// thread-safe, callers should serialize access through an external Mutex.
 unsafe impl Send for LoadedPlugin {}
 unsafe impl Sync for LoadedPlugin {}
 

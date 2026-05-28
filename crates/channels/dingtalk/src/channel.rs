@@ -5,7 +5,7 @@
 use crate::api;
 use crate::token::AccessTokenCache;
 use crate::ws::DingTalkWsClient;
-use types::channel::Channel;
+use types::channel::{Channel, ChannelError};
 use types::plugin::PluginMessage;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -49,7 +49,7 @@ impl Channel for DingTalkChannel {
         &self.app_key
     }
 
-    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
         let bot_name = self.bot_name.clone();
         let app_key = self.app_key.clone();
         let token_cache = self.token_cache.clone();
@@ -74,14 +74,14 @@ impl Channel for DingTalkChannel {
                 rt.block_on(client.run(&sender));
                 info!(tenant = %bot_name, "DingTalk WS client exited");
             })
-            .map_err(|e| format!("Failed to spawn DingTalk channel thread: {e}"))?;
+            .map_err(|e| ChannelError::Other(format!("Failed to spawn DingTalk channel thread: {e}")))?;
 
         self.thread_handle = Some(handle);
         info!(tenant = %log_name, "DingTalkChannel started");
         Ok(())
     }
 
-    fn send(&self, _bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+    fn send(&self, _bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
         let token_cache = self.token_cache.clone();
         let user_id = user_id.to_string();
         let text = text.to_string();
@@ -94,7 +94,7 @@ impl Channel for DingTalkChannel {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    let _ = tx.send(Err(format!("Runtime creation failed: {e}")));
+                    let _ = tx.send(Err(ChannelError::Other(format!("Runtime creation failed: {e}"))));
                     return;
                 }
             };
@@ -103,18 +103,20 @@ impl Channel for DingTalkChannel {
                 let token = token_cache
                     .get_token()
                     .await
-                    .map_err(|e| format!("Token error: {e}"))?;
+                    .map_err(|e| ChannelError::TokenFailed(e.to_string()))?;
                 let http = token_cache.http().clone();
                 let robot_code = token_cache.app_key().to_string();
 
-                api::send_direct_message(&http, &token, &robot_code, &user_id, &text).await
+                api::send_direct_message(&http, &token, &robot_code, &user_id, &text)
+                    .await
+                    .map_err(ChannelError::SendFailed)
             });
 
             let _ = tx.send(result);
         });
 
         rx.recv()
-            .map_err(|e| format!("Send thread disconnected: {e}"))?
+            .map_err(|e| ChannelError::Other(format!("Send thread disconnected: {e}")))?
     }
 
     fn stop(&mut self) {

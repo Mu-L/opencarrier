@@ -206,7 +206,7 @@ impl BotEntry {
 
     fn get_or_refresh_token(&self) -> Result<String, String> {
         // Check cache
-        if let Some((token, expires_at)) = self.cached_token.lock().unwrap().as_ref() {
+        if let Some((token, expires_at)) = self.cached_token.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             if Instant::now() < *expires_at {
                 return Ok(token.clone());
             }
@@ -223,14 +223,17 @@ impl BotEntry {
     }
 
     async fn fetch_token(&self) -> Result<String, String> {
-        let url = format!(
-            "{}/cgi-bin/gettoken?corpid={}&corpsecret={}",
-            WECOM_API_BASE, self.corp_id, self.secret
-        );
+        // SECURITY: Use POST body instead of query params to avoid leaking corpsecret in logs
+        let url = format!("{}/cgi-bin/gettoken", WECOM_API_BASE);
+        let body = serde_json::json!({
+            "corpid": self.corp_id,
+            "corpsecret": self.secret
+        });
 
         let resp: serde_json::Value = self
             .http
-            .get(&url)
+            .post(&url)
+            .json(&body)
             .send()
             .await
             .map_err(|e| format!("token request failed: {e}"))?
@@ -255,7 +258,7 @@ impl BotEntry {
 
         info!(bot = %self.name, "Refreshed WeCom access token");
 
-        *self.cached_token.lock().unwrap() = Some((token.clone(), expires_at));
+        *self.cached_token.lock().unwrap_or_else(|e| e.into_inner()) = Some((token.clone(), expires_at));
         Ok(token)
     }
 }
@@ -271,9 +274,11 @@ pub async fn wedoc_post(
     token: &str,
     body: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let url = format!("{}/{}?access_token={}", WECOM_API_BASE, path, token);
+    // SECURITY: Pass access_token in header instead of query string to avoid credential logging
+    let url = format!("{}/{}", WECOM_API_BASE, path);
     let resp: serde_json::Value = http
         .post(&url)
+        .header("X-Access-Token", token)
         .json(body)
         .send()
         .await
@@ -381,6 +386,9 @@ pub async fn send_smartbot_response_async(
     response_url: &str,
     content: &str,
 ) -> Result<(), String> {
+    // SECURITY: Validate response_url before making request
+    types::ssrf::check_ssrf(response_url)?;
+
     let body = serde_json::json!({
         "msgtype": "markdown",
         "markdown": {
@@ -637,8 +645,17 @@ impl WecomState {
         let path = dir.join("session.json");
         match serde_json::to_string_pretty(sf) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
+                if let Err(e) = std::fs::write(&path, &json) {
                     warn!(path = %path.display(), "Failed to write session file: {e}");
+                } else {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(
+                            &path,
+                            std::fs::Permissions::from_mode(0o600),
+                        );
+                    }
                 }
             }
             Err(e) => {

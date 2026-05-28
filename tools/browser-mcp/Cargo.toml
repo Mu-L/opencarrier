@@ -23,3 +23,4 @@ futures = "0.3"
 tokio-tungstenite = "0.26"
 base64 = "0.22"
 uuid = { workspace = true }
+mcp-common = { path = "../mcp-common" }

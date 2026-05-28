@@ -40,7 +40,7 @@ impl BotTokenCache {
     pub async fn get_token(&self) -> Result<String, String> {
         // Check cached token
         {
-            let guard = self.token.lock().unwrap();
+            let guard = self.token.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(ref cached) = *guard {
                 if cached.expires_at > Instant::now() {
                     return Ok(cached.access_token.clone());
@@ -74,7 +74,7 @@ impl BotTokenCache {
             + std::time::Duration::from_secs(expire_secs.saturating_sub(TOKEN_REFRESH_AHEAD_SECS));
 
         {
-            let mut guard = self.token.lock().unwrap();
+            let mut guard = self.token.lock().unwrap_or_else(|e| e.into_inner());
             *guard = Some(CachedToken {
                 access_token: token.clone(),
                 expires_at,

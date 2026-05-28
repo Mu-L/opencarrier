@@ -397,6 +397,7 @@ dependencies = [
  "dirs",
  "futures",
  "hex",
+ "mcp-common",
  "reqwest",
  "rmcp",
  "schemars",
@@ -2829,6 +2830,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "urlencoding",
 ]
 
 [[package]]
@@ -4812,6 +4814,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64",
+ "mcp-common",
  "reqwest",
  "rmcp",
  "schemars",
@@ -5428,6 +5431,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "urlencoding",
 ]
 
 [[package]]

@@ -493,7 +493,7 @@ mod tests {
 
         // Manually set locked_until to past to simulate stale lock
         {
-            let conn = store.conn.lock().unwrap();
+            let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
             conn.execute(
                 "UPDATE mem_tree_jobs SET locked_until_ms = 1 WHERE id = ?1",
                 rusqlite::params![job_id],

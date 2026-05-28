@@ -139,7 +139,7 @@ mod tests {
 
         // Directly update hotness counters to cross the threshold
         {
-            let c = conn.lock().unwrap();
+            let c = conn.lock().unwrap_or_else(|e| e.into_inner());
             c.execute(
                 "UPDATE mem_tree_entity_hotness SET mention_count_30d = 5000, distinct_sources = 10, query_hits_30d = 5
                  WHERE owner_id = 'owner_1' AND entity_id = ?1",

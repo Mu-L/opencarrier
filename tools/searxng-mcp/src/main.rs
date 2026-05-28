@@ -90,7 +90,8 @@ impl SearXngClient {
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(format!("SearXNG HTTP {status}: {}", &text[..text.len().min(500)]));
+            let truncated: String = text.chars().take(500).collect();
+            return Err(format!("SearXNG HTTP {status}: {truncated}"));
         }
 
         let data: SearXngResponse = resp.json().await.map_err(|e| format!("SearXNG parse error: {e}"))?;

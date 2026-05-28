@@ -81,7 +81,7 @@ impl SenderRouter {
 
     /// Set the first available agent (called after bindings are populated).
     pub fn set_first_agent(&self, agent_name: String) {
-        let mut first = self.first_agent.lock().unwrap();
+        let mut first = self.first_agent.lock().unwrap_or_else(|e| e.into_inner());
         if first.is_none() {
             info!(agent = %agent_name, "SenderRouter: first agent set");
             *first = Some(agent_name);
@@ -282,7 +282,7 @@ impl SenderRouter {
 
     fn auto_assign(&self, sender_id: &str) -> Option<String> {
         let agent_name = {
-            let first = self.first_agent.lock().unwrap();
+            let first = self.first_agent.lock().unwrap_or_else(|e| e.into_inner());
             first.clone()?
         };
 

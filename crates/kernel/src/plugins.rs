@@ -125,6 +125,10 @@ impl CarrierKernel {
             urlencoding::encode(&hub_template_id)
         );
 
+        // SECURITY: SSRF check before downloading from hub
+        types::ssrf::check_ssrf(&download_url)
+            .map_err(|e| format!("Hub download URL failed SSRF check: {e}"))?;
+
         let resp = reqwest::get(&download_url)
             .await
             .map_err(|e| format!("Failed to download from hub: {e}"))?;

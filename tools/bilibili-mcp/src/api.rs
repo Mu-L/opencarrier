@@ -182,7 +182,8 @@ pub async fn bilibili_api(
     let http = Client::new();
     let mut headers = HeaderMap::new();
     if !cookie_str.is_empty() {
-        headers.insert("Cookie", cookie_str.parse().unwrap());
+        let safe_cookie = mcp_common::json::sanitize_header_value(cookie_str);
+        headers.insert("Cookie", safe_cookie.parse().unwrap());
     }
     headers.insert(
         "User-Agent",

@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use types::channel::Channel;
+use types::channel::{Channel, ChannelError};
 use types::plugin::{PluginMessage, PluginStatus};
 use types::tool::ToolDefinition;
 use tokio::sync::mpsc;
@@ -79,7 +79,7 @@ impl ChannelManager {
     pub async fn start(&mut self) {
         // Start channel adapters
         {
-            let mut channels = self.channels.lock().unwrap();
+            let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
             for (name, channel) in channels.iter_mut() {
                 match channel.start(self.message_tx.clone()) {
                     Ok(()) => {
@@ -116,16 +116,16 @@ impl ChannelManager {
         // Set up channel send function for bridge to deliver responses
         let channels_for_send = self.channels.clone();
         let send_fn: ChannelSendFn = Arc::new(move |channel_type, bot_id, user_id, text| {
-            let channels = channels_for_send.lock().unwrap();
+            let channels = channels_for_send.lock().unwrap_or_else(|e| e.into_inner());
             for channel in channels.values() {
                 if channel.channel_type() == channel_type {
                     return channel.send(bot_id, user_id, text);
                 }
             }
-            Err(format!(
+            Err(ChannelError::UnknownBot(format!(
                 "Channel not found for type: {}, bot: {}",
                 channel_type, bot_id
-            ))
+            )))
         });
         bridge.set_channel_send_fn(send_fn);
 
@@ -136,7 +136,7 @@ impl ChannelManager {
             });
         }
 
-        let count = self.channels.lock().unwrap().len();
+        let count = self.channels.lock().unwrap_or_else(|e| e.into_inner()).len();
         info!(channels = count, "Channel manager started");
     }
 
@@ -147,17 +147,17 @@ impl ChannelManager {
         bot_id: &str,
         user_id: &str,
         text: &str,
-    ) -> Result<(), String> {
-        let channels = self.channels.lock().unwrap();
+    ) -> Result<(), ChannelError> {
+        let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         for channel in channels.values() {
             if channel.channel_type() == channel_type {
                 return channel.send(bot_id, user_id, text);
             }
         }
-        Err(format!(
+        Err(ChannelError::UnknownBot(format!(
             "Channel not found for type: {}, bot: {}",
             channel_type, bot_id
-        ))
+        )))
     }
 
     /// Build a closure that can send messages through this manager's channels.
@@ -165,16 +165,16 @@ impl ChannelManager {
     pub fn make_channel_send_fn(&self) -> crate::plugin::bridge::ChannelSendFn {
         let channels = self.channels.clone();
         Arc::new(move |channel_type, bot_id, user_id, text| {
-            let channels = channels.lock().unwrap();
+            let channels = channels.lock().unwrap_or_else(|e| e.into_inner());
             for channel in channels.values() {
                 if channel.channel_type() == channel_type {
                     return channel.send(bot_id, user_id, text);
                 }
             }
-            Err(format!(
+            Err(ChannelError::UnknownBot(format!(
                 "Channel not found for type: {}, bot: {}",
                 channel_type, bot_id
-            ))
+            )))
         })
     }
 
@@ -183,7 +183,7 @@ impl ChannelManager {
     pub fn make_supports_proactive_fn(&self) -> Arc<dyn Fn(&str) -> bool + Send + Sync> {
         let channels = self.channels.clone();
         Arc::new(move |channel_type| {
-            let channels = channels.lock().unwrap();
+            let channels = channels.lock().unwrap_or_else(|e| e.into_inner());
             for channel in channels.values() {
                 if channel.channel_type() == channel_type {
                     return channel.supports_proactive_push();
@@ -200,15 +200,15 @@ impl ChannelManager {
         bot_id: &str,
         user_id: &str,
         text: &str,
-    ) -> Result<(), String> {
-        let channels = self.channels.lock().unwrap();
+    ) -> Result<(), ChannelError> {
+        let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         for channel in channels.values() {
             match channel.send(bot_id, user_id, text) {
                 Ok(()) => return Ok(()),
                 Err(_) => continue,
             }
         }
-        Err(format!("No channel found for bot: {}", bot_id))
+        Err(ChannelError::UnknownBot(format!("No channel found for bot: {}", bot_id)))
     }
 
     /// Set a sender route (route_key → agent_id).
@@ -255,17 +255,17 @@ impl ChannelManager {
     ///
     /// Called by the API after writing a new `senders/{sender_id}/session.json`.
     /// The matching channel loads the session and starts its connection immediately.
-    pub fn start_sender(&self, channel_type: &str, sender_id: &str) -> Result<(), String> {
-        let mut channels = self.channels.lock().unwrap();
+    pub fn start_sender(&self, channel_type: &str, sender_id: &str) -> Result<(), ChannelError> {
+        let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         for channel in channels.values_mut() {
             if channel.channel_type() == channel_type {
                 return channel.start_sender(sender_id, self.message_tx.clone());
             }
         }
-        Err(format!(
+        Err(ChannelError::UnknownBot(format!(
             "Channel not found for type: {}, sender: {}",
             channel_type, sender_id
-        ))
+        )))
     }
 
     /// Get all plugin tool definitions.
@@ -275,7 +275,7 @@ impl ChannelManager {
 
     /// Get status of all registered channels.
     pub fn status(&self) -> Vec<PluginStatus> {
-        let channels = self.channels.lock().unwrap();
+        let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         channels
             .iter()
             .map(|(name, channel)| PluginStatus {
@@ -292,7 +292,7 @@ impl ChannelManager {
 
     /// Stop all channels and release resources.
     pub fn stop_all(&self) {
-        let mut channels = self.channels.lock().unwrap();
+        let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         for (name, channel) in channels.iter_mut() {
             info!(channel = %name, "Stopping channel");
             channel.stop();

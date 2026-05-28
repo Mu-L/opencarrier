@@ -1369,6 +1369,29 @@ impl KernelConfig {
         } else if self.web.fetch.timeout_secs > 120 {
             self.web.fetch.timeout_secs = 120;
         }
+
+        // Exec timeout: min 1s
+        if self.exec_policy.timeout_secs == 0 {
+            self.exec_policy.timeout_secs = 30;
+        }
+        if self.exec_policy.no_output_timeout_secs == 0 {
+            self.exec_policy.no_output_timeout_secs = 30;
+        }
+
+        // Browser idle timeout: min 1s
+        if self.browser.idle_timeout_secs == 0 {
+            self.browser.idle_timeout_secs = 300;
+        }
+
+        // TTS timeout: min 1s
+        if self.tts.timeout_secs == 0 {
+            self.tts.timeout_secs = 30;
+        }
+
+        // Auth session TTL: min 1 hour
+        if self.auth.session_ttl_hours == 0 {
+            self.auth.session_ttl_hours = 168;
+        }
     }
 }
 

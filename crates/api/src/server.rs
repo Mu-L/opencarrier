@@ -287,7 +287,7 @@ pub async fn run_daemon(
         // Inject tool dispatcher into kernel
         {
             let dispatcher = cm.tool_dispatcher();
-            let mut guard = kernel.plugins.plugin_tool_dispatcher.lock().unwrap();
+            let mut guard = kernel.plugins.plugin_tool_dispatcher.lock().unwrap_or_else(|e| e.into_inner());
             *guard = Some(dispatcher);
         }
 

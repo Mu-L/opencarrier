@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use types::channel::Channel;
+use types::channel::{Channel, ChannelError};
 
 /// Main polling loop (runs in a dedicated thread with its own runtime).
 /// `session_key` is the user_id used as the DashMap key in WEIXIN_STATE.bots.
@@ -89,7 +89,7 @@ async fn poll_loop_inner(
         let cursor = WEIXIN_STATE
             .bots
             .get(session_key)
-            .map(|s| s.cursor.lock().unwrap().clone())
+            .map(|s| s.cursor.lock().unwrap_or_else(|e| e.into_inner()).clone())
             .unwrap_or_default();
 
         match api::get_updates(&http, &bot_token, &baseurl, &cursor).await {
@@ -119,7 +119,7 @@ async fn poll_loop_inner(
                 if let Some(new_cursor) = &resp.get_updates_buf {
                     if !new_cursor.is_empty() {
                         if let Some(state) = WEIXIN_STATE.bots.get(session_key) {
-                            *state.cursor.lock().unwrap() = new_cursor.clone();
+                            *state.cursor.lock().unwrap_or_else(|e| e.into_inner()) = new_cursor.clone();
                         }
                     }
                 }
@@ -185,17 +185,7 @@ async fn download_cdn_as_data_uri(
     let url = crypto::cdn_download_url(eqp);
     let data = crypto::cdn_download(http, &url, &key).await?;
 
-    let mime = if data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-        "image/png"
-    } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        "image/jpeg"
-    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
-        "image/gif"
-    } else if data.starts_with(b"RIFF") && data.len() > 11 && &data[8..12] == b"WEBP" {
-        "image/webp"
-    } else {
-        "image/jpeg"
-    };
+    let mime = types::media::detect_image_mime(&data);
 
     let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
     Ok(format!("data:{mime};base64,{b64}"))
@@ -397,7 +387,7 @@ impl Channel for SessionWatcher {
         ""
     }
 
-    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
         // Initial load + spawn all discovered bots
         WEIXIN_STATE.load_from_dir();
         spawn_all_bots(&sender);
@@ -409,23 +399,23 @@ impl Channel for SessionWatcher {
             .spawn(move || {
                 respawn_watcher_loop(sender, shutdown);
             })
-            .map_err(|e| format!("Failed to spawn respawn watcher thread: {e}"))?;
+            .map_err(|e| ChannelError::Other(format!("Failed to spawn respawn watcher thread: {e}")))?;
         self.thread_handle = Some(handle);
         info!("WeChat SessionWatcher started");
         Ok(())
     }
 
-    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
         let state = WEIXIN_STATE
             .get_session_for_send(bot_id, user_id)
-            .ok_or_else(|| format!("No session for bot {bot_id}, user {user_id}"))?;
+            .ok_or_else(|| ChannelError::UnknownBot(format!("No session for bot {bot_id}, user {user_id}")))?;
 
         if state.is_expired() {
-            return Err(format!("Token expired for bot {bot_id}"));
+            return Err(ChannelError::TokenFailed(format!("Token expired for bot {bot_id}")));
         }
 
         let context_token = state.get_context_token(user_id).ok_or_else(|| {
-            format!("No context_token for user {user_id} — can only reply to received messages")
+            ChannelError::NotSupported(format!("No context_token for user {user_id} — can only reply to received messages"))
         })?;
 
         let client_id = format!("openclaw-weixin-{}", Uuid::new_v4().as_simple());
@@ -444,7 +434,7 @@ impl Channel for SessionWatcher {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    let _ = tx.send(Err(format!("Failed to create send runtime: {e}")));
+                    let _ = tx.send(Err(ChannelError::Other(format!("Failed to create send runtime: {e}"))));
                     return;
                 }
             };
@@ -459,12 +449,13 @@ impl Channel for SessionWatcher {
                     &text,
                 )
                 .await
+                .map_err(ChannelError::SendFailed)
             });
             let _ = tx.send(result);
         });
 
         rx.recv()
-            .map_err(|e| format!("Send thread disconnected: {e}"))?
+            .map_err(|e| ChannelError::Other(format!("Send thread disconnected: {e}")))?
     }
 
     fn stop(&mut self) {
@@ -478,7 +469,7 @@ impl Channel for SessionWatcher {
         info!("SessionWatcher stopped");
     }
 
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
         WEIXIN_STATE.load_new_from_dir();
         spawn_bot_by_id(sender_id, &sender);
         info!(sender_id = %sender_id, "WeChat: started new sender");

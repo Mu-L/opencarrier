@@ -132,7 +132,7 @@ impl AcpSessionStore {
         };
 
         let lock = self.get_lock(session_id);
-        let _lock = lock.lock().unwrap();
+        let _lock = lock.lock().unwrap_or_else(|e| e.into_inner());
 
         let line = serde_json::json!({
             "type": "user",
@@ -185,7 +185,7 @@ impl AcpSessionStore {
         };
 
         let lock = self.get_lock(session_id);
-        let _lock = lock.lock().unwrap();
+        let _lock = lock.lock().unwrap_or_else(|e| e.into_inner());
 
         let line = serde_json::json!({
             "type": "assistant",
@@ -329,7 +329,7 @@ impl AcpSessionStore {
     }
 
     fn get_lock(&self, session_id: &str) -> Arc<Mutex<()>> {
-        let mut locks = self.file_locks.lock().unwrap();
+        let mut locks = self.file_locks.lock().unwrap_or_else(|e| e.into_inner());
         locks
             .entry(session_id.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(())))

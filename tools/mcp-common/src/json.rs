@@ -7,6 +7,18 @@ pub fn json_to_string(v: &Value) -> String {
     serde_json::to_string(v).unwrap_or_else(|e| format!("{{\"error\": \"serialize: {}\"}}", e))
 }
 
+/// Build a safe JSON error response string.
+/// Uses `serde_json::json!` to avoid injection via `format!`.
+pub fn error_response(e: impl std::fmt::Display) -> String {
+    serde_json::json!({ "error": e.to_string() }).to_string()
+}
+
+/// Build a safe JSON success response, truncating if needed.
+/// Combines `json_to_string` + `truncate_result` in one call.
+pub fn ok_response(data: &Value, max_bytes: usize) -> String {
+    truncate_result(json_to_string(data), max_bytes)
+}
+
 /// Truncate a string to `max_bytes` UTF-8 bytes at a character boundary.
 pub fn truncate_result(text: String, max_bytes: usize) -> String {
     if text.len() > max_bytes {
@@ -64,4 +76,9 @@ pub fn url_encode(s: &str) -> String {
         }
     }
     result
+}
+
+/// Sanitize a header value by removing CR/LF characters to prevent HTTP header injection.
+pub fn sanitize_header_value(s: &str) -> String {
+    s.chars().filter(|c| *c != '\r' && *c != '\n').collect()
 }

@@ -476,17 +476,7 @@ impl FeishuWsClient {
         let data = api::download_image(&http, &token, &base, image_key).await?;
 
         // Detect MIME from first bytes
-        let mime = if data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-            "image/png"
-        } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
-            "image/jpeg"
-        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
-            "image/gif"
-        } else if data.starts_with(b"RIFF") && data.len() > 11 && &data[8..12] == b"WEBP" {
-            "image/webp"
-        } else {
-            "image/jpeg"
-        };
+        let mime = types::media::detect_image_mime(&data);
 
         let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
         Ok(format!("data:{mime};base64,{b64}"))

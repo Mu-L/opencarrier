@@ -166,21 +166,40 @@ pub async fn auth_login(
             .into_response();
     }
 
-    if !session_auth::verify_password(password, &auth_config.password_hash) {
-        // On credential failure, record the attempt
-        {
-            let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| { tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering"); e.into_inner() });
-            let entry = failures.entry(client_ip.clone()).or_insert((0, Instant::now()));
-            entry.0 += 1;
-            if entry.1.elapsed().as_secs() >= LOGIN_BAN_SECS {
-                *entry = (1, Instant::now());
+    match session_auth::verify_password(password, &auth_config.password_hash) {
+        session_auth::PasswordResult::Invalid => {
+            // On credential failure, record the attempt
+            {
+                let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| { tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering"); e.into_inner() });
+                let entry = failures.entry(client_ip.clone()).or_insert((0, Instant::now()));
+                entry.0 += 1;
+                if entry.1.elapsed().as_secs() >= LOGIN_BAN_SECS {
+                    *entry = (1, Instant::now());
+                }
+            }
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({"error": "Invalid credentials"})),
+            )
+                .into_response();
+        }
+        session_auth::PasswordResult::Upgraded { new_hash } => {
+            // Auto-upgrade legacy SHA256 hash to Argon2id in config.toml
+            let config_path = state.kernel.config.home_dir.join("config.toml");
+            if config_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&config_path) {
+                    if let Ok(mut table) = content.parse::<toml::value::Table>() {
+                        if let Some(toml::Value::Table(ref mut t)) = table.get_mut("auth") {
+                            t.insert("password_hash".to_string(), toml::Value::String(new_hash));
+                        }
+                        if let Ok(toml_string) = toml::to_string_pretty(&table) {
+                            let _ = std::fs::write(&config_path, &toml_string);
+                        }
+                    }
+                }
             }
         }
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "Invalid credentials"})),
-        )
-            .into_response();
+        session_auth::PasswordResult::Valid => {}
     }
 
     // Clear rate limit on successful login
@@ -191,13 +210,22 @@ pub async fn auth_login(
 
     // Use API key as the HMAC secret for session tokens
     let secret = &state.kernel.config.api_key;
-    let token = session_auth::create_session_token(
+    let token = match session_auth::create_session_token(
         None,
         "admin",
         username,
         secret,
         auth_config.session_ttl_hours,
-    );
+    ) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to create session token"})),
+            )
+                .into_response();
+        }
+    };
 
     let mut response = (
         StatusCode::OK,
@@ -305,7 +333,7 @@ pub async fn change_credentials(
 
     // Verify current password
     let auth_config = &state.kernel.config.auth;
-    if !session_auth::verify_password(current_password, &auth_config.password_hash) {
+    if !session_auth::verify_password_bool(current_password, &auth_config.password_hash) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "Current password incorrect"})),
@@ -392,13 +420,22 @@ pub async fn change_credentials(
 
     // Issue new session token
     let secret = &state.kernel.config.api_key;
-    let token = session_auth::create_session_token(
+    let token = match session_auth::create_session_token(
         None,
         "admin",
         &updated_username,
         secret,
         state.kernel.config.auth.session_ttl_hours,
-    );
+    ) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to create session token"})),
+            )
+                .into_response();
+        }
+    };
 
     state.kernel.audit_log.record(
         "system",

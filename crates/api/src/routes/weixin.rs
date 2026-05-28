@@ -357,7 +357,7 @@ pub async fn weixin_qrcode_status(
         // Register dynamic binding + start sender
         if let Some((ref agent_id, _, _)) = resolved_agent {
             // Resolve to agent name for routing (already resolved above, but agent_id may differ)
-            let agent_name = crate::routes::common::resolve_to_name(&agent_id, &state.kernel.registry)
+            let agent_name = crate::routes::common::resolve_to_name(agent_id, &state.kernel.registry)
                 .unwrap_or_else(|_| agent_id.clone());
             if let Some(ref pm_arc) = state.channel_manager {
                 let pm = pm_arc.lock().await;

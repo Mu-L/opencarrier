@@ -91,7 +91,7 @@ fn estimate_tokens(messages: &[Message], system_prompt: &str, tools: &[ToolDefin
 /// With L0 summaries + drawer keeping context controlled, only tool result
 /// truncation and the final error fallback are needed.
 pub fn recover_from_overflow(
-    messages: &mut Vec<Message>,
+    messages: &mut [Message],
     system_prompt: &str,
     tools: &[ToolDefinition],
     context_window: usize,

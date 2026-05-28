@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use types::channel::Channel;
+use types::channel::{Channel, ChannelError};
 use types::plugin::{PluginContent, PluginMessage};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -138,7 +138,7 @@ impl Channel for SmartBotChannel {
         &self.bot_id
     }
 
-    fn start(&mut self, sender: tokio::sync::mpsc::Sender<PluginMessage>) -> Result<(), String> {
+    fn start(&mut self, sender: tokio::sync::mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
         let bot_name = self.bot_name.clone();
         let secret = self.secret.clone();
         let bot_id = self.bot_id.clone();
@@ -171,7 +171,7 @@ impl Channel for SmartBotChannel {
         Ok(())
     }
 
-    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
         // Use the passed bot_id (from the original message's bot_id field)
         // rather than self.bot_id, because the kernel dispatch picks channels
         // by channel_type only and may route to a different SmartBotChannel instance.
@@ -183,22 +183,23 @@ impl Channel for SmartBotChannel {
             .unwrap()
             .remove(&key)
             .ok_or_else(|| {
-                "No response_url available for this user. SmartBot can only reply within callback context.".to_string()
+                ChannelError::NotSupported("No response_url available for this user. SmartBot can only reply within callback context.".to_string())
             })?;
 
         let bot = crate::token::WECOM_STATE
             .get_session_for_send(bot_id)
-            .ok_or_else(|| format!("Unknown WeCom bot: {bot_id}"))?;
+            .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|e| format!("Runtime creation failed: {e}"))?;
+            .map_err(|e| ChannelError::Other(format!("Runtime creation failed: {e}")))?;
         rt.block_on(token::send_smartbot_response_async(
             &bot.entry.http,
             &response_url,
             text,
         ))
+        .map_err(ChannelError::SendFailed)
     }
 
     fn stop(&mut self) {
@@ -414,7 +415,7 @@ async fn handle_ws_message(
             // Store response_url for later reply via send()
             if let Some(ref url) = body.response_url {
                 let key = format!("{}:{}", bot_id, user_id);
-                response_urls.lock().unwrap().insert(key, url.clone());
+                response_urls.lock().unwrap_or_else(|e| e.into_inner()).insert(key, url.clone());
             }
 
             let mut metadata = HashMap::new();

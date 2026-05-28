@@ -41,6 +41,7 @@ impl CarrierKernel {
     /// check, core tool set assembly, skill/subagent classification, and manifest
     /// mutation. Returns a `PreparedContext` that both streaming and non-streaming
     /// paths consume before diverging at the actual LLM invocation.
+    #[allow(clippy::too_many_arguments)]
     async fn prepare_agent_context(
         &self,
         agent_id: AgentId,
@@ -896,7 +897,7 @@ impl CarrierKernel {
     ) -> KernelResult<AgentLoopResult> {
         // Prepare shared context (session, tools, skill/subagent matching, manifest)
         let ctx = self.prepare_agent_context(
-            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type,
+            agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type,
         ).await?;
         let PreparedContext { mut session, needs_compact, tools, manifest, .. } = ctx;
 

@@ -147,6 +147,9 @@ impl WeChatClient {
 
     /// Download bytes from a URL.
     pub async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        // SECURITY: SSRF check before fetching external URL
+        mcp_common::ssrf::check_ssrf(url)
+            .map_err(|e| anyhow::anyhow!("SSRF check failed: {e}"))?;
         let resp = self.http.get(url).send().await?;
         if !resp.status().is_success() {
             bail!("HTTP {} fetching {}", resp.status(), url);

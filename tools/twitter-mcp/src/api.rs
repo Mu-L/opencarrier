@@ -114,7 +114,7 @@ pub async fn twitter_graphql(
     headers.insert("X-Csrf-Token", csrf_token.parse().unwrap());
     headers.insert("X-Twitter-Auth-Type", "OAuth2Session".parse().unwrap());
     headers.insert("X-Twitter-Active-User", "yes".parse().unwrap());
-    headers.insert("Cookie", cookie_str.parse().unwrap());
+    headers.insert("Cookie", mcp_common::json::sanitize_header_value(cookie_str).parse().unwrap());
     headers.insert("Content-Type", "application/json".parse().unwrap());
 
     let req = if method == Method::POST {

@@ -417,7 +417,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         )
     });
     if tools_may_have_changed {
-        if let Some(ref kernel) = kernel {
+        if let Some(kernel) = kernel {
             let _agent_id_str = session.agent_name.to_string();
 
             // Log skill_load calls
@@ -466,7 +466,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 if !discovered_tool_names.is_empty() {
                     let before = tools_owned.len();
                     let stale: std::collections::HashSet<String> =
-                        discovered_tool_names.drain().collect();
+                        std::mem::take(discovered_tool_names);
                     tools_owned.retain(|t| !stale.contains(&t.name));
                     let evicted = before - tools_owned.len();
                     if evicted > 0 {

@@ -19,7 +19,7 @@ mod wecom;
 use std::sync::Arc;
 
 use anyhow::Result;
-use mcp_common::json::{json_to_string, truncate_result};
+use mcp_common::json::{error_response, json_to_string, truncate_result};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::{tool, tool_router, transport::stdio as stdio_transport, ServiceExt};
 use serde_json::Value;
@@ -492,7 +492,7 @@ impl WecomServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -514,7 +514,7 @@ impl WecomServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -529,7 +529,7 @@ impl WecomServer {
         );
         match self.proxy.client().http_get_json(&url).await {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -545,7 +545,7 @@ impl WecomServer {
         );
         match self.proxy.client().http_get_json(&url).await {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -581,7 +581,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -616,7 +616,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -639,7 +639,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -668,7 +668,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -696,7 +696,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -718,7 +718,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -740,7 +740,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -763,7 +763,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -786,7 +786,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -809,7 +809,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -832,7 +832,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -856,7 +856,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -880,7 +880,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -904,7 +904,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -930,7 +930,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -954,7 +954,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -981,7 +981,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1005,7 +1005,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1038,7 +1038,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1070,7 +1070,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1097,7 +1097,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1139,7 +1139,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1161,7 +1161,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1189,7 +1189,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1223,7 +1223,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1245,7 +1245,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1268,7 +1268,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1308,7 +1308,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1337,7 +1337,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1365,7 +1365,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1387,7 +1387,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1410,7 +1410,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1437,7 +1437,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1459,7 +1459,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1481,7 +1481,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1503,7 +1503,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1525,7 +1525,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1548,7 +1548,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1571,7 +1571,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1595,7 +1595,7 @@ impl WecomServer {
             .await
         {
             Ok(result) => truncate_result(result, 65536),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 }

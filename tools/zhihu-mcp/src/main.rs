@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use mcp_common::cookie::make_cookie;
-use mcp_common::{define_params, impl_cookie, json::json_to_string};
+use mcp_common::{define_params, impl_cookie, json::{error_response, json_to_string}};
 use reqwest::Method;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::{tool, tool_router, transport::stdio as stdio_transport, ServiceExt};
@@ -43,24 +43,9 @@ impl_cookie!(SearchParams);
 //  Helpers                                                             //
 // ================================================================== //
 
+/// Delegate to mcp_common's strip_html implementation.
 fn strip_html(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut in_tag = false;
-    for ch in s.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => result.push(ch),
-            _ => {}
-        }
-    }
-    result = result.replace("&nbsp;", " ");
-    result = result.replace("&lt;", "<");
-    result = result.replace("&gt;", ">");
-    result = result.replace("&amp;", "&");
-    result = result.replace("&#39;", "'");
-    result = result.replace("&quot;", "\"");
-    result
+    mcp_common::json::strip_html(s)
 }
 
 // ================================================================== //
@@ -103,7 +88,7 @@ impl ZhihuServer {
                 }).collect::<Vec<_>>().into();
                 json_to_string(&result)
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -111,7 +96,7 @@ impl ZhihuServer {
     async fn zhihu_question(&self, Parameters(params): Parameters<QuestionParams>) -> String {
         let limit = params.limit.unwrap_or(5);
         let query = format!("limit={limit}&offset=0&sort_by=default&include=data[*].content,voteup_count,comment_count,author");
-        let path = format!("/api/v4/questions/{}/answers", params.question_id);
+        let path = format!("/api/v4/questions/{}/answers", urlencoding::encode(&params.question_id));
         match api::zhihu_api(&make_cookie(&params), Method::GET, &path, Some(&query)).await {
             Ok(resp) => {
                 let items = resp
@@ -132,23 +117,14 @@ impl ZhihuServer {
                 }).collect::<Vec<_>>().into();
                 json_to_string(&result)
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
     #[tool(description = "搜索知乎内容")]
     async fn zhihu_search(&self, Parameters(params): Parameters<SearchParams>) -> String {
         let limit = params.limit.unwrap_or(10);
-        let encoded: String = params
-            .query
-            .bytes()
-            .map(|b| match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                    (b as char).to_string()
-                }
-                _ => format!("%{:02X}", b),
-            })
-            .collect();
+        let encoded = mcp_common::json::url_encode(&params.query);
         let query = format!("q={encoded}&t=general&offset=0&limit={limit}");
         match api::zhihu_api(
             &make_cookie(&params),
@@ -204,7 +180,7 @@ impl ZhihuServer {
                     }).collect::<Vec<_>>().into();
                 json_to_string(&result)
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 }

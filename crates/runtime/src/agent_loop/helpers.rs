@@ -363,7 +363,7 @@ pub(in crate::agent_loop) fn trim_oldest_turns(messages: &mut Vec<Message>, max_
     // We drain in pairs (user + assistant) to keep whole turns.
     let excess = messages.len() - max_retained;
     // Round up to the nearest even number to preserve turn boundaries
-    let drain_count = if excess % 2 == 0 { excess } else { excess + 1 };
+    let drain_count = if excess.is_multiple_of(2) { excess } else { excess + 1 };
     messages.drain(..drain_count.min(messages.len()));
 }
 

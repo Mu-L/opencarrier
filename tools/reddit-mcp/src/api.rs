@@ -32,7 +32,8 @@ pub async fn reddit_api(
     };
 
     let mut headers = HeaderMap::new();
-    headers.insert("Cookie", cookie_str.parse().unwrap());
+    let safe_cookie = mcp_common::json::sanitize_header_value(cookie_str);
+    headers.insert("Cookie", safe_cookie.parse().unwrap());
     headers.insert("User-Agent", "OpenCarrier/0.1.0".parse().unwrap());
 
     let req = if method == Method::POST {

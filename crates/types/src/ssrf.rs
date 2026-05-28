@@ -10,6 +10,13 @@ use std::net::{IpAddr, ToSocketAddrs};
 /// Blocks localhost, cloud metadata endpoints, and private IPs.
 /// Must run BEFORE any network I/O.
 pub fn check_ssrf(url: &str) -> Result<(), String> {
+    check_ssrf_with_ip(url).map(|_| ())
+}
+
+/// Check SSRF and return the resolved IP address.
+/// Callers should use reqwest's `.resolve()` to pin this IP,
+/// preventing DNS rebinding (TOCTOU) attacks.
+pub fn check_ssrf_with_ip(url: &str) -> Result<IpAddr, String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("Only http:// and https:// URLs are allowed".to_string());
     }
@@ -38,28 +45,30 @@ pub fn check_ssrf(url: &str) -> Result<(), String> {
         return Err(format!("SSRF blocked: {hostname} is a restricted hostname"));
     }
 
-    let hostname_lower = hostname.to_lowercase();
-    let allowed_domains = ["github.com", "github.io", "githubusercontent.com"];
-    for domain in &allowed_domains {
-        if hostname_lower == *domain || hostname_lower.ends_with(&format!(".{domain}")) {
-            return Ok(());
-        }
-    }
-
     let port = if url.starts_with("https") { 443 } else { 80 };
     let socket_addr = format!("{hostname}:{port}");
-    if let Ok(addrs) = socket_addr.to_socket_addrs() {
-        for addr in addrs {
-            let ip = addr.ip();
-            if ip.is_loopback() || ip.is_unspecified() || is_private_ip(&ip) {
-                return Err(format!(
-                    "SSRF blocked: {hostname} resolves to private IP {ip}"
-                ));
-            }
+    let addrs = socket_addr.to_socket_addrs().map_err(|e| {
+        format!("SSRF blocked: cannot resolve {hostname}: {e}")
+    })?;
+
+    for addr in addrs {
+        let ip = addr.ip();
+        if ip.is_loopback() || ip.is_unspecified() || is_private_ip(&ip) {
+            return Err(format!(
+                "SSRF blocked: {hostname} resolves to private IP {ip}"
+            ));
         }
     }
 
-    Ok(())
+    // Return the first resolved IP for callers to pin via .resolve()
+    let first_ip = socket_addr
+        .to_socket_addrs()
+        .map_err(|e| format!("SSRF: DNS resolution failed for {hostname}: {e}"))?
+        .next()
+        .map(|a| a.ip())
+        .ok_or_else(|| format!("SSRF: no DNS results for {hostname}"))?;
+
+    Ok(first_ip)
 }
 
 /// Check if an IP address is in a private/internal range.
@@ -138,13 +147,28 @@ mod tests {
     #[test]
     fn ssrf_allows_public() {
         assert!(check_ssrf("https://api.openai.com/v1/chat").is_ok());
-        assert!(check_ssrf("https://github.com/user/repo").is_ok());
     }
 
     #[test]
     fn ssrf_rejects_non_http() {
         assert!(check_ssrf("ftp://example.com/").is_err());
         assert!(check_ssrf("file:///etc/passwd").is_err());
+    }
+
+    #[test]
+    fn ssrf_rejects_unresolvable() {
+        // DNS resolution failure should be rejected (no silent pass-through)
+        assert!(check_ssrf("http://this-domain-does-not-exist-xyz123.invalid/").is_err());
+    }
+
+    #[test]
+    fn ssrf_with_ip_returns_resolved() {
+        // check_ssrf_with_ip should return a resolved IP for public domains
+        let result = check_ssrf_with_ip("https://api.openai.com/v1/chat");
+        assert!(result.is_ok());
+        let ip = result.unwrap();
+        assert!(!ip.is_loopback());
+        assert!(!is_private_ip(&ip));
     }
 
     #[test]

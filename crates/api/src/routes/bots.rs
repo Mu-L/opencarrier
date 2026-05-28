@@ -1332,7 +1332,7 @@ pub async fn sender_send_message(
         ),
         Err(e) => (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
+            Json(serde_json::json!({"error": e.to_string()})),
         ),
     }
 }

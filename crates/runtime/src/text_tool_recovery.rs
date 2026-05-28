@@ -653,7 +653,7 @@ pub fn recover_text_tool_calls(
             };
             let inner = &after[..close];
             let tool_name = inner
-                .find(|c: char| c == ' ' || c == ':' || c == '(' || c == '{')
+                .find([' ', ':', '(', '{'])
                 .map(|pos| &inner[..pos])
                 .unwrap_or(inner);
 
@@ -743,7 +743,7 @@ pub fn recover_text_tool_calls(
                 }
                 let input_obj = call.input.as_object();
                 let missing: Vec<&str> = required.iter()
-                    .filter(|r| input_obj.map_or(true, |o| !o.contains_key(r.as_str())))
+                    .filter(|r| input_obj.is_none_or(|o| !o.contains_key(r.as_str())))
                     .map(|s| s.as_str())
                     .collect();
                 if !missing.is_empty() {

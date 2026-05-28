@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use types::channel::ChannelError;
 use types::plugin::{PluginContent, PluginMessage};
 use dashmap::DashMap;
 use tokio::sync::mpsc;
@@ -17,7 +18,7 @@ use crate::kernel_handle::KernelHandle;
 /// A function that can send a response through a channel.
 /// Used by the bridge to deliver agent replies back to users.
 pub type ChannelSendFn =
-    Arc<dyn Fn(&str, &str, &str, &str) -> Result<(), String> + Send + Sync>;
+    Arc<dyn Fn(&str, &str, &str, &str) -> Result<(), ChannelError> + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // Bridge manager
@@ -73,16 +74,16 @@ impl PluginBridgeManager {
             // Try exact match first
             for channel in plugin.channels() {
                 if channel.channel_type == channel_type && channel.bot_id == bot_id {
-                    return plugin.channel_send(channel, bot_id, user_id, text);
+                    return plugin.channel_send(channel, bot_id, user_id, text).map_err(ChannelError::Other);
                 }
             }
             // Fallback: any channel of the same type
             for channel in plugin.channels() {
                 if channel.channel_type == channel_type {
-                    return plugin.channel_send(channel, bot_id, user_id, text);
+                    return plugin.channel_send(channel, bot_id, user_id, text).map_err(ChannelError::Other);
                 }
             }
-            Err(format!("No plugin channel found for type: {}", channel_type))
+            Err(ChannelError::UnknownBot(format!("No plugin channel found for type: {}", channel_type)))
         });
 
         // If no send fn set yet, use this one. Otherwise, chain them.
@@ -355,7 +356,7 @@ impl PluginBridgeManager {
             if let Some(rest) = t.strip_prefix(pat) {
                 let name = rest
                     .trim()
-                    .trim_end_matches(|c: char| c == '吧' || c == '！' || c == '!' || c == '。' || c == '~')
+                    .trim_end_matches(['吧', '！', '!', '。', '~'])
                     .trim();
                 if !name.is_empty() && name.len() <= 20 {
                     return Some(name.to_string());

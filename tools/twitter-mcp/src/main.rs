@@ -4,7 +4,7 @@
 //! to serve multiple Twitter/X accounts simultaneously.
 
 use anyhow::Result;
-use mcp_common::json::json_to_string;
+use mcp_common::json::{error_response, json_to_string};
 use reqwest::Method;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::{tool, tool_router, transport::stdio as stdio_transport, ServiceExt};
@@ -454,7 +454,7 @@ impl TwitterServer {
                     &instructions,
                 )))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -485,7 +485,7 @@ impl TwitterServer {
                     &instructions,
                 )))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -514,7 +514,7 @@ impl TwitterServer {
                 };
                 json_to_string(&result)
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -546,7 +546,7 @@ impl TwitterServer {
                 });
                 json_to_string(&result)
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -591,7 +591,7 @@ impl TwitterServer {
                 }
                 json_to_string(&serde_json::Value::Array(users))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -636,7 +636,7 @@ impl TwitterServer {
                 }
                 json_to_string(&serde_json::Value::Array(users))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -663,7 +663,7 @@ impl TwitterServer {
                     &instructions,
                 )))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -683,7 +683,7 @@ impl TwitterServer {
                     &instructions,
                 )))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -704,7 +704,7 @@ impl TwitterServer {
                     &instructions,
                 )))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -749,7 +749,7 @@ impl TwitterServer {
                 }
                 json_to_string(&serde_json::Value::Array(lists))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -780,7 +780,7 @@ impl TwitterServer {
                     &instructions,
                 )))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -832,7 +832,7 @@ impl TwitterServer {
                 }
                 json_to_string(&serde_json::Value::Array(notifications))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -880,7 +880,7 @@ impl TwitterServer {
                 };
                 json_to_string(&result)
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -891,7 +891,7 @@ impl TwitterServer {
         let variables = serde_json::json!({"tweet_id": params.tweet_id});
         match gql(&params, "FavoriteTweet", variables, None, Method::POST).await {
             Ok(resp) => json_to_string(&serde_json::json!({"ok": resp.get("data").is_some()})),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -900,7 +900,7 @@ impl TwitterServer {
         let variables = serde_json::json!({"tweet_id": params.tweet_id});
         match gql(&params, "UnfavoriteTweet", variables, None, Method::POST).await {
             Ok(resp) => json_to_string(&serde_json::json!({"ok": resp.get("data").is_some()})),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -909,7 +909,7 @@ impl TwitterServer {
         let variables = serde_json::json!({"tweet_id": params.tweet_id});
         match gql(&params, "CreateBookmark", variables, None, Method::POST).await {
             Ok(resp) => json_to_string(&serde_json::json!({"ok": resp.get("data").is_some()})),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -918,7 +918,7 @@ impl TwitterServer {
         let variables = serde_json::json!({"screen_name": params.username});
         match gql(&params, "CreateFollow", variables, None, Method::POST).await {
             Ok(resp) => json_to_string(&serde_json::json!({"ok": resp.get("data").is_some()})),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -927,7 +927,7 @@ impl TwitterServer {
         let variables = serde_json::json!({"screen_name": params.username});
         match gql(&params, "DestroyFollow", variables, None, Method::POST).await {
             Ok(resp) => json_to_string(&serde_json::json!({"ok": resp.get("data").is_some()})),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -951,7 +951,7 @@ impl TwitterServer {
                     "url": format!("https://x.com/i/status/{tweet_id}")
                 }))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -963,7 +963,7 @@ impl TwitterServer {
         });
         match gql(&params, "DeleteTweet", variables, None, Method::POST).await {
             Ok(resp) => json_to_string(&serde_json::json!({"ok": resp.get("data").is_some()})),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 }

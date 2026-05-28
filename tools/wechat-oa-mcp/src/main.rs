@@ -22,6 +22,7 @@ use rmcp::{tool, tool_router, transport::stdio as stdio_transport, ServiceExt};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use wechat::WeChatClient;
+use mcp_common::json::error_response;
 
 // ================================================================== //
 //  Tool parameter structs                                              //
@@ -362,7 +363,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(token) => serde_json::json!({ "access_token": token }).to_string(),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -388,7 +389,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -415,7 +416,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -468,7 +469,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -486,7 +487,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -508,7 +509,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -526,7 +527,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -546,7 +547,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -567,7 +568,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -591,7 +592,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -612,7 +613,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -638,7 +639,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -662,7 +663,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -689,7 +690,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -714,7 +715,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -739,7 +740,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -764,7 +765,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -790,7 +791,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -816,7 +817,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -843,7 +844,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -864,7 +865,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -885,7 +886,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -905,7 +906,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -923,7 +924,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -941,7 +942,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -959,7 +960,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -978,7 +979,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -997,7 +998,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1018,7 +1019,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1036,7 +1037,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1057,7 +1058,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1079,7 +1080,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1100,7 +1101,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1118,7 +1119,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1138,7 +1139,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1157,7 +1158,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1179,7 +1180,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1200,7 +1201,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1220,7 +1221,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1238,7 +1239,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1256,27 +1257,10 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
-    #[tool(description = "Get article total detail stats (datacube). Replaces the deprecated getarticletotal. Max date range: 1 day.")]
-    async fn get_article_total(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getarticletotaldetail",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
-        }
-    }
 
     #[tool(description = "Get article read analytics (datacube). Replaces the deprecated getuserread. Max date range: 3 days.")]
     async fn get_user_read(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
@@ -1292,11 +1276,11 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
-    #[tool(description = "Get article read analytics (datacube). Replaces the deprecated getuserreadhour. Max date range: 1 day.")]
+    #[tool(description = "Get article read hourly analytics (datacube). Replaces the deprecated getuserreadhour. Returns hourly breakdown. Max date range: 1 day.")]
     async fn get_user_read_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
         let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
         match self
@@ -1304,13 +1288,13 @@ impl WeChatOaServer {
             .api_post(
                 &params.app_id,
                 &params.app_secret,
-                "/datacube/getarticleread",
+                "/datacube/getarticlereadhour",
                 &body,
             )
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1328,11 +1312,11 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
-    #[tool(description = "Get article share analytics (datacube). Replaces the deprecated getusersharehour. Max date range: 1 day.")]
+    #[tool(description = "Get article share hourly analytics (datacube). Replaces the deprecated getusersharehour. Returns hourly breakdown. Max date range: 1 day.")]
     async fn get_user_share_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
         let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
         match self
@@ -1340,13 +1324,13 @@ impl WeChatOaServer {
             .api_post(
                 &params.app_id,
                 &params.app_secret,
-                "/datacube/getarticleshare",
+                "/datacube/getarticlesharehour",
                 &body,
             )
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1364,7 +1348,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1382,7 +1366,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1400,7 +1384,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1418,7 +1402,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1439,7 +1423,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1460,7 +1444,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1478,7 +1462,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1499,7 +1483,7 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1520,45 +1504,10 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
-    #[tool(description = "Get article read analytics (datacube). Max date range: 3 days.")]
-    async fn get_article_read(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getarticleread",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
-        }
-    }
-
-    #[tool(description = "Get article share analytics (datacube). Max date range: 7 days.")]
-    async fn get_article_share(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getarticleshare",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
-        }
-    }
 
     #[tool(description = "Get business summary (datacube). Max date range: 7 days.")]
     async fn get_biz_summary(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
@@ -1574,30 +1523,10 @@ impl WeChatOaServer {
             .await
         {
             Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
-    #[tool(description = "Get article total detail stats (datacube). Same as get_article_total (new API). Max date range: 1 day.")]
-    async fn get_article_total_detail(
-        &self,
-        Parameters(params): Parameters<DatacubeParams>,
-    ) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getarticletotaldetail",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
-        }
-    }
 }
 
 // ================================================================== //

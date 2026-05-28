@@ -145,7 +145,7 @@ pub(in crate::agent_loop) async fn handle_end_turn(
 
     // Generate turn summary for this conversation turn
     let turn_msgs = &session.messages[session_base_len..];
-    if let Some(ref brain_ref) = brain {
+    if let Some(brain_ref) = brain {
         if let Some(mut summary) =
             super::helpers::generate_turn_summary(turn_msgs, brain_ref).await
         {

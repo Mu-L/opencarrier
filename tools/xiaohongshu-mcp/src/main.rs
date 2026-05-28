@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use mcp_common::cookie::make_cookie;
-use mcp_common::{define_params, impl_cookie, json::json_to_string};
+use mcp_common::{define_params, impl_cookie, json::{error_response, json_to_string}};
 use reqwest::Method;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::{tool, tool_router, transport::stdio as stdio_transport, ServiceExt};
@@ -80,7 +80,7 @@ impl XiaohongshuServer {
                     .unwrap_or_default();
                 json_to_string(&serde_json::Value::Array(notes))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -99,7 +99,7 @@ impl XiaohongshuServer {
                     .unwrap_or_else(|| serde_json::json!({"error": "Note not found"}));
                 json_to_string(&data)
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -127,7 +127,7 @@ impl XiaohongshuServer {
                 };
                 json_to_string(&result)
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -155,7 +155,7 @@ impl XiaohongshuServer {
                 };
                 json_to_string(&result)
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 

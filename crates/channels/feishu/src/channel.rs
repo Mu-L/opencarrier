@@ -6,7 +6,7 @@
 
 use crate::token::BotTokenCache;
 use crate::ws::FeishuWsClient;
-use types::channel::Channel;
+use types::channel::{Channel, ChannelError};
 use types::plugin::PluginMessage;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -51,7 +51,7 @@ impl Channel for FeishuChannel {
         &self.app_id
     }
 
-    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
         let bot_name = self.bot_name.clone();
         let app_id = self.app_id.clone();
         let token_cache = self.token_cache.clone();
@@ -63,20 +63,20 @@ impl Channel for FeishuChannel {
             .spawn(move || {
                 run_ws_loop(&bot_name, app_id, token_cache, shutdown, sender);
             })
-            .map_err(|e| format!("Failed to spawn Feishu WS thread: {e}"))?;
+            .map_err(|e| ChannelError::Other(format!("Failed to spawn Feishu WS thread: {e}")))?;
 
         self.thread_handle = Some(handle);
         info!(tenant = %log_name, "FeishuChannel started");
         Ok(())
     }
 
-    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
         // Verify tenant matches (by app_id)
         if bot_id != self.app_id {
-            return Err(format!(
+            return Err(ChannelError::UnknownBot(format!(
                 "Tenant mismatch: expected {}, got {}",
                 self.app_id, bot_id
-            ));
+            )));
         }
 
         let content = serde_json::json!({ "text": text }).to_string();
@@ -91,7 +91,7 @@ impl Channel for FeishuChannel {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    let _ = tx.send(Err(format!("Failed to create send runtime: {e}")));
+                    let _ = tx.send(Err(ChannelError::Other(format!("Failed to create send runtime: {e}"))));
                     return;
                 }
             };
@@ -99,19 +99,20 @@ impl Channel for FeishuChannel {
                 let token = token_cache
                     .get_token()
                     .await
-                    .map_err(|e| format!("Token error: {e}"))?;
+                    .map_err(|e| ChannelError::TokenFailed(e.to_string()))?;
                 let http = token_cache.http().clone();
                 let base = token_cache.api_base().to_string();
                 let resp = crate::api::send_message(
                     &http, &token, &base, &user_id, "open_id", "text", &content,
                 )
-                .await?;
+                .await
+                .map_err(ChannelError::SendFailed)?;
 
                 if resp.code != 0 {
-                    return Err(format!(
+                    return Err(ChannelError::SendFailed(format!(
                         "Feishu send error: code={} msg={}",
                         resp.code, resp.msg
-                    ));
+                    )));
                 }
                 Ok(())
             });
@@ -119,7 +120,7 @@ impl Channel for FeishuChannel {
         });
 
         rx.recv()
-            .map_err(|e| format!("Send thread disconnected: {e}"))?
+            .map_err(|e| ChannelError::Other(format!("Send thread disconnected: {e}")))?
     }
 
     fn stop(&mut self) {

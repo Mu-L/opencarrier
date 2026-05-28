@@ -43,7 +43,7 @@ pub struct BuiltinPlugin {
     channels: Vec<LoadedChannel>,
     tools: Vec<PluginToolDef>,
     channel_adapters: Mutex<HashMap<String, Box<dyn BuiltinChannel>>>,
-    tool_providers: HashMap<String, Box<dyn ToolProvider>>,
+    tool_providers: Mutex<HashMap<String, Box<dyn ToolProvider>>>,
 }
 
 impl BuiltinPlugin {
@@ -55,7 +55,7 @@ impl BuiltinPlugin {
             channels: Vec::new(),
             tools: Vec::new(),
             channel_adapters: Mutex::new(HashMap::new()),
-            tool_providers: HashMap::new(),
+            tool_providers: Mutex::new(HashMap::new()),
         }
     }
 
@@ -91,12 +91,9 @@ impl BuiltinPlugin {
             description: def.description.clone(),
             parameters_json: def.parameters_json.clone(),
         });
-        self.tool_providers.insert(def.name, provider);
+        self.tool_providers.lock().unwrap_or_else(|e| e.into_inner()).insert(def.name, provider);
     }
 }
-
-unsafe impl Send for BuiltinPlugin {}
-unsafe impl Sync for BuiltinPlugin {}
 
 impl PluginInstance for BuiltinPlugin {
     fn name(&self) -> &str {
@@ -130,7 +127,7 @@ impl PluginInstance for BuiltinPlugin {
         user_id: &str,
         text: &str,
     ) -> Result<(), String> {
-        let adapters = self.channel_adapters.lock().unwrap();
+        let adapters = self.channel_adapters.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(adapter) = adapters.get(&channel.channel_type) {
             adapter.send(bot_id, user_id, text)
         } else {
@@ -147,8 +144,8 @@ impl PluginInstance for BuiltinPlugin {
         args_json: &str,
         context_json: &str,
     ) -> Result<String, String> {
-        let provider = self
-            .tool_providers
+        let providers = self.tool_providers.lock().unwrap_or_else(|e| e.into_inner());
+        let provider = providers
             .get(tool_name)
             .ok_or_else(|| format!("Built-in tool '{}' not found", tool_name))?;
 
@@ -163,7 +160,7 @@ impl PluginInstance for BuiltinPlugin {
     }
 
     fn stop(&self) {
-        let mut adapters = self.channel_adapters.lock().unwrap();
+        let mut adapters = self.channel_adapters.lock().unwrap_or_else(|e| e.into_inner());
         for (name, adapter) in adapters.iter_mut() {
             adapter.stop();
             tracing::info!(channel = %name, "Built-in channel stopped");
@@ -171,6 +168,6 @@ impl PluginInstance for BuiltinPlugin {
     }
 
     fn is_stopped(&self) -> bool {
-        self.channel_adapters.lock().unwrap().is_empty()
+        self.channel_adapters.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
     }
 }

@@ -27,21 +27,23 @@ pub struct SessionInfo {
 ///
 /// Format is backward-compatible: old tokens with 3 segments (username:expiry:sig)
 /// are still accepted by `verify_session_token` and treated as admin sessions.
+///
+/// Returns None if the HMAC secret is empty.
 pub fn create_session_token(
     tenant_id: Option<&str>,
     role: &str,
     username: &str,
     secret: &str,
     ttl_hours: u64,
-) -> String {
+) -> Option<String> {
     use base64::Engine;
     let expiry = chrono::Utc::now().timestamp() + (ttl_hours as i64 * 3600);
     let tid = tenant_id.unwrap_or("_");
     let payload = format!("{tid}:{role}:{username}:{expiry}");
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC key");
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
     mac.update(payload.as_bytes());
     let signature = hex::encode(mac.finalize().into_bytes());
-    base64::engine::general_purpose::STANDARD.encode(format!("{payload}:{signature}"))
+    Some(base64::engine::general_purpose::STANDARD.encode(format!("{payload}:{signature}")))
 }
 
 /// Verify a session token. Returns session info if valid and not expired.
@@ -146,34 +148,62 @@ pub fn hash_password(password: &str) -> String {
         .to_string()
 }
 
-/// Verify a password against a stored Argon2id hash.
+/// Result of password verification with optional auto-upgrade.
+pub enum PasswordResult {
+    /// Password did not match.
+    Invalid,
+    /// Password verified against Argon2id hash.
+    Valid,
+    /// Password verified against legacy SHA256 hash; caller should store the new Argon2id hash.
+    Upgraded { new_hash: String },
+}
+
+/// Verify a password against a stored hash.
 ///
-/// Supports both new Argon2id hashes and legacy SHA256 hashes for migration.
-pub fn verify_password(password: &str, stored_hash: &str) -> bool {
+/// Supports Argon2id hashes (preferred) and legacy SHA256 hashes (auto-upgraded).
+pub fn verify_password(password: &str, stored_hash: &str) -> PasswordResult {
     // Try Argon2id first (new format starts with $argon2)
     if stored_hash.starts_with("$argon2") {
         let parsed = match PasswordHash::new(stored_hash) {
             Ok(p) => p,
-            Err(_) => return false,
+            Err(_) => return PasswordResult::Invalid,
         };
-        return Argon2::default()
+        return if Argon2::default()
             .verify_password(password.as_bytes(), &parsed)
-            .is_ok();
+            .is_ok()
+        {
+            PasswordResult::Valid
+        } else {
+            PasswordResult::Invalid
+        };
     }
 
-    // Legacy SHA256 fallback for migration (deprecated, will be removed)
-    // SHA256 hashes are 64 hex characters
+    // Legacy SHA256 fallback for migration
     if stored_hash.len() == 64 && stored_hash.chars().all(|c| c.is_ascii_hexdigit()) {
         use sha2::Digest;
         let computed = hex::encode(Sha256::digest(password.as_bytes()));
         use subtle::ConstantTimeEq;
         if computed.len() != stored_hash.len() {
-            return false;
+            return PasswordResult::Invalid;
         }
-        return computed.as_bytes().ct_eq(stored_hash.as_bytes()).into();
+        if computed.as_bytes().ct_eq(stored_hash.as_bytes()).into() {
+            tracing::warn!(
+                "Legacy SHA256 password hash verified — auto-upgrading to Argon2id"
+            );
+            let new_hash = hash_password(password);
+            return PasswordResult::Upgraded { new_hash };
+        }
     }
 
-    false
+    PasswordResult::Invalid
+}
+
+/// Simple boolean check for password verification (convenience wrapper).
+pub fn verify_password_bool(password: &str, stored_hash: &str) -> bool {
+    matches!(
+        verify_password(password, stored_hash),
+        PasswordResult::Valid | PasswordResult::Upgraded { .. }
+    )
 }
 
 #[cfg(test)]
@@ -183,13 +213,13 @@ mod tests {
     #[test]
     fn test_hash_and_verify_password() {
         let hash = hash_password("secret123");
-        assert!(verify_password("secret123", &hash));
-        assert!(!verify_password("wrong", &hash));
+        assert!(matches!(verify_password("secret123", &hash), PasswordResult::Valid));
+        assert!(matches!(verify_password("wrong", &hash), PasswordResult::Invalid));
     }
 
     #[test]
     fn test_create_and_verify_new_token() {
-        let token = create_session_token(Some("tenant-123"), "tenant", "user1", "my-secret", 1);
+        let token = create_session_token(Some("tenant-123"), "tenant", "user1", "my-secret", 1).unwrap();
         let info = verify_session_token(&token, "my-secret").unwrap();
         assert_eq!(info.tenant_id, Some("tenant-123".to_string()));
         assert_eq!(info.role, "tenant");
@@ -198,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_create_and_verify_admin_token() {
-        let token = create_session_token(None, "admin", "admin", "my-secret", 1);
+        let token = create_session_token(None, "admin", "admin", "my-secret", 1).unwrap();
         let info = verify_session_token(&token, "my-secret").unwrap();
         assert_eq!(info.tenant_id, None);
         assert_eq!(info.role, "admin");
@@ -225,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_token_wrong_secret() {
-        let token = create_session_token(None, "admin", "admin", "my-secret", 1);
+        let token = create_session_token(None, "admin", "admin", "my-secret", 1).unwrap();
         assert!(verify_session_token(&token, "wrong-secret").is_none());
     }
 
@@ -236,6 +266,6 @@ mod tests {
 
     #[test]
     fn test_password_hash_length_mismatch() {
-        assert!(!verify_password("x", "short"));
+        assert!(matches!(verify_password("x", "short"), PasswordResult::Invalid));
     }
 }

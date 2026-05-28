@@ -456,7 +456,7 @@ impl Brain {
                         endpoint: name.to_string(),
                         env_var: sk_env.clone(),
                     })?;
-                Some(generate_jwt_token(&access_key, &secret_key))
+                Some(generate_jwt_token(&access_key, &secret_key)?)
             }
             _ => {
                 // Default apikey auth
@@ -496,7 +496,7 @@ impl Brain {
 /// - Header: `{"alg":"HS256","typ":"JWT"}`
 /// - Payload: `{"iss": access_key, "exp": now + 1800, "nbf": now - 5}`
 /// - Signature: HMAC-SHA256 over `header.payload` using `secret_key`
-fn generate_jwt_token(access_key: &str, secret_key: &str) -> String {
+fn generate_jwt_token(access_key: &str, secret_key: &str) -> Result<String, String> {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use hmac::{Hmac, Mac};
@@ -520,12 +520,12 @@ fn generate_jwt_token(access_key: &str, secret_key: &str) -> String {
 
     let signing_input = format!("{}.{}", header_b64, payload_b64);
     let mut mac =
-        HmacSha256::new_from_slice(secret_key.as_bytes()).expect("HMAC key length is valid");
+        HmacSha256::new_from_slice(secret_key.as_bytes()).map_err(|_| "HMAC secret key cannot be empty")?;
     mac.update(signing_input.as_bytes());
     let signature = mac.finalize().into_bytes();
     let sig_b64 = URL_SAFE_NO_PAD.encode(signature);
 
-    format!("{}.{}.{}", header_b64, payload_b64, sig_b64)
+    Ok(format!("{}.{}.{}", header_b64, payload_b64, sig_b64))
 }
 
 /// Implement the runtime Brain trait so agent_loop can use Brain methods.
@@ -577,6 +577,14 @@ pub enum BrainError {
     MissingJwtParam { endpoint: String, param: String },
     /// JWT auth credential (env var) is not set.
     MissingJwtCredential { endpoint: String, env_var: String },
+    /// JWT token generation failed.
+    JwtGeneration { endpoint: String, error: String },
+}
+
+impl From<String> for BrainError {
+    fn from(s: String) -> Self {
+        BrainError::JwtGeneration { endpoint: String::new(), error: s }
+    }
 }
 
 impl std::fmt::Display for BrainError {
@@ -607,6 +615,13 @@ impl std::fmt::Display for BrainError {
                     endpoint, env_var
                 )
             }
+            BrainError::JwtGeneration { endpoint, error } => {
+                write!(
+                    f,
+                    "Endpoint '{}': JWT token generation failed: {}",
+                    endpoint, error
+                )
+            }
         }
     }
 }
@@ -619,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_generate_jwt_token_structure() {
-        let token = generate_jwt_token("test_access_key", "test_secret_key");
+        let token = generate_jwt_token("test_access_key", "test_secret_key").unwrap();
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 3, "JWT should have 3 parts separated by '.'");
 

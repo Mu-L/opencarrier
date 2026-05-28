@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use mcp_common::cookie::make_cookie;
-use mcp_common::json::json_to_string;
+use mcp_common::json::{error_response, json_to_string};
 use mcp_common::{define_params, impl_cookie, json::url_encode};
 use reqwest::Method;
 use rmcp::handler::server::wrapper::Parameters;
@@ -266,7 +266,7 @@ impl RedditServer {
             Ok(resp) => {
                 json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -286,7 +286,7 @@ impl RedditServer {
             Ok(resp) => {
                 json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -306,14 +306,14 @@ impl RedditServer {
             Ok(resp) => {
                 json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
     #[tool(description = "获取 Subreddit 帖子列表")]
     async fn reddit_subreddit(&self, Parameters(params): Parameters<SubredditParams>) -> String {
         let sort = params.sort.as_deref().unwrap_or("hot");
-        let path = format!("/r/{}/{sort}.json", params.name);
+        let path = format!("/r/{}/{sort}.json", urlencoding::encode(&params.name));
         let limit = params.limit.unwrap_or(15);
         let time = params.time.as_deref().unwrap_or("all");
         let query = format!("limit={limit}&t={time}");
@@ -329,7 +329,7 @@ impl RedditServer {
             Ok(resp) => {
                 json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -353,7 +353,7 @@ impl RedditServer {
             Ok(resp) => {
                 json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -392,13 +392,13 @@ impl RedditServer {
                 };
                 json_to_string(&result)
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
     #[tool(description = "获取 Reddit 用户资料")]
     async fn reddit_user(&self, Parameters(params): Parameters<UserParams>) -> String {
-        let path = format!("/user/{}/about.json", params.username);
+        let path = format!("/user/{}/about.json", urlencoding::encode(&params.username));
         match api::reddit_api(&make_cookie(&params), Method::GET, &path, None, None).await {
             Ok(resp) => {
                 let data = resp.get("data");
@@ -416,13 +416,13 @@ impl RedditServer {
                 };
                 json_to_string(&result)
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
     #[tool(description = "获取 Reddit 用户帖子")]
     async fn reddit_user_posts(&self, Parameters(params): Parameters<UserPostsParams>) -> String {
-        let path = format!("/user/{}/submitted.json", params.username);
+        let path = format!("/user/{}/submitted.json", urlencoding::encode(&params.username));
         let limit = params.limit.unwrap_or(15);
         let query = format!("limit={limit}");
         match api::reddit_api(
@@ -437,7 +437,7 @@ impl RedditServer {
             Ok(resp) => {
                 json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -446,7 +446,7 @@ impl RedditServer {
         &self,
         Parameters(params): Parameters<UserCommentsParams>,
     ) -> String {
-        let path = format!("/user/{}/comments.json", params.username);
+        let path = format!("/user/{}/comments.json", urlencoding::encode(&params.username));
         let limit = params.limit.unwrap_or(15);
         let query = format!("limit={limit}");
         match api::reddit_api(
@@ -461,7 +461,7 @@ impl RedditServer {
             Ok(resp) => json_to_string(&serde_json::Value::Array(extract_comments_from_listing(
                 &resp,
             ))),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -487,7 +487,7 @@ impl RedditServer {
             Ok(resp) => {
                 json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -513,7 +513,7 @@ impl RedditServer {
             Ok(resp) => {
                 json_to_string(&serde_json::Value::Array(extract_posts_from_listing(&resp)))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -537,7 +537,7 @@ impl RedditServer {
             Ok(resp) => json_to_string(
                 &serde_json::json!({"ok": resp.get("success").and_then(|v| v.as_bool()).unwrap_or(true)}),
             ),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -559,7 +559,7 @@ impl RedditServer {
                     .unwrap_or(false);
                 json_to_string(&serde_json::json!({"ok": success}))
             }
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -576,7 +576,7 @@ impl RedditServer {
         let body = format!("id={post_id}&uh={modhash}");
         match api::reddit_api(&cookie, Method::POST, path, None, Some(&body)).await {
             Ok(_) => json_to_string(&serde_json::json!({"ok": true})),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -593,7 +593,7 @@ impl RedditServer {
         let body = format!("sr_name={subreddit}&action={action}&uh={modhash}");
         match api::reddit_api(&cookie, Method::POST, "/api/subscribe", None, Some(&body)).await {
             Ok(_) => json_to_string(&serde_json::json!({"ok": true})),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 }

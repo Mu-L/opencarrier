@@ -83,7 +83,7 @@ impl BotSession {
 
     /// Get the cached context_token for a user.
     pub fn get_context_token(&self, user_id: &str) -> Option<String> {
-        self.context_tokens.lock().unwrap().get(user_id).cloned()
+        self.context_tokens.lock().unwrap_or_else(|e| e.into_inner()).get(user_id).cloned()
     }
 
     /// Cache a typing_ticket for a user (valid 24h, we cache for 23h).
@@ -223,8 +223,8 @@ impl WeixinState {
         let key = user_id.unwrap_or(bot_id);
         if let Some(mut existing) = self.bots.get_mut(key) {
             // Preserve cursor from existing session if possible
-            let old_cursor = existing.cursor.lock().unwrap().clone();
-            *state.cursor.lock().unwrap() = old_cursor;
+            let old_cursor = existing.cursor.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            *state.cursor.lock().unwrap_or_else(|e| e.into_inner()) = old_cursor;
             *existing = state;
         } else {
             self.bots.insert(key.to_string(), state);

@@ -209,10 +209,10 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response<Bo
     headers.insert("x-content-type-options", "nosniff".parse().unwrap());
     headers.insert("x-frame-options", "DENY".parse().unwrap());
     headers.insert("x-xss-protection", "1; mode=block".parse().unwrap());
-    // All JS/CSS/fonts bundled inline — zero external CDN dependency.
+    // CSP: removed unsafe-eval and unsafe-inline for script-src, restricted connect-src
     headers.insert(
         "content-security-policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://liteapp.weixin.qq.com https://*.qpic.cn; connect-src 'self' ws://* wss://*; font-src 'self'; media-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://liteapp.weixin.qq.com https://*.qpic.cn; connect-src 'self' wss:; font-src 'self'; media-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
             .parse()
             .unwrap(),
     );

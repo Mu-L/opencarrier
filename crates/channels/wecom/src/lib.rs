@@ -7,7 +7,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use types::channel::Channel;
+use types::channel::{Channel, ChannelError};
 use types::plugin::PluginMessage;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -63,7 +63,7 @@ impl Channel for SessionWatcher {
         ""
     }
 
-    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
         // Initial load + spawn all discovered bots
         token::WECOM_STATE.load_from_dir();
         spawn_inactive_bots(&sender);
@@ -71,29 +71,31 @@ impl Channel for SessionWatcher {
         Ok(())
     }
 
-    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
         let session = token::WECOM_STATE
             .get_session_for_send(bot_id)
-            .ok_or_else(|| format!("Unknown WeCom bot: {bot_id}"))?;
+            .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
 
         match &session.entry.mode {
             token::WecomMode::App { .. } => {
-                token::send_app_message(&session.entry, user_id, text)?;
+                token::send_app_message(&session.entry, user_id, text)
+                    .map_err(ChannelError::SendFailed)?;
             }
             token::WecomMode::Kf { .. } => {
-                token::send_kf_message(&session.entry, user_id, text)?;
+                token::send_kf_message(&session.entry, user_id, text)
+                    .map_err(ChannelError::SendFailed)?;
             }
             token::WecomMode::SmartBot { .. } => {
                 // SmartBot uses response_url mechanism
                 let key = format!("{}:{}", bot_id, user_id);
                 let response_url = smartbot::RESPONSE_URLS
                     .get()
-                    .ok_or_else(|| "RESPONSE_URLS not initialized".to_string())?
+                    .ok_or_else(|| ChannelError::Config("RESPONSE_URLS not initialized".to_string()))?
                     .lock()
                     .unwrap()
                     .remove(&key)
                     .ok_or_else(|| {
-                        "No response_url available. SmartBot can only reply within callback context.".to_string()
+                        ChannelError::NotSupported("No response_url available. SmartBot can only reply within callback context.".to_string())
                     })?;
 
                 let http = session.entry.http.clone();
@@ -104,13 +106,14 @@ impl Channel for SessionWatcher {
                         .enable_all()
                         .build();
                     let result = match rt {
-                        Ok(rt) => rt.block_on(token::send_smartbot_response_async(&http, &response_url, &text)),
-                        Err(e) => Err(format!("Runtime creation failed: {e}")),
+                        Ok(rt) => rt.block_on(token::send_smartbot_response_async(&http, &response_url, &text))
+                            .map_err(ChannelError::SendFailed),
+                        Err(e) => Err(ChannelError::Other(format!("Runtime creation failed: {e}"))),
                     };
                     let _ = tx.send(result);
                 });
                 rx.recv()
-                    .map_err(|e| format!("SmartBot send thread disconnected: {e}"))??;
+                    .map_err(|e| ChannelError::Other(format!("SmartBot send thread disconnected: {e}")))??;
             }
         }
 
@@ -121,7 +124,7 @@ impl Channel for SessionWatcher {
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
         token::WECOM_STATE.load_new_from_dir();
         spawn_bot_by_id(sender_id, &sender);
         info!(sender_id = %sender_id, "WeCom: started new sender");

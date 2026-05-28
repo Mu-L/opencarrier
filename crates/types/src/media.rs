@@ -2,6 +2,22 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Detect image MIME type from magic bytes.
+/// Falls back to "image/jpeg" if the format is unrecognized.
+pub fn detect_image_mime(data: &[u8]) -> &'static str {
+    if data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        "image/png"
+    } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "image/jpeg"
+    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        "image/gif"
+    } else if data.starts_with(b"RIFF") && data.len() > 11 && &data[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        "image/jpeg"
+    }
+}
+
 /// Supported media types for understanding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

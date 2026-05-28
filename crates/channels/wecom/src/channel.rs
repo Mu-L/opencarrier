@@ -6,7 +6,7 @@ use axum::extract::Query;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
-use types::channel::Channel;
+use types::channel::{Channel, ChannelError};
 use types::plugin::{PluginContent, PluginMessage};
 use serde::Deserialize;
 use tokio::sync::mpsc;
@@ -74,7 +74,7 @@ impl Channel for WeComChannel {
         &self.bot_id
     }
 
-    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
         let bot_id = self.bot_id.clone();
         let encoding_aes_key = self.encoding_aes_key.clone();
         let callback_token = self.callback_token.clone();
@@ -107,23 +107,24 @@ impl Channel for WeComChannel {
         Ok(())
     }
 
-    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
         let bot = crate::token::WECOM_STATE
             .get_session_for_send(bot_id)
-            .ok_or_else(|| format!("Unknown bot: {bot_id}"))?;
+            .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
 
         match &bot.entry.mode {
             token::WecomMode::App { .. } => {
-                token::send_app_message(&bot.entry, user_id, text)?;
+                token::send_app_message(&bot.entry, user_id, text)
+                    .map_err(ChannelError::SendFailed)?;
             }
             token::WecomMode::Kf { .. } => {
-                token::send_kf_message(&bot.entry, user_id, text)?;
+                token::send_kf_message(&bot.entry, user_id, text)
+                    .map_err(ChannelError::SendFailed)?;
             }
             token::WecomMode::SmartBot { .. } => {
-                return Err(
-                    "SmartBot mode does not support send via channel (use response_url)"
-                        .to_string(),
-                );
+                return Err(ChannelError::NotSupported(
+                    "SmartBot mode does not support send via channel (use response_url)".to_string(),
+                ));
             }
         }
 
@@ -158,7 +159,7 @@ async fn run_webhook_server(
         .route("/wecom/webhook", post(webhook_post))
         .with_state(std::sync::Arc::new(state));
 
-    let listener = match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
         Ok(l) => l,
         Err(e) => {
             warn!("Failed to bind webhook port {}: {e}", port);

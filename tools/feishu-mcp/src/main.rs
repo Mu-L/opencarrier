@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use feishu::FeishuClient;
 use mcp_common::define_app_params;
-use mcp_common::json::{json_to_string, truncate_result};
+use mcp_common::json::{error_response, json_to_string, truncate_result};
 
 // ================================================================== //
 //  Tool parameter structs                                              //
@@ -753,7 +753,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -773,7 +773,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -801,7 +801,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -829,7 +829,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -860,7 +860,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -890,7 +890,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -913,7 +913,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -935,7 +935,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -959,7 +959,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -985,7 +985,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1014,7 +1014,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1045,7 +1045,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1061,7 +1061,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1080,7 +1080,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1104,7 +1104,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1123,7 +1123,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1153,7 +1153,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1176,7 +1176,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1198,7 +1198,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1224,7 +1224,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1249,7 +1249,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1268,7 +1268,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1291,7 +1291,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1314,7 +1314,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1346,7 +1346,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1368,7 +1368,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1397,7 +1397,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1423,7 +1423,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1465,7 +1465,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1484,7 +1484,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1513,7 +1513,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1552,7 +1552,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1575,7 +1575,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1600,7 +1600,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1628,7 +1628,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1648,7 +1648,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1671,7 +1671,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1699,7 +1699,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1721,7 +1721,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1748,7 +1748,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1772,7 +1772,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1792,7 +1792,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1822,7 +1822,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1838,7 +1838,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1871,7 +1871,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1888,7 +1888,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1917,7 +1917,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1942,7 +1942,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -1977,7 +1977,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2006,7 +2006,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2025,7 +2025,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2051,7 +2051,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2077,7 +2077,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2100,7 +2100,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2124,7 +2124,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2140,7 +2140,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2159,7 +2159,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2184,7 +2184,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2207,7 +2207,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2226,7 +2226,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2251,7 +2251,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2274,7 +2274,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2297,7 +2297,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2324,7 +2324,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2349,7 +2349,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2375,7 +2375,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2398,7 +2398,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2422,7 +2422,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2444,7 +2444,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2468,7 +2468,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2484,7 +2484,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2505,7 +2505,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 
@@ -2534,7 +2534,7 @@ impl FeishuServer {
             .await
         {
             Ok(resp) => truncate_result(json_to_string(&resp), 60000),
-            Err(e) => format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => error_response(&e),
         }
     }
 }

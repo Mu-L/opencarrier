@@ -13,7 +13,7 @@ pub mod ws;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use types::channel::Channel;
+use types::channel::{Channel, ChannelError};
 use types::plugin::PluginMessage;
 use dashmap::DashMap;
 use tokio::sync::mpsc;
@@ -257,7 +257,7 @@ impl Channel for SessionWatcher {
         ""
     }
 
-    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
         // Initial load + spawn all discovered bots
         DINGTALK_STATE.load_from_dir();
         spawn_inactive_bots(&sender);
@@ -265,10 +265,10 @@ impl Channel for SessionWatcher {
         Ok(())
     }
 
-    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), String> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
         let entry = DINGTALK_STATE
             .get_session(bot_id)
-            .ok_or_else(|| format!("Unknown DingTalk bot: {bot_id}"))?;
+            .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
 
         let token_cache = entry.token_cache.clone();
         let user_id = user_id.to_string();
@@ -282,7 +282,7 @@ impl Channel for SessionWatcher {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    let _ = tx.send(Err(format!("Runtime creation failed: {e}")));
+                    let _ = tx.send(Err(ChannelError::Other(format!("Runtime creation failed: {e}"))));
                     return;
                 }
             };
@@ -290,24 +290,26 @@ impl Channel for SessionWatcher {
                 let token = token_cache
                     .get_token()
                     .await
-                    .map_err(|e| format!("Token error: {e}"))?;
+                    .map_err(|e| ChannelError::TokenFailed(e.to_string()))?;
                 let http = token_cache.http().clone();
                 let robot_code = token_cache.app_key().to_string();
 
-                api::send_direct_message(&http, &token, &robot_code, &user_id, &text).await
+                api::send_direct_message(&http, &token, &robot_code, &user_id, &text)
+                    .await
+                    .map_err(ChannelError::SendFailed)
             });
             let _ = tx.send(result);
         });
 
         rx.recv()
-            .map_err(|e| format!("Send thread disconnected: {e}"))?
+            .map_err(|e| ChannelError::Other(format!("Send thread disconnected: {e}")))?
     }
 
     fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), String> {
+    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
         DINGTALK_STATE.load_new_from_dir();
         spawn_bot_by_id(sender_id, &sender);
         info!(sender_id = %sender_id, "DingTalk: started new sender");

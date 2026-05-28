@@ -348,7 +348,7 @@ mod tests {
 
         // Tamper with an entry
         {
-            let mut entries = log.entries.lock().unwrap();
+            let mut entries = log.entries.lock().unwrap_or_else(|e| e.into_inner());
             entries[1].detail = "echo hello".to_string(); // change the detail
         }
 
@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(log.len(), 2);
 
         // Verify entries in database
-        let db_conn = db.lock().unwrap();
+        let db_conn = db.lock().unwrap_or_else(|e| e.into_inner());
         let count: i64 = db_conn
             .query_row("SELECT COUNT(*) FROM audit_entries", [], |row| row.get(0))
             .unwrap();

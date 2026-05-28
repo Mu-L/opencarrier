@@ -711,40 +711,11 @@ fn chromium_candidates() -> Vec<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// SSRF check (simplified from runtime's web_fetch::check_ssrf)
+// SSRF check (delegated to mcp_common::ssrf)
 // ---------------------------------------------------------------------------
 
 fn check_ssrf(url: &str) -> Result<(), String> {
-    let parsed = reqwest::Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| "URL has no host".to_string())?;
-
-    // Block private/internal IPs
-    if host == "localhost"
-        || host == "127.0.0.1"
-        || host == "0.0.0.0"
-        || host == "::1"
-        || host.ends_with(".local")
-        || host.ends_with(".internal")
-    {
-        return Err("Blocked: private/internal host".to_string());
-    }
-
-    // Block common internal ranges
-    if host.starts_with("10.")
-        || host.starts_with("172.16.")
-        || host.starts_with("172.17.")
-        || host.starts_with("172.18.")
-        || host.starts_with("172.19.")
-        || host.starts_with("172.2")
-        || host.starts_with("172.3")
-        || host.starts_with("192.168.")
-    {
-        return Err("Blocked: private IP range".to_string());
-    }
-
-    Ok(())
+    mcp_common::ssrf::check_ssrf(url)
 }
 
 // ---------------------------------------------------------------------------

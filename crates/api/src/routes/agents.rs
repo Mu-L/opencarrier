@@ -1200,7 +1200,7 @@ pub async fn verify_clone_access(
     };
 
     let provided = body["password"].as_str().unwrap_or("");
-    if crate::session_auth::verify_password(provided, &expected) {
+    if crate::session_auth::verify_password_bool(provided, &expected) {
         (StatusCode::OK, Json(serde_json::json!({"ok": true})))
     } else {
         (
