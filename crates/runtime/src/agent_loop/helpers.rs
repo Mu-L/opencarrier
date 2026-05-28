@@ -53,8 +53,10 @@ pub(in crate::agent_loop) fn pick_modality(
         return default_modality.to_string();
     };
     if iteration == 0 && brain.has_modality(REASONING_MODALITY) {
+        tracing::info!(iteration, selected = REASONING_MODALITY, default = default_modality, "Adaptive modality: using reasoning for initial turn");
         return REASONING_MODALITY.to_string();
     }
+    tracing::info!(iteration, selected = default_modality, "Adaptive modality: using default");
     default_modality.to_string()
 }
 
