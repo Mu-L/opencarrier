@@ -733,10 +733,10 @@ mod tests {
     #[test]
     fn test_system_kv_set_get() {
         let substrate = MemorySubstrate::open_in_memory().unwrap();
-        let agent_id = AgentId::new();
+        let agent_id_str = "test-agent".to_string();
         substrate
             .system_kv_set(
-                agent_id,
+                &agent_id_str,
                 "user1",
                 "user1",
                 "test_key",
@@ -744,7 +744,7 @@ mod tests {
             )
             .unwrap();
         let val = substrate
-            .system_kv_get(agent_id, "user1", "user1", "test_key")
+            .system_kv_get(&agent_id_str, "user1", "user1", "test_key")
             .unwrap();
         assert_eq!(val, Some(serde_json::json!("test_value")));
     }

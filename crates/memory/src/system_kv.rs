@@ -608,74 +608,74 @@ mod tests {
     #[test]
     fn test_kv_set_get() {
         let store = setup();
-        let agent_id = AgentId::new();
+        let agent_id = "test-agent".to_string();
         store
             .set(
-                agent_id,
+                &agent_id,
                 "user1",
                 "user1",
                 "test_key",
                 serde_json::json!("test_value"),
             )
             .unwrap();
-        let value = store.get(agent_id, "user1", "user1", "test_key").unwrap();
+        let value = store.get(&agent_id, "user1", "user1", "test_key").unwrap();
         assert_eq!(value, Some(serde_json::json!("test_value")));
     }
 
     #[test]
     fn test_kv_get_missing() {
         let store = setup();
-        let agent_id = AgentId::new();
-        let value = store.get(agent_id, "user1", "user1", "nonexistent").unwrap();
+        let agent_id = "test-agent".to_string();
+        let value = store.get(&agent_id, "user1", "user1", "nonexistent").unwrap();
         assert!(value.is_none());
     }
 
     #[test]
     fn test_kv_delete() {
         let store = setup();
-        let agent_id = AgentId::new();
+        let agent_id = "test-agent".to_string();
         store
-            .set(agent_id, "user1", "user1", "to_delete", serde_json::json!(42))
+            .set(&agent_id, "user1", "user1", "to_delete", serde_json::json!(42))
             .unwrap();
-        store.delete(agent_id, "user1", "user1", "to_delete").unwrap();
-        let value = store.get(agent_id, "user1", "user1", "to_delete").unwrap();
+        store.delete(&agent_id, "user1", "user1", "to_delete").unwrap();
+        let value = store.get(&agent_id, "user1", "user1", "to_delete").unwrap();
         assert!(value.is_none());
     }
 
     #[test]
     fn test_kv_update() {
         let store = setup();
-        let agent_id = AgentId::new();
+        let agent_id = "test-agent".to_string();
         store
-            .set(agent_id, "user1", "user1", "key", serde_json::json!("v1"))
+            .set(&agent_id, "user1", "user1", "key", serde_json::json!("v1"))
             .unwrap();
         store
-            .set(agent_id, "user1", "user1", "key", serde_json::json!("v2"))
+            .set(&agent_id, "user1", "user1", "key", serde_json::json!("v2"))
             .unwrap();
-        let value = store.get(agent_id, "user1", "user1", "key").unwrap();
+        let value = store.get(&agent_id, "user1", "user1", "key").unwrap();
         assert_eq!(value, Some(serde_json::json!("v2")));
     }
 
     #[test]
     fn test_kv_update_preserves_history() {
         let store = setup();
-        let agent_id = AgentId::new();
+        let agent_id = "test-agent".to_string();
         store
-            .set(agent_id, "user1", "user1", "key", serde_json::json!("v1"))
+            .set(&agent_id, "user1", "user1", "key", serde_json::json!("v1"))
             .unwrap();
         store
-            .set(agent_id, "user1", "user1", "key", serde_json::json!("v2"))
+            .set(&agent_id, "user1", "user1", "key", serde_json::json!("v2"))
             .unwrap();
         store
-            .set(agent_id, "user1", "user1", "key", serde_json::json!("v3"))
+            .set(&agent_id, "user1", "user1", "key", serde_json::json!("v3"))
             .unwrap();
 
         // Latest value is v3
-        let value = store.get(agent_id, "user1", "user1", "key").unwrap();
+        let value = store.get(&agent_id, "user1", "user1", "key").unwrap();
         assert_eq!(value, Some(serde_json::json!("v3")));
 
         // History preserves all old values
-        let history = store.get_history(agent_id, "user1", "user1", "key").unwrap();
+        let history = store.get_history(&agent_id, "user1", "user1", "key").unwrap();
         assert_eq!(history.len(), 2, "should have 2 archived entries (v1, v2)");
         assert_eq!(history[0].0, serde_json::json!("v1"));
         assert_eq!(history[1].0, serde_json::json!("v2"));
@@ -684,18 +684,18 @@ mod tests {
     #[test]
     fn test_kv_delete_preserves_history() {
         let store = setup();
-        let agent_id = AgentId::new();
+        let agent_id = "test-agent".to_string();
         store
-            .set(agent_id, "user1", "user1", "key", serde_json::json!("important"))
+            .set(&agent_id, "user1", "user1", "key", serde_json::json!("important"))
             .unwrap();
-        store.delete(agent_id, "user1", "user1", "key").unwrap();
+        store.delete(&agent_id, "user1", "user1", "key").unwrap();
 
         // Value is gone from main store
-        let value = store.get(agent_id, "user1", "user1", "key").unwrap();
+        let value = store.get(&agent_id, "user1", "user1", "key").unwrap();
         assert!(value.is_none());
 
         // But history preserves it
-        let history = store.get_history(agent_id, "user1", "user1", "key").unwrap();
+        let history = store.get_history(&agent_id, "user1", "user1", "key").unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].0, serde_json::json!("important"));
     }
@@ -703,27 +703,27 @@ mod tests {
     #[test]
     fn test_kv_per_user_isolation() {
         let store = setup();
-        let agent_id = AgentId::new();
+        let agent_id = "test-agent".to_string();
         store
-            .set(agent_id, "user_a", "user_a", "pref", serde_json::json!("dark mode"))
+            .set(&agent_id, "user_a", "user_a", "pref", serde_json::json!("dark mode"))
             .unwrap();
         store
-            .set(agent_id, "user_b", "user_b", "pref", serde_json::json!("light mode"))
+            .set(&agent_id, "user_b", "user_b", "pref", serde_json::json!("light mode"))
             .unwrap();
 
         // Each user sees their own value
         assert_eq!(
-            store.get(agent_id, "user_a", "user_a", "pref").unwrap(),
+            store.get(&agent_id, "user_a", "user_a", "pref").unwrap(),
             Some(serde_json::json!("dark mode"))
         );
         assert_eq!(
-            store.get(agent_id, "user_b", "user_b", "pref").unwrap(),
+            store.get(&agent_id, "user_b", "user_b", "pref").unwrap(),
             Some(serde_json::json!("light mode"))
         );
 
         // list_kv is per-user
-        let a_keys = store.list_kv(agent_id, "user_a", "user_a").unwrap();
-        let b_keys = store.list_kv(agent_id, "user_b", "user_b").unwrap();
+        let a_keys = store.list_kv(&agent_id, "user_a", "user_a").unwrap();
+        let b_keys = store.list_kv(&agent_id, "user_b", "user_b").unwrap();
         assert_eq!(a_keys.len(), 1);
         assert_eq!(b_keys.len(), 1);
     }
