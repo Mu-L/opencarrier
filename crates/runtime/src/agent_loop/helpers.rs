@@ -40,8 +40,9 @@ pub(in crate::agent_loop) const REASONING_MODALITY: &str = "reasoning";
 
 /// Pick the optimal modality for the current agent loop iteration.
 ///
-/// - Iteration 0: `reasoning` (if available) for intent understanding and planning
-/// - Other iterations: the agent's default modality
+/// Alternating strategy:
+/// - Even turns (0, 2, 4, ...): `reasoning` — plan, decompose, review results
+/// - Odd turns (1, 3, 5, ...): `chat` — execute tools, collect data
 ///
 /// Falls back gracefully: no `reasoning` modality → use default, same as before.
 pub(in crate::agent_loop) fn pick_modality(
@@ -52,11 +53,11 @@ pub(in crate::agent_loop) fn pick_modality(
     let Some(brain) = brain else {
         return default_modality.to_string();
     };
-    if iteration == 0 && brain.has_modality(REASONING_MODALITY) {
-        tracing::info!(iteration, selected = REASONING_MODALITY, default = default_modality, "Adaptive modality: using reasoning for initial turn");
+    if iteration % 2 == 0 && brain.has_modality(REASONING_MODALITY) {
+        tracing::info!(iteration, selected = REASONING_MODALITY, default = default_modality, "Adaptive modality: reasoning for planning/review turn");
         return REASONING_MODALITY.to_string();
     }
-    tracing::info!(iteration, selected = default_modality, "Adaptive modality: using default");
+    tracing::info!(iteration, selected = default_modality, "Adaptive modality: chat for execution turn");
     default_modality.to_string()
 }
 
