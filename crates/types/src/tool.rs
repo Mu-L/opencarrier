@@ -819,7 +819,8 @@ mod tests {
 /// These are the bootstrap tools every agent gets. Other tools are discovered
 /// at runtime via `tool_search` when the LLM needs them.
 pub const CORE_TOOL_NAMES: &[&str] = &[
-    "tool_search", "skill_load", "session_summarize",
+    "tool_search", "skill_load", "skill_create", "skill_update",
+    "session_summarize",
     "knowledge_read", "knowledge_list",
     "file_read", "file_list",
     "cron_create", "cron_list", "cron_cancel",
