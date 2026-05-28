@@ -52,13 +52,13 @@ impl ToolModule for ToolSearchTools {
         }
 
         let mut out = format!("Found {} tool(s) matching \"{}\":\n\n", results.len(), query);
-        for (ts_name, def) in &results {
+        for (_ts_name, def) in &results {
             let desc_preview = if def.description.len() > 200 {
                 format!("{}...", &def.description[..197])
             } else {
                 def.description.clone()
             };
-            out.push_str(&format!("## {} (from {})\n{}\n\n", def.name, ts_name, desc_preview));
+            out.push_str(&format!("## {}\n{}\n\n", def.name, desc_preview));
             // Include input_schema so LLM knows how to call the tool
             if !def.input_schema.is_null() {
                 out.push_str(&format!("Parameters: {}\n\n", serde_json::to_string(&def.input_schema).unwrap_or_default()));
