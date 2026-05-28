@@ -35,6 +35,29 @@ pub(in crate::agent_loop) const SUMMARY_MAX_TOKENS: u32 = 150;
 /// Summary modality (fast/cheap).
 pub(in crate::agent_loop) const SUMMARY_MODALITY: &str = "fast";
 
+/// Reasoning modality — expensive model for planning and complex inference.
+pub(in crate::agent_loop) const REASONING_MODALITY: &str = "reasoning";
+
+/// Pick the optimal modality for the current agent loop iteration.
+///
+/// - Iteration 0: `reasoning` (if available) for intent understanding and planning
+/// - Other iterations: the agent's default modality
+///
+/// Falls back gracefully: no `reasoning` modality → use default, same as before.
+pub(in crate::agent_loop) fn pick_modality(
+    brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
+    iteration: u32,
+    default_modality: &str,
+) -> String {
+    let Some(brain) = brain else {
+        return default_modality.to_string();
+    };
+    if iteration == 0 && brain.has_modality(REASONING_MODALITY) {
+        return REASONING_MODALITY.to_string();
+    }
+    default_modality.to_string()
+}
+
 /// Tool search recall limit (stage 1: how many candidates to retrieve).
 pub(in crate::agent_loop) const TOOL_SEARCH_RECALL_LIMIT: usize = 10;
 

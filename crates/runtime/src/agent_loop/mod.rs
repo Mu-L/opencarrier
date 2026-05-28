@@ -383,15 +383,16 @@ async fn run_agent_loop_impl(
             }
         }
 
-        let modality = if manifest.model.modality.is_empty() {
+        let default_modality = if manifest.model.modality.is_empty() {
             "chat"
         } else {
             &manifest.model.modality
         };
+        let modality = helpers::pick_modality(brain.as_ref(), iteration, default_modality);
         let mut response = helpers::call_with_fallback(
             brain.as_ref(),
             &*driver,
-            modality,
+            &modality,
             request,
             stream_tx.clone(),
             Some(loop_deadline),
