@@ -660,11 +660,11 @@ async fn tool_image_generate(
         return Err("Image generation returned empty image list".into());
     }
 
-    // Save images to sender output directory if available
+    // Save images to workspace output directory if available
     let saved_paths = if let (Some(hd), Some(an)) = (home_dir, agent_name) {
-        let sid = sender_id.ok_or("Cannot save images: no sender context")?;
-        let oid = owner_id.unwrap_or(sid);
-        let rel_dir = types::config::sender_relative_path(oid, an, Some(sid), "output");
+        // Use workspaces/{agent_name}/output for simpler path structure
+        // This path is accessible by MCP tools running from /home/ubuntu/.opencarrier
+        let rel_dir = format!("workspaces/{}/output", an);
         let output_dir = hd.join(&rel_dir);
         tokio::fs::create_dir_all(&output_dir)
             .await
