@@ -216,10 +216,19 @@ impl CarrierKernel {
                         thinking: None,
                         extra: Default::default(),
                     };
-                    rt_handle
-                        .block_on(async { driver.complete(request).await })
-                        .map(|r: runtime::llm_driver::CompletionResponse| r.text())
-                        .map_err(|e| anyhow::anyhow!("{e}"))
+                    // IMPORTANT: Do NOT use `rt_handle.block_on()` here.
+                    // The watcher callback runs on a notify crate thread, and
+                    // block_on() can deadlock if all tokio worker threads are busy.
+                    // Instead, spawn the async work and wait via oneshot channel.
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let driver = driver.clone();
+                    rt_handle.spawn(async move {
+                        let result = driver.complete(request).await
+                            .map(|r| r.text())
+                            .map_err(|e| anyhow::anyhow!("{e}"));
+                        let _ = tx.send(result);
+                    });
+                    rx.recv().map_err(|_| anyhow::anyhow!("LLM call channel closed"))?
                 },
             );
 
