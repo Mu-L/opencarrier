@@ -934,7 +934,7 @@ impl CarrierKernel {
                     examples.join(", ")
                 };
 
-                summary.push_str(&format!("- {}: {} tools ({})\n", name, tools.len(), example_str));
+                summary.push_str(&format!("- [{}] {} tools: {}\n", name, tools.len(), example_str));
             }
         }
 

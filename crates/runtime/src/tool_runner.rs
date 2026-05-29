@@ -114,12 +114,20 @@ pub async fn execute_tool(
     if !permission_checked {
         let level = types::tool::PermissionLevel::for_tool(tool_name);
         if level > max_tool_level {
+            // Suggest likely intended tool names when the LLM hallucinates
+            // a toolset name (e.g. "filesystem") instead of a real tool name.
+            let suggestion = match tool_name {
+                "filesystem" => " Did you mean file_write, file_read, or file_list?",
+                "knowledge" => " Did you mean knowledge_add, knowledge_read, or knowledge_list?",
+                "shell" => " Did you mean shell_exec?",
+                "media" => " Did you mean image_generate or text_to_speech?",
+                _ => "",
+            };
             warn!(tool_name, ?level, ?max_tool_level, "Permission denied: non-builtin tool exceeds max level");
             return ToolResult {
                 tool_use_id: tool_use_id.to_string(),
                 content: format!(
-                    "Permission denied: tool '{tool_name}' requires {:?} level but agent is limited to {:?}",
-                    level, max_tool_level
+                    "Permission denied: '{tool_name}' is not a callable tool.{suggestion} Available tools are listed in your tool definitions.",
                 ),
                 is_error: true,
             };
