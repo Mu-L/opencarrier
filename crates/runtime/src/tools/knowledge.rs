@@ -64,7 +64,7 @@ impl ToolModule for KnowledgeTools {
             },
             ToolDefinition {
                 name: "knowledge_add".to_string(),
-                description: "Add a new knowledge entry to the clone's knowledge base.".to_string(),
+                description: "Save a long-term knowledge entry that ALL users share (e.g. policies, reference docs, how-to guides, facts). Do NOT use this for user-specific content like article drafts, reports, outlines, or task outputs — use file_write with an output/ path for those.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {

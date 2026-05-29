@@ -33,7 +33,7 @@ impl super::ToolModule for FilesystemTools {
             },
             ToolDefinition {
                 name: "file_write".to_string(),
-                description: "Write content to a file. Paths are relative to the agent workspace.".to_string(),
+                description: "Write content to a file. Use 'output/' prefix for user-specific task outputs (articles, reports, drafts, generated content). Use 'memory/' prefix for user-specific private notes. Paths are sandboxed per-user automatically.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
