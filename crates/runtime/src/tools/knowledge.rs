@@ -452,6 +452,18 @@ async fn tool_knowledge_add(
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
+
+    // Reject content that looks like credentials/secrets — these belong in kv_set
+    let content_lower = content.to_lowercase();
+    let sensitive_patterns = ["app_secret", "app_id", "api_key", "apikey", "secret_key", "access_token", "private_key"];
+    let matched = sensitive_patterns.iter().find(|p| content_lower.contains(*p));
+    if let Some(pattern) = matched {
+        return Err(format!(
+            "Rejected: content contains '{pattern}' which looks like credentials/secrets. \
+             Use kv_set to store private data in your personal key-value store instead of knowledge_add."
+        ));
+    }
+
     let filename = knowledge_add_core(root, title, content, "tool").await?;
     Ok(format!("Knowledge added: {filename}.md"))
 }
