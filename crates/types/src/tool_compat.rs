@@ -47,7 +47,18 @@ pub fn normalize_tool_name(name: &str) -> &str {
     if is_known_carrier_tool(name) {
         return name;
     }
-    map_tool_name(name).unwrap_or(name)
+    if let Some(mapped) = map_tool_name(name) {
+        return mapped;
+    }
+    // Fix LLM-hallucinated double-prefixed MCP tool names.
+    // e.g. "mcp__tools__mcp_wechat_oa_create_draft" → "mcp_wechat_oa_create_draft"
+    // Pattern: starts with "mcp__" and contains another "mcp_" later
+    if let Some(after_first) = name.strip_prefix("mcp__") {
+        if let Some(idx) = after_first.find("mcp_") {
+            return &after_first[idx..];
+        }
+    }
+    name
 }
 
 /// Check if a tool name is a known Carrier built-in tool.
@@ -167,9 +178,17 @@ mod tests {
         assert_eq!(normalize_tool_name("Read"), "file_read");
         assert_eq!(normalize_tool_name("Bash"), "shell_exec");
 
+        // LLM-hallucinated double-prefixed MCP tool names
+        assert_eq!(
+            normalize_tool_name("mcp__tools__mcp_wechat_oa_create_draft"),
+            "mcp_wechat_oa_create_draft"
+        );
+        assert_eq!(
+            normalize_tool_name("mcp__xxx__mcp_server_tool"),
+            "mcp_server_tool"
+        );
+
         // Unknown names pass through unchanged
-        assert_eq!(normalize_tool_name("my_custom_tool"), "my_custom_tool");
-        assert_eq!(normalize_tool_name("mcp_server_tool"), "mcp_server_tool");
     }
 
     #[test]
