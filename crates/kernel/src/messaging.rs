@@ -59,7 +59,8 @@ impl CarrierKernel {
             let user_label = format!("user:{}", sid);
             match self
                 .memory
-                .find_session_by_label(&agent_name, &user_label)
+                .find_session_by_label_async(&agent_name, &user_label)
+                .await
                 .map_err(KernelError::Carrier)?
             {
                 Some(s) => s,
@@ -70,7 +71,8 @@ impl CarrierKernel {
             }
         } else {
             self.memory
-                .get_session(entry.session_id)
+                .get_session_async(entry.session_id)
+                .await
                 .map_err(KernelError::Carrier)?
                 .unwrap_or_else(|| memory::session::Session {
                     id: entry.session_id,
@@ -351,12 +353,24 @@ impl CarrierKernel {
 
         // Acquire concurrency permit — limits parallel LLM requests to protect the API.
         // This is held until the function returns (permit dropped with _permit).
-        let _permit = self
-            .runtime
-            .llm_concurrency_limit
-            .acquire()
-            .await
-            .map_err(|_| KernelError::Carrier(CarrierError::RateLimited))?;
+        // Timeout prevents indefinite queuing when all slots are held by stuck tasks.
+        let _permit = match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            self.runtime.llm_concurrency_limit.acquire(),
+        )
+        .await
+        {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_)) => {
+                return Err(KernelError::Carrier(CarrierError::RateLimited));
+            }
+            Err(_) => {
+                tracing::warn!("LLM concurrency permit acquisition timed out — all slots occupied");
+                return Err(KernelError::Carrier(CarrierError::Internal(
+                    "All LLM concurrency slots occupied — try again in a moment".to_string(),
+                )));
+            }
+        };
 
         // Enforce quota before running the agent loop
         self.runtime
@@ -385,7 +399,7 @@ impl CarrierKernel {
                     tracing::warn!(agent_id = %agent_id, error = %e, "Intent classifier failed; opening new session as fallback");
                     // Fallback: open new session on classifier error.
                     let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
-                    if let Ok(new_session) = self.memory.create_session(agent_name) {
+                    if let Ok(new_session) = self.memory.create_session_async(agent_name).await {
                         if let Err(e) = self.registry.update_session_id(agent_id, new_session.id) {
                             tracing::warn!(agent_id = %agent_id, error = %e, "Failed to update session ID in registry");
                         }
@@ -583,7 +597,7 @@ impl CarrierKernel {
                     Ok(msg) => {
                         info!(agent_id = %agent_id, "{msg}");
                         // Reload the session after compaction
-                        if let Ok(Some(reloaded)) = memory.get_session(session.id) {
+                        if let Ok(Some(reloaded)) = memory.get_session_async(session.id).await {
                             session = reloaded;
                         }
                     }
@@ -925,7 +939,7 @@ impl CarrierKernel {
             match self.compact_agent_session(agent_id, session.id).await {
                 Ok(msg) => {
                     info!(agent_id = %agent_id, "{msg}");
-                    if let Ok(Some(reloaded)) = self.memory.get_session(session.id) {
+                    if let Ok(Some(reloaded)) = self.memory.get_session_async(session.id).await {
                         session = reloaded;
                     }
                 }
@@ -1179,7 +1193,8 @@ impl CarrierKernel {
 
                 // Each step gets its own session
                 let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
-                let step_session = self.memory.create_session(agent_name)
+                let step_session = self.memory.create_session_async(agent_name)
+                    .await
                     .map_err(KernelError::Carrier)?;
 
                 // Clone Arc references for the spawned task

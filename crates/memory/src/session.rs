@@ -146,26 +146,37 @@ impl SessionStore {
             .clone();
         let _guard = lock.lock().await;
 
-        let mut session = match self.get_session(session_id)? {
-            Some(s) => s,
-            None => Session {
-                id: session_id,
-                agent_name: agent_id.to_string(),
-                messages: Vec::new(),
-                turn_summaries: Vec::new(),
-                context_window_tokens: 0,
-                label: None,
-            },
-        };
-        session.messages.extend_from_slice(new_messages);
-        session.context_window_tokens = context_window_tokens;
-        if let Some(l) = label {
-            session.label = Some(l.to_string());
-        }
-        if let Some(summaries) = turn_summaries {
-            session.turn_summaries = summaries.to_vec();
-        }
-        self.save_session(&session)?;
+        // Clone what we need for the blocking closure
+        let store = self.clone();
+        let agent_id = agent_id.to_string();
+        let new_messages = new_messages.to_vec();
+        let label = label.map(String::from);
+        let turn_summaries = turn_summaries.map(|s| s.to_vec());
+
+        tokio::task::spawn_blocking(move || {
+            let mut session = match store.get_session(session_id)? {
+                Some(s) => s,
+                None => Session {
+                    id: session_id,
+                    agent_name: agent_id,
+                    messages: Vec::new(),
+                    turn_summaries: Vec::new(),
+                    context_window_tokens: 0,
+                    label: None,
+                },
+            };
+            session.messages.extend_from_slice(&new_messages);
+            session.context_window_tokens = context_window_tokens;
+            if let Some(l) = label {
+                session.label = Some(l);
+            }
+            if let Some(summaries) = turn_summaries {
+                session.turn_summaries = summaries;
+            }
+            store.save_session(&session)
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(e.to_string()))??;
 
         // Clean up lock entry if no one else is waiting
         drop(_guard);

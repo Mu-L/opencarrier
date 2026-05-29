@@ -29,6 +29,13 @@ pub const BASE_RETRY_DELAY_MS: u64 = 1000;
 /// Catches mid-stream hangs where the server goes silent after connection.
 pub(in crate::agent_loop) const PER_LLM_CALL_TIMEOUT_SECS: u64 = 180;
 
+/// Wall-clock timeout for streaming LLM calls (seconds).
+/// Even though the driver has a per-chunk idle timeout (120s), keepalive bytes
+/// or very slow responses can defeat it. This provides a hard upper bound.
+/// Higher than PER_LLM_CALL_TIMEOUT_SECS to allow long generations that are
+/// actively streaming (max_tokens=8192 typically completes in 60-90s).
+pub(in crate::agent_loop) const STREAM_WALL_CLOCK_TIMEOUT_SECS: u64 = 300;
+
 /// Max tokens for turn summary generation.
 pub(in crate::agent_loop) const SUMMARY_MAX_TOKENS: u32 = 150;
 
@@ -181,32 +188,35 @@ pub(in crate::agent_loop) async fn call_with_retry(
             }
         };
 
-        // For streaming mode, do NOT apply an overall timeout to driver.stream().
-        // stream() reads ALL SSE events before returning; for long generations
-        // (e.g. max_tokens=8192 article writing) total time can exceed 180s even
-        // though the server is actively streaming.  The driver's built-in idle
-        // timeout (120s of silence) is sufficient protection against hangs.
-        // For non-streaming mode, keep the per-call timeout as before.
-        let result = if stream_tx.is_some() {
-            call.await
+        // Streaming mode uses a higher wall-clock timeout to allow long generations,
+        // but still caps total time to prevent indefinite hangs (keepalive bytes can
+        // defeat the per-chunk idle timeout). Non-streaming uses the standard timeout.
+        let timeout = if stream_tx.is_some() {
+            std::cmp::min(
+                per_call_timeout,
+                std::time::Duration::from_secs(STREAM_WALL_CLOCK_TIMEOUT_SECS),
+            )
         } else {
-            match tokio::time::timeout(per_call_timeout, call).await {
-                Ok(r) => r,
-                Err(_) => {
-                    warn!(attempt, timeout_secs = per_call_timeout.as_secs(), "LLM call timed out");
-                    last_error = Some("LLM call timed out".to_string());
-                    if attempt == MAX_RETRIES {
-                        return Err(CarrierError::LlmDriver(format!(
-                            "LLM call timed out after {}s — server may be unresponsive",
-                            per_call_timeout.as_secs()
-                        )));
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(
-                        BASE_RETRY_DELAY_MS * 2u64.pow(attempt),
-                    ))
-                    .await;
-                    continue;
+            per_call_timeout
+        };
+        let is_stream = stream_tx.is_some();
+        let result = match tokio::time::timeout(timeout, call).await {
+            Ok(r) => r,
+            Err(_) => {
+                warn!(attempt, timeout_secs = timeout.as_secs(), is_stream, "LLM call timed out");
+                last_error = Some("LLM call timed out".to_string());
+                if attempt == MAX_RETRIES {
+                    return Err(CarrierError::LlmDriver(format!(
+                        "LLM call timed out after {}s{} — server may be unresponsive",
+                        timeout.as_secs(),
+                        if is_stream { " (wall-clock)" } else { "" }
+                    )));
                 }
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    BASE_RETRY_DELAY_MS * 2u64.pow(attempt),
+                ))
+                .await;
+                continue;
             }
         };
         match result {

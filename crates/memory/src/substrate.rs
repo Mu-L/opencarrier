@@ -182,6 +182,14 @@ impl MemorySubstrate {
         self.sessions.get_session(session_id)
     }
 
+    /// Async wrapper for get_session — runs SQLite query in a blocking thread.
+    pub async fn get_session_async(&self, session_id: SessionId) -> CarrierResult<Option<Session>> {
+        let sessions = self.sessions.clone();
+        tokio::task::spawn_blocking(move || sessions.get_session(session_id))
+            .await
+            .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
     /// Save a session.
     pub fn save_session(&self, session: &Session) -> CarrierResult<()> {
         self.sessions.save_session(session)
@@ -220,6 +228,14 @@ impl MemorySubstrate {
     /// Create a new empty session for an agent.
     pub fn create_session(&self, agent_id: String) -> CarrierResult<Session> {
         self.sessions.create_session(agent_id)
+    }
+
+    /// Async wrapper for create_session — runs SQLite query in a blocking thread.
+    pub async fn create_session_async(&self, agent_id: String) -> CarrierResult<Session> {
+        let sessions = self.sessions.clone();
+        tokio::task::spawn_blocking(move || sessions.create_session(agent_id))
+            .await
+            .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
 
     /// List all sessions with metadata.
@@ -267,6 +283,20 @@ impl MemorySubstrate {
         label: &str,
     ) -> CarrierResult<Option<Session>> {
         self.sessions.find_session_by_label(agent_id, label)
+    }
+
+    /// Async wrapper for find_session_by_label — runs SQLite query in a blocking thread.
+    pub async fn find_session_by_label_async(
+        &self,
+        agent_id: &str,
+        label: &str,
+    ) -> CarrierResult<Option<Session>> {
+        let sessions = self.sessions.clone();
+        let agent_id = agent_id.to_string();
+        let label = label.to_string();
+        tokio::task::spawn_blocking(move || sessions.find_session_by_label(&agent_id, &label))
+            .await
+            .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
 
     /// List all sessions for a specific agent.
