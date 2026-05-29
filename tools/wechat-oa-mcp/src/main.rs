@@ -49,8 +49,10 @@ define_params!(UploadMediaParams {
     media_type: String,
     #[schemars(description = "Filename (e.g. cover.jpg)")]
     filename: String,
-    #[schemars(description = "Base64-encoded media data")]
-    data_base64: String,
+    #[schemars(description = "Base64-encoded media data (required if file_path not provided)")]
+    data_base64: Option<String>,
+    #[schemars(description = "Local file path to read (e.g., output/image.png - reads file directly, bypassing base64 size limits)")]
+    file_path: Option<String>,
 });
 
 define_params!(UploadMediaFromUrlParams {
@@ -370,13 +372,25 @@ impl WeChatOaServer {
     // ---- Media ----
 
     #[tool(
-        description = "Upload image/media to a WeChat OA account's permanent material library. Returns media_id and url."
+        description = "Upload image/media to a WeChat OA account's permanent material library. Returns media_id and url. Use file_path to read local files directly (recommended for images to avoid base64 size limits), or data_base64 for small data."
     )]
     async fn upload_media(&self, Parameters(params): Parameters<UploadMediaParams>) -> String {
-        let data = match base64::engine::general_purpose::STANDARD.decode(&params.data_base64) {
-            Ok(d) => d,
-            Err(e) => return format!("{{\"error\": \"invalid base64: {}\"}}", e),
+        let data = if let Some(ref path) = params.file_path {
+            // Read from local file (bypasses base64 size limits)
+            match std::fs::read(path) {
+                Ok(d) => d,
+                Err(e) => return format!("{{\"error\": \"failed to read file {}: {}\"}}", path, e),
+            }
+        } else if let Some(ref base64) = params.data_base64 {
+            // Decode from base64 (for small data only)
+            match base64::engine::general_purpose::STANDARD.decode(base64) {
+                Ok(d) => d,
+                Err(e) => return format!("{{\"error\": \"invalid base64: {}\"}}", e),
+            }
+        } else {
+            return "{\"error\": \"Either file_path or data_base64 must be provided\"}".to_string();
         };
+
         match self
             .client
             .upload_media(
