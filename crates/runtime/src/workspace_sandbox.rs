@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 /// Check if a relative path is an internal workspace path that should NOT be
 /// auto-routed to the sender's output directory.
-fn is_internal_path(rel: &str) -> bool {
+pub fn is_internal_path(rel: &str) -> bool {
     matches!(
         rel,
         "agent.toml" | "SOUL.md" | "system_prompt.md" | "profile.md" | "style.md" | "evolution.md"
@@ -119,14 +119,16 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
 /// Enforces:
 /// - **Blocked**: `agent.toml`, `SOUL.md` (only trainer tools may modify these)
 /// - **Blocked**: identity-frozen files when EVOLUTION.md declares identity freeze
-/// - **Rewritten**: `output/` and `memory/` → per-sender directories
-/// - **Catch-all**: non-internal paths auto-routed to per-sender `output/`
-/// - **Per-sender**: `senders/{sender_id}/` paths must match the current sender
+///
+/// Note: output/, memory/, and catch-all (non-internal) paths are handled by the
+/// filesystem tools directly via `resolve_user_data_path()`, which writes to the
+/// top-level `~/.opencarrier/senders/` directory. This sandbox function only
+/// handles workspace-internal paths (knowledge/, skills/, etc.).
 pub fn resolve_sandbox_path_for_write(
     user_path: &str,
     workspace_root: &Path,
-    sender_id: Option<&str>,
-    agent_name: Option<&str>,
+    _sender_id: Option<&str>,
+    _agent_name: Option<&str>,
 ) -> Result<PathBuf, String> {
     let normalized = user_path.replace('\\', "/");
     let path = Path::new(&normalized);
@@ -170,72 +172,20 @@ pub fn resolve_sandbox_path_for_write(
         }
     }
 
-    // Rewrite output/ and memory/ to per-sender directories, and auto-route
-    // non-internal paths to per-sender output/
-    let effective_path = if let (Some(sid), Some(an)) = (sender_id, agent_name) {
-        if rel_str.starts_with("output/") || rel_str == "output" {
-            let rest = rel_str.strip_prefix("output").unwrap_or("");
-            let rest = rest.strip_prefix('/').unwrap_or(rest);
-            if rest.is_empty() {
-                format!("senders/{}/{}/output", sid, an)
-            } else {
-                format!("senders/{}/{}/output/{}", sid, an, rest)
-            }
-        } else if rel_str.starts_with("memory/") || rel_str == "memory" {
-            let rest = rel_str.strip_prefix("memory").unwrap_or("");
-            let rest = rest.strip_prefix('/').unwrap_or(rest);
-            if rest.is_empty() {
-                format!("senders/{}/{}/memory", sid, an)
-            } else {
-                format!("senders/{}/{}/memory/{}", sid, an, rest)
-            }
-        } else if is_internal_path(&rel_str) {
-            rel_str.to_string()
-        } else {
-            format!("senders/{}/{}/output/{}", sid, an, rel_str)
-        }
-    } else {
-        rel_str.to_string()
-    };
-
-    // Check per-sender isolation for senders/ paths
-    let eff_path = Path::new(&effective_path);
-    if eff_path.starts_with("senders/") {
-        let components: Vec<&str> = eff_path
-            .components()
-            .filter_map(|c| c.as_os_str().to_str())
-            .collect();
-        if components.len() >= 2 {
-            let path_sender = components[1];
-            if let Some(sid) = sender_id {
-                if path_sender != sid {
-                    return Err(format!(
-                        "Write denied: cannot write to sender '{}' directory (current sender: '{}')",
-                        path_sender, sid
-                    ));
-                }
-            } else {
-                return Err(
-                    "Write denied: cannot write to senders/ directory without sender context"
-                        .to_string(),
-                );
-            }
-        }
-    }
-
     // Delegate to the existing sandbox for path resolution and traversal checks
-    resolve_sandbox_path(&effective_path, workspace_root)
+    resolve_sandbox_path(&rel_str, workspace_root)
 }
 
 /// Resolve a user-supplied path for read operations within a workspace sandbox.
 ///
-/// Rewrites `output/` and `memory/` to per-sender directories.
-/// Enforces per-sender isolation for `senders/` paths.
+/// Note: output/, memory/, and catch-all paths are handled by the filesystem tools
+/// directly via `resolve_user_data_path()`. This sandbox function only handles
+/// workspace-internal paths.
 pub fn resolve_sandbox_path_for_read(
     user_path: &str,
     workspace_root: &Path,
-    sender_id: Option<&str>,
-    agent_name: Option<&str>,
+    _sender_id: Option<&str>,
+    _agent_name: Option<&str>,
 ) -> Result<PathBuf, String> {
     let normalized = user_path.replace('\\', "/");
     let path = Path::new(&normalized);
@@ -249,60 +199,7 @@ pub fn resolve_sandbox_path_for_read(
     };
 
     let rel_str = relative.to_string_lossy();
-
-    // Rewrite output/ and memory/ to per-sender directories when context is available
-    let effective_path = if let (Some(sid), Some(an)) = (sender_id, agent_name) {
-        if rel_str.starts_with("output/") || rel_str == "output" {
-            let rest = rel_str.strip_prefix("output").unwrap_or("");
-            let rest = rest.strip_prefix('/').unwrap_or(rest);
-            if rest.is_empty() {
-                format!("senders/{}/{}/output", sid, an)
-            } else {
-                format!("senders/{}/{}/output/{}", sid, an, rest)
-            }
-        } else if rel_str.starts_with("memory/") || rel_str == "memory" {
-            let rest = rel_str.strip_prefix("memory").unwrap_or("");
-            let rest = rest.strip_prefix('/').unwrap_or(rest);
-            if rest.is_empty() {
-                format!("senders/{}/{}/memory", sid, an)
-            } else {
-                format!("senders/{}/{}/memory/{}", sid, an, rest)
-            }
-        } else {
-            rel_str.to_string()
-        }
-    } else {
-        rel_str.to_string()
-    };
-
-    // Check per-sender isolation for senders/ paths
-    let eff_path = Path::new(&effective_path);
-    if eff_path.starts_with("senders/") {
-        let components: Vec<&str> = eff_path
-            .components()
-            .filter_map(|c| c.as_os_str().to_str())
-            .collect();
-        if components.len() >= 2 {
-            let path_sender = components[1];
-            match sender_id {
-                Some(sid) if path_sender != sid => {
-                    return Err(format!(
-                        "Read denied: cannot read from sender '{}' directory (current sender: '{}')",
-                        path_sender, sid
-                    ));
-                }
-                None => {
-                    return Err(
-                        "Read denied: cannot read from senders/ directory without sender context"
-                            .to_string(),
-                    );
-                }
-                _ => {} // sender_id matches path_sender — allow
-            }
-        }
-    }
-
-    resolve_sandbox_path(&effective_path, workspace_root)
+    resolve_sandbox_path(&rel_str, workspace_root)
 }
 
 #[cfg(test)]

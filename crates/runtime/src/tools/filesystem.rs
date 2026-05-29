@@ -77,12 +77,10 @@ impl super::ToolModule for FilesystemTools {
         ctx: &ToolContext<'_>,
     ) -> Option<Result<String, String>> {
         match name {
-            "file_read" => Some(tool_file_read(input, ctx.workspace_root, ctx.sender_id, ctx.agent_name).await),
-            "file_write" => Some(tool_file_write(input, ctx.workspace_root, ctx.sender_id, ctx.agent_name).await),
-            "file_list" => Some(tool_file_list(input, ctx.workspace_root, ctx.sender_id, ctx.agent_name).await),
-            "file_convert" => {
-                Some(tool_file_convert(input, ctx.workspace_root, ctx.sender_id, ctx.agent_name).await)
-            }
+            "file_read" => Some(tool_file_read(input, ctx).await),
+            "file_write" => Some(tool_file_write(input, ctx).await),
+            "file_list" => Some(tool_file_list(input, ctx).await),
+            "file_convert" => Some(tool_file_convert(input, ctx).await),
             _ => None,
         }
     }
@@ -100,33 +98,99 @@ impl super::ToolModule for FilesystemTools {
 // Private tool implementations
 // ---------------------------------------------------------------------------
 
-async fn tool_file_read(
-    input: &Value,
-    workspace_root: Option<&Path>,
-    sender_id: Option<&str>,
-    agent_name: Option<&str>,
-) -> Result<String, String> {
+/// Resolve output/memory (and catch-all) paths to the top-level senders directory.
+///
+/// Returns `None` if the path is a workspace-internal path (knowledge/, skills/, etc.)
+/// that should be handled by the sandbox instead.
+fn resolve_user_data_path(
+    raw_path: &str,
+    home_dir: &Path,
+    sender_id: &str,
+    owner_id: Option<&str>,
+    agent_name: &str,
+) -> Option<Result<PathBuf, String>> {
+    let normalized = raw_path.replace('\\', "/");
+    let rel = normalized.trim_start_matches('/');
+
+    // Determine subdirectory and rest-of-path from the user's input
+    let (subdir, rest) = if rel.starts_with("output/") || rel == "output" {
+        let rest = rel.strip_prefix("output").unwrap_or("");
+        let rest = rest.strip_prefix('/').unwrap_or(rest);
+        ("output", rest)
+    } else if rel.starts_with("memory/") || rel == "memory" {
+        let rest = rel.strip_prefix("memory").unwrap_or("");
+        let rest = rest.strip_prefix('/').unwrap_or(rest);
+        ("memory", rest)
+    } else if crate::workspace_sandbox::is_internal_path(rel) {
+        // Internal paths go through sandbox
+        return None;
+    } else {
+        // Catch-all: non-internal paths go to output/
+        ("output", rel)
+    };
+
+    // Validate no path traversal
+    if let Err(e) = super::validate_path(rel) {
+        return Some(Err(e));
+    }
+
+    let oid = owner_id.unwrap_or(sender_id);
+    let base = types::config::sender_data_dir(home_dir, oid, agent_name, Some(sender_id));
+    let target = if rest.is_empty() {
+        base.join(subdir)
+    } else {
+        base.join(subdir).join(rest)
+    };
+
+    Some(Ok(target))
+}
+
+async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = super::resolve_file_path_for_read(raw_path, workspace_root, sender_id, agent_name)?;
-    tracing::info!(raw_path, resolved = %resolved.display(), sender_id = ?sender_id, agent_name = ?agent_name, workspace_root = ?workspace_root, "file_read resolved path");
+
+    let resolved = if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
+        match resolve_user_data_path(raw_path, hd, sid, ctx.owner_id, an) {
+            Some(Ok(path)) => path,
+            Some(Err(e)) => return Err(e),
+            None => {
+                // Internal path — go through sandbox
+                super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
+            }
+        }
+    } else {
+        super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
+    };
+
+    tracing::info!(raw_path, resolved = %resolved.display(), "file_read resolved path");
     tokio::fs::read_to_string(&resolved)
         .await
         .map_err(|e| format!("Failed to read file: {e}"))
 }
 
-async fn tool_file_write(
-    input: &Value,
-    workspace_root: Option<&Path>,
-    sender_id: Option<&str>,
-    agent_name: Option<&str>,
-) -> Result<String, String> {
+async fn tool_file_write(input: &Value, ctx: &ToolContext<'_>) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = if let Some(root) = workspace_root {
-        crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, sender_id, agent_name)?
+
+    let resolved = if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
+        match resolve_user_data_path(raw_path, hd, sid, ctx.owner_id, an) {
+            Some(Ok(path)) => path,
+            Some(Err(e)) => return Err(e),
+            None => {
+                // Internal path — go through sandbox
+                if let Some(root) = ctx.workspace_root {
+                    crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, ctx.sender_id, ctx.agent_name)?
+                } else {
+                    let _ = super::validate_path(raw_path)?;
+                    PathBuf::from(raw_path)
+                }
+            }
+        }
+    } else if let Some(root) = ctx.workspace_root {
+        crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, ctx.sender_id, ctx.agent_name)?
     } else {
         let _ = super::validate_path(raw_path)?;
         PathBuf::from(raw_path)
     };
+
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
@@ -145,14 +209,22 @@ async fn tool_file_write(
     ))
 }
 
-async fn tool_file_list(
-    input: &Value,
-    workspace_root: Option<&Path>,
-    sender_id: Option<&str>,
-    agent_name: Option<&str>,
-) -> Result<String, String> {
+async fn tool_file_list(input: &Value, ctx: &ToolContext<'_>) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let resolved = super::resolve_file_path_for_read(raw_path, workspace_root, sender_id, agent_name)?;
+
+    let resolved = if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
+        match resolve_user_data_path(raw_path, hd, sid, ctx.owner_id, an) {
+            Some(Ok(path)) => path,
+            Some(Err(e)) => return Err(e),
+            None => {
+                // Internal path — go through sandbox
+                super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
+            }
+        }
+    } else {
+        super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
+    };
+
     let mut entries = tokio::fs::read_dir(&resolved)
         .await
         .map_err(|e| format!("Failed to list directory: {e}"))?;
@@ -174,12 +246,7 @@ async fn tool_file_list(
     Ok(files.join("\n"))
 }
 
-async fn tool_file_convert(
-    input: &Value,
-    workspace_root: Option<&Path>,
-    sender_id: Option<&str>,
-    agent_name: Option<&str>,
-) -> Result<String, String> {
+async fn tool_file_convert(input: &Value, ctx: &ToolContext<'_>) -> Result<String, String> {
     let raw_input_path = input["input_path"]
         .as_str()
         .ok_or("Missing 'input_path' parameter")?;
@@ -188,7 +255,7 @@ async fn tool_file_convert(
         .ok_or("Missing 'output_format' parameter")?;
     let raw_output_path = input["output_path"].as_str();
 
-    let input_path = super::resolve_file_path(raw_input_path, workspace_root)?;
+    let input_path = super::resolve_file_path(raw_input_path, ctx.workspace_root)?;
     if !input_path.exists() {
         return Err(format!("Input file not found: {}", input_path.display()));
     }
@@ -202,21 +269,37 @@ async fn tool_file_convert(
     }
 
     let output_path = if let Some(op) = raw_output_path {
-        if let Some(root) = workspace_root {
-            crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, sender_id, agent_name)?
+        // User-specified output path — resolve through the same logic as file_write
+        if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
+            match resolve_user_data_path(op, hd, sid, ctx.owner_id, an) {
+                Some(Ok(path)) => path,
+                Some(Err(e)) => return Err(e),
+                None => {
+                    if let Some(root) = ctx.workspace_root {
+                        crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, ctx.sender_id, ctx.agent_name)?
+                    } else {
+                        let _ = super::validate_path(op)?;
+                        PathBuf::from(op)
+                    }
+                }
+            }
+        } else if let Some(root) = ctx.workspace_root {
+            crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, ctx.sender_id, ctx.agent_name)?
         } else {
             let _ = super::validate_path(op)?;
             PathBuf::from(op)
         }
     } else {
+        // Auto-generated output path — use top-level senders directory
         let input_stem = input_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("converted");
-        let sender = sender_id.unwrap_or("unknown");
-        let output_dir = if let Some(root) = workspace_root {
-            let rel = types::config::sender_relative_path(sender, agent_name.unwrap_or("unknown"), None, "output");
-            root.join(rel)
+        let sender = ctx.sender_id.unwrap_or("unknown");
+        let agent = ctx.agent_name.unwrap_or("unknown");
+        let oid = ctx.owner_id.unwrap_or(sender);
+        let output_dir = if let Some(hd) = ctx.home_dir {
+            types::config::sender_data_dir(hd, oid, agent, Some(sender)).join("output")
         } else {
             PathBuf::from("output")
         };

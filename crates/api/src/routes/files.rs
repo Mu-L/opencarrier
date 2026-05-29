@@ -587,16 +587,6 @@ pub async fn list_output_files(
         Err(resp) => return resp,
     };
 
-    let workspace = match entry.manifest.workspace {
-        Some(ref ws) => ws.clone(),
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Agent has no workspace"})),
-            );
-        }
-    };
-
     let agent_name = &entry.manifest.name;
     let output_dir = types::config::sender_data_dir(
         &state.kernel.config.home_dir, params.owner_id.as_deref().unwrap_or(&params.sender_id), agent_name, Some(&params.sender_id),
@@ -604,26 +594,6 @@ pub async fn list_output_files(
 
     if !output_dir.exists() {
         return (StatusCode::OK, Json(serde_json::json!({"files": []})));
-    }
-
-    // Verify output_dir is inside workspace (path safety)
-    let ws_canonical = match workspace.canonicalize() {
-        Ok(p) => p,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Workspace path error"})),
-            );
-        }
-    };
-    match output_dir.canonicalize() {
-        Ok(p) if p.starts_with(&ws_canonical) => {}
-        _ => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Invalid path"})),
-            );
-        }
     }
 
     let mut files = Vec::new();
@@ -687,11 +657,6 @@ pub async fn serve_output_file(
         }
     };
 
-    let workspace = match entry.manifest.workspace {
-        Some(ref ws) => ws.clone(),
-        None => return err(StatusCode::NOT_FOUND, "Agent has no workspace"),
-    };
-
     // Build the safe base: senders/{owner_id}/{agent_name}/.../output/
     let agent_name = &entry.manifest.name;
     let safe_base = types::config::sender_data_dir(
@@ -705,23 +670,17 @@ pub async fn serve_output_file(
 
     let target = safe_base.join(&file_path);
 
-    // Canonicalize and verify target stays inside safe_base AND workspace
+    // Canonicalize and verify target stays inside safe_base
     let base_canonical = match safe_base.canonicalize() {
         Ok(p) => p,
         Err(_) => return err(StatusCode::NOT_FOUND, "Output directory not found"),
-    };
-    let ws_canonical = match workspace.canonicalize() {
-        Ok(p) => p,
-        Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR, "Workspace path error"),
     };
     let target_canonical = match target.canonicalize() {
         Ok(p) => p,
         Err(_) => return err(StatusCode::NOT_FOUND, "File not found"),
     };
 
-    if !target_canonical.starts_with(&base_canonical)
-        || !target_canonical.starts_with(&ws_canonical)
-    {
+    if !target_canonical.starts_with(&base_canonical) {
         return err(StatusCode::FORBIDDEN, "Path traversal denied");
     }
 
