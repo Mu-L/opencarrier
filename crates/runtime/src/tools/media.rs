@@ -716,6 +716,7 @@ async fn tool_image_generate(
     // Also save to the uploads temp dir so the web UI can serve them via
     // GET /api/uploads/{file_id}. Each image gets a UUID filename.
     let mut image_urls: Vec<String> = Vec::new();
+    let mut temp_paths: Vec<String> = Vec::new();
     {
         let upload_dir = std::env::temp_dir().join("carrier_uploads");
         let _ = std::fs::create_dir_all(&upload_dir);
@@ -732,6 +733,8 @@ async fn tool_image_generate(
                 let path = upload_dir.join(&file_id);
                 if std::fs::write(&path, &decoded).is_ok() {
                     image_urls.push(format!("/api/uploads/{file_id}"));
+                    // Return actual file path for MCP tools that need direct file access
+                    temp_paths.push(path.to_string_lossy().to_string());
                 }
             } else if let Some(ref url) = image.url {
                 image_urls.push(url.clone());
@@ -777,6 +780,7 @@ async fn tool_image_generate(
         "images_generated": images.len(),
         "saved_to": saved_paths,
         "image_urls": image_urls,
+        "temp_paths": temp_paths,
         "base64": base64_data,
         "provider": "brain",
     });
