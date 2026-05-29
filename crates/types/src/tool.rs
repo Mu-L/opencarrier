@@ -463,6 +463,7 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "file_read", "file_list",
     "cron_create", "cron_list", "cron_cancel",
     "task_plan",
+    "image_generate",
 ];
 
 #[cfg(test)]
