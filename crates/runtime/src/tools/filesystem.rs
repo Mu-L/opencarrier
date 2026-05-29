@@ -67,17 +67,6 @@ impl super::ToolModule for FilesystemTools {
                     "required": ["input_path", "output_format"]
                 }),
             },
-            ToolDefinition {
-                name: "file_read_base64".to_string(),
-                description: "Read a binary file and return its contents as base64-encoded string. Use this to read images, audio, or other binary files for upload to external services (e.g., WeChat media upload). Returns the base64 string directly.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "Path to the binary file (e.g., output/image.png)" }
-                    },
-                    "required": ["path"]
-                }),
-            },
         ]
     }
 
@@ -92,14 +81,13 @@ impl super::ToolModule for FilesystemTools {
             "file_write" => Some(tool_file_write(input, ctx).await),
             "file_list" => Some(tool_file_list(input, ctx).await),
             "file_convert" => Some(tool_file_convert(input, ctx).await),
-            "file_read_base64" => Some(tool_file_read_base64(input, ctx).await),
             _ => None,
         }
     }
 
     fn permission_level(&self, tool_name: &str) -> types::tool::PermissionLevel {
         match tool_name {
-            "file_read" | "file_list" | "file_convert" | "file_read_base64" => types::tool::PermissionLevel::ReadOnly,
+            "file_read" | "file_list" | "file_convert" => types::tool::PermissionLevel::ReadOnly,
             "file_write" => types::tool::PermissionLevel::Write,
             _ => types::tool::PermissionLevel::Dangerous,
         }
@@ -361,51 +349,4 @@ async fn tool_file_convert(input: &Value, ctx: &ToolContext<'_>) -> Result<Strin
         output_path.display(),
         out_size,
     ))
-}
-
-async fn tool_file_read_base64(input: &Value, ctx: &ToolContext<'_>) -> Result<String, String> {
-    let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-
-    let resolved = if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
-        match resolve_user_data_path(raw_path, hd, sid, ctx.owner_id, an) {
-            Some(Ok(path)) => path,
-            Some(Err(e)) => return Err(e),
-            None => {
-                // Internal path — go through sandbox
-                super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
-            }
-        }
-    } else {
-        super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
-    };
-
-    tracing::info!(raw_path, resolved = %resolved.display(), "file_read_base64 reading binary file");
-
-    // Read binary file
-    let bytes = tokio::fs::read(&resolved)
-        .await
-        .map_err(|e| format!("Failed to read file: {e}"))?;
-
-    // Check file size (limit to 10MB to avoid overwhelming the conversation)
-    const MAX_SIZE: usize = 10 * 1024 * 1024;
-    if bytes.len() > MAX_SIZE {
-        return Err(format!(
-            "File too large: {} bytes (max {} bytes for base64 encoding)",
-            bytes.len(),
-            MAX_SIZE
-        ));
-    }
-
-    // Encode to base64
-    use base64::Engine;
-    let base64_string = base64::engine::general_purpose::STANDARD.encode(&bytes);
-
-    tracing::info!(
-        path = %resolved.display(),
-        size_bytes = bytes.len(),
-        base64_len = base64_string.len(),
-        "file_read_base64 success"
-    );
-
-    Ok(base64_string)
 }

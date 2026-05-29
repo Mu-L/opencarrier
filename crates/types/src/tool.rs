@@ -460,7 +460,7 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "tool_search", "skill_load", "skill_create", "skill_update",
     "session_summarize",
     "knowledge_read", "knowledge_list",
-    "file_read", "file_list", "file_read_base64",
+    "file_read", "file_list",
     "cron_create", "cron_list", "cron_cancel",
     "task_plan",
     "image_generate",
