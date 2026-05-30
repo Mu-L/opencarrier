@@ -577,8 +577,8 @@ async fn tool_image_generate(
     brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
     home_dir: Option<&Path>,
     agent_name: Option<&str>,
-    owner_id: Option<&str>,
-    sender_id: Option<&str>,
+    _owner_id: Option<&str>,
+    _sender_id: Option<&str>,
 ) -> Result<String, String> {
     let brain = brain.ok_or("Brain not available. Ensure image modality is configured.")?;
     let prompt = input["prompt"]
