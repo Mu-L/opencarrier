@@ -603,6 +603,7 @@ async fn tool_image_generate(
 
     let quality = input["quality"].as_str().unwrap_or("hd");
     let count = input["count"].as_u64().unwrap_or(1).min(4) as u8;
+    let include_base64 = input["include_base64"].as_bool().unwrap_or(false);
 
     let mut extra = serde_json::Map::new();
     extra.insert("model".to_string(), serde_json::json!(model));
@@ -776,14 +777,23 @@ async fn tool_image_generate(
         String::new()
     };
 
-    let response = serde_json::json!({
-        "images_generated": images.len(),
-        "saved_to": saved_paths,
-        "image_urls": image_urls,
-        "temp_paths": temp_paths,
-        "base64": base64_data,
-        "provider": "brain",
-    });
+    // Build response - only include base64 when explicitly requested
+    // to avoid response truncation (25500 char limit)
+    let mut response = serde_json::Map::new();
+    response.insert("images_generated".into(), serde_json::json!(images.len()));
+    response.insert("saved_to".into(), serde_json::json!(saved_paths));
+    response.insert("image_urls".into(), serde_json::json!(image_urls));
+    response.insert("temp_paths".into(), serde_json::json!(temp_paths));
+    response.insert("provider".into(), serde_json::json!("brain"));
+
+    // Only include base64 if explicitly requested (for small images or debugging)
+    if include_base64 {
+        response.insert("base64".into(), serde_json::json!(base64_data));
+    } else {
+        response.insert("base64".into(), serde_json::json!(null));
+        response.insert("base64_truncated".into(), serde_json::json!(true));
+        response.insert("note".into(), serde_json::json!("base64 omitted to avoid response truncation. Use include_base64=true if needed, or use saved_to/temp_paths paths directly."));
+    }
 
     serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
 }
