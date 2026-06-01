@@ -51,7 +51,7 @@ pub use helpers::{tool_input_hash, detect_tool_loop};
 const MAX_ITERATIONS: u32 = 25;
 
 /// Overall timeout for the entire agent loop (seconds).
-const AGENT_LOOP_TIMEOUT_SECS: u64 = 1200;
+const AGENT_LOOP_TIMEOUT_SECS: u64 = 600;
 
 /// Agent lifecycle phase within the execution loop.
 /// Used for UX indicators (typing, reactions) without coupling to channel types.
@@ -135,6 +135,7 @@ pub async fn run_agent_loop(
     sender_id: Option<&str>,
     owner_id: Option<&str>,
     channel_type: Option<&str>,
+    llm_concurrency_limit: Option<Arc<tokio::sync::Semaphore>>,
 ) -> CarrierResult<AgentLoopResult> {
     let timeout = std::time::Duration::from_secs(AGENT_LOOP_TIMEOUT_SECS);
     match tokio::time::timeout(
@@ -144,6 +145,7 @@ pub async fn run_agent_loop(
             kernel, stream_tx, mcp_connections, fetch_engine, workspace_root,
             on_phase, hooks, context_window_tokens, process_manager,
             user_content_blocks, brain, memory_handle, sender_id, owner_id, channel_type,
+            llm_concurrency_limit,
         ),
     )
     .await
@@ -190,12 +192,14 @@ pub async fn run_agent_loop_streaming(
     sender_id: Option<&str>,
     owner_id: Option<&str>,
     channel_type: Option<&str>,
+    llm_concurrency_limit: Option<Arc<tokio::sync::Semaphore>>,
 ) -> CarrierResult<AgentLoopResult> {
     run_agent_loop(
         manifest, user_message, session, memory, driver, tools,
         kernel, Some(stream_tx), mcp_connections, fetch_engine, workspace_root,
         on_phase, hooks, context_window_tokens, process_manager,
         user_content_blocks, brain, memory_handle, sender_id, owner_id, channel_type,
+        llm_concurrency_limit,
     ).await
 }
 
@@ -226,6 +230,7 @@ async fn run_agent_loop_impl(
     sender_id: Option<&str>,
     owner_id: Option<&str>,
     channel_type: Option<&str>,
+    llm_concurrency_limit: Option<Arc<tokio::sync::Semaphore>>,
 ) -> CarrierResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
 
@@ -396,6 +401,7 @@ async fn run_agent_loop_impl(
             request,
             stream_tx.clone(),
             Some(loop_deadline),
+            llm_concurrency_limit.as_ref(),
         )
         .await?;
 

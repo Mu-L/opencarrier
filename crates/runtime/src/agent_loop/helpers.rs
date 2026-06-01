@@ -132,6 +132,11 @@ pub fn detect_tool_loop(recent: &[(String, u64)], window: usize) -> Option<(Stri
 ///
 /// Uses the `llm_errors` classifier for smart error handling and the
 /// `ProviderCooldown` circuit breaker to prevent request storms.
+///
+/// If `llm_concurrency_limit` is provided, a semaphore permit is acquired
+/// before each LLM call attempt and released immediately after. This ensures
+/// the concurrency slot is only held during actual API work, not during
+/// tool execution or session management.
 pub(in crate::agent_loop) async fn call_with_retry(
     driver: &dyn LlmDriver,
     request: CompletionRequest,
@@ -139,6 +144,7 @@ pub(in crate::agent_loop) async fn call_with_retry(
     provider: Option<&str>,
     cooldown: Option<&ProviderCooldown>,
     deadline: Option<std::time::Instant>,
+    llm_concurrency_limit: Option<&Arc<tokio::sync::Semaphore>>,
 ) -> CarrierResult<CompletionResponse> {
     let is_stream = stream_tx.is_some();
 
@@ -186,6 +192,47 @@ pub(in crate::agent_loop) async fn call_with_retry(
                 Some(tx) => driver.stream(request.clone(), tx.clone()).await,
                 None => driver.complete(request.clone()).await,
             }
+        };
+
+        // Acquire per-call concurrency permit so the slot is only held
+        // during actual API work, not across the entire agent loop.
+        let _permit = if let Some(sem) = llm_concurrency_limit {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                sem.acquire(),
+            )
+            .await
+            {
+                Ok(Ok(permit)) => Some(permit),
+                Ok(Err(_)) => {
+                    last_error = Some("LLM concurrency semaphore closed".to_string());
+                    if attempt == MAX_RETRIES {
+                        return Err(CarrierError::RateLimited);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        BASE_RETRY_DELAY_MS * 2u64.pow(attempt),
+                    ))
+                    .await;
+                    continue;
+                }
+                Err(_) => {
+                    warn!("LLM concurrency permit acquisition timed out — all slots occupied");
+                    last_error = Some("All LLM concurrency slots occupied".to_string());
+                    if attempt == MAX_RETRIES {
+                        return Err(CarrierError::Internal(
+                            "All LLM concurrency slots occupied — try again in a moment"
+                                .to_string(),
+                        ));
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        BASE_RETRY_DELAY_MS * 2u64.pow(attempt),
+                    ))
+                    .await;
+                    continue;
+                }
+            }
+        } else {
+            None
         };
 
         // Streaming mode uses a higher wall-clock timeout to allow long generations,
@@ -312,9 +359,10 @@ pub(in crate::agent_loop) async fn call_with_fallback(
     request: CompletionRequest,
     stream_tx: Option<mpsc::Sender<StreamEvent>>,
     deadline: Option<std::time::Instant>,
+    llm_concurrency_limit: Option<&Arc<tokio::sync::Semaphore>>,
 ) -> CarrierResult<CompletionResponse> {
     let Some(brain) = brain else {
-        return call_with_retry(fallback_driver, request, stream_tx, None, None, deadline).await;
+        return call_with_retry(fallback_driver, request, stream_tx, None, None, deadline, llm_concurrency_limit).await;
     };
 
     let endpoints = brain.endpoints_for(modality);
@@ -346,7 +394,7 @@ pub(in crate::agent_loop) async fn call_with_fallback(
             req.model = ep.model.clone();
             let start = std::time::Instant::now();
             let tx_arg = stream_tx.clone();
-            match call_with_retry(&*driver, req, tx_arg, Some(&ep.provider), None, deadline).await {
+            match call_with_retry(&*driver, req, tx_arg, Some(&ep.provider), None, deadline, llm_concurrency_limit).await {
                 Ok(response) => {
                     let latency = start.elapsed().as_millis() as u64;
                     brain.report(types::brain::EndpointReport {

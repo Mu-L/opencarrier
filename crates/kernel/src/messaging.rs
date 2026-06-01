@@ -351,26 +351,10 @@ impl CarrierKernel {
         // consistency is maintained by `save_session_append_async` which uses
         // per-session write locks and merge-writes.
 
-        // Acquire concurrency permit — limits parallel LLM requests to protect the API.
-        // This is held until the function returns (permit dropped with _permit).
-        // Timeout prevents indefinite queuing when all slots are held by stuck tasks.
-        let _permit = match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            self.runtime.llm_concurrency_limit.acquire(),
-        )
-        .await
-        {
-            Ok(Ok(permit)) => permit,
-            Ok(Err(_)) => {
-                return Err(KernelError::Carrier(CarrierError::RateLimited));
-            }
-            Err(_) => {
-                tracing::warn!("LLM concurrency permit acquisition timed out — all slots occupied");
-                return Err(KernelError::Carrier(CarrierError::Internal(
-                    "All LLM concurrency slots occupied — try again in a moment".to_string(),
-                )));
-            }
-        };
+        // LLM concurrency is now enforced per-call inside the agent loop
+        // (call_with_retry), not at the agent-loop level. This means a stuck
+        // agent only holds a semaphore slot for the duration of a single LLM
+        // call (~180-300s), not the entire loop.
 
         // Enforce quota before running the agent loop
         self.runtime
@@ -650,6 +634,7 @@ impl CarrierKernel {
                 sender_id.as_deref(),
                 owner_id.as_deref(),
                 channel_type.as_deref(),
+                Some(kernel_clone.runtime.llm_concurrency_limit.clone()),
             )
             .await;
 
@@ -1016,6 +1001,7 @@ impl CarrierKernel {
             sender_id.as_deref(),
             owner_id.as_deref(),
             channel_type.as_deref(),
+            Some(self.runtime.llm_concurrency_limit.clone()),
         )
         .await
         .map_err(KernelError::Carrier)?;
@@ -1219,6 +1205,8 @@ impl CarrierKernel {
                     "Starting plan step"
                 );
 
+                let sem_clone = self.runtime.llm_concurrency_limit.clone();
+
                 let handle = tokio::spawn(async move {
                     let mut session = step_session;
                     let result = runtime::agent_loop::run_agent_loop(
@@ -1237,6 +1225,7 @@ impl CarrierKernel {
                         mh_clone,
                         sid.as_deref(), oid.as_deref(),
                         ct.as_deref(),
+                        Some(sem_clone),
                     ).await;
                     (step_id, result, session)
                 });

@@ -282,6 +282,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // sender_id
             None, // owner_id
             None, // channel_type
+            None, // llm_concurrency_limit
         )
         .await
         .expect("Loop should complete without error");
@@ -336,6 +337,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // sender_id
             None, // owner_id
             None, // channel_type
+            None, // llm_concurrency_limit
         )
         .await
         .expect("Loop should complete without error");
@@ -392,6 +394,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // sender_id
             None, // owner_id
             None, // channel_type
+            None, // llm_concurrency_limit
         )
         .await
         .expect("Loop should complete without error");
@@ -446,6 +449,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // sender_id
             None, // owner_id
             None, // channel_type
+            None, // llm_concurrency_limit
         )
         .await
         .expect("Loop should complete without error");
@@ -492,6 +496,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // sender_id
             None, // owner_id
             None, // channel_type
+            None, // llm_concurrency_limit
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -620,6 +625,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // sender_id
             None, // owner_id
             None, // channel_type
+            None, // llm_concurrency_limit
         )
         .await
         .expect("Loop should recover via retry");
@@ -668,6 +674,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // sender_id
             None, // owner_id
             None, // channel_type
+            None, // llm_concurrency_limit
         )
         .await
         .expect("Loop should complete with fallback");
@@ -723,6 +730,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // sender_id
             None, // owner_id
             None, // channel_type
+            None, // llm_concurrency_limit
         )
         .await
         .expect("Streaming loop should complete without error");
@@ -1609,6 +1617,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // sender_id
             None, // owner_id
             None, // channel_type
+            None, // llm_concurrency_limit
         )
         .await
         .expect("Agent loop should complete");
@@ -1677,6 +1686,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // sender_id
             None, // owner_id
             None, // channel_type
+            None, // llm_concurrency_limit
         )
         .await
         .expect("Normal loop should complete");
@@ -1740,6 +1750,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             None, // sender_id
             None, // owner_id
             None, // channel_type
+            None, // llm_concurrency_limit
         )
         .await
         .expect("Streaming loop should complete");
