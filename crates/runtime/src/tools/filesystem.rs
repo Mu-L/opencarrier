@@ -225,9 +225,18 @@ async fn tool_file_list(input: &Value, ctx: &ToolContext<'_>) -> Result<String, 
         super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
     };
 
-    let mut entries = tokio::fs::read_dir(&resolved)
-        .await
-        .map_err(|e| format!("Failed to list directory: {e}"))?;
+    // For user-data paths (output/ memory/), treat missing directory as empty
+    let is_user_data = raw_path.starts_with("output/") || raw_path == "output"
+        || raw_path.starts_with("memory/") || raw_path == "memory";
+
+    let read_dir_result = tokio::fs::read_dir(&resolved).await;
+    let mut entries = match read_dir_result {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && is_user_data => {
+            return Ok("(empty directory)".to_string());
+        }
+        Err(e) => return Err(format!("Failed to list directory: {e}")),
+    };
     let mut files = Vec::new();
     while let Some(entry) = entries
         .next_entry()
@@ -243,7 +252,11 @@ async fn tool_file_list(input: &Value, ctx: &ToolContext<'_>) -> Result<String, 
         files.push(format!("{name}{suffix}"));
     }
     files.sort();
-    Ok(files.join("\n"))
+    if files.is_empty() {
+        Ok("(empty directory)".to_string())
+    } else {
+        Ok(files.join("\n"))
+    }
 }
 
 async fn tool_file_convert(input: &Value, ctx: &ToolContext<'_>) -> Result<String, String> {
