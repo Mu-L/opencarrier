@@ -122,10 +122,19 @@ pub async fn classify_intent(
         extra: serde_json::Value::Null,
     };
 
-    let response = driver
-        .complete(request)
-        .await
-        .map_err(|e| format!("intent LLM call failed: {e}"))?;
+    // Intent classification is a lightweight LLM call (max_tokens=200).
+    // Apply a 30s timeout to prevent it from blocking the entire request
+    // if the LLM API is unresponsive.
+    let response = match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        driver.complete(request),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return Err(format!("intent LLM call failed: {e}")),
+        Err(_) => return Err("intent LLM call timed out after 30s".to_string()),
+    };
 
     let text = response.text();
     parse_response(&text).ok_or_else(|| format!("intent response parse failed: {text}"))

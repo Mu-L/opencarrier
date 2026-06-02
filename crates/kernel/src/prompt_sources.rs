@@ -591,10 +591,22 @@ pub async fn classify_skill_with_llm(
         extra: Default::default(),
     };
 
-    let response = match brain.complete("fast", request).await {
-        Ok(r) => r,
-        Err(e) => {
+    // Skill classification is a lightweight LLM call (max_tokens=50).
+    // Apply a 30s timeout to prevent it from blocking the entire request
+    // if the LLM API is unresponsive.
+    let response = match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        brain.complete("fast", request),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
             tracing::warn!("Skill classification LLM call failed: {}", e);
+            return None;
+        }
+        Err(_) => {
+            tracing::warn!("Skill classification LLM call timed out after 30s — skipping skill matching");
             return None;
         }
     };

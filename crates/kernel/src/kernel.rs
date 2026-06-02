@@ -282,8 +282,11 @@ impl CarrierKernel {
                 extra: Default::default(),
             };
 
-            match driver.complete(request).await {
-                Ok(completion) => {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                driver.complete(request),
+            ).await {
+                Ok(Ok(completion)) => {
                     let text = completion.text();
                     match lifecycle::evolution::parse_analysis_response(&text) {
                         Ok(analysis) => {
@@ -323,8 +326,11 @@ impl CarrierKernel {
                                         thinking: None,
                                         extra: Default::default(),
                                     };
-                                    match driver.complete(anon_req).await {
-                                        Ok(anon_resp) => {
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_secs(30),
+                                        driver.complete(anon_req),
+                                    ).await {
+                                        Ok(Ok(anon_resp)) => {
                                             let anon_text = anon_resp.text();
                                             let (title, content) =
                                                 lifecycle::feedback::parse_anonymize_response(
@@ -344,8 +350,11 @@ impl CarrierKernel {
                                                 tracing::warn!(error = %e, "Feedback: failed to save");
                                             }
                                         }
-                                        Err(e) => {
+                                        Ok(Err(e)) => {
                                             tracing::warn!(error = %e, "Feedback: anonymize LLM failed");
+                                        }
+                                        Err(_) => {
+                                            tracing::warn!("Feedback: anonymize LLM timed out after 30s");
                                         }
                                     }
                                 }
@@ -381,8 +390,11 @@ impl CarrierKernel {
                         }
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::warn!(error = %e, "Evolution: LLM call failed");
+                }
+                Err(_) => {
+                    tracing::warn!("Evolution: LLM call timed out after 60s");
                 }
             }
         });

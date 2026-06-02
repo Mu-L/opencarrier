@@ -223,12 +223,17 @@ impl CarrierKernel {
                     let (tx, rx) = std::sync::mpsc::channel();
                     let driver = driver.clone();
                     rt_handle.spawn(async move {
-                        let result = driver.complete(request).await
-                            .map(|r| r.text())
-                            .map_err(|e| anyhow::anyhow!("{e}"));
+                        let result = tokio::time::timeout(
+                            std::time::Duration::from_secs(60),
+                            driver.complete(request),
+                        )
+                        .await
+                        .map_err(|_| anyhow::anyhow!("knowledge watcher LLM call timed out after 60s"))
+                        .and_then(|r| r.map(|r| r.text()).map_err(|e| anyhow::anyhow!("{e}")));
                         let _ = tx.send(result);
                     });
-                    rx.recv().map_err(|_| anyhow::anyhow!("LLM call channel closed"))?
+                    rx.recv_timeout(std::time::Duration::from_secs(65))
+                        .map_err(|_| anyhow::anyhow!("knowledge watcher LLM call channel closed or timed out"))?
                 },
             );
 
