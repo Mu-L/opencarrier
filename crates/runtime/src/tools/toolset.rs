@@ -48,7 +48,7 @@ impl ToolModule for ToolSearchTools {
         };
 
         if results.is_empty() {
-            return Some(Ok("No tools found matching your query. All available tools are already loaded.".to_string()));
+            return Some(Ok("No additional tools found matching your query — all available tools are already loaded. Do NOT call tool_search again. Use the tools you already have to accomplish the task.".to_string()));
         }
 
         let mut out = format!("Found {} tool(s) matching \"{}\":\n\n", results.len(), query);
@@ -64,7 +64,9 @@ impl ToolModule for ToolSearchTools {
                 out.push_str(&format!("Parameters: {}\n\n", serde_json::to_string(&def.input_schema).unwrap_or_default()));
             }
         }
-        out.push_str("You can call any of these tools directly. Use the tool name and follow the parameter schema.");
+        out.push_str("⚠️ STOP — These are SEARCH RESULTS, not tool execution output.\n\
+You MUST now directly call the tool you need (e.g. `mcp_wechat_oa_create_draft`) with the required parameters.\n\
+Do NOT call `tool_search` again for the same query — it will return the same list, not execute anything.");
 
         Some(Ok(out))
     }
