@@ -67,7 +67,7 @@ pub struct KernelServices {
 pub struct KernelPlugins {
     /// MCP server connections keyed by normalized server name.
     /// DashMap allows concurrent tool calls to different servers without blocking each other.
-    pub mcp_connections: dashmap::DashMap<String, runtime::mcp::McpConnection>,
+    pub mcp_connections: Arc<dashmap::DashMap<String, runtime::mcp::McpConnection>>,
     /// MCP tool definitions cache (populated after connections are established).
     pub mcp_tools: std::sync::Mutex<Vec<ToolDefinition>>,
     /// Toolset registry: name -> tool definitions for that toolset.
@@ -596,7 +596,7 @@ impl CarrierKernel {
                 media_engine,
             },
             plugins: KernelPlugins {
-                mcp_connections: dashmap::DashMap::new(),
+                mcp_connections: Arc::new(dashmap::DashMap::new()),
                 mcp_tools: std::sync::Mutex::new(Vec::new()),
                 toolset_registry: std::sync::RwLock::new(std::collections::HashMap::new()),
                 effective_mcp_servers: std::sync::RwLock::new(all_mcp_servers),

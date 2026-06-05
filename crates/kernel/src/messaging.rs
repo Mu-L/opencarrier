@@ -1206,6 +1206,7 @@ impl CarrierKernel {
                 );
 
                 let sem_clone = self.runtime.llm_concurrency_limit.clone();
+                let mcp_arc = Arc::clone(&self.plugins.mcp_connections);
 
                 let handle = tokio::spawn(async move {
                     let mut session = step_session;
@@ -1213,7 +1214,7 @@ impl CarrierKernel {
                         &manifest_clone, &message, &mut session,
                         &memory, driver_clone, &tools_owned,
                         kh, None,
-                        None,   // mcp_connections: MCP tools are already in the tools list
+                        Some(&*mcp_arc),
                         None,   // fetch_engine: not available in spawned task
                         ws.as_deref(),
                         None,   // on_phase
