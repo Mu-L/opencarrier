@@ -263,7 +263,21 @@ function setMsg(id, text, ok) {
 function api(method, path, body) {
   var opts = { method: method, headers: {'Content-Type':'application/json'}, credentials: 'same-origin' };
   if (body) opts.body = JSON.stringify(body);
-  return fetch(path, opts).then(function(r) { return r.json().then(function(d) { return {ok:r.ok, data:d}; }); });
+  return fetch(path, opts).then(function(r) {
+    return r.text().then(function(text) {
+      var data = {};
+      if (text) {
+        try {
+          data = JSON.parse(text);
+        } catch (_) {
+          data = { error: r.status + ' ' + r.statusText };
+        }
+      }
+      return {ok:r.ok, data:data};
+    });
+  }).catch(function(err) {
+    return {ok:false, data:{error: err && err.message ? err.message : '请求失败'}};
+  });
 }
 
 function del(path) {

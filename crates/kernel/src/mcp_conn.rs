@@ -34,7 +34,7 @@ use crate::kernel::CarrierKernel;
 
 impl CarrierKernel {
     /// Connect to all configured MCP servers and cache their tool definitions.
-    pub(crate) async fn connect_mcp_servers(self: &Arc<Self>) {
+    pub async fn connect_mcp_servers(self: &Arc<Self>) {
         use runtime::mcp::McpConnection;
 
         let servers = self
@@ -94,30 +94,39 @@ impl CarrierKernel {
                 // --- Phase 1: Detect dead connections by pinging ---
                 let mut dead_servers = Vec::new();
                 let mut registry_dirty = false;
-                {
-                    let keys: Vec<String> = kernel
-                        .plugins
-                        .mcp_connections
-                        .iter()
-                        .map(|e| e.key().clone())
-                        .collect();
-                    for key in &keys {
-                        if let Some(mut conn) = kernel.plugins.mcp_connections.get_mut(key) {
-                            if conn.ping().await.is_err() {
-                                let name = conn.name().to_string();
-                                let config = conn.config().clone();
-                                warn!(server = %name, "MCP server health check failed, will reconnect");
-                                dead_servers.push((name, config));
-                            }
+                let keys: Vec<String> = kernel
+                    .plugins
+                    .mcp_connections
+                    .iter()
+                    .map(|e| e.key().clone())
+                    .collect();
+                for key in &keys {
+                    let Some((_, mut conn)) = kernel.plugins.mcp_connections.remove(key) else {
+                        continue;
+                    };
+
+                    let name = conn.name().to_string();
+                    let config = conn.config().clone();
+                    let ping = tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        conn.ping(),
+                    )
+                    .await;
+
+                    match ping {
+                        Ok(Ok(())) => {
+                            kernel.plugins.mcp_connections.insert(key.clone(), conn);
                         }
-                    }
-                    let dead_keys: Vec<String> = dead_servers
-                        .iter()
-                        .map(|(name, _)| runtime::mcp::normalize_name(name))
-                        .collect();
-                    for key in &dead_keys {
-                        kernel.plugins.mcp_connections.remove(key);
-                        registry_dirty = true;
+                        Ok(Err(e)) => {
+                            warn!(server = %name, error = %e, "MCP server health check failed, will reconnect");
+                            dead_servers.push((name, config));
+                            registry_dirty = true;
+                        }
+                        Err(_) => {
+                            warn!(server = %name, "MCP server health check timed out, will reconnect");
+                            dead_servers.push((name, config));
+                            registry_dirty = true;
+                        }
                     }
                 }
 
