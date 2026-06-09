@@ -28,45 +28,15 @@ use mcp_common::json::error_response;
 //  Every struct carries app_id + app_secret for multi-tenant support. //
 // ================================================================== //
 
-/// Coerce string values that look like numbers into actual JSON numbers.
-///
-/// LLMs sometimes pass `"20"` (string) instead of `20` (integer) for numeric
-/// parameters. This walks a JSON object and converts any string value that
-/// parses as i64 or f64 into its numeric form, so serde deserialization succeeds.
-fn coerce_number_strings(mut v: serde_json::Value) -> serde_json::Value {
-    if let serde_json::Value::Object(map) = &mut v {
-        for (_key, val) in map.iter_mut() {
-            if let serde_json::Value::String(s) = val {
-                if let Ok(n) = s.parse::<i64>() {
-                    *val = serde_json::Value::Number(n.into());
-                } else if let Ok(f) = s.parse::<f64>() {
-                    if let Some(n) = serde_json::Number::from_f64(f) {
-                        *val = serde_json::Value::Number(n);
-                    }
-                }
-            }
-        }
-    }
-    v
-}
-
 macro_rules! define_params {
     ($name:ident { $($field:tt)* }) => {
-        #[derive(Debug, JsonSchema)]
+        #[derive(Debug, serde::Deserialize, JsonSchema)]
         struct $name {
             #[schemars(description = "公众号 AppID")]
             app_id: String,
             #[schemars(description = "公众号 AppSecret")]
             app_secret: String,
             $($field)*
-        }
-
-        impl<'de> serde::Deserialize<'de> for $name {
-            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-                let value = serde_json::Value::deserialize(deserializer)?;
-                let coerced = coerce_number_strings(value);
-                serde_json::from_value(coerced).map_err(serde::de::Error::custom)
-            }
         }
     };
 }
