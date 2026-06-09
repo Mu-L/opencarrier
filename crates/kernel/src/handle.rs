@@ -390,10 +390,29 @@ impl KernelHandle for CarrierKernel {
             .as_str()
             .ok_or("Missing 'name' field")?
             .to_string();
-        let schedule: CronSchedule = serde_json::from_value(job_json["schedule"].clone())
-            .map_err(|e| format!("Invalid schedule: {e}"))?;
-        let action: CronAction = serde_json::from_value(job_json["action"].clone())
-            .map_err(|e| format!("Invalid action: {e}"))?;
+        let schedule: CronSchedule = {
+            let schedule_val = job_json.get("schedule").cloned().unwrap_or(serde_json::Value::Null);
+            // LLMs sometimes wrap the schedule in a string; unwrap it.
+            let resolved = match &schedule_val {
+                serde_json::Value::String(s) => {
+                    serde_json::from_str::<serde_json::Value>(s).unwrap_or(schedule_val)
+                }
+                other => other.clone(),
+            };
+            serde_json::from_value(resolved)
+                .map_err(|e| format!("Invalid schedule: {e}"))?
+        };
+        let action: CronAction = {
+            let action_val = job_json.get("action").cloned().unwrap_or(serde_json::Value::Null);
+            let resolved = match &action_val {
+                serde_json::Value::String(s) => {
+                    serde_json::from_str::<serde_json::Value>(s).unwrap_or(action_val)
+                }
+                other => other.clone(),
+            };
+            serde_json::from_value(resolved)
+                .map_err(|e| format!("Invalid action: {e}"))?
+        };
         let delivery: CronDelivery = if job_json["delivery"].is_object() {
             serde_json::from_value(job_json["delivery"].clone())
                 .map_err(|e| format!("Invalid delivery: {e}"))?
