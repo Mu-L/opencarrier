@@ -3,6 +3,9 @@
 //! All methods live on `CarrierKernel` but are organized here for clarity.
 
 use types::agent::{AgentId, AgentState, ScheduleMode};
+use futures::stream::{FuturesUnordered, StreamExt};
+
+use super::handle::SYSTEM_AGENT_ID;
 use types::event::*;
 use types::scheduler::CronJob;
 use std::sync::Arc;
@@ -28,7 +31,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
             }))
             .unwrap_or_default();
             let event = Event::new(
-                AgentId::new(),
+                SYSTEM_AGENT_ID,
                 EventTarget::Broadcast,
                 EventPayload::Custom(payload_bytes),
             );
@@ -587,26 +590,27 @@ impl CarrierKernel {
                     }
 
                     let due = kernel.cron_scheduler.due_jobs();
+                    let mut handles = FuturesUnordered::new();
                     for job in due {
                         let job_id = job.id;
                         let job_name = job.name.clone();
-
-                        // Guard: if one job panics, don't kill the entire tick loop.
-                        // Spawn each job in its own task so panics are isolated.
                         let k = Arc::clone(&kernel);
-                        let handle = tokio::spawn(async move {
-                            cron_fire_job(&k, job).await;
+                        handles.push(async move {
+                            let handle = tokio::spawn(async move {
+                                cron_fire_job(&k, job).await;
+                            });
+                            (job_id, job_name, handle.await)
                         });
-                        if let Err(join_error) = handle.await {
+                    }
+                    while let Some((job_id, job_name, result)) = handles.next().await {
+                        if let Err(join_error) = result {
                             if join_error.is_panic() {
                                 tracing::error!(job = %job_name, "Cron job task panicked");
+                                kernel.cron_scheduler.record_failure(job_id, "cron task panicked");
                             } else {
                                 tracing::error!(job = %job_name, "Cron job task cancelled");
+                                kernel.cron_scheduler.record_failure(job_id, "cron task cancelled");
                             }
-                            kernel.cron_scheduler.record_failure(
-                                job_id,
-                                "agent turn panicked",
-                            );
                         }
                     }
 

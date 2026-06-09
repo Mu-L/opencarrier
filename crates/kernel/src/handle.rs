@@ -12,6 +12,9 @@ use types::event::*;
 use types::message::{ContentBlock, Message, MessageContent, Role};
 use std::sync::Arc;
 
+/// Well-known agent ID for system/kernel-originated events.
+pub const SYSTEM_AGENT_ID: AgentId = AgentId(uuid::Uuid::nil());
+
 use crate::capabilities::manifest_to_capabilities;
 use crate::kernel::CarrierKernel;
 use memory::MemorySubstrate;
@@ -363,7 +366,7 @@ impl KernelHandle for CarrierKernel {
         event_type: &str,
         payload: serde_json::Value,
     ) -> Result<(), String> {
-        let system_agent = AgentId::new();
+        let system_agent = SYSTEM_AGENT_ID;
         let payload_bytes =
             serde_json::to_vec(&serde_json::json!({"type": event_type, "data": payload}))
                 .map_err(|e| format!("Serialize failed: {e}"))?;
@@ -388,7 +391,7 @@ impl KernelHandle for CarrierKernel {
 
         let name = job_json["name"]
             .as_str()
-            .ok_or("Missing 'name' field")?
+            .ok_or("'name' must be a string")?
             .to_string();
         let schedule: CronSchedule = {
             let schedule_val = job_json.get("schedule").cloned().unwrap_or(serde_json::Value::Null);
@@ -413,13 +416,34 @@ impl KernelHandle for CarrierKernel {
             serde_json::from_value(resolved)
                 .map_err(|e| format!("Invalid action: {e}"))?
         };
-        let delivery: CronDelivery = if job_json["delivery"].is_object() {
-            serde_json::from_value(job_json["delivery"].clone())
-                .map_err(|e| format!("Invalid delivery: {e}"))?
-        } else {
-            CronDelivery::None
+        let delivery: CronDelivery = {
+            let val = job_json.get("delivery").cloned().unwrap_or(serde_json::Value::Null);
+            if val.is_null() {
+                CronDelivery::None
+            } else {
+                let resolved = match &val {
+                    serde_json::Value::String(s) => {
+                        serde_json::from_str::<serde_json::Value>(s).unwrap_or_else(|_| val.clone())
+                    }
+                    other => other.clone(),
+                };
+                if resolved.is_object() {
+                    serde_json::from_value(resolved)
+                        .map_err(|e| format!("Invalid delivery: {e}"))?
+                } else {
+                    tracing::warn!("delivery is not an object, defaulting to None: {val}");
+                    CronDelivery::None
+                }
+            }
         };
-        let one_shot = job_json["one_shot"].as_bool().unwrap_or(false);
+        let one_shot = match job_json.get("one_shot") {
+            Some(v) => match v {
+                serde_json::Value::Bool(b) => *b,
+                serde_json::Value::String(s) => matches!(s.to_lowercase().as_str(), "true" | "1" | "yes"),
+                _ => false,
+            },
+            None => false,
+        };
 
         tracing::debug!(agent_id, "cron_create resolving agent_id");
         let (aid, _) = self.registry.resolve(agent_id)

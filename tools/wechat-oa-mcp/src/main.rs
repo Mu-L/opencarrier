@@ -21,7 +21,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::{tool, tool_router, transport::stdio as stdio_transport, ServiceExt};
 use schemars::JsonSchema;
 use wechat::WeChatClient;
-use mcp_common::json::error_response;
+use mcp_common::json::{error_response, json_to_string, url_encode};
 
 // ================================================================== //
 //  Tool parameter structs                                              //
@@ -31,6 +31,7 @@ use mcp_common::json::error_response;
 macro_rules! define_params {
     ($name:ident { $($field:tt)* }) => {
         #[derive(Debug, serde::Deserialize, JsonSchema)]
+        #[allow(dead_code)] // structs are constructed by rmcp deserialization, not manually
         struct $name {
             #[schemars(description = "公众号 AppID")]
             app_id: String,
@@ -342,6 +343,28 @@ define_params!(DatacubeParams {
 //  MCP Server                                                         //
 // ================================================================== //
 
+/// Macro to generate datacube handler methods with identical body structure.
+/// Eliminates ~300 lines of boilerplate for the 17 datacube endpoints.
+macro_rules! datacube_handler {
+    ($name:ident, $path:expr, $desc:literal) => {
+        #[tool(description = $desc)]
+        async fn $name(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+            let body = serde_json::json!({
+                "begin_date": params.begin_date,
+                "end_date": params.end_date
+            });
+            match self
+                .client
+                .api_post(&params.app_id, &params.app_secret, $path, &body)
+                .await
+            {
+                Ok(resp) => json_to_string(&resp),
+                Err(e) => error_response(&e),
+            }
+        }
+    };
+}
+
 #[derive(Clone)]
 struct WeChatOaServer {
     client: Arc<WeChatClient>,
@@ -375,19 +398,27 @@ impl WeChatOaServer {
     )]
     async fn upload_media(&self, Parameters(params): Parameters<UploadMediaParams>) -> String {
         let data = if let Some(ref path) = params.file_path {
-            // Read from local file (bypasses base64 size limits)
+            // SECURITY: validate path before reading
+            if let Err(e) = mcp_common::path::validate_path(path) {
+                return error_response(&e);
+            }
             match std::fs::read(path) {
-                Ok(d) => d,
-                Err(e) => return format!("{{\"error\": \"failed to read file {}: {}\"}}", path, e),
+                Ok(d) => {
+                    if let Err(e) = mcp_common::path::validate_size(&d) {
+                        return error_response(&e);
+                    }
+                    d
+                }
+                Err(e) => return error_response(format!("failed to read file {path}: {e}")),
             }
         } else if let Some(ref base64) = params.data_base64 {
             // Decode from base64 (for small data only)
             match base64::engine::general_purpose::STANDARD.decode(base64) {
                 Ok(d) => d,
-                Err(e) => return format!("{{\"error\": \"invalid base64: {}\"}}", e),
+                Err(e) => return error_response(format!("invalid base64: {e}")),
             }
         } else {
-            return "{\"error\": \"Either file_path or data_base64 must be provided\"}".to_string();
+            return error_response("Either file_path or data_base64 must be provided");
         };
 
         match self
@@ -415,7 +446,7 @@ impl WeChatOaServer {
     ) -> String {
         let data = match self.client.fetch_bytes(&params.url).await {
             Ok(d) => d,
-            Err(e) => return format!("{{\"error\": \"failed to download: {}\"}}", e),
+            Err(e) => return error_response(format!("failed to download: {e}")),
         };
         match self
             .client
@@ -1059,7 +1090,7 @@ impl WeChatOaServer {
     #[tool(description = "Get user info by openid. Uses GET request to WeChat API.")]
     async fn get_user_info(&self, Parameters(params): Parameters<GetUserInfoParams>) -> String {
         let lang = params.lang.unwrap_or_else(|| "zh_CN".to_string());
-        let query = format!("openid={}&lang={}", params.openid, lang);
+        let query = format!("openid={}&lang={}", url_encode(&params.openid), url_encode(&lang));
         match self
             .client
             .api_get(
@@ -1220,325 +1251,23 @@ impl WeChatOaServer {
 
     // ---- Data statistics (datacube) ----
 
-    #[tool(description = "Get user growth summary (datacube). Max date range: 7 days.")]
-    async fn get_user_summary(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getusersummary",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get cumulative user count (datacube). Max date range: 7 days.")]
-    async fn get_user_cumulate(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getusercumulate",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get article total detail stats (datacube). Replaces the deprecated getarticlesummary and getarticletotal. Max date range: 1 day.")]
-    async fn get_article_summary(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getarticletotaldetail",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-
-    #[tool(description = "Get article read analytics (datacube). Replaces the deprecated getuserread. Max date range: 3 days.")]
-    async fn get_user_read(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getarticleread",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get article read hourly analytics (datacube). Replaces the deprecated getuserreadhour. Returns hourly breakdown. Max date range: 1 day.")]
-    async fn get_user_read_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getarticlereadhour",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get article share analytics (datacube). Replaces the deprecated getusershare. Max date range: 7 days.")]
-    async fn get_user_share(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getarticleshare",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get article share hourly analytics (datacube). Replaces the deprecated getusersharehour. Returns hourly breakdown. Max date range: 1 day.")]
-    async fn get_user_share_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getarticlesharehour",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get upstream message stats (datacube). Max date range: 7 days.")]
-    async fn get_upstream_msg(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getupstreammsg",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get upstream message weekly stats (datacube). Max date range: 30 days.")]
-    async fn get_upstream_msg_week(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getupstreammsgweek",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get upstream message monthly stats (datacube). Max date range: 30 days.")]
-    async fn get_upstream_msg_month(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getupstreammsgmonth",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get upstream message distribution stats (datacube). Max date range: 15 days.")]
-    async fn get_upstream_msg_dist(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getupstreammsgdist",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get upstream message weekly distribution stats (datacube). Max date range: 30 days.")]
-    async fn get_upstream_msg_dist_week(
-        &self,
-        Parameters(params): Parameters<DatacubeParams>,
-    ) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getupstreammsgdistweek",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get upstream message monthly distribution stats (datacube). Max date range: 30 days.")]
-    async fn get_upstream_msg_dist_month(
-        &self,
-        Parameters(params): Parameters<DatacubeParams>,
-    ) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getupstreammsgdistmonth",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get upstream message hourly stats (datacube). Max date range: 1 day.")]
-    async fn get_upstream_msg_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getupstreammsghour",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get interface summary stats (datacube). Max date range: 30 days.")]
-    async fn get_interface_summary(
-        &self,
-        Parameters(params): Parameters<DatacubeParams>,
-    ) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getinterfacesummary",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-    #[tool(description = "Get interface summary hourly stats (datacube). Max date range: 1 day.")]
-    async fn get_interface_summary_hour(
-        &self,
-        Parameters(params): Parameters<DatacubeParams>,
-    ) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getinterfacesummaryhour",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
-
-
-    #[tool(description = "Get business summary (datacube). Max date range: 7 days.")]
-    async fn get_biz_summary(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-        let body = serde_json::json!({ "begin_date": params.begin_date, "end_date": params.end_date });
-        match self
-            .client
-            .api_post(
-                &params.app_id,
-                &params.app_secret,
-                "/datacube/getbizsummary",
-                &body,
-            )
-            .await
-        {
-            Ok(resp) => json_to_string(&resp),
-            Err(e) => error_response(&e),
-        }
-    }
+    datacube_handler!(get_user_summary, "/datacube/getusersummary", "Get user growth summary (datacube). Max date range: 7 days.");
+    datacube_handler!(get_user_cumulate, "/datacube/getusercumulate", "Get cumulative user count (datacube). Max date range: 7 days.");
+    datacube_handler!(get_article_summary, "/datacube/getarticletotaldetail", "Get article total detail stats (datacube). Replaces the deprecated getarticlesummary and getarticletotal. Max date range: 1 day.");
+    datacube_handler!(get_user_read, "/datacube/getarticleread", "Get article read analytics (datacube). Replaces the deprecated getuserread. Max date range: 3 days.");
+    datacube_handler!(get_user_read_hour, "/datacube/getarticlereadhour", "Get article read hourly analytics (datacube). Replaces the deprecated getuserreadhour. Returns hourly breakdown. Max date range: 1 day.");
+    datacube_handler!(get_user_share, "/datacube/getarticleshare", "Get article share analytics (datacube). Replaces the deprecated getusershare. Max date range: 7 days.");
+    datacube_handler!(get_user_share_hour, "/datacube/getarticlesharehour", "Get article share hourly analytics (datacube). Replaces the deprecated getusersharehour. Returns hourly breakdown. Max date range: 1 day.");
+    datacube_handler!(get_upstream_msg, "/datacube/getupstreammsg", "Get upstream message stats (datacube). Max date range: 7 days.");
+    datacube_handler!(get_upstream_msg_week, "/datacube/getupstreammsgweek", "Get upstream message weekly stats (datacube). Max date range: 30 days.");
+    datacube_handler!(get_upstream_msg_month, "/datacube/getupstreammsgmonth", "Get upstream message monthly stats (datacube). Max date range: 30 days.");
+    datacube_handler!(get_upstream_msg_dist, "/datacube/getupstreammsgdist", "Get upstream message distribution stats (datacube). Max date range: 15 days.");
+    datacube_handler!(get_upstream_msg_dist_week, "/datacube/getupstreammsgdistweek", "Get upstream message weekly distribution stats (datacube). Max date range: 30 days.");
+    datacube_handler!(get_upstream_msg_dist_month, "/datacube/getupstreammsgdistmonth", "Get upstream message monthly distribution stats (datacube). Max date range: 30 days.");
+    datacube_handler!(get_upstream_msg_hour, "/datacube/getupstreammsghour", "Get upstream message hourly stats (datacube). Max date range: 1 day.");
+    datacube_handler!(get_interface_summary, "/datacube/getinterfacesummary", "Get interface summary stats (datacube). Max date range: 30 days.");
+    datacube_handler!(get_interface_summary_hour, "/datacube/getinterfacesummaryhour", "Get interface summary hourly stats (datacube). Max date range: 1 day.");
+    datacube_handler!(get_biz_summary, "/datacube/getbizsummary", "Get business summary (datacube). Max date range: 7 days.");
 
 }
 
@@ -1555,10 +1284,6 @@ fn coerce_json_value(v: serde_json::Value) -> serde_json::Value {
         }
         other => other,
     }
-}
-
-fn json_to_string(v: &serde_json::Value) -> String {
-    serde_json::to_string(v).unwrap_or_else(|e| format!("{{\"error\": \"serialize: {}\"}}", e))
 }
 
 // ================================================================== //

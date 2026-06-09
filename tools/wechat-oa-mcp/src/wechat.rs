@@ -145,7 +145,7 @@ impl WeChatClient {
         Ok(json)
     }
 
-    /// Download bytes from a URL.
+    /// Download bytes from a URL. Size capped at 10 MB.
     pub async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>> {
         // SECURITY: SSRF check before fetching external URL
         mcp_common::ssrf::check_ssrf(url)
@@ -154,7 +154,18 @@ impl WeChatClient {
         if !resp.status().is_success() {
             bail!("HTTP {} fetching {}", resp.status(), url);
         }
+        if let Some(len) = resp.content_length() {
+            if len > mcp_common::path::MAX_FILE_SIZE as u64 {
+                bail!("Response too large: {len} bytes (max 10 MB)");
+            }
+        }
         let bytes = resp.bytes().await?;
+        if bytes.len() > mcp_common::path::MAX_FILE_SIZE {
+            bail!(
+                "Response too large: {} bytes (max 10 MB)",
+                bytes.len()
+            );
+        }
         Ok(bytes.to_vec())
     }
 
