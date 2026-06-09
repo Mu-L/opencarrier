@@ -1595,8 +1595,7 @@ fn json_to_string(v: &serde_json::Value) -> String {
 //  Entry point                                                         //
 // ================================================================== //
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Log to stderr — stdout is reserved for the MCP protocol.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -1606,14 +1605,23 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let client = WeChatClient::new();
-    let server = WeChatOaServer {
-        client: Arc::new(client),
-    };
+    // Build a runtime with 32MB thread stack — the default 2MB overflows
+    // with 55 tool handlers' large async state machines.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .thread_stack_size(32 * 1024 * 1024)
+        .build()?;
 
-    tracing::info!("wechat-oa-mcp starting (stdio, multi-tenant)");
-    let service = server.serve(stdio_transport()).await?;
-    service.waiting().await?;
+    rt.block_on(async {
+        let client = WeChatClient::new();
+        let server = WeChatOaServer {
+            client: Arc::new(client),
+        };
 
-    Ok(())
+        tracing::info!("wechat-oa-mcp starting (stdio, multi-tenant)");
+        let service = server.serve(stdio_transport()).await?;
+        service.waiting().await?;
+
+        Ok(())
+    })
 }
