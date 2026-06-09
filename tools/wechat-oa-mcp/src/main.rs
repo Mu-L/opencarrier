@@ -1595,7 +1595,8 @@ fn json_to_string(v: &serde_json::Value) -> String {
 //  Entry point                                                         //
 // ================================================================== //
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Log to stderr — stdout is reserved for the MCP protocol.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -1605,25 +1606,14 @@ fn main() -> Result<()> {
         )
         .init();
 
-    // Build a multi-threaded runtime with 32MB worker stack — the default
-    // 2MB overflows with 55 tool handlers' large async state machines.
-    // rmcp internally uses tokio::spawn for tool dispatch, so we need
-    // a multi-threaded runtime (new_current_thread won't work).
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_stack_size(32 * 1024 * 1024)
-        .build()?;
+    let client = WeChatClient::new();
+    let server = WeChatOaServer {
+        client: Arc::new(client),
+    };
 
-    rt.block_on(async {
-        let client = WeChatClient::new();
-        let server = WeChatOaServer {
-            client: Arc::new(client),
-        };
+    tracing::info!("wechat-oa-mcp starting (stdio, multi-tenant)");
+    let service = server.serve(stdio_transport()).await?;
+    service.waiting().await?;
 
-        tracing::info!("wechat-oa-mcp starting (stdio, multi-tenant)");
-        let service = server.serve(stdio_transport()).await?;
-        service.waiting().await?;
-
-        Ok(())
-    })
+    Ok(())
 }
