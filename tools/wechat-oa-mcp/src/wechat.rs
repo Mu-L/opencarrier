@@ -109,6 +109,7 @@ impl WeChatClient {
     }
 
     /// GET request with auto-injected access_token.
+    /// Auto-retries once on errcode 40001 (invalid token) by forcing a token refresh.
     pub async fn api_get(
         &self,
         app_id: &str,
@@ -116,21 +117,30 @@ impl WeChatClient {
         path: &str,
         query_params: &str,
     ) -> Result<serde_json::Value> {
-        let token = self.get_token(app_id, app_secret).await?;
-        let url = if query_params.is_empty() {
-            format!("{}{}?access_token={}", WECHAT_API_BASE, path, token)
-        } else {
-            format!(
-                "{}{}?access_token={}&{}",
-                WECHAT_API_BASE, path, token, query_params
-            )
-        };
-        let json: serde_json::Value = self.http.get(&url).send().await?.json().await?;
-        check_error(&json)?;
-        Ok(json)
+        for attempt in 0..2 {
+            let token = self.get_token(app_id, app_secret).await?;
+            let url = if query_params.is_empty() {
+                format!("{}{}?access_token={}", WECHAT_API_BASE, path, token)
+            } else {
+                format!(
+                    "{}{}?access_token={}&{}",
+                    WECHAT_API_BASE, path, token, query_params
+                )
+            };
+            let json: serde_json::Value = self.http.get(&url).send().await?.json().await?;
+            if is_token_error(&json) && attempt == 0 {
+                tracing::warn!("WeChat 40001 on GET {}, forcing token refresh", path);
+                self.invalidate_token(app_id);
+                continue;
+            }
+            check_error(&json)?;
+            return Ok(json);
+        }
+        unreachable!()
     }
 
     /// POST JSON body with auto-injected access_token.
+    /// Auto-retries once on errcode 40001 (invalid token) by forcing a token refresh.
     pub async fn api_post(
         &self,
         app_id: &str,
@@ -138,11 +148,26 @@ impl WeChatClient {
         path: &str,
         body: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let token = self.get_token(app_id, app_secret).await?;
-        let url = format!("{}{}?access_token={}", WECHAT_API_BASE, path, token);
-        let json: serde_json::Value = self.http.post(&url).json(body).send().await?.json().await?;
-        check_error(&json)?;
-        Ok(json)
+        for attempt in 0..2 {
+            let token = self.get_token(app_id, app_secret).await?;
+            let url = format!("{}{}?access_token={}", WECHAT_API_BASE, path, token);
+            let json: serde_json::Value = self.http.post(&url).json(body).send().await?.json().await?;
+            if is_token_error(&json) && attempt == 0 {
+                tracing::warn!("WeChat 40001 on POST {}, forcing token refresh", path);
+                self.invalidate_token(app_id);
+                continue;
+            }
+            check_error(&json)?;
+            return Ok(json);
+        }
+        unreachable!()
+    }
+
+    /// Force-invalidate the cached token for a given app_id.
+    /// The next get_token() call will fetch a fresh one from WeChat.
+    fn invalidate_token(&self, app_id: &str) {
+        let mut guard = self.tokens.blocking_lock();
+        guard.remove(app_id);
     }
 
     /// Download bytes from a URL. Size capped at 10 MB.
@@ -206,6 +231,13 @@ impl WeChatClient {
         check_error(&json)?;
         Ok(json)
     }
+}
+
+/// Check if the response indicates an invalid/expired access_token (errcode 40001 or 42001).
+fn is_token_error(json: &serde_json::Value) -> bool {
+    json.get("errcode")
+        .and_then(|v| v.as_i64())
+        .is_some_and(|code| code == 40001 || code == 42001)
 }
 
 /// Check for `errcode != 0` in a WeChat JSON response.
