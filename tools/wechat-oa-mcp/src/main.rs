@@ -1605,9 +1605,11 @@ fn main() -> Result<()> {
         )
         .init();
 
-    // Build a runtime with 32MB thread stack — the default 2MB overflows
-    // with 55 tool handlers' large async state machines.
-    let rt = tokio::runtime::Builder::new_current_thread()
+    // Build a multi-threaded runtime with 32MB worker stack — the default
+    // 2MB overflows with 55 tool handlers' large async state machines.
+    // rmcp internally uses tokio::spawn for tool dispatch, so we need
+    // a multi-threaded runtime (new_current_thread won't work).
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(32 * 1024 * 1024)
         .build()?;
