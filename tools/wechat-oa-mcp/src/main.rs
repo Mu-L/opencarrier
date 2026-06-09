@@ -431,28 +431,6 @@ define_params!(DatacubeParams {
 //  MCP Server                                                         //
 // ================================================================== //
 
-/// Macro to generate datacube handler methods with identical body structure.
-/// Eliminates ~300 lines of boilerplate for the 17 datacube endpoints.
-macro_rules! datacube_handler {
-    ($name:ident, $path:expr, $desc:literal) => {
-        #[tool(description = $desc)]
-        async fn $name(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
-            let body = serde_json::json!({
-                "begin_date": params.begin_date,
-                "end_date": params.end_date
-            });
-            match self
-                .client
-                .api_post(&params.app_id, &params.app_secret, $path, &body)
-                .await
-            {
-                Ok(resp) => json_to_string(&resp),
-                Err(e) => error_response(&e),
-            }
-        }
-    };
-}
-
 #[derive(Clone)]
 struct WeChatOaServer {
     client: Arc<WeChatClient>,
@@ -1339,23 +1317,106 @@ impl WeChatOaServer {
 
     // ---- Data statistics (datacube) ----
 
-    datacube_handler!(get_user_summary, "/datacube/getusersummary", "Get user growth summary (datacube). Max date range: 7 days.");
-    datacube_handler!(get_user_cumulate, "/datacube/getusercumulate", "Get cumulative user count (datacube). Max date range: 7 days.");
-    datacube_handler!(get_article_summary, "/datacube/getarticletotaldetail", "Get article total detail stats (datacube). Replaces the deprecated getarticlesummary and getarticletotal. Max date range: 1 day.");
-    datacube_handler!(get_user_read, "/datacube/getarticleread", "Get article read analytics (datacube). Replaces the deprecated getuserread. Max date range: 3 days.");
-    datacube_handler!(get_user_read_hour, "/datacube/getarticlereadhour", "Get article read hourly analytics (datacube). Replaces the deprecated getuserreadhour. Returns hourly breakdown. Max date range: 1 day.");
-    datacube_handler!(get_user_share, "/datacube/getarticleshare", "Get article share analytics (datacube). Replaces the deprecated getusershare. Max date range: 7 days.");
-    datacube_handler!(get_user_share_hour, "/datacube/getarticlesharehour", "Get article share hourly analytics (datacube). Replaces the deprecated getusersharehour. Returns hourly breakdown. Max date range: 1 day.");
-    datacube_handler!(get_upstream_msg, "/datacube/getupstreammsg", "Get upstream message stats (datacube). Max date range: 7 days.");
-    datacube_handler!(get_upstream_msg_week, "/datacube/getupstreammsgweek", "Get upstream message weekly stats (datacube). Max date range: 30 days.");
-    datacube_handler!(get_upstream_msg_month, "/datacube/getupstreammsgmonth", "Get upstream message monthly stats (datacube). Max date range: 30 days.");
-    datacube_handler!(get_upstream_msg_dist, "/datacube/getupstreammsgdist", "Get upstream message distribution stats (datacube). Max date range: 15 days.");
-    datacube_handler!(get_upstream_msg_dist_week, "/datacube/getupstreammsgdistweek", "Get upstream message weekly distribution stats (datacube). Max date range: 30 days.");
-    datacube_handler!(get_upstream_msg_dist_month, "/datacube/getupstreammsgdistmonth", "Get upstream message monthly distribution stats (datacube). Max date range: 30 days.");
-    datacube_handler!(get_upstream_msg_hour, "/datacube/getupstreammsghour", "Get upstream message hourly stats (datacube). Max date range: 1 day.");
-    datacube_handler!(get_interface_summary, "/datacube/getinterfacesummary", "Get interface summary stats (datacube). Max date range: 30 days.");
-    datacube_handler!(get_interface_summary_hour, "/datacube/getinterfacesummaryhour", "Get interface summary hourly stats (datacube). Max date range: 1 day.");
-    datacube_handler!(get_biz_summary, "/datacube/getbizsummary", "Get business summary (datacube). Max date range: 7 days.");
+    /// Helper: execute a datacube API call with standard begin_date/end_date body.
+    async fn datacube_get(
+        &self,
+        params: &DatacubeParams,
+        path: &str,
+    ) -> String {
+        let body = serde_json::json!({
+            "begin_date": params.begin_date,
+            "end_date": params.end_date
+        });
+        match self.client.api_post(&params.app_id, &params.app_secret, path, &body).await {
+            Ok(resp) => json_to_string(&resp),
+            Err(e) => error_response(&e),
+        }
+    }
+
+    #[tool(description = "Get user growth summary (datacube). Max date range: 7 days.")]
+    async fn get_user_summary(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getusersummary").await
+    }
+
+    #[tool(description = "Get cumulative user count (datacube). Max date range: 7 days.")]
+    async fn get_user_cumulate(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getusercumulate").await
+    }
+
+    #[tool(description = "Get article total detail stats (datacube). Max date range: 1 day.")]
+    async fn get_article_summary(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getarticletotaldetail").await
+    }
+
+    #[tool(description = "Get article read analytics (datacube). Max date range: 3 days.")]
+    async fn get_user_read(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getarticleread").await
+    }
+
+    #[tool(description = "Get article read hourly analytics (datacube). Max date range: 1 day.")]
+    async fn get_user_read_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getarticlereadhour").await
+    }
+
+    #[tool(description = "Get article share analytics (datacube). Max date range: 7 days.")]
+    async fn get_user_share(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getarticleshare").await
+    }
+
+    #[tool(description = "Get article share hourly analytics (datacube). Max date range: 1 day.")]
+    async fn get_user_share_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getarticlesharehour").await
+    }
+
+    #[tool(description = "Get upstream message stats (datacube). Max date range: 7 days.")]
+    async fn get_upstream_msg(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getupstreammsg").await
+    }
+
+    #[tool(description = "Get upstream message weekly stats (datacube). Max date range: 30 days.")]
+    async fn get_upstream_msg_week(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getupstreammsgweek").await
+    }
+
+    #[tool(description = "Get upstream message monthly stats (datacube). Max date range: 30 days.")]
+    async fn get_upstream_msg_month(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getupstreammsgmonth").await
+    }
+
+    #[tool(description = "Get upstream message distribution stats (datacube). Max date range: 15 days.")]
+    async fn get_upstream_msg_dist(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getupstreammsgdist").await
+    }
+
+    #[tool(description = "Get upstream message weekly distribution stats (datacube). Max date range: 30 days.")]
+    async fn get_upstream_msg_dist_week(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getupstreammsgdistweek").await
+    }
+
+    #[tool(description = "Get upstream message monthly distribution stats (datacube). Max date range: 30 days.")]
+    async fn get_upstream_msg_dist_month(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getupstreammsgdistmonth").await
+    }
+
+    #[tool(description = "Get upstream message hourly stats (datacube). Max date range: 1 day.")]
+    async fn get_upstream_msg_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getupstreammsghour").await
+    }
+
+    #[tool(description = "Get interface summary stats (datacube). Max date range: 30 days.")]
+    async fn get_interface_summary(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getinterfacesummary").await
+    }
+
+    #[tool(description = "Get interface summary hourly stats (datacube). Max date range: 1 day.")]
+    async fn get_interface_summary_hour(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getinterfacesummaryhour").await
+    }
+
+    #[tool(description = "Get business summary (datacube). Max date range: 7 days.")]
+    async fn get_biz_summary(&self, Parameters(params): Parameters<DatacubeParams>) -> String {
+        self.datacube_get(&params, "/datacube/getbizsummary").await
+    }
 
 }
 
