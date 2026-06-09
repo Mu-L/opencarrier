@@ -3,16 +3,6 @@
 //! Each tool call carries its own `app_id` / `app_secret`, allowing a single
 //! MCP server process to serve multiple WeChat Official Accounts
 //! simultaneously.  Access tokens are cached per `app_id` and auto-refreshed.
-//!
-//! ## Token refresh deduplication
-//!
-//! WeChat access_tokens are globally unique — each call to `cgi-bin/token`
-//! invalidates the previous token. When multiple agent loops share the same
-//! app_id, concurrent refreshes would invalidate each other's tokens (40001).
-//!
-//! We prevent this by tracking in-flight refresh requests: the first caller
-//! performs the actual HTTP request; concurrent callers for the same app_id
-//! wait for the in-flight request to complete and reuse its result.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -35,10 +25,8 @@ const TOKEN_EXPIRY_MARGIN: Duration = Duration::from_secs(300);
 #[derive(Clone)]
 pub struct WeChatClient {
     http: reqwest::Client,
-    /// app_id → cached token
+    /// app_id → (access_token, expires_at)
     tokens: Arc<Mutex<HashMap<String, CachedToken>>>,
-    /// app_id → in-flight refresh handle (dedup)
-    in_flight: Arc<Mutex<HashMap<String, Arc<tokio::sync::Notify>>>>,
 }
 
 struct CachedToken {
@@ -68,15 +56,10 @@ impl WeChatClient {
         Self {
             http: reqwest::Client::new(),
             tokens: Arc::new(Mutex::new(HashMap::new())),
-            in_flight: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     /// Obtain a valid access_token for the given account, refreshing when needed.
-    ///
-    /// Uses deduplication: if a refresh is already in-flight for this app_id,
-    /// subsequent callers wait for it instead of firing a second request
-    /// (which would invalidate the first token — WeChat's global uniqueness).
     pub async fn get_token(&self, app_id: &str, app_secret: &str) -> Result<String> {
         // Fast path — cached and not about to expire AND secret unchanged.
         {
@@ -90,63 +73,7 @@ impl WeChatClient {
             }
         }
 
-        // Dedup: check if a refresh is already in-flight for this app_id.
-        let notify = {
-            let mut guard = self.in_flight.lock().await;
-            if let Some(existing) = guard.get(app_id) {
-                // Another caller is refreshing — wait for it.
-                existing.clone()
-            } else {
-                // We are the first — register ourselves.
-                let notify = Arc::new(tokio::sync::Notify::new());
-                guard.insert(app_id.to_string(), notify.clone());
-                notify
-            }
-        };
-
-        // If we're NOT the first caller, wait for the in-flight refresh.
-        // Then check the cache again — the first caller should have populated it.
-        let is_first = {
-            let guard = self.in_flight.lock().await;
-            guard.get(app_id).map(|n| Arc::ptr_eq(&notify, n)).unwrap_or(false)
-        };
-
-        if !is_first {
-            // Wait for the in-flight refresh to complete.
-            notify.notified().await;
-
-            // Check cache — the first caller should have populated it.
-            let guard = self.tokens.lock().await;
-            if let Some(cached) = guard.get(app_id) {
-                if cached.secret == app_secret
-                    && cached.expires_at > Instant::now() + TOKEN_EXPIRY_MARGIN
-                {
-                    return Ok(cached.access_token.clone());
-                }
-            }
-            // Cache still not valid (unlikely) — fall through to refresh ourselves.
-            // Re-register as the first caller.
-            let mut guard = self.in_flight.lock().await;
-            let notify = Arc::new(tokio::sync::Notify::new());
-            guard.insert(app_id.to_string(), notify.clone());
-            // Continue to the slow path below.
-        }
-
-        // Slow path — hit the WeChat API (only one caller reaches here per app_id).
-        let result = self.refresh_token(app_id, app_secret).await;
-
-        // Remove in-flight marker and notify waiters.
-        {
-            let mut guard = self.in_flight.lock().await;
-            guard.remove(app_id);
-        }
-        notify.notify_waiters();
-
-        result
-    }
-
-    /// Actually call the WeChat API to get a fresh token.
-    async fn refresh_token(&self, app_id: &str, app_secret: &str) -> Result<String> {
+        // Slow path — hit the WeChat API.
         let url = format!(
             "{}/cgi-bin/token?grant_type=client_credential&appid={}&secret={}",
             WECHAT_API_BASE, app_id, app_secret
