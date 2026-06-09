@@ -567,6 +567,9 @@ impl McpConnection {
         if let Ok(path) = std::env::var("PATH") {
             cmd.env("PATH", path);
         }
+        // Increase stack for Rust MCP servers (default 8MB can overflow with
+        // large async state machines, e.g. wechat-oa-mcp with 55 tools).
+        cmd.env("RUST_MIN_STACK", "16777216"); // 16 MB
         // On Windows, npm/node need APPDATA, USERPROFILE, LOCALAPPDATA, and SystemRoot
         if cfg!(windows) {
             for var in &[
