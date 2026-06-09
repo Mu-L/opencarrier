@@ -578,7 +578,7 @@ async fn tool_image_generate(
     home_dir: Option<&Path>,
     agent_name: Option<&str>,
     _owner_id: Option<&str>,
-    _sender_id: Option<&str>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let brain = brain.ok_or("Brain not available. Ensure image modality is configured.")?;
     let prompt = input["prompt"]
@@ -663,10 +663,9 @@ async fn tool_image_generate(
 
     // Save images to workspace output directory if available
     let saved_paths = if let (Some(hd), Some(an)) = (home_dir, agent_name) {
-        // Use workspaces/{agent_name}/output for simpler path structure
-        // This path is accessible by MCP tools running from /home/ubuntu/.opencarrier
-        let rel_dir = format!("workspaces/{}/output", an);
-        let output_dir = hd.join(&rel_dir);
+        // Use workspaces/{agent_name}/{sender}/output for per-sender isolation
+        let sid = sender_id.unwrap_or("shared");
+        let output_dir = types::config::sender_data_dir(hd, sid, an, None).join("output");
         tokio::fs::create_dir_all(&output_dir)
             .await
             .map_err(|e| format!("Failed to create output dir: {e}"))?;
@@ -707,7 +706,7 @@ async fn tool_image_generate(
                 .await
                 .map_err(|e| format!("Failed to write image: {e}"))?;
 
-            paths.push(format!("{}/{}", rel_dir, filename));
+            paths.push(output_dir.join(&filename).to_string_lossy().to_string());
         }
         paths
     } else {

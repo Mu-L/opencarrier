@@ -1,6 +1,7 @@
 //! Migrations:
 //! 1. `plugins/{platform}/bot/<uuid>/bot.toml` → `{platform}-sessions/<id>.json` (legacy)
 //! 2. `{platform}-sessions/<id>.json` → `senders/{sender_id}/session.json` (current)
+//! 3. `senders/{owner}/{agent}/` → `workspaces/{agent}/{owner}/` (current)
 
 use std::path::Path;
 use tracing::{info, warn};
@@ -271,5 +272,164 @@ fn migrate_platform(home_dir: &Path, platform: &str) {
             count = migrated,
             "Migration complete: converted bot.toml files to session files"
         );
+    }
+}
+
+/// Migrate agent-per-sender data from `senders/{owner}/{agent}/` to `workspaces/{agent}/{owner}/`.
+///
+/// Sender personal data (`senders/{sender_id}/session.json`, `config.json`) is NOT moved.
+/// Only subdirectories that contain agent data (sessions/, output/, input/, memory/,
+/// knowledge/, profile.json) are migrated.
+///
+/// Idempotent — skips if `.sender-data-migrated` marker exists or target already exists.
+pub fn migrate_sender_data_to_workspaces(home_dir: &Path) {
+    let marker = home_dir.join("senders").join(".sender-data-migrated");
+    if marker.exists() {
+        return;
+    }
+
+    let senders_dir = home_dir.join("senders");
+    if !senders_dir.exists() {
+        return;
+    }
+
+    // Known agent data subdirectories/files that indicate an agent data directory
+    let agent_data_indicators = [
+        "sessions",
+        "output",
+        "input",
+        "memory",
+        "knowledge",
+        "profile.json",
+    ];
+
+    let mut migrated = 0usize;
+    let owner_entries = match std::fs::read_dir(&senders_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for owner_entry in owner_entries.flatten() {
+        if !owner_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let owner_id = owner_entry.file_name().to_string_lossy().to_string();
+        let owner_dir = owner_entry.path();
+
+        // Scan subdirectories of senders/{owner_id}/
+        let agent_entries = match std::fs::read_dir(&owner_dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for agent_entry in agent_entries.flatten() {
+            if !agent_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let agent_name = agent_entry.file_name().to_string_lossy().to_string();
+            let agent_dir = agent_entry.path();
+
+            // Check if this looks like agent data (has known subdirs)
+            let is_agent_data = agent_data_indicators.iter().any(|indicator| {
+                agent_dir.join(indicator).exists()
+            });
+
+            if !is_agent_data {
+                continue;
+            }
+
+            // Target: workspaces/{agent_name}/{owner_id}/
+            let target_dir = home_dir
+                .join("workspaces")
+                .join(&agent_name)
+                .join(&owner_id);
+
+            // Skip if target already exists (partial migration)
+            if target_dir.exists() {
+                // Move remaining items from source to target
+                move_dir_contents(&agent_dir, &target_dir);
+                // Try to remove source dir if empty
+                let _ = std::fs::remove_dir(&agent_dir);
+                migrated += 1;
+                continue;
+            }
+
+            if let Err(e) = std::fs::create_dir_all(&target_dir) {
+                warn!(
+                    dir = %target_dir.display(),
+                    "Migration: failed to create target dir: {e}"
+                );
+                continue;
+            }
+
+            move_dir_contents(&agent_dir, &target_dir);
+
+            // Try to remove source dir if empty
+            let _ = std::fs::remove_dir(&agent_dir);
+
+            info!(
+                owner = %owner_id,
+                agent = %agent_name,
+                "Migrated senders/{{owner}}/{{agent}} -> workspaces/{{agent}}/{{owner}}"
+            );
+            migrated += 1;
+        }
+    }
+
+    if migrated > 0 {
+        info!(
+            count = migrated,
+            "Migration complete: moved sender agent data to workspaces/"
+        );
+    }
+
+    // Write marker to prevent re-running
+    if let Err(e) = std::fs::write(&marker, "") {
+        warn!(path = %marker.display(), "Migration: failed to write marker: {e}");
+    }
+}
+
+/// Move all contents from `src_dir` into `dst_dir`, preserving subdirectory structure.
+fn move_dir_contents(src_dir: &Path, dst_dir: &Path) {
+    let entries = match std::fs::read_dir(src_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let src_path = entry.path();
+        let file_name = entry.file_name();
+        let dst_path = dst_dir.join(&file_name);
+
+        if src_path.is_dir() {
+            // Create target subdirectory if needed
+            if !dst_path.exists() {
+                if let Err(e) = std::fs::create_dir_all(&dst_path) {
+                    warn!(path = %dst_path.display(), "Migration: failed to create dir: {e}");
+                    continue;
+                }
+            }
+            // Recursively move contents
+            move_dir_contents(&src_path, &dst_path);
+            // Remove now-empty source dir
+            let _ = std::fs::remove_dir(&src_path);
+        } else {
+            // Skip if target already exists
+            if dst_path.exists() {
+                continue;
+            }
+            if let Err(e) = std::fs::rename(&src_path, &dst_path) {
+                // rename may fail across filesystems; fall back to copy+delete
+                if let Err(e2) = std::fs::copy(&src_path, &dst_path) {
+                    warn!(
+                        src = %src_path.display(),
+                        dst = %dst_path.display(),
+                        "Migration: copy failed: {e2} (rename also failed: {e})"
+                    );
+                    continue;
+                }
+                let _ = std::fs::remove_file(&src_path);
+            }
+        }
     }
 }

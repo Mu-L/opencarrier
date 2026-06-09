@@ -15,6 +15,7 @@ pub fn is_internal_path(rel: &str) -> bool {
         || rel.starts_with("skills/")
         || rel.starts_with("sessions/")
         || rel.starts_with("senders/")
+        || rel.starts_with("workspaces/")
         || rel.starts_with("data/")
 }
 
