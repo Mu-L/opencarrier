@@ -1785,7 +1785,8 @@ fn extract_thinking_summary(thinking: &str) -> String {
     if let Some(last) = paragraphs.last() {
         let trimmed = last.trim();
         if trimmed.len() > 200 {
-            format!("{}...", &trimmed[..200])
+            let end = trimmed.char_indices().take_while(|(i, _)| *i < 200).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(0);
+            format!("{}...", &trimmed[..end])
         } else {
             trimmed.to_string()
         }
