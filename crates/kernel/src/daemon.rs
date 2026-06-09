@@ -4,12 +4,129 @@
 
 use types::agent::{AgentId, AgentState, ScheduleMode};
 use types::event::*;
+use types::scheduler::CronJob;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::kernel::CarrierKernel;
 
 // ── Cron delivery helper ───────────────────────────────────
+
+/// Fire a single cron job (system event or agent turn), recording success/failure.
+pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
+    let job_id = job.id;
+    let agent_id = job.agent_id;
+    let job_name = job.name.clone();
+
+    match &job.action {
+        types::scheduler::CronAction::SystemEvent { text } => {
+            tracing::debug!(job = %job_name, "Cron: firing system event");
+            let payload_bytes = serde_json::to_vec(&serde_json::json!({
+                "type": format!("cron.{}", job_name),
+                "text": text,
+                "job_id": job_id.to_string(),
+            }))
+            .unwrap_or_default();
+            let event = Event::new(
+                AgentId::new(),
+                EventTarget::Broadcast,
+                EventPayload::Custom(payload_bytes),
+            );
+            kernel.publish_event(event).await;
+            kernel.cron_scheduler.record_success(job_id);
+        }
+        types::scheduler::CronAction::AgentTurn {
+            message,
+            timeout_secs,
+            ..
+        } => {
+            tracing::debug!(job = %job_name, agent = %agent_id, "Cron: firing agent turn");
+            let timeout_s = timeout_secs.unwrap_or(120);
+            let timeout = std::time::Duration::from_secs(timeout_s);
+            let delivery = job.delivery.clone();
+            let owner_id = job.owner_id.clone();
+            let kh: std::sync::Arc<dyn runtime::kernel_handle::KernelHandle> =
+                kernel.clone();
+            match tokio::time::timeout(
+                timeout,
+                kernel.send_message_with_handle(
+                    agent_id,
+                    message,
+                    Some(kh),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(result)) => {
+                    match cron_deliver_response(
+                        kernel,
+                        agent_id,
+                        owner_id.as_deref(),
+                        &result.response,
+                        &delivery,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            tracing::info!(job = %job_name, "Cron job completed successfully");
+                            kernel.cron_scheduler.record_success(job_id);
+                        }
+                        Err(e) => {
+                            tracing::warn!(job = %job_name, error = %e, "Cron job delivery failed");
+                            kernel.cron_scheduler.record_failure(job_id, &e);
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    let err_msg = format!("{e}");
+                    tracing::warn!(job = %job_name, error = %err_msg, "Cron job failed");
+                    kernel.cron_scheduler.record_failure(job_id, &err_msg);
+                    let notice = format!(
+                        "⚠️ 定时任务「{}」执行失败：{}",
+                        job_name, err_msg
+                    );
+                    if let Err(de) = cron_deliver_response(
+                        kernel,
+                        agent_id,
+                        owner_id.as_deref(),
+                        &notice,
+                        &delivery,
+                    )
+                    .await
+                    {
+                        tracing::warn!(job = %job_name, error = %de, "Failure-notice delivery failed");
+                    }
+                }
+                Err(_) => {
+                    tracing::warn!(job = %job_name, timeout_s, "Cron job timed out");
+                    kernel.cron_scheduler.record_failure(
+                        job_id,
+                        &format!("timed out after {timeout_s}s"),
+                    );
+                    let notice = format!(
+                        "⚠️ 定时任务「{}」执行超时（{}秒未完成）",
+                        job_name, timeout_s
+                    );
+                    if let Err(de) = cron_deliver_response(
+                        kernel,
+                        agent_id,
+                        owner_id.as_deref(),
+                        &notice,
+                        &delivery,
+                    )
+                    .await
+                    {
+                        tracing::warn!(job = %job_name, error = %de, "Timeout-notice delivery failed");
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// Deliver a cron job's agent response to the configured delivery target.
 ///
@@ -472,117 +589,24 @@ impl CarrierKernel {
                     let due = kernel.cron_scheduler.due_jobs();
                     for job in due {
                         let job_id = job.id;
-                        let agent_id = job.agent_id;
                         let job_name = job.name.clone();
 
-                        match &job.action {
-                            types::scheduler::CronAction::SystemEvent { text } => {
-                                tracing::debug!(job = %job_name, "Cron: firing system event");
-                                let payload_bytes = serde_json::to_vec(&serde_json::json!({
-                                    "type": format!("cron.{}", job_name),
-                                    "text": text,
-                                    "job_id": job_id.to_string(),
-                                }))
-                                .unwrap_or_default();
-                                let event = Event::new(
-                                    AgentId::new(),
-                                    EventTarget::Broadcast,
-                                    EventPayload::Custom(payload_bytes),
-                                );
-                                kernel.publish_event(event).await;
-                                kernel.cron_scheduler.record_success(job_id);
+                        // Guard: if one job panics, don't kill the entire tick loop.
+                        // Spawn each job in its own task so panics are isolated.
+                        let k = Arc::clone(&kernel);
+                        let handle = tokio::spawn(async move {
+                            cron_fire_job(&k, job).await;
+                        });
+                        if let Err(join_error) = handle.await {
+                            if join_error.is_panic() {
+                                tracing::error!(job = %job_name, "Cron job task panicked");
+                            } else {
+                                tracing::error!(job = %job_name, "Cron job task cancelled");
                             }
-                            types::scheduler::CronAction::AgentTurn {
-                                message,
-                                timeout_secs,
-                                ..
-                            } => {
-                                tracing::debug!(job = %job_name, agent = %agent_id, "Cron: firing agent turn");
-                                let timeout_s = timeout_secs.unwrap_or(120);
-                                let timeout = std::time::Duration::from_secs(timeout_s);
-                                let delivery = job.delivery.clone();
-                                let owner_id = job.owner_id.clone();
-                                let kh: std::sync::Arc<
-                                    dyn runtime::kernel_handle::KernelHandle,
-                                > = kernel.clone();
-                                match tokio::time::timeout(
-                                    timeout,
-                                    kernel.send_message_with_handle(
-                                        agent_id,
-                                        message,
-                                        Some(kh),
-                                        None,
-                                        None,
-                                        None,
-                                        None,
-                                    ),
-                                )
-                                .await
-                                {
-                                    Ok(Ok(result)) => {
-                                        match cron_deliver_response(
-                                            &kernel,
-                                            agent_id,
-                                            owner_id.as_deref(),
-                                            &result.response,
-                                            &delivery,
-                                        )
-                                        .await
-                                        {
-                                            Ok(()) => {
-                                                tracing::info!(job = %job_name, "Cron job completed successfully");
-                                                kernel.cron_scheduler.record_success(job_id);
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!(job = %job_name, error = %e, "Cron job delivery failed");
-                                                kernel.cron_scheduler.record_failure(job_id, &e);
-                                            }
-                                        }
-                                    }
-                                    Ok(Err(e)) => {
-                                        let err_msg = format!("{e}");
-                                        tracing::warn!(job = %job_name, error = %err_msg, "Cron job failed");
-                                        kernel.cron_scheduler.record_failure(job_id, &err_msg);
-                                        let notice = format!(
-                                            "⚠️ 定时任务「{}」执行失败：{}",
-                                            job_name, err_msg
-                                        );
-                                        if let Err(de) = cron_deliver_response(
-                                            &kernel,
-                                            agent_id,
-                                            owner_id.as_deref(),
-                                            &notice,
-                                            &delivery,
-                                        )
-                                        .await
-                                        {
-                                            tracing::warn!(job = %job_name, error = %de, "Failure-notice delivery failed");
-                                        }
-                                    }
-                                    Err(_) => {
-                                        tracing::warn!(job = %job_name, timeout_s, "Cron job timed out");
-                                        kernel.cron_scheduler.record_failure(
-                                            job_id,
-                                            &format!("timed out after {timeout_s}s"),
-                                        );
-                                        let notice = format!(
-                                            "⚠️ 定时任务「{}」执行超时（{}秒未完成）",
-                                            job_name, timeout_s
-                                        );
-                                        if let Err(de) = cron_deliver_response(
-                                            &kernel,
-                                            agent_id,
-                                            owner_id.as_deref(),
-                                            &notice,
-                                            &delivery,
-                                        )
-                                        .await
-                                        {
-                                            tracing::warn!(job = %job_name, error = %de, "Timeout-notice delivery failed");
-                                        }
-                                    }
-                                }
-                            }
+                            kernel.cron_scheduler.record_failure(
+                                job_id,
+                                "agent turn panicked",
+                            );
                         }
                     }
 

@@ -335,23 +335,34 @@ impl CronScheduler {
     /// Increments the consecutive error counter. If it reaches
     /// [`MAX_CONSECUTIVE_ERRORS`], the job is automatically disabled.
     pub fn record_failure(&self, id: CronJobId, error_msg: &str) {
-        if let Some(mut meta) = self.jobs.get_mut(&id) {
-            meta.job.last_run = Some(Utc::now());
-            meta.last_status = Some(format!(
-                "error: {}",
-                types::truncate_str(error_msg, 256)
-            ));
-            meta.consecutive_errors += 1;
-            if meta.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                warn!(
-                    job_id = %id,
-                    errors = meta.consecutive_errors,
-                    "Auto-disabling cron job after repeated failures"
-                );
-                meta.job.enabled = false;
+        // one_shot jobs are removed on first completion (success or failure)
+        // to prevent duplicate work, especially in pipeline chains.
+        let should_remove = {
+            if let Some(mut meta) = self.jobs.get_mut(&id) {
+                meta.job.last_run = Some(Utc::now());
+                meta.last_status = Some(format!(
+                    "error: {}",
+                    types::truncate_str(error_msg, 256)
+                ));
+                meta.consecutive_errors += 1;
+                if meta.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                    warn!(
+                        job_id = %id,
+                        errors = meta.consecutive_errors,
+                        "Auto-disabling cron job after repeated failures"
+                    );
+                    meta.job.enabled = false;
+                } else if !meta.one_shot {
+                    meta.job.next_run =
+                        Some(compute_next_run_after(&meta.job.schedule, Utc::now()));
+                }
+                meta.one_shot
             } else {
-                meta.job.next_run = Some(compute_next_run_after(&meta.job.schedule, Utc::now()));
+                return;
             }
+        };
+        if should_remove {
+            self.jobs.remove(&id);
         }
     }
 }
