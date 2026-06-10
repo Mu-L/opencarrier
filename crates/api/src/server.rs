@@ -254,6 +254,8 @@ pub async fn run_daemon(
         crate::migration::migrate_sessions_to_senders(&kernel.config.home_dir);
         // Migrate senders/{owner}/{agent}/ → workspaces/{agent}/{owner}/
         crate::migration::migrate_sender_data_to_workspaces(&kernel.config.home_dir);
+        // Migrate workspaces/{agent}/{sender}/ → workspaces/{agent}/senders/{sender}/
+        crate::migration::migrate_sender_data_to_senders_dir(&kernel.config.home_dir);
 
         // Register channel adapters from independent crates
         cm.register("feishu", Box::new(channel_feishu::SessionWatcher::new()));

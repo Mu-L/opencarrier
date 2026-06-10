@@ -552,11 +552,10 @@ impl PluginBridgeManager {
             _ => return None,
         };
 
-        let base_dir = self.kernel.resolve_agent_workspace(agent_id)
-            .map(std::path::PathBuf::from)
-            .or_else(|| self.kernel.home_dir());
-        let base = match base_dir {
-            Some(b) => b,
+        // sender_relative_path returns a home_dir-relative path (e.g. "workspaces/{agent}/senders/{sender}/input"),
+        // so we must use home_dir as the base, NOT the workspace root, to avoid double-nesting.
+        let base = match self.kernel.home_dir() {
+            Some(b) => b.to_path_buf(),
             None => return None,
         };
 

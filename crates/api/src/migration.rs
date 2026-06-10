@@ -1,7 +1,8 @@
 //! Migrations:
 //! 1. `plugins/{platform}/bot/<uuid>/bot.toml` → `{platform}-sessions/<id>.json` (legacy)
 //! 2. `{platform}-sessions/<id>.json` → `senders/{sender_id}/session.json` (current)
-//! 3. `senders/{owner}/{agent}/` → `workspaces/{agent}/{owner}/` (current)
+//! 3. `senders/{owner}/{agent}/` → `workspaces/{agent}/{owner}/` (completed)
+//! 4. `workspaces/{agent}/{sender}/` → `workspaces/{agent}/senders/{sender}/` (current)
 
 use std::path::Path;
 use tracing::{info, warn};
@@ -272,6 +273,168 @@ fn migrate_platform(home_dir: &Path, platform: &str) {
             count = migrated,
             "Migration complete: converted bot.toml files to session files"
         );
+    }
+}
+
+/// Migrate per-sender data from `workspaces/{agent}/{sender}/` to `workspaces/{agent}/senders/{sender}/`.
+///
+/// This also cleans up two legacy path issues:
+/// - Old `senders/{sender}/{agent}/` nesting (extra agent name layer) is flattened into `senders/{sender}/`.
+/// - Double-nested `workspaces/{agent}/workspaces/{agent}/{sender}/` directories are merged in.
+///
+/// Idempotent — skips if `.sender-senders-migrated` marker exists.
+pub fn migrate_sender_data_to_senders_dir(home_dir: &Path) {
+    let marker = home_dir.join("workspaces").join(".sender-senders-migrated");
+    if marker.exists() {
+        return;
+    }
+
+    let workspaces_dir = home_dir.join("workspaces");
+    if !workspaces_dir.exists() {
+        return;
+    }
+
+    let agent_data_indicators = [
+        "sessions",
+        "output",
+        "input",
+        "memory",
+        "knowledge",
+        "profile.json",
+    ];
+
+    let mut migrated = 0usize;
+    let workspace_entries = match std::fs::read_dir(&workspaces_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for agent_entry in workspace_entries.flatten() {
+        if !agent_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let agent_name = agent_entry.file_name().to_string_lossy().to_string();
+        let agent_dir = agent_entry.path();
+
+        // Skip if already has senders/ subdirectory and no flat sender dirs
+        let senders_dir = agent_dir.join("senders");
+        let has_senders_dir = senders_dir.exists();
+
+        // 1. Move flat sender dirs (e.g. workspaces/{agent}/o9cq80-xxx/) → senders/{sender}/
+        let entries = match std::fs::read_dir(&agent_dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let dirname = entry.file_name().to_string_lossy().to_string();
+
+            // Skip non-sender directories
+            if matches!(dirname.as_str(), "skills" | "knowledge" | "sessions" | "logs" | "history" | "data" | "senders" | "workspaces" | "output" | "input" | "memory" | "agents" | ".lifecycle" | "style" | "test" | "test-img" | "test-pipeline" | "test-quick" | "test-sender" | "test2" | "test3" | "test4" | "test5" | "articles") {
+                continue;
+            }
+
+            // Check if this looks like a sender data dir (has profile.json, sessions/, output/, etc.)
+            let entry_path = entry.path();
+            let is_sender_data = agent_data_indicators.iter().any(|indicator| {
+                entry_path.join(indicator).exists()
+            });
+
+            if !is_sender_data {
+                continue;
+            }
+
+            // Create senders/ if needed
+            if !has_senders_dir {
+                if let Err(e) = std::fs::create_dir_all(&senders_dir) {
+                    warn!(dir = %senders_dir.display(), "Migration: failed to create senders dir: {e}");
+                    continue;
+                }
+            }
+
+            // Move workspaces/{agent}/{sender}/ → workspaces/{agent}/senders/{sender}/
+            let target = senders_dir.join(&dirname);
+            if target.exists() {
+                // Target exists — merge contents
+                move_dir_contents(&entry_path, &target);
+                let _ = std::fs::remove_dir(&entry_path);
+            } else {
+                if let Err(e) = std::fs::rename(&entry_path, &target) {
+                    warn!(src = %entry_path.display(), dst = %target.display(), "Migration: rename failed: {e}");
+                    continue;
+                }
+            }
+
+            info!(agent = %agent_name, sender = %dirname, "Migrated workspaces/{{agent}}/{{sender}} -> workspaces/{{agent}}/senders/{{sender}}");
+            migrated += 1;
+        }
+
+        // 2. Flatten old senders/{sender}/{agent}/ → senders/{sender}/
+        if senders_dir.exists() {
+            let sender_entries = match std::fs::read_dir(&senders_dir) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            for sender_entry in sender_entries.flatten() {
+                if !sender_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let sender_path = sender_entry.path();
+
+                // Check for nested agent dir: senders/{sender}/{agent}/
+                let nested_agent = sender_path.join(&agent_name);
+                if nested_agent.exists() && nested_agent.is_dir() {
+                    move_dir_contents(&nested_agent, &sender_path);
+                    let _ = std::fs::remove_dir(&nested_agent);
+                    info!(agent = %agent_name, "Flattened senders/{{sender}}/{{agent}} -> senders/{{sender}}");
+                    migrated += 1;
+                }
+            }
+        }
+
+        // 3. Clean up double-nested workspaces/{agent}/workspaces/{agent}/{sender}/
+        let double_nested = agent_dir.join("workspaces").join(&agent_name);
+        if double_nested.exists() && double_nested.is_dir() {
+            if !senders_dir.exists() {
+                let _ = std::fs::create_dir_all(&senders_dir);
+            }
+            let nested_entries = match std::fs::read_dir(&double_nested) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for nested_entry in nested_entries.flatten() {
+                if !nested_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let nested_name = nested_entry.file_name().to_string_lossy().to_string();
+                let target = senders_dir.join(&nested_name);
+                if target.exists() {
+                    move_dir_contents(&nested_entry.path(), &target);
+                } else {
+                    let _ = std::fs::rename(nested_entry.path(), &target);
+                }
+                migrated += 1;
+            }
+            // Remove the now-empty double-nested dir tree
+            let _ = std::fs::remove_dir_all(agent_dir.join("workspaces"));
+            info!(agent = %agent_name, "Cleaned up double-nested workspaces/ dir");
+        }
+    }
+
+    if migrated > 0 {
+        info!(
+            count = migrated,
+            "Migration complete: moved sender data to senders/ subdirectories"
+        );
+    }
+
+    // Write marker
+    if let Err(e) = std::fs::write(&marker, "") {
+        warn!(path = %marker.display(), "Migration: failed to write marker: {e}");
     }
 }
 

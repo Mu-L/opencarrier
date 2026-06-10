@@ -1066,18 +1066,18 @@ pub fn home_dir() -> PathBuf {
 
 /// Resolve the per-sender-per-agent data directory under `workspaces/`.
 ///
-/// Returns `workspaces/{agent_name}/{owner_id}/` or
-/// `workspaces/{agent_name}/{owner_id}/users/{user_id}/` when user_id differs from owner_id.
+/// Returns `workspaces/{agent_name}/senders/{owner_id}/` or
+/// `workspaces/{agent_name}/senders/{owner_id}/users/{user_id}/` when user_id differs from owner_id.
 ///
 /// - `owner_id` is the route_key: for WeChat it's the openid, for WeCom/Feishu/DingTalk it's the bot_id/app_id/app_key.
 /// - `user_id` is the actual user identity from the platform message. When present and different
-///   from `owner_id`, the path becomes `workspaces/{agent_name}/{owner_id}/users/{user_id}/`
+///   from `owner_id`, the path becomes `workspaces/{agent_name}/senders/{owner_id}/users/{user_id}/`
 ///   (group users under a bot). When `None` or equal to `owner_id`, the path is
-///   `workspaces/{agent_name}/{owner_id}/` (the owner's own data).
+///   `workspaces/{agent_name}/senders/{owner_id}/` (the owner's own data).
 pub fn sender_data_dir(home_dir: &std::path::Path, owner_id: &str, agent_name: &str, user_id: Option<&str>) -> PathBuf {
     let safe_owner = sanitize_path_component(owner_id);
     let safe_agent = sanitize_path_component(agent_name);
-    let base = home_dir.join("workspaces").join(safe_agent).join(safe_owner);
+    let base = home_dir.join("workspaces").join(safe_agent).join("senders").join(safe_owner);
     match user_id {
         Some(uid) if uid != owner_id => base.join("users").join(sanitize_path_component(uid)),
         _ => base,
@@ -1086,12 +1086,12 @@ pub fn sender_data_dir(home_dir: &std::path::Path, owner_id: &str, agent_name: &
 
 /// Compute a home-relative path under `workspaces/` for a given subdir (input/output/memory).
 ///
-/// Returns a string like `workspaces/{agent_name}/{owner_id}/{subdir}` or
-/// `workspaces/{agent_name}/{owner_id}/users/{user_id}/{subdir}` when user_id differs from owner_id.
+/// Returns a string like `workspaces/{agent_name}/senders/{owner_id}/{subdir}` or
+/// `workspaces/{agent_name}/senders/{owner_id}/users/{user_id}/{subdir}` when user_id differs from owner_id.
 pub fn sender_relative_path(owner_id: &str, agent_name: &str, user_id: Option<&str>, subdir: &str) -> String {
     let safe_owner = sanitize_path_component(owner_id);
     let safe_agent = sanitize_path_component(agent_name);
-    let base = format!("workspaces/{}/{}", safe_agent, safe_owner);
+    let base = format!("workspaces/{}/senders/{}", safe_agent, safe_owner);
     match user_id {
         Some(uid) if uid != owner_id => format!("{}/users/{}/{}", base, sanitize_path_component(uid), subdir),
         _ => format!("{}/{}", base, subdir),
