@@ -1284,9 +1284,9 @@ impl UnifiedHttpDriver {
                 }
             }
 
-            // Strip temperature for reasoning models
-            if status == 400 && body.contains("temperature") && body.contains("unsupported_parameter")
-                && oai_request.temperature.is_some() && attempt < max_retries
+            // Strip temperature for reasoning/deprecated models
+            if status == 400 && oai_request.temperature.is_some() && attempt < max_retries
+                && (body.contains("temperature") && (body.contains("unsupported_parameter") || body.contains("deprecated")))
             {
                 warn!(model = %oai_request.model, "Stripping temperature for this model");
                 oai_request.temperature = None;
