@@ -98,8 +98,10 @@ define_params!(UploadMediaParams {
     media_type: String,
     #[schemars(description = "Filename (e.g. cover.jpg)")]
     filename: String,
+    #[serde(default)]
     #[schemars(description = "Base64-encoded media data (required if file_path not provided)")]
     data_base64: Option<String>,
+    #[serde(default)]
     #[schemars(description = "Local file path to read (e.g., output/image.png - reads file directly, bypassing base64 size limits)")]
     file_path: Option<String>,
 });
@@ -114,25 +116,33 @@ define_params!(UploadMediaFromUrlParams {
 });
 
 define_params!(CreateDraftParams {
+    #[serde(default)]
     #[schemars(description = "Article type: \"news\" (default) or \"newspic\" (image gallery)")]
     article_type: Option<String>,
     #[schemars(description = "Article title")]
     title: String,
     #[schemars(description = "Article content (HTML for news, plain text for newspic)")]
     content: String,
+    #[serde(default)]
     #[schemars(description = "Author name")]
     author: Option<String>,
+    #[serde(default)]
     #[schemars(description = "Original article URL")]
     content_source_url: Option<String>,
+    #[serde(default)]
     #[schemars(description = "Article digest / summary")]
     digest: Option<String>,
+    #[serde(default)]
     #[schemars(description = "Cover image media_id for news type (from upload_media)")]
     thumb_media_id: Option<String>,
+    #[serde(default)]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
-    #[schemars(description = "Show cover in article body (1=yes 0=no, default 1)")]
+    #[schemars(description = "Open comment section (1=yes 0=no, default 1)")]
     need_open_comment: Option<i64>,
+    #[serde(default)]
     #[schemars(description = "Image info for newspic type. JSON object: {\"image_list\": [{\"image_media_id\": \"...\"}]}")]
     image_info: Option<serde_json::Value>,
+    #[serde(default)]
     #[schemars(description = "Cover crop for newspic type. JSON object: {\"crop_percent_list\": [{\"ratio\": \"1_1\", \"x1\": \"0\", \"y1\": \"0\", \"x2\": \"1\", \"y2\": \"1\"}]}")]
     cover_info: Option<serde_json::Value>,
 });
@@ -143,12 +153,15 @@ define_params!(GetDraftParams {
 });
 
 define_params!(ListDraftsParams {
+    #[serde(default)]
     #[schemars(description = "Page offset (0-based, default 0)")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     offset: Option<i64>,
+    #[serde(default)]
     #[schemars(description = "Page size (max 20, default 20)")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     count: Option<i64>,
+    #[serde(default)]
     #[schemars(description = "Set to 1 to omit article content (saves bandwidth)")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     no_content: Option<i64>,
@@ -172,9 +185,11 @@ define_params!(GetPublishStatusParams {
 define_params!(ListMaterialsParams {
     #[schemars(description = "Material type: image, video, voice, news")]
     r#type: String,
+    #[serde(default)]
     #[schemars(description = "Page offset (0-based, default 0)")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     offset: Option<i64>,
+    #[serde(default)]
     #[schemars(description = "Page size (max 20, default 20)")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     count: Option<i64>,
@@ -191,6 +206,7 @@ define_params!(OpenCommentParams {
     #[schemars(description = "图文消息的 msg_data_id（从群发通知或 publish_status 获取）")]
     #[serde(deserialize_with = "deserialize_string_or_i64")]
     msg_data_id: i64,
+    #[serde(default)]
     #[schemars(description = "多图文时第几篇文章（从0开始，默认0即第一篇）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     index: Option<i64>,
@@ -200,6 +216,7 @@ define_params!(CloseCommentParams {
     #[schemars(description = "图文消息的 msg_data_id")]
     #[serde(deserialize_with = "deserialize_string_or_i64")]
     msg_data_id: i64,
+    #[serde(default)]
     #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     index: Option<i64>,
@@ -209,15 +226,19 @@ define_params!(ListCommentsParams {
     #[schemars(description = "图文消息的 msg_data_id")]
     #[serde(deserialize_with = "deserialize_string_or_i64")]
     msg_data_id: i64,
+    #[serde(default)]
     #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     index: Option<i64>,
+    #[serde(default)]
     #[schemars(description = "评论类型：0=全部 1=普通评论 2=精选评论（默认0）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     comment_type: Option<i64>,
+    #[serde(default)]
     #[schemars(description = "页偏移（0开始，默认0）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     offset: Option<i64>,
+    #[serde(default)]
     #[schemars(description = "每页条数（默认10）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     count: Option<i64>,
@@ -227,6 +248,7 @@ define_params!(MarkElectParams {
     #[schemars(description = "图文消息的 msg_data_id")]
     #[serde(deserialize_with = "deserialize_string_or_i64")]
     msg_data_id: i64,
+    #[serde(default)]
     #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     index: Option<i64>,
@@ -239,6 +261,7 @@ define_params!(UnmarkElectParams {
     #[schemars(description = "图文消息的 msg_data_id")]
     #[serde(deserialize_with = "deserialize_string_or_i64")]
     msg_data_id: i64,
+    #[serde(default)]
     #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     index: Option<i64>,
@@ -251,6 +274,7 @@ define_params!(DeleteCommentParams {
     #[schemars(description = "图文消息的 msg_data_id")]
     #[serde(deserialize_with = "deserialize_string_or_i64")]
     msg_data_id: i64,
+    #[serde(default)]
     #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     index: Option<i64>,
@@ -263,6 +287,7 @@ define_params!(ReplyCommentParams {
     #[schemars(description = "图文消息的 msg_data_id")]
     #[serde(deserialize_with = "deserialize_string_or_i64")]
     msg_data_id: i64,
+    #[serde(default)]
     #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     index: Option<i64>,
@@ -277,6 +302,7 @@ define_params!(DeleteReplyParams {
     #[schemars(description = "图文消息的 msg_data_id")]
     #[serde(deserialize_with = "deserialize_string_or_i64")]
     msg_data_id: i64,
+    #[serde(default)]
     #[schemars(description = "多图文时第几篇文章（从0开始，默认0）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     index: Option<i64>,
@@ -291,12 +317,15 @@ define_params!(DeleteReplyParams {
 // ---- Publish (freepublish) params ----
 
 define_params!(ListPublishedParams {
+    #[serde(default)]
     #[schemars(description = "页偏移（0开始，默认0）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     offset: Option<i64>,
+    #[serde(default)]
     #[schemars(description = "每页条数（默认20）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     count: Option<i64>,
+    #[serde(default)]
     #[schemars(description = "1=返回内容 0=不返回（默认0）")]
     #[serde(deserialize_with = "deserialize_opt_string_or_i64")]
     no_content: Option<i64>,
@@ -353,6 +382,7 @@ define_params!(GetTagUsersParams {
     #[schemars(description = "标签 id")]
     #[serde(deserialize_with = "deserialize_string_or_i64")]
     tag_id: i64,
+    #[serde(default)]
     #[schemars(description = "翻页 openid，第一页不传")]
     next_openid: Option<String>,
 });
@@ -367,6 +397,7 @@ define_params!(GetUserTagsParams {
 define_params!(GetUserInfoParams {
     #[schemars(description = "用户 openid")]
     openid: String,
+    #[serde(default)]
     #[schemars(description = "语言：zh_CN, zh_TW, en（默认 zh_CN）")]
     lang: Option<String>,
 });
@@ -377,6 +408,7 @@ define_params!(BatchGetUserInfoParams {
 });
 
 define_params!(GetFollowersParams {
+    #[serde(default)]
     #[schemars(description = "翻页 openid，第一页不传")]
     next_openid: Option<String>,
 });
@@ -391,6 +423,7 @@ define_params!(UpdateRemarkParams {
 // ---- User management: blacklist ----
 
 define_params!(GetBlacklistParams {
+    #[serde(default)]
     #[schemars(description = "翻页 openid，第一页不传")]
     begin_openid: Option<String>,
 });
