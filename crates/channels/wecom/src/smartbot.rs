@@ -412,13 +412,25 @@ async fn handle_ws_message(
                     };
                     PluginContent::Image { url: image_url, caption: None, data: image_data }
                 }
-                _ => {
-                    // Log the full content for unsupported message types to help debug
-                    let content_json = body.content
+                "voice" => {
+                    // WeCom SmartBot provides speech-to-text result in voice.content
+                    let recognition = body
+                        .content
                         .as_ref()
-                        .map(|c| serde_json::to_string(c).unwrap_or_default())
-                        .unwrap_or_default();
-                    info!("SmartBot ignoring msgtype: {}, content: {}", msg_type, content_json);
+                        .and_then(|c| c.get("voice").and_then(|v| v.get("content")).and_then(|v| v.as_str()))
+                        .unwrap_or("")
+                        .to_string();
+
+                    if recognition.is_empty() {
+                        info!("SmartBot voice message without recognition, ignoring");
+                        return Ok(());
+                    }
+
+                    info!("SmartBot voice recognized: {}", recognition);
+                    PluginContent::Text(recognition)
+                }
+                _ => {
+                    info!("SmartBot ignoring msgtype: {}", msg_type);
                     return Ok(());
                 }
             };
