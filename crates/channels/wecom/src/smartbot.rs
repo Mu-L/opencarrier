@@ -413,7 +413,12 @@ async fn handle_ws_message(
                     PluginContent::Image { url: image_url, caption: None, data: image_data }
                 }
                 _ => {
-                    info!("SmartBot ignoring msgtype: {}", msg_type);
+                    // Log the full content for unsupported message types to help debug
+                    let content_json = body.content
+                        .as_ref()
+                        .map(|c| serde_json::to_string(c).unwrap_or_default())
+                        .unwrap_or_default();
+                    info!("SmartBot ignoring msgtype: {}, content: {}", msg_type, content_json);
                     return Ok(());
                 }
             };
