@@ -640,6 +640,13 @@ pub async fn classify_skill_with_llm(
                 name.to_lowercase().contains(&skill_name)
                     || skill_name.contains(&name.to_lowercase())
             })
+        })
+        // Fallback: some LLMs (e.g. DeepSeek) output a reasoning chain instead of
+        // just the skill name. Scan the full response for any known skill name.
+        .or_else(|| {
+            skill_summaries.iter().find(|(name, _)| {
+                raw.contains(&name.to_lowercase())
+            })
         });
 
     let matched_name = match matched {
