@@ -154,9 +154,12 @@ pub struct CronJob {
     pub id: CronJobId,
     /// Owning agent.
     pub agent_id: AgentId,
-    /// Sender/user who created this job (for per-sender isolation).
+    /// Route owner (bot/app owner) who created this job.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_id: Option<String>,
+    /// Actual sender/user on whose behalf this job runs (for per-sender file paths).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_id: Option<String>,
     /// Human-readable name (max 128 chars, alphanumeric + spaces/hyphens/underscores).
     pub name: String,
     /// Whether the job is active.
@@ -370,6 +373,7 @@ mod tests {
             id: CronJobId::new(),
             agent_id: AgentId::new(),
             owner_id: None,
+            sender_id: None,
             name: "daily-report".into(),
             enabled: true,
             schedule: CronSchedule::Every { every_secs: 3600 },

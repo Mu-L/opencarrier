@@ -487,6 +487,7 @@ mod tests {
             id: CronJobId::new(),
             agent_id,
             owner_id: None,
+            sender_id: None,
             name: "test-job".into(),
             enabled: true,
             schedule: CronSchedule::Every { every_secs: 3600 },

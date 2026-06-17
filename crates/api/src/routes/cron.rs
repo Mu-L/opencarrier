@@ -46,7 +46,7 @@ pub async fn create_cron_job(
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let agent_id = body["agent_id"].as_str().unwrap_or("");
-    match state.kernel.cron_create(agent_id, None, body.clone()).await {
+    match state.kernel.cron_create(agent_id, None, None, body.clone()).await {
         Ok(result) => (
             StatusCode::CREATED,
             Json(serde_json::json!({"result": result})),

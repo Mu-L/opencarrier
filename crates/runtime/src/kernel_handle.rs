@@ -106,9 +106,10 @@ pub trait KernelHandle: Send + Sync {
         &self,
         agent_id: &str,
         owner_id: Option<&str>,
+        sender_id: Option<&str>,
         job_json: serde_json::Value,
     ) -> Result<String, String> {
-        let _ = (agent_id, owner_id, job_json);
+        let _ = (agent_id, owner_id, sender_id, job_json);
         Err("Cron scheduler not available".to_string())
     }
 

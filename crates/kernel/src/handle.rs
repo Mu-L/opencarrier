@@ -383,6 +383,7 @@ impl KernelHandle for CarrierKernel {
         &self,
         agent_id: &str,
         owner_id: Option<&str>,
+        sender_id: Option<&str>,
         job_json: serde_json::Value,
     ) -> Result<String, String> {
         use types::scheduler::{
@@ -453,6 +454,7 @@ impl KernelHandle for CarrierKernel {
             id: CronJobId::new(),
             agent_id: aid,
             owner_id: owner_id.map(|s| s.to_string()),
+            sender_id: sender_id.map(|s| s.to_string()),
             name,
             schedule,
             action,

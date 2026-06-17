@@ -250,11 +250,12 @@ async fn tool_cron_create(
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
     owner_id: Option<&str>,
+    sender_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = crate::tools::require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Agent ID required for cron_create")?;
     tracing::debug!(agent_id, ?input, "cron_create called");
-    kh.cron_create(agent_id, owner_id, input.clone()).await
+    kh.cron_create(agent_id, owner_id, sender_id, input.clone()).await
 }
 
 async fn tool_cron_list(
@@ -392,6 +393,7 @@ impl ToolModule for SchedulingTools {
         let memory = ctx.memory;
         let caller_agent_id = ctx.caller_agent_id;
         let owner_id = ctx.owner_id;
+        let sender_id = ctx.sender_id;
 
         match name {
             // Scheduling tools
@@ -400,7 +402,7 @@ impl ToolModule for SchedulingTools {
             "schedule_delete" => Some(tool_schedule_delete(input, memory, caller_agent_id).await),
 
             // Cron scheduling tools
-            "cron_create" => Some(tool_cron_create(input, kernel, caller_agent_id, owner_id).await),
+            "cron_create" => Some(tool_cron_create(input, kernel, caller_agent_id, owner_id, sender_id).await),
             "cron_list" => Some(tool_cron_list(kernel, caller_agent_id, owner_id).await),
             "cron_cancel" => Some(tool_cron_cancel(input, kernel, caller_agent_id, owner_id).await),
 
