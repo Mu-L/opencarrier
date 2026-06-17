@@ -6,6 +6,18 @@
 
 use std::net::{IpAddr, ToSocketAddrs};
 
+/// Comma-separated hostnames that are allowed to resolve to private IPs.
+/// Set via the `OPENCARRIER_SSRF_ALLOWLIST` environment variable.
+/// Example: `github.com,api.github.com`.
+fn ssrf_allowlist() -> Vec<String> {
+    std::env::var("OPENCARRIER_SSRF_ALLOWLIST")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 /// Check if a URL targets a private/internal network resource.
 /// Blocks localhost, cloud metadata endpoints, and private IPs.
 /// Must run BEFORE any network I/O.
@@ -45,30 +57,32 @@ pub fn check_ssrf_with_ip(url: &str) -> Result<IpAddr, String> {
         return Err(format!("SSRF blocked: {hostname} is a restricted hostname"));
     }
 
+    // Allowlisted hostnames bypass private-IP checks. Still must resolve.
+    let allowlisted = ssrf_allowlist().contains(&hostname.to_lowercase());
+
     let port = if url.starts_with("https") { 443 } else { 80 };
     let socket_addr = format!("{hostname}:{port}");
-    let addrs = socket_addr.to_socket_addrs().map_err(|e| {
+    let addrs: Vec<_> = socket_addr.to_socket_addrs().map_err(|e| {
         format!("SSRF blocked: cannot resolve {hostname}: {e}")
     })?;
 
-    for addr in addrs {
-        let ip = addr.ip();
-        if ip.is_loopback() || ip.is_unspecified() || is_private_ip(&ip) {
-            return Err(format!(
-                "SSRF blocked: {hostname} resolves to private IP {ip}"
-            ));
+    if addrs.is_empty() {
+        return Err(format!("SSRF: no DNS results for {hostname}"));
+    }
+
+    if !allowlisted {
+        for addr in &addrs {
+            let ip = addr.ip();
+            if ip.is_loopback() || ip.is_unspecified() || is_private_ip(&ip) {
+                return Err(format!(
+                    "SSRF blocked: {hostname} resolves to private IP {ip}"
+                ));
+            }
         }
     }
 
     // Return the first resolved IP for callers to pin via .resolve()
-    let first_ip = socket_addr
-        .to_socket_addrs()
-        .map_err(|e| format!("SSRF: DNS resolution failed for {hostname}: {e}"))?
-        .next()
-        .map(|a| a.ip())
-        .ok_or_else(|| format!("SSRF: no DNS results for {hostname}"))?;
-
-    Ok(first_ip)
+    Ok(addrs[0].ip())
 }
 
 /// Check if an IP address is in a private/internal range.
