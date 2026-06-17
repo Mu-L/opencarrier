@@ -68,8 +68,5 @@ clones/
 sdk/
 packages/
 deploy/
-docs/*
-!docs/aginx/
-docs/aginx/*
-!docs/aginx/aginxbrower/
+docs/
 CLAUDE.md
