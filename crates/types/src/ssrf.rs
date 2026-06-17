@@ -62,9 +62,10 @@ pub fn check_ssrf_with_ip(url: &str) -> Result<IpAddr, String> {
 
     let port = if url.starts_with("https") { 443 } else { 80 };
     let socket_addr = format!("{hostname}:{port}");
-    let addrs: Vec<_> = socket_addr.to_socket_addrs().map_err(|e| {
-        format!("SSRF blocked: cannot resolve {hostname}: {e}")
-    })?;
+    let addrs: Vec<std::net::SocketAddr> = socket_addr
+        .to_socket_addrs()
+        .map_err(|e| format!("SSRF blocked: cannot resolve {hostname}: {e}"))?
+        .collect();
 
     if addrs.is_empty() {
         return Err(format!("SSRF: no DNS results for {hostname}"));
