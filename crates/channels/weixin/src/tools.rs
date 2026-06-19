@@ -28,7 +28,7 @@ impl ToolProvider for WeixinQrLoginTool {
             .unwrap_or("default")
             .to_string();
 
-        let http = reqwest::Client::new();
+        let http = crate::build_http_client();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

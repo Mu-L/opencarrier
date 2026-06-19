@@ -127,7 +127,7 @@ impl WeixinState {
     fn new() -> Self {
         Self {
             bots: DashMap::new(),
-            http: Client::new(),
+            http: crate::build_http_client(),
         }
     }
 
@@ -175,7 +175,7 @@ impl WeixinState {
                 ilink_bot_id: tf.ilink_bot_id,
                 user_id: Some(user_id.clone()),
                 expires_at: AtomicI64::new(tf.expires_at),
-                http: Client::new(),
+                http: crate::build_http_client(),
                 context_tokens: Mutex::new(HashMap::new()),
                 typing_tickets: Mutex::new(HashMap::new()),
                 cursor: Mutex::new(String::new()),
@@ -208,7 +208,7 @@ impl WeixinState {
             ilink_bot_id: ilink_bot_id.to_string(),
             user_id: user_id.map(|s| s.to_string()),
             expires_at: AtomicI64::new(now + SESSION_DURATION_SECS),
-            http: Client::new(),
+            http: crate::build_http_client(),
             context_tokens: Mutex::new(HashMap::new()),
             typing_tickets: Mutex::new(HashMap::new()),
             cursor: Mutex::new(String::new()),
@@ -354,7 +354,7 @@ impl WeixinState {
                 ilink_bot_id: tf.ilink_bot_id,
                 user_id: Some(sender_id.clone()),
                 expires_at: AtomicI64::new(tf.expires_at),
-                http: Client::new(),
+                http: crate::build_http_client(),
                 context_tokens: Mutex::new(HashMap::new()),
                 typing_tickets: Mutex::new(HashMap::new()),
                 cursor: Mutex::new(String::new()),

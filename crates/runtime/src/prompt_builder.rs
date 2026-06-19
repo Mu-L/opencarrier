@@ -878,17 +878,17 @@ pub fn tool_hint(name: &str) -> &'static str {
         "web_fetch" => "fetch a URL and get its content as markdown",
 
         // Browser
-        "browser_navigate" => "open a URL in the browser",
-        "browser_click" => "click an element on the page",
-        "browser_type" => "type text into an input field",
-        "browser_screenshot" => "capture a screenshot",
-        "browser_read_page" => "extract page content as text",
-        "browser_close" => "close the browser session",
-        "browser_scroll" => "scroll the page",
-        "browser_wait" => "wait for an element or condition",
-        "browser_evaluate" => "run JavaScript on the page",
-        "browser_select" => "select a dropdown option",
-        "browser_back" => "go back to the previous page",
+        "browser_navigate" => "open a URL in the browser and return content",
+        "browser_click" => "click an element on the page via JS",
+        "browser_type" => "type text into an input field via JS",
+        "browser_screenshot" => "capture a screenshot (not supported — use browser_navigate)",
+        "browser_read_page" => "extract page content as text/markdown",
+        "browser_close" => "close the browser session (no-op for AginxBrower)",
+        "browser_scroll" => "scroll the page via JS",
+        "browser_wait" => "wait for an element or condition via JS",
+        "browser_evaluate" => "run arbitrary JavaScript on the page",
+        "browser_select" => "select a dropdown option via JS",
+        "browser_back" => "go back to the previous page (not supported — use browser_navigate)",
 
         // Shell
         "shell_exec" => "execute a shell command",

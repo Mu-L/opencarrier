@@ -87,8 +87,10 @@ impl SetupWizard {
                         "browser_click",
                         "browser_type",
                         "browser_read_page",
-                        "browser_screenshot",
-                        "browser_close",
+                        "browser_evaluate",
+                        "browser_scroll",
+                        "browser_wait",
+                        "browser_back",
                     ] {
                         let s = t.to_string();
                         if !caps.tools.contains(&s) {

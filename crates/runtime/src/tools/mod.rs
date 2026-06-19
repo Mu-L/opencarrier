@@ -6,6 +6,7 @@
 pub mod a2a;
 pub mod agent;
 pub mod agent_mgmt;
+pub mod browser;
 pub mod collaboration;
 pub mod filesystem;
 pub mod knowledge;
@@ -68,6 +69,7 @@ pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
         Box::new(filesystem::FilesystemTools),
         Box::new(sqlite::SqliteTools),
         Box::new(shell::ShellTools),
+        Box::new(browser::BrowserTools),
         Box::new(misc::MiscTools),
         Box::new(toolset::ToolSearchTools),
         Box::new(knowledge::KnowledgeTools),

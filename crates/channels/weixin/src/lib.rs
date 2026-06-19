@@ -16,3 +16,15 @@ pub mod models;
 
 pub use channel::SessionWatcher;
 pub use tools::{WeixinQrLoginTool, WeixinSendMessageTool, WeixinStatusTool};
+
+/// Build an HTTP client that bypasses ambient/system proxies and forces
+/// HTTP/1.1. The iLink API must be reached directly; reqwest's default
+/// `Client::new()` inherits the OS proxy (e.g. a SOCKS proxy on macOS) and
+/// hangs against iLink. Use this everywhere an iLink client is constructed.
+pub fn build_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .http1_only()
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}

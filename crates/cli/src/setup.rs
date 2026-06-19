@@ -83,26 +83,10 @@ session_ttl_hours = 168
     );
     let config_path = carrier_dir.join("config.toml");
 
-    // Detect built-in MCP server binaries
-    let bin_dir = carrier_dir.join("bin");
-    let mut mcp_entries = String::new();
-
-    // browser-mcp
-    let browser_mcp = if bin_dir.join("browser-mcp").exists() {
-        bin_dir.join("browser-mcp").to_str().unwrap_or("browser-mcp").to_string()
-    } else {
-        "browser-mcp".to_string() // rely on PATH
-    };
-    mcp_entries.push_str(&format!(r#"
-
-[[mcp_servers]]
-name = "browser"
-timeout_secs = 60
-
-[mcp_servers.transport]
-type = "stdio"
-command = "{browser_mcp}"
-"#));
+    // Note: browser-mcp has been replaced by built-in AginxBrower HTTP client.
+    // No stdio MCP server needed — browser tools connect directly to
+    // AGINXBROWER_URL (default: http://127.0.0.1:8093).
+    let mcp_entries = String::new();
 
     if !mcp_entries.is_empty() {
         let full_config = format!(

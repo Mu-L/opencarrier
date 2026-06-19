@@ -183,7 +183,9 @@ pub async fn execute_tool(
             }
         }
 
-        // Browser automation tools are now handled by browser-mcp (standalone MCP server)
+        // Browser automation tools are now provided by the built-in browser module
+        // (direct HTTP calls to AginxBrower). Legacy mcp_browser_* tools are still
+        // handled via MCP fallback for backward compatibility.
         other => {
             // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
             // Permission already enforced by max_tool_level check above
