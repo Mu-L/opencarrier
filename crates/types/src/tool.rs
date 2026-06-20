@@ -72,7 +72,11 @@ impl PermissionLevel {
 
             // ReadOnly — reads from external sources
             "file_read" | "file_list" | "file_convert"
-            | "web_fetch" 
+            | "web_fetch"
+            | "browser_navigate" | "browser_read_page" | "browser_evaluate"
+            | "browser_click" | "browser_type" | "browser_scroll"
+            | "browser_wait" | "browser_back" | "browser_screenshot"
+            | "browser_close"
             | "image_analyze" | "media_describe" | "media_transcribe"
             | "speech_to_text" | "location_get" | "system_time" => Self::ReadOnly,
 
