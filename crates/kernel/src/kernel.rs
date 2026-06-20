@@ -913,6 +913,7 @@ impl CarrierKernel {
             n if n.starts_with("memory_") => Some("memory"),
             n if n.starts_with("media_") || n.starts_with("image_") || n == "text_to_speech" || n == "speech_to_text" => Some("media"),
             n if n.starts_with("web_") => Some("web"),
+            n if n.starts_with("browser_") => Some("browser"),
             n if n.starts_with("agent_") || n.starts_with("train_") => Some("agent"),
             n if n.starts_with("location_") || n.starts_with("system_") || n == "user_profile" => Some("misc"),
             n if n.starts_with("process_") => Some("process"),
