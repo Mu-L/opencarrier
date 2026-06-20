@@ -825,11 +825,11 @@ mod tests {
 
     #[test]
     fn test_parse_skill_full_multiline_tools() {
-        let content = "---\nname: test-skill\ndescription: test\ntools:\n  - mcp_searxng_web_search\n  - knowledge_add\n---\nBody text";
+        let content = "---\nname: test-skill\ndescription: test\ntools:\n  - web_search\n  - knowledge_add\n---\nBody text";
         let (name, desc, _max_iter, tools, body) = parse_skill_full(content);
         assert_eq!(name, "test-skill");
         assert_eq!(desc, "test");
-        assert_eq!(tools, vec!["mcp_searxng_web_search", "knowledge_add"]);
+        assert_eq!(tools, vec!["web_search", "knowledge_add"]);
         assert_eq!(body, "Body text");
     }
 

@@ -19,6 +19,7 @@ pub mod shell;
 pub mod sqlite;
 pub mod toolset;
 pub mod training;
+pub mod web_search;
 
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
@@ -82,6 +83,7 @@ pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
         Box::new(scheduling::SchedulingTools),
         Box::new(collaboration::CollaborationTools),
         Box::new(a2a::A2aTools),
+        Box::new(web_search::WebSearchTools),
     ]
 }
 

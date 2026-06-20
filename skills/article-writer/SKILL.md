@@ -5,7 +5,7 @@ version: 7
 tools:
   - file_read
   - file_write
-  - mcp_searxng_web_search
+  - web_search
   - web_fetch
 ---
 # Article Writer
@@ -16,7 +16,7 @@ tools:
 
 - 写文件 = `file_write`（不是 ~~mcp__tools__file_write~~）
 - 读文件 = `file_read`
-- 搜索 = `mcp_searxng_web_search`
+- 搜索 = `web_search`
 
 ## 写作风格
 
@@ -40,7 +40,7 @@ knowledge/writing-style 可能不存在，读不到就跳过。
 
 ### 2. 补充搜索
 
-用 `mcp_searxng_web_search` 补充案例和数据。时间线、人名、机构名必须核实。
+用 `web_search` 补充案例和数据。时间线、人名、机构名必须核实。
 
 ### 3. 撰写正文
 

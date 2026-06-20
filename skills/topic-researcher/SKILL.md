@@ -3,7 +3,7 @@ name: topic-researcher
 description: 搜索热点话题与选题研究，帮助用户选题
 version: 3
 tools:
-  - mcp_searxng_web_search
+  - web_search
   - web_fetch
   - file_write
 ---
@@ -15,7 +15,7 @@ tools:
 
 - 写文件 = `file_write`（不是 ~~mcp__tools__file_write~~）
 - 读文件 = `file_read`
-- 搜索 = `mcp_searxng_web_search`（不是 ~~web_search~~）
+- 搜索 = `web_search`
 
 ## 写作风格
 
@@ -29,7 +29,7 @@ tools:
 
 ### 1. 多源搜索
 
-用 `mcp_searxng_web_search` 搜索近 24-48h 热点（行业动态、产品发布、技术突破、争议话题）。
+用 `web_search` 搜索近 24-48h 热点（行业动态、产品发布、技术突破、争议话题）。
 
 ### 2. 写作风格切入点匹配
 
