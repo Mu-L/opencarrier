@@ -85,7 +85,7 @@ session_ttl_hours = 168
 
     // Note: browser-mcp has been replaced by built-in AginxBrower HTTP client.
     // No stdio MCP server needed — browser tools connect directly to
-    // AGINXBROWER_URL (default: http://127.0.0.1:8093).
+    // AGINXBROWER_URL (default: http://127.0.0.1:8089).
     let mcp_entries = String::new();
 
     if !mcp_entries.is_empty() {

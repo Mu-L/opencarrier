@@ -1,7 +1,7 @@
 //! Browser automation tools — powered by AginxBrower HTTP API.
 //!
 //! Replaces the old browser-mcp (standalone MCP server) with direct HTTP calls
-//! to a local AginxBrower instance (default: http://127.0.0.1:8093).
+//! to a local AginxBrower instance (default: http://127.0.0.1:8089).
 //!
 //! Supported tools:
 //! - browser_navigate: fetch a page and return content (markdown/html/text)
@@ -19,7 +19,7 @@ use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 
 /// Default AginxBrower endpoint. Override via `AGINXBROWER_URL` env var.
-const DEFAULT_URL: &str = "http://127.0.0.1:8093";
+const DEFAULT_URL: &str = "http://127.0.0.1:8089";
 
 fn aginxbrower_url() -> String {
     std::env::var("AGINXBROWER_URL").unwrap_or_else(|_| DEFAULT_URL.to_string())
