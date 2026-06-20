@@ -125,36 +125,17 @@ pub fn touch_user_profile(home_dir: &Path, owner_id: &str, agent_name: &str, use
     }
 }
 
-/// Read clone skill catalog from workspace/skills/ directory.
-/// Returns a short summary of all skills: "1. **{name}** — {description}"
+/// Read skill catalog from workspace/skills/ (private) AND ~/.opencarrier/skills/
+/// (shared system skills). Returns a short summary of all skills:
+/// "1. **{name}** — {description}". Private skills take precedence on name
+/// collisions with shared system skills.
 pub fn read_skills_catalog(workspace: &Path) -> Option<String> {
-    let skills_dir = workspace.join("skills");
-    if !skills_dir.is_dir() {
-        return None;
-    }
-
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut entries: Vec<(String, String)> = Vec::new();
 
-    let dir_iter = match std::fs::read_dir(&skills_dir) {
-        Ok(iter) => iter,
-        Err(_) => return None,
-    };
-
-    for entry in dir_iter.flatten() {
-        let path = entry.path();
-
-        // Directory format: skills/<name>/SKILL.md
-        if path.is_dir() {
-            let skill_md = path.join("SKILL.md");
-            if skill_md.exists() {
-                if let Some((name, description)) = parse_skill_frontmatter(&skill_md) {
-                    entries.push((name, description));
-                }
-            }
-        }
-        // Flat format: skills/<name>.md
-        else if path.extension().is_some_and(|ext| ext == "md") {
-            if let Some((name, description)) = parse_skill_frontmatter(&path) {
+    for dir in [workspace.join("skills"), types::config::home_dir().join("skills")] {
+        for (name, description, _) in collect_skill_summaries(&dir) {
+            if seen.insert(name.to_lowercase()) {
                 entries.push((name, description));
             }
         }
@@ -511,6 +492,46 @@ pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, Vec<Stri
     (String::new(), String::new(), None, Vec::new(), content)
 }
 
+/// Scan a skills directory and return `(name, description, skill_file_path)` for
+/// each skill with a non-empty description. Supports both directory format
+/// (`skills/{name}/SKILL.md`) and flat format (`skills/{name}.md`).
+///
+/// Used by both the LLM skill classifier and the skill catalog builder to scan
+/// private (`workspace/skills`) and shared system (`~/.opencarrier/skills`) dirs.
+fn collect_skill_summaries(skills_dir: &Path) -> Vec<(String, String, std::path::PathBuf)> {
+    let mut out = Vec::new();
+    if !skills_dir.is_dir() {
+        return out;
+    }
+    let entries = match std::fs::read_dir(skills_dir) {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let skill_path = if path.is_dir() {
+            path.join("SKILL.md")
+        } else if path.extension().is_some_and(|ext| ext == "md") {
+            path
+        } else {
+            continue;
+        };
+        if !skill_path.exists() {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&skill_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let (name, description, _, _, _) = parse_skill_full(content.trim());
+        if description.is_empty() {
+            continue;
+        }
+        out.push((name, description, skill_path));
+    }
+    out
+}
+
 /// Result of automatic skill matching against a user message.
 pub struct SkillMatch {
     /// Skill name.
@@ -529,38 +550,19 @@ pub async fn classify_skill_with_llm(
     workspace: &std::path::Path,
     brain: &std::sync::Arc<dyn runtime::llm_driver::Brain>,
 ) -> Option<SkillMatch> {
-    let skills_dir = workspace.join("skills");
-    if !skills_dir.is_dir() {
-        return None;
-    }
+    // Collect skill summaries from two sources, private first so it wins
+    // on name collisions with shared system skills:
+    //   1. workspace/skills/  — agent's private skills
+    //   2. ~/.opencarrier/skills/ — system-level shared skills (see docs/SKILL-STANDARD.md)
+    let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut skill_summaries: Vec<(String, String, std::path::PathBuf)> = Vec::new();
 
-    // Collect all skill summaries (name + description)
-    let mut skill_summaries: Vec<(String, String)> = Vec::new();
-    for entry in std::fs::read_dir(&skills_dir).ok()? {
-        let entry = entry.ok()?;
-        let path = entry.path();
-
-        let skill_path = if path.is_dir() {
-            path.join("SKILL.md")
-        } else if path.extension().is_some_and(|ext| ext == "md") {
-            path
-        } else {
-            continue;
-        };
-
-        if !skill_path.exists() {
-            continue;
+    for dir in [workspace.join("skills"), types::config::home_dir().join("skills")] {
+        for (name, description, path) in collect_skill_summaries(&dir) {
+            if seen_names.insert(name.to_lowercase()) {
+                skill_summaries.push((name, description, path));
+            }
         }
-
-        let content = std::fs::read_to_string(&skill_path).ok()?;
-        let trimmed = content.trim();
-
-        let (name, description, _, _, _) = parse_skill_full(trimmed);
-        if description.is_empty() {
-            continue;
-        }
-
-        skill_summaries.push((name, description));
     }
 
     if skill_summaries.is_empty() {
@@ -571,7 +573,7 @@ pub async fn classify_skill_with_llm(
     let mut prompt = String::from(
         "You are a skill classifier. Given a user message and available skills, respond with ONLY the best-matching skill name or \"none\".\n\nAvailable skills:\n",
     );
-    for (name, description) in &skill_summaries {
+    for (name, description, _) in &skill_summaries {
         prompt.push_str(&format!("- {}: {}\n", name, description));
     }
     prompt.push_str(&format!("\nUser message: {}\n\nSkill name:", message));
@@ -634,9 +636,9 @@ pub async fn classify_skill_with_llm(
     // Find matching skill (exact or case-insensitive)
     let matched = skill_summaries
         .iter()
-        .find(|(name, _)| name.to_lowercase() == skill_name)
+        .find(|(name, _, _)| name.to_lowercase() == skill_name)
         .or_else(|| {
-            skill_summaries.iter().find(|(name, _)| {
+            skill_summaries.iter().find(|(name, _, _)| {
                 name.to_lowercase().contains(&skill_name)
                     || skill_name.contains(&name.to_lowercase())
             })
@@ -644,26 +646,25 @@ pub async fn classify_skill_with_llm(
         // Fallback: some LLMs (e.g. DeepSeek) output a reasoning chain instead of
         // just the skill name. Scan the full response for any known skill name.
         .or_else(|| {
-            skill_summaries.iter().find(|(name, _)| {
+            skill_summaries.iter().find(|(name, _, _)| {
                 raw.contains(&name.to_lowercase())
             })
         });
 
-    let matched_name = match matched {
-        Some((name, _)) => name.clone(),
+    let matched_skill = match matched {
+        Some(entry) => entry,
         None => {
             tracing::warn!(
                 skill_name = %skill_name,
-                available = ?skill_summaries.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+                available = ?skill_summaries.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>(),
                 "LLM returned unknown skill name"
             );
             return None;
         }
     };
 
-    // Load full skill content
-    let skill_file = skills_dir.join(&matched_name).join("SKILL.md");
-    let content = std::fs::read_to_string(&skill_file).ok()?;
+    // Load full skill content from the recorded path (private or shared system dir)
+    let content = std::fs::read_to_string(&matched_skill.2).ok()?;
     let (name, _description, max_iterations, tools, body) = parse_skill_full(&content);
 
     tracing::info!(

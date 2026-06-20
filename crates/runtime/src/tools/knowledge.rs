@@ -599,51 +599,59 @@ async fn tool_skill_load(
     let root = workspace_root.ok_or("skill_load requires a workspace root")?;
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
 
-    let skills_dir = root.join("skills");
-    let filename = lifecycle::evolution::sanitize_filename(name);
-    let flat_path = skills_dir.join(format!("{filename}.md"));
-    let dir_path = skills_dir.join(&filename).join("SKILL.md");
-
-    if flat_path.exists() {
-        return tokio::fs::read_to_string(&flat_path)
-            .await
-            .map_err(|e| format!("Failed to read skill: {e}"));
-    }
-    if dir_path.exists() {
-        return tokio::fs::read_to_string(&dir_path)
-            .await
-            .map_err(|e| format!("Failed to read skill: {e}"));
-    }
-
-    // Fuzzy match
-    if skills_dir.exists() {
-        let mut entries = tokio::fs::read_dir(&skills_dir)
-            .await
-            .map_err(|e| format!("Failed to read skills dir: {e}"))?;
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| format!("Read error: {e}"))?
-        {
-            let entry_name = entry.file_name().to_string_lossy().to_string();
-            if entry_name.to_lowercase().contains(&name.to_lowercase()) {
-                if entry_name.ends_with(".md") {
-                    return tokio::fs::read_to_string(entry.path())
-                        .await
-                        .map_err(|e| format!("Failed to read skill: {e}"));
-                } else if entry.path().is_dir() {
-                    let skill_md = entry.path().join("SKILL.md");
-                    if skill_md.exists() {
-                        return tokio::fs::read_to_string(&skill_md)
-                            .await
-                            .map_err(|e| format!("Failed to read skill: {e}"));
-                    }
-                }
-            }
+    // Search private skills first (workspace/skills), then fall back to
+    // shared system skills (~/.opencarrier/skills). Private wins on collision.
+    let dirs = [
+        root.join("skills"),
+        types::config::home_dir().join("skills"),
+    ];
+    for skills_dir in dirs {
+        if let Some(path) = find_skill_path(&skills_dir, name).await {
+            return tokio::fs::read_to_string(&path)
+                .await
+                .map_err(|e| format!("Failed to read skill: {e}"));
         }
     }
 
     Err(format!("Skill '{name}' not found."))
+}
+
+/// Locate a skill file by name within a skills directory.
+///
+/// Tries exact flat (`{name}.md`), exact directory (`{name}/SKILL.md`), then a
+/// case-insensitive fuzzy match on entry names. Returns the path if found.
+async fn find_skill_path(skills_dir: &Path, name: &str) -> Option<PathBuf> {
+    if !skills_dir.is_dir() {
+        return None;
+    }
+    let filename = lifecycle::evolution::sanitize_filename(name);
+    let flat_path = skills_dir.join(format!("{filename}.md"));
+    if flat_path.exists() {
+        return Some(flat_path);
+    }
+    let dir_path = skills_dir.join(&filename).join("SKILL.md");
+    if dir_path.exists() {
+        return Some(dir_path);
+    }
+
+    // Fuzzy match on entry names
+    let mut entries = tokio::fs::read_dir(skills_dir).await.ok()?;
+    while let Some(entry) = entries.next_entry().await.ok()? {
+        let entry_name = entry.file_name().to_string_lossy().to_string();
+        if !entry_name.to_lowercase().contains(&name.to_lowercase()) {
+            continue;
+        }
+        if entry_name.ends_with(".md") {
+            return Some(entry.path());
+        }
+        if entry.path().is_dir() {
+            let skill_md = entry.path().join("SKILL.md");
+            if skill_md.exists() {
+                return Some(skill_md);
+            }
+        }
+    }
+    None
 }
 
 async fn tool_session_summarize(
