@@ -4,38 +4,9 @@
 
 use crate::mcp;
 use crate::tool_context::ToolContext;
-use types::taint::{TaintLabel, TaintSink, TaintedValue};
 use types::tool::{ToolDefinition, ToolResult};
 use types::tool_compat::normalize_tool_name;
-use std::collections::HashSet;
 use tracing::{debug, warn};
-
-/// Check if a URL should be blocked by taint tracking before network fetch.
-///
-/// Blocks URLs that appear to contain API keys, tokens, or other secrets
-/// in query parameters (potential data exfiltration). Implements TaintSink::net_fetch().
-fn check_taint_net_fetch(url: &str) -> Option<String> {
-    let exfil_patterns = [
-        "api_key=",
-        "apikey=",
-        "token=",
-        "secret=",
-        "password=",
-        "Authorization:",
-    ];
-    for pattern in &exfil_patterns {
-        if url.to_lowercase().contains(&pattern.to_lowercase()) {
-            let mut labels = HashSet::new();
-            labels.insert(TaintLabel::Secret);
-            let tainted = TaintedValue::new(url, labels, "llm_tool_call");
-            if let Err(violation) = tainted.check_sink(&TaintSink::net_fetch()) {
-                warn!(url = crate::str_utils::safe_truncate_str(url, 80), %violation, "Net fetch taint check failed");
-                return Some(violation.to_string());
-            }
-        }
-    }
-    None
-}
 
 tokio::task_local! {
     /// Tracks the current inter-agent call depth within a task.
@@ -66,7 +37,7 @@ pub async fn execute_tool(
         memory: _,
         caller_agent_id: _,
         mcp_connections,
-        fetch_engine,
+        fetch_engine: _,
         allowed_env_vars: _,
         workspace_root: _,
         brain: _,
@@ -158,68 +129,40 @@ pub async fn execute_tool(
         }
     }
 
-    // Phase 2: Remaining tools not yet extracted to modules
-    let result = match tool_name {
-        // Web tools
-        "web_fetch" => {
-            let url = input_ref["url"].as_str().unwrap_or("");
-            if let Some(violation) = check_taint_net_fetch(url) {
-                return ToolResult {
-                    tool_use_id: tool_use_id.to_string(),
-                    content: format!("Taint violation: {violation}"),
-                    is_error: true,
-                };
-            }
-            match fetch_engine {
-                Some(engine) => {
-                    let method = input_ref["method"].as_str().unwrap_or("GET");
-                    let headers = input_ref.get("headers").and_then(|v| v.as_object());
-                    let body = input_ref["body"].as_str();
-                    engine
-                        .fetch_with_options(url, method, headers, body)
-                        .await
-                }
-                None => Err("Web fetch not available".to_string()),
-            }
-        }
-
-        // Browser automation tools are now provided by the built-in browser module
-        // (direct HTTP calls to AginxBrowser). Legacy mcp_browser_* tools are still
-        // handled via MCP fallback for backward compatibility.
-        other => {
-            // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
-            // Permission already enforced by max_tool_level check above
-            if mcp::is_mcp_tool(other) {
-                if let Some(mcp_conns) = mcp_connections {
-                    // Collect known server keys from DashMap for name resolution
-                    let known_keys: Vec<String> =
-                        mcp_conns.iter().map(|e| e.key().clone()).collect();
-                    let known_refs: Vec<&str> = known_keys.iter().map(|s| s.as_str()).collect();
-                    if let Some(server_key) = mcp::extract_mcp_server_from_known(other, &known_refs)
-                    {
-                        // O(1) lookup by normalized server name — no global lock
-                        if let Some(mut conn) = mcp_conns.get_mut(&server_key.to_string()) {
-                            debug!(
-                                tool = other,
-                                server = server_key,
-                                "Dispatching to MCP server"
-                            );
-                            match conn.call_tool(other, input_ref).await {
-                                Ok(content) => Ok(content),
-                                Err(e) => Err(format!("MCP tool call failed: {e}")),
-                            }
-                        } else {
-                            Err(format!("MCP server '{server_key}' not connected"))
+    // Phase 2: MCP fallback (all built-in tools now handled by ToolModules in Phase 1)
+    let result = {
+        // Fallback 1: MCP tools (mcp_{server}_{tool} prefix)
+        // Permission already enforced by max_tool_level check above
+        if mcp::is_mcp_tool(tool_name) {
+            if let Some(mcp_conns) = mcp_connections {
+                // Collect known server keys from DashMap for name resolution
+                let known_keys: Vec<String> =
+                    mcp_conns.iter().map(|e| e.key().clone()).collect();
+                let known_refs: Vec<&str> = known_keys.iter().map(|s| s.as_str()).collect();
+                if let Some(server_key) = mcp::extract_mcp_server_from_known(tool_name, &known_refs)
+                {
+                    // O(1) lookup by normalized server name — no global lock
+                    if let Some(mut conn) = mcp_conns.get_mut(&server_key.to_string()) {
+                        debug!(
+                            tool = tool_name,
+                            server = server_key,
+                            "Dispatching to MCP server"
+                        );
+                        match conn.call_tool(tool_name, input_ref).await {
+                            Ok(content) => Ok(content),
+                            Err(e) => Err(format!("MCP tool call failed: {e}")),
                         }
                     } else {
-                        Err(format!("Invalid MCP tool name: {other}"))
+                        Err(format!("MCP server '{server_key}' not connected"))
                     }
                 } else {
-                    Err(format!("MCP not available for tool: {other}"))
+                    Err(format!("Invalid MCP tool name: {tool_name}"))
                 }
             } else {
-                Err(format!("Unknown tool: {other}"))
+                Err(format!("MCP not available for tool: {tool_name}"))
             }
+        } else {
+            Err(format!("Unknown tool: {tool_name}"))
         }
     };
 
@@ -349,30 +292,11 @@ fn smart_truncate(content: &str, max_chars: usize) -> String {
 
 /// Get definitions for all built-in tools.
 pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
-    // Collect definitions from extracted modules
-    let mut defs: Vec<ToolDefinition> = crate::tools::builtin_modules()
+    // All built-in tool definitions come from ToolModules now.
+    crate::tools::builtin_modules()
         .into_iter()
         .flat_map(|m| m.definitions())
-        .collect();
-
-    // Web tools (still dispatched from this file)
-    defs.extend(vec![
-        ToolDefinition {
-            name: "web_fetch".to_string(),
-            description: "Fetch a URL with SSRF protection. Supports GET/POST/PUT/PATCH/DELETE. For GET, HTML is converted to Markdown. For other methods, returns raw response body.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "url": { "type": "string", "description": "The URL to fetch (http/https only)" },
-                    "method": { "type": "string", "enum": ["GET","POST","PUT","PATCH","DELETE"], "description": "HTTP method (default: GET)" },
-                    "headers": { "type": "object", "description": "Custom HTTP headers as key-value pairs" },
-                    "body": { "type": "string", "description": "Request body for POST/PUT/PATCH" }
-                },
-                "required": ["url"]
-            }),
-        },
-    ]);
-    defs
+        .collect()
 }
 
 #[cfg(test)]

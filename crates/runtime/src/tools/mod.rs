@@ -19,6 +19,7 @@ pub mod shell;
 pub mod sqlite;
 pub mod toolset;
 pub mod training;
+pub mod web_fetch;
 pub mod web_search;
 
 use crate::kernel_handle::KernelHandle;
@@ -93,6 +94,7 @@ pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
         Box::new(sqlite::SqliteTools),
         Box::new(shell::ShellTools),
         Box::new(browser::BrowserTools),
+        Box::new(web_fetch::WebFetchModule),
         Box::new(web_search::WebSearchTools),
         Box::new(misc::MiscTools),
         Box::new(toolset::ToolSearchTools),
