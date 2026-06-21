@@ -131,7 +131,7 @@ struct OaiChoice { message: OaiResponseMessage, finish_reason: Option<String> }
 
 #[derive(Debug, Deserialize)]
 struct OaiResponseMessage {
-    content: Option<String>,
+    content: Option<serde_json::Value>,
     tool_calls: Option<Vec<OaiToolCall>>,
     reasoning_content: Option<serde_json::Value>,
 }
@@ -385,6 +385,7 @@ impl UnifiedHttpDriver {
 
         let mut content = Vec::new();
         let mut tool_calls = Vec::new();
+        let mut media = None;
 
         if let Some(ref reasoning) = choice.message.reasoning_content {
             let text = extract_reasoning_text(reasoning);
@@ -394,23 +395,68 @@ impl UnifiedHttpDriver {
             }
         }
 
-        if let Some(text) = choice.message.content {
-            if !text.is_empty() {
-                let (cleaned, thinking) = extract_think_tags(&text);
-                if let Some(think_text) = thinking {
-                    if choice.message.reasoning_content.is_none() {
-                        content.push(ContentBlock::Thinking { thinking: think_text });
+        // content can be: String, Array of content parts (OpenAI), or Array with image URLs (aginxbrain)
+        if let Some(content_val) = &choice.message.content {
+            match content_val {
+                serde_json::Value::String(text) => {
+                    if !text.is_empty() {
+                        let (cleaned, thinking) = extract_think_tags(text);
+                        if let Some(think_text) = thinking {
+                            if choice.message.reasoning_content.is_none() {
+                                content.push(ContentBlock::Thinking { thinking: think_text });
+                            }
+                        }
+                        if !cleaned.is_empty() {
+                            content.push(ContentBlock::Text { text: cleaned, provider_metadata: None });
+                        }
                     }
                 }
-                if !cleaned.is_empty() {
-                    content.push(ContentBlock::Text { text: cleaned, provider_metadata: None });
+                serde_json::Value::Array(parts) => {
+                    let mut text_parts = Vec::new();
+                    let mut image_urls = Vec::new();
+                    for part in parts {
+                        if let Some(s) = part.as_str() {
+                            text_parts.push(s.to_string());
+                        } else if let Some(url) = part.get("image").and_then(|v| v.as_str()) {
+                            image_urls.push(url.to_string());
+                        } else if let Some(url) = part.get("image_url")
+                            .and_then(|v| v.get("url"))
+                            .and_then(|v| v.as_str())
+                        {
+                            image_urls.push(url.to_string());
+                        } else if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
+                            text_parts.push(t.to_string());
+                        }
+                    }
+                    if !text_parts.is_empty() {
+                        let text = text_parts.join("");
+                        let (cleaned, thinking) = extract_think_tags(&text);
+                        if let Some(think_text) = thinking {
+                            if choice.message.reasoning_content.is_none() {
+                                content.push(ContentBlock::Thinking { thinking: think_text });
+                            }
+                        }
+                        if !cleaned.is_empty() {
+                            content.push(ContentBlock::Text { text: cleaned, provider_metadata: None });
+                        }
+                    }
+                    if !image_urls.is_empty() {
+                        let items: Vec<types::media::GeneratedImage> = image_urls.into_iter().map(|url| {
+                            types::media::GeneratedImage {
+                                data_base64: String::new(),
+                                url: Some(url),
+                            }
+                        }).collect();
+                        media = Some(types::media::MediaOutput::Images { items });
+                    }
                 }
+                _ => {}
             }
         }
 
         let has_text = content.iter().any(|b| matches!(b, ContentBlock::Text { .. }));
         let has_thinking = content.iter().any(|b| matches!(b, ContentBlock::Thinking { .. }));
-        if has_thinking && !has_text && choice.message.tool_calls.is_none() {
+        if has_thinking && !has_text && choice.message.tool_calls.is_none() && media.is_none() {
             let thinking_text = content.iter().find_map(|b| match b {
                 ContentBlock::Thinking { thinking } => Some(thinking.as_str()),
                 _ => None,
@@ -454,7 +500,7 @@ impl UnifiedHttpDriver {
             usage.output_tokens = 1;
         }
 
-        Ok(CompletionResponse { content, stop_reason, tool_calls, usage, media: None })
+        Ok(CompletionResponse { content, stop_reason, tool_calls, usage, media })
     }
 
     /// OpenAI-specific retry with request body mutation.
