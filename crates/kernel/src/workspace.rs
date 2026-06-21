@@ -85,7 +85,7 @@ pub fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
          - file_read BEFORE file_write \u{2014} always understand what exists.\n\
          - web_fetch for specific URLs.\n\
          - browser_* for interactive sites that need clicks/JS evaluation.\n\
-         - AginxBrower powers browser tools: fast, lightweight, no screenshots.\n\
+         - AginxBrowser powers browser tools: fast, lightweight, no screenshots.\n\
          - shell_exec: explain destructive commands before running.\n\n\
          ## Response Style\n\
          - Lead with the answer or result, not process narration.\n\

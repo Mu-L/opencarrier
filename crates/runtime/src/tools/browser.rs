@@ -1,7 +1,7 @@
-//! Browser automation tools — powered by AginxBrower HTTP API.
+//! Browser automation tools — powered by AginxBrowser HTTP API.
 //!
 //! Replaces the old browser-mcp (standalone MCP server) with direct HTTP calls
-//! to a local AginxBrower instance (default: http://127.0.0.1:8089).
+//! to a local AginxBrowser instance (default: http://127.0.0.1:8089).
 //!
 //! Supported tools:
 //! - browser_navigate: fetch a page and return content (markdown/html/text)
@@ -18,11 +18,11 @@ use async_trait::async_trait;
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 
-/// Default AginxBrower endpoint. Override via `AGINXBROWER_URL` env var.
+/// Default AginxBrowser endpoint. Override via `AGINXBROWSER_URL` env var.
 const DEFAULT_URL: &str = "http://127.0.0.1:8089";
 
-fn aginxbrower_url() -> String {
-    std::env::var("AGINXBROWER_URL").unwrap_or_else(|_| DEFAULT_URL.to_string())
+fn aginxbrowser_url() -> String {
+    std::env::var("AGINXBROWSER_URL").unwrap_or_else(|_| DEFAULT_URL.to_string())
 }
 
 pub struct BrowserTools;
@@ -153,7 +153,7 @@ The script can be an expression or an async IIFE."
             },
             ToolDefinition {
                 name: "browser_screenshot".to_string(),
-                description: "Capture a screenshot. NOTE: AginxBrower does not support screenshots. \
+                description: "Capture a screenshot. NOTE: AginxBrowser does not support screenshots. \
 Use browser_navigate to extract page content instead."
                     .to_string(),
                 input_schema: serde_json::json!({
@@ -191,7 +191,7 @@ Use browser_navigate to extract page content instead."
             },
             ToolDefinition {
                 name: "browser_close".to_string(),
-                description: "Close the browser session. NOTE: AginxBrower is stateless; this is a no-op."
+                description: "Close the browser session. NOTE: AginxBrowser is stateless; this is a no-op."
                     .to_string(),
                 input_schema: serde_json::json!({ "type": "object", "properties": {} }),
             },
@@ -213,7 +213,7 @@ Use browser_navigate to extract page content instead."
             "browser_back" => Some(browser_back(input).await),
             "browser_screenshot" => Some(browser_screenshot(input).await),
             "browser_wait" => Some(browser_wait(input).await),
-            "browser_close" => Some(Ok("Browser session closed (AginxBrower is stateless).".to_string())),
+            "browser_close" => Some(Ok("Browser session closed (AginxBrowser is stateless).".to_string())),
             _ => None,
         }
     }
@@ -238,23 +238,23 @@ async fn do_fetch_request(req_body: Value) -> Result<Value, String> {
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
 
-    let url = format!("{}/fetch", aginxbrower_url());
+    let url = format!("{}/fetch", aginxbrowser_url());
     let resp = client
         .post(&url)
         .json(&req_body)
         .send()
         .await
-        .map_err(|e| format!("AginxBrower request failed: {e}"))?;
+        .map_err(|e| format!("AginxBrowser request failed: {e}"))?;
 
     let status = resp.status();
     let body = resp
         .json::<Value>()
         .await
-        .map_err(|e| format!("Failed to parse AginxBrower response: {e}"))?;
+        .map_err(|e| format!("Failed to parse AginxBrowser response: {e}"))?;
 
     if !status.is_success() {
         let err = body["error"].as_str().unwrap_or("Unknown error");
-        return Err(format!("AginxBrower error ({}): {}", status, err));
+        return Err(format!("AginxBrowser error ({}): {}", status, err));
     }
 
     Ok(body)
@@ -266,23 +266,23 @@ async fn do_click_request(req_body: Value) -> Result<Value, String> {
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
 
-    let url = format!("{}/click", aginxbrower_url());
+    let url = format!("{}/click", aginxbrowser_url());
     let resp = client
         .post(&url)
         .json(&req_body)
         .send()
         .await
-        .map_err(|e| format!("AginxBrower request failed: {e}"))?;
+        .map_err(|e| format!("AginxBrowser request failed: {e}"))?;
 
     let status = resp.status();
     let body = resp
         .json::<Value>()
         .await
-        .map_err(|e| format!("Failed to parse AginxBrower response: {e}"))?;
+        .map_err(|e| format!("Failed to parse AginxBrowser response: {e}"))?;
 
     if !status.is_success() {
         let err = body["error"].as_str().unwrap_or("Unknown error");
-        return Err(format!("AginxBrower error ({}): {}", status, err));
+        return Err(format!("AginxBrowser error ({}): {}", status, err));
     }
 
     Ok(body)
@@ -294,23 +294,23 @@ async fn do_eval_request(req_body: Value) -> Result<Value, String> {
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
 
-    let url = format!("{}/eval", aginxbrower_url());
+    let url = format!("{}/eval", aginxbrowser_url());
     let resp = client
         .post(&url)
         .json(&req_body)
         .send()
         .await
-        .map_err(|e| format!("AginxBrower request failed: {e}"))?;
+        .map_err(|e| format!("AginxBrowser request failed: {e}"))?;
 
     let status = resp.status();
     let body = resp
         .json::<Value>()
         .await
-        .map_err(|e| format!("Failed to parse AginxBrower response: {e}"))?;
+        .map_err(|e| format!("Failed to parse AginxBrowser response: {e}"))?;
 
     if !status.is_success() {
         let err = body["error"].as_str().unwrap_or("Unknown error");
-        return Err(format!("AginxBrower error ({}): {}", status, err));
+        return Err(format!("AginxBrowser error ({}): {}", status, err));
     }
 
     Ok(body)
@@ -470,13 +470,13 @@ async fn browser_scroll(input: &Value) -> Result<String, String> {
 }
 
 async fn browser_back(_input: &Value) -> Result<String, String> {
-    Ok("browser_back: AginxBrower is stateless and does not maintain navigation history. \
+    Ok("browser_back: AginxBrowser is stateless and does not maintain navigation history. \
 Use browser_navigate with the target URL instead.".to_string())
 }
 
 async fn browser_screenshot(_input: &Value) -> Result<String, String> {
-    Err("Screenshots are not supported by AginxBrower. \
-AginxBrower uses a lightweight engine without a layout/paint renderer. \
+    Err("Screenshots are not supported by AginxBrowser. \
+AginxBrowser uses a lightweight engine without a layout/paint renderer. \
 Use browser_navigate to extract page content as text/markdown instead.".to_string())
 }
 

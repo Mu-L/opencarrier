@@ -12,25 +12,25 @@ use types::ssrf;
 use std::sync::Arc;
 use tracing::debug;
 
-/// 外挂 AginxBrower 需要兜底抓取的站点（JS 渲染或风控）。命中且 AginxBrower 已启用时
+/// 外挂 AginxBrowser 需要兜底抓取的站点（JS 渲染或风控）。命中且 AginxBrowser 已启用时
 /// 走浏览器，其余走 reqwest 直连。这是 web_fetch 的私有路由策略，不暴露为配置。
-const AGINXBROWER_HOSTS: &[&str] = &[
+const AGINXBROWSER_HOSTS: &[&str] = &[
     "mp.weixin.qq.com", // 微信公众号文章（风控）
     "zhuanlan.zhihu.com", // 知乎专栏（JS 渲染）
     "search.jd.com", // 京东搜索（动态）
     "github.com", // GitHub（动态 + 需代理）
 ];
 
-/// 读 AGINXBROWER_URL。未设/空 → None（不启用外挂，纯 reqwest，行为等同改造前）。
+/// 读 AGINXBROWSER_URL。未设/空 → None（不启用外挂，纯 reqwest，行为等同改造前）。
 /// 在 fetch 调用时读取（非构造时），故环境变量可动态生效，且无需把字段塞进 WebFetchConfig。
-fn aginxbrower_url() -> Option<String> {
-    std::env::var("AGINXBROWER_URL").ok().filter(|s| !s.is_empty())
+fn aginxbrowser_url() -> Option<String> {
+    std::env::var("AGINXBROWSER_URL").ok().filter(|s| !s.is_empty())
 }
 
 /// 目标 URL 是否属于已知需要浏览器渲染/过风控的站点。
-fn should_use_aginxbrower(url: &str) -> bool {
+fn should_use_aginxbrowser(url: &str) -> bool {
     let host = ssrf::extract_host(url); // 返回 "host:port"
-    AGINXBROWER_HOSTS.iter().any(|h| host.contains(h)) // .contains 兼容带端口后缀
+    AGINXBROWSER_HOSTS.iter().any(|h| host.contains(h)) // .contains 兼容带端口后缀
 }
 
 /// Enhanced web fetch engine with SSRF protection and readability extraction.
@@ -86,10 +86,10 @@ impl WebFetchEngine {
             }
         }
 
-        // Step 2b: 外挂 AginxBrower —— 命中风控站 + 已启用时走浏览器抓取，失败回退 reqwest。
+        // Step 2b: 外挂 AginxBrowser —— 命中风控站 + 已启用时走浏览器抓取，失败回退 reqwest。
         // 仅对 GET 生效；POST/PUT 等 API 调用永远走 reqwest。对 agent 完全透明。
-        if method_upper == "GET" && should_use_aginxbrower(url) && aginxbrower_url().is_some() {
-            if let Ok(content) = self.fetch_via_aginxbrower(url).await {
+        if method_upper == "GET" && should_use_aginxbrowser(url) && aginxbrowser_url().is_some() {
+            if let Ok(content) = self.fetch_via_aginxbrowser(url).await {
                 let truncated = if content.len() > self.config.max_chars {
                     format!(
                         "{}... [truncated, {} total chars]",
@@ -100,14 +100,14 @@ impl WebFetchEngine {
                     content
                 };
                 let result = format!(
-                    "HTTP 200 (via AginxBrower)\n\n{}",
+                    "HTTP 200 (via AginxBrowser)\n\n{}",
                     wrap_external_content(url, &truncated)
                 );
                 self.cache.put(cache_key.clone(), result.clone());
                 return Ok(result);
             }
-            // AginxBrower 失败/空内容 → 不 return，继续走下方 reqwest（降级）
-            debug!(url, "AginxBrower fetch failed or empty, falling back to reqwest");
+            // AginxBrowser 失败/空内容 → 不 return，继续走下方 reqwest（降级）
+            debug!(url, "AginxBrowser fetch failed or empty, falling back to reqwest");
         }
 
         // Step 3: Build request with configured method
@@ -213,10 +213,10 @@ impl WebFetchEngine {
         Ok(result)
     }
 
-    /// 调外挂 AginxBrower 的 /fetch，返回 markdown 正文。失败返回 Err（调用方回退 reqwest）。
+    /// 调外挂 AginxBrowser 的 /fetch，返回 markdown 正文。失败返回 Err（调用方回退 reqwest）。
     /// 请求格式对齐 browser.rs 的 do_fetch_request；响应解析 {content, title, url}。
-    async fn fetch_via_aginxbrower(&self, url: &str) -> Result<String, String> {
-        let base = aginxbrower_url().expect("caller guards aginxbrower_url().is_some()");
+    async fn fetch_via_aginxbrowser(&self, url: &str) -> Result<String, String> {
+        let base = aginxbrowser_url().expect("caller guards aginxbrowser_url().is_some()");
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(
                 self.config.timeout_secs.max(30),
@@ -233,15 +233,15 @@ impl WebFetchEngine {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("AginxBrower request failed: {e}"))?
+            .map_err(|e| format!("AginxBrowser request failed: {e}"))?
             .json()
             .await
-            .map_err(|e| format!("AginxBrower parse failed: {e}"))?;
+            .map_err(|e| format!("AginxBrowser parse failed: {e}"))?;
         resp.get("content")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .filter(|s| !s.trim().is_empty())
-            .ok_or_else(|| "AginxBrower response missing/empty content".into())
+            .ok_or_else(|| "AginxBrowser response missing/empty content".into())
     }
 }
 

@@ -883,7 +883,7 @@ pub fn tool_hint(name: &str) -> &'static str {
         "browser_type" => "type text into an input field via JS",
         "browser_screenshot" => "capture a screenshot (not supported — use browser_navigate)",
         "browser_read_page" => "extract page content as text/markdown",
-        "browser_close" => "close the browser session (no-op for AginxBrower)",
+        "browser_close" => "close the browser session (no-op for AginxBrowser)",
         "browser_scroll" => "scroll the page via JS",
         "browser_wait" => "wait for an element or condition via JS",
         "browser_evaluate" => "run arbitrary JavaScript on the page",

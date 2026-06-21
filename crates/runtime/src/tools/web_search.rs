@@ -1,12 +1,12 @@
-//! Built-in web search tool — powered by AginxBrower /search endpoint.
+//! Built-in web search tool — powered by AginxBrowser /search endpoint.
 //!
 //! Replaces the old searxng-mcp (standalone MCP server) with a direct HTTP call
-//! to the local AginxBrower instance (default: http://127.0.0.1:8089).
+//! to the local AginxBrowser instance (default: http://127.0.0.1:8089).
 //!
-//! AginxBrower /search calls SearXNG for meta search aggregation and optionally
+//! AginxBrowser /search provides native search aggregation (baidu, sogou, etc.) and optionally
 //! auto-fetches full content for top N results (one-step "search → read").
 //!
-//! Enabled via `AGINXBROWER_URL` env var (same switch as web_fetch and browser_*).
+//! Enabled via `AGINXBROWSER_URL` env var (same switch as web_fetch and browser_*).
 //! Not set → tool returns "Search not available".
 
 use super::ToolModule;
@@ -22,7 +22,7 @@ impl ToolModule for WebSearchTools {
     fn definitions(&self) -> Vec<ToolDefinition> {
         vec![ToolDefinition {
             name: "web_search".to_string(),
-            description: "Search the web using AginxBrower (meta search via SearXNG). \
+            description: "Search the web using AginxBrowser (native search aggregation). \
                 Returns results with title, URL, and snippet. \
                 Set fetch_top>0 to auto-fetch full content for top N results (one-step search+read)."
                 .to_string(),
@@ -69,9 +69,9 @@ impl ToolModule for WebSearchTools {
             return None;
         }
 
-        let base = match std::env::var("AGINXBROWER_URL").ok().filter(|s| !s.is_empty()) {
+        let base = match std::env::var("AGINXBROWSER_URL").ok().filter(|s| !s.is_empty()) {
             Some(u) => u,
-            None => return Some(Err("Search not available: AGINXBROWER_URL not set".into())),
+            None => return Some(Err("Search not available: AGINXBROWSER_URL not set".into())),
         };
 
         Some(do_search(&base, input).await)
@@ -82,7 +82,7 @@ impl ToolModule for WebSearchTools {
     }
 }
 
-/// POST AginxBrower /search and format results as Markdown.
+/// POST AginxBrowser /search and format results as Markdown.
 async fn do_search(base_url: &str, input: &Value) -> Result<String, String> {
     let q = input["q"]
         .as_str()
@@ -120,16 +120,16 @@ async fn do_search(base_url: &str, input: &Value) -> Result<String, String> {
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("AginxBrower search request failed: {e}"))?;
+        .map_err(|e| format!("AginxBrowser search request failed: {e}"))?;
 
     let status = resp.status();
     if status.as_u16() == 503 {
-        return Err("Search backend (SearXNG) unavailable. AginxBrower /search returned 503.".into());
+        return Err("Search backend unavailable. AginxBrowser /search returned 503.".into());
     }
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
         let truncated: String = text.chars().take(500).collect();
-        return Err(format!("AginxBrower search error ({}): {}", status, truncated));
+        return Err(format!("AginxBrowser search error ({}): {}", status, truncated));
     }
 
     let data: Value = resp
