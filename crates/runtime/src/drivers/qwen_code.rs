@@ -33,8 +33,6 @@ const SENSITIVE_ENV_EXACT: &[&str] = &[
     "HUGGINGFACE_API_KEY",
     "XAI_API_KEY",
     "REPLICATE_API_TOKEN",
-    "BRAVE_API_KEY",
-    "TAVILY_API_KEY",
     "ELEVENLABS_API_KEY",
 ];
 

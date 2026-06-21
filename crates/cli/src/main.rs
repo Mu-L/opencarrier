@@ -2546,8 +2546,6 @@ fn provider_to_env_var(provider: &str) -> String {
         "perplexity" => "PERPLEXITY_API_KEY".to_string(),
         "cohere" => "COHERE_API_KEY".to_string(),
         "xai" => "XAI_API_KEY".to_string(),
-        "brave" => "BRAVE_API_KEY".to_string(),
-        "tavily" => "TAVILY_API_KEY".to_string(),
         other => format!("{}_API_KEY", other.to_uppercase()),
     }
 }

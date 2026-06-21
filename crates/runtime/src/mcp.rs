@@ -696,8 +696,8 @@ pub fn extract_mcp_server(tool_name: &str) -> Option<&str> {
 
 /// Extract the original server name by matching against known server names.
 ///
-/// This handles server names with hyphens (e.g. "bocha-search") correctly —
-/// the normalized prefix "mcp_bocha_search_" is matched against each known
+/// This handles server names with hyphens (e.g. "my-api") correctly —
+/// the normalized prefix "mcp_my_api_" is matched against each known
 /// server's normalized name, returning the original (unhyphenated) name.
 pub fn extract_mcp_server_from_known<'a>(
     tool_name: &str,
@@ -795,12 +795,12 @@ mod tests {
 
     #[test]
     fn test_extract_mcp_server_from_known_with_hyphens() {
-        // Server "bocha-search" normalized to "bocha_search" in tool prefix
-        let servers = vec!["bocha-search", "github"];
-        let tool = "mcp_bocha_search_bocha_web_search";
+        // Server "my-api" normalized to "my_api" in tool prefix
+        let servers = vec!["my-api", "github"];
+        let tool = "mcp_my_api_get_data";
         assert_eq!(
             extract_mcp_server_from_known(tool, &servers),
-            Some("bocha-search")
+            Some("my-api")
         );
         // Simple server name still works
         assert_eq!(

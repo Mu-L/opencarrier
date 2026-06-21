@@ -678,7 +678,7 @@ mod tests {
                 role: Role::Assistant,
                 content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
                     id: "tu-dup".to_string(),
-                    name: "search".to_string(),
+                    name: "web_search".to_string(),
                     input: serde_json::json!({}),
                     provider_metadata: None,
                 }]),
@@ -852,13 +852,13 @@ mod tests {
                 content: MessageContent::Blocks(vec![
                     ContentBlock::ToolUse {
                         id: "tu-a".to_string(),
-                        name: "search".to_string(),
+                        name: "web_search".to_string(),
                         input: serde_json::json!({}),
                         provider_metadata: None,
                     },
                     ContentBlock::ToolUse {
                         id: "tu-b".to_string(),
-                        name: "fetch".to_string(),
+                        name: "web_fetch".to_string(),
                         input: serde_json::json!({}),
                         provider_metadata: None,
                     },

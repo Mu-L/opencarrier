@@ -17,7 +17,7 @@ pub fn map_tool_name(name: &str) -> Option<&'static str> {
         "Grep" | "grep" => Some("file_list"),
         "Bash" | "bash" | "exec" | "execute_command" => Some("shell_exec"),
         "WebFetch" | "fetch_url" | "web_fetch" => Some("web_fetch"),
-        "WebSearch" | "search" | "mcp_searxng_web_search" => Some("web_search"),
+        "WebSearch" => Some("web_search"),
         "browser_navigate" => Some("browser_navigate"),
         "sessions_send" | "agent_message" => Some("agent_send"),
         "sessions_list" | "agents_list" | "agent_list" => Some("agent_list"),

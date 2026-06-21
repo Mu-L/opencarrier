@@ -1,7 +1,6 @@
 //! Built-in web search tool — powered by AginxBrowser /search endpoint.
 //!
-//! Replaces the old searxng-mcp (standalone MCP server) with a direct HTTP call
-//! to the local AginxBrowser instance (default: http://127.0.0.1:8089).
+//! Direct HTTP call to the local AginxBrowser instance (default: http://127.0.0.1:8089).
 //!
 //! AginxBrowser /search provides native search aggregation (baidu, sogou, etc.) and optionally
 //! auto-fetches full content for top N results (one-step "search → read").
