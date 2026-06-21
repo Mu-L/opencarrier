@@ -40,12 +40,6 @@ pub struct ProviderConfig {
     /// If empty/missing, this provider doesn't require authentication (e.g., local aginxbrain).
     #[serde(default)]
     pub api_key_env: String,
-    /// Legacy fields accepted from old brain.json but no longer used.
-    /// All auth goes through aginxbrain with simple Bearer token.
-    #[serde(default, skip_serializing)]
-    pub auth_type: String,
-    #[serde(default, skip_serializing)]
-    pub params: HashMap<String, String>,
 }
 
 /// Endpoint = base_url + model (complete callable unit).
@@ -68,47 +62,9 @@ pub struct EndpointConfig {
     /// Legacy fields accepted from old brain.json but no longer used.
     /// All endpoints use OpenAI format through aginxbrain.
     #[serde(default, skip_serializing)]
-    pub format: ApiFormat,
+    pub format: String,
     #[serde(default, skip_serializing)]
-    pub auth_header: AuthHeaderType,
-}
-
-/// API protocol format — always OpenAI since aginxbrain proxies all LLM traffic.
-///
-/// This is a unit struct that always serializes as `"openai"` and accepts any
-/// string during deserialization (for backward compatibility with old brain.json
-/// files that may specify `"anthropic"`, `"gemini"`, etc.).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct ApiFormat;
-
-impl Serialize for ApiFormat {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str("openai")
-    }
-}
-
-impl<'de> Deserialize<'de> for ApiFormat {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        // Accept any string value for backward compatibility, always produce OpenAI
-        let _ = <String>::deserialize(d);
-        Ok(ApiFormat)
-    }
-}
-
-impl std::fmt::Display for ApiFormat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "openai")
-    }
-}
-
-/// Legacy type accepted from old brain.json but no longer used.
-/// All auth goes through aginxbrain with Bearer token.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthHeaderType {
-    #[default]
-    Bearer,
-    ApiKey,
+    pub auth_header: String,
 }
 
 /// Modality = task type → endpoint routing.
@@ -263,7 +219,6 @@ mod tests {
 
         assert_eq!(config.endpoints.len(), 3);
         assert_eq!(config.endpoints["brain_chat"].model, "chat");
-        assert_eq!(config.endpoints["ollama_local"].format, ApiFormat); // always OpenAI
 
         assert_eq!(config.modalities["chat"].primary, "brain_chat");
         assert_eq!(config.modalities["chat"].fallbacks, vec!["brain_reasoning"]);
@@ -273,27 +228,8 @@ mod tests {
     }
 
     #[test]
-    fn test_api_format_always_openai() {
-        // Always serializes as "openai"
-        assert_eq!(
-            serde_json::to_string(&ApiFormat).unwrap(),
-            "\"openai\""
-        );
-
-        // Accepts any string (backward compatibility) and produces ApiFormat
-        let f: ApiFormat = serde_json::from_str("\"anthropic\"").unwrap();
-        assert_eq!(f, ApiFormat);
-
-        let f: ApiFormat = serde_json::from_str("\"gemini\"").unwrap();
-        assert_eq!(f, ApiFormat);
-
-        let f: ApiFormat = serde_json::from_str("\"openai\"").unwrap();
-        assert_eq!(f, ApiFormat);
-    }
-
-    #[test]
-    fn test_legacy_fields_ignored() {
-        // Old brain.json with "format": "anthropic" and "auth_type": "jwt" still parses
+    fn test_legacy_endpoint_fields_ignored() {
+        // Old brain.json with "format": "anthropic" and "auth_header": "api_key" still parses
         let json = r#"{
             "provider": "aginxbrain",
             "model": "chat",
@@ -303,8 +239,13 @@ mod tests {
         }"#;
         let ep: EndpointConfig = serde_json::from_str(json).unwrap();
         assert_eq!(ep.model, "chat");
-        assert_eq!(ep.format, ApiFormat); // always OpenAI regardless of input
+        // format and auth_header are accepted but skip_serializing
+        assert_eq!(ep.format, "anthropic");
+        assert_eq!(ep.auth_header, "api_key");
+    }
 
+    #[test]
+    fn test_legacy_provider_fields_ignored() {
         // Old provider config with auth_type/params still parses
         let json = r#"{
             "api_key_env": "FOO",
@@ -313,8 +254,5 @@ mod tests {
         }"#;
         let pc: ProviderConfig = serde_json::from_str(json).unwrap();
         assert_eq!(pc.api_key_env, "FOO");
-        // auth_type and params are accepted but skip_serializing
-        assert_eq!(pc.auth_type, "jwt");
-        assert_eq!(pc.params["access_key_env"], "AK");
     }
 }

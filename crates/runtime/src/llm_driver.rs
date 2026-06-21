@@ -335,12 +335,6 @@ pub struct DriverConfig {
     pub api_key: Option<String>,
     /// Base URL — the complete API endpoint URL (no path suffix appended by drivers).
     pub base_url: Option<String>,
-    /// Legacy fields accepted from old configs but no longer used.
-    /// All HTTP drivers use OpenAI format with Bearer auth through aginxbrain.
-    #[serde(default, skip_serializing)]
-    pub format: Option<types::brain::ApiFormat>,
-    #[serde(default, skip_serializing)]
-    pub auth_header: types::brain::AuthHeaderType,
     /// Skip interactive permission prompts (Claude Code provider only).
     ///
     /// When `true`, adds `--dangerously-skip-permissions` to the spawned
@@ -362,8 +356,6 @@ impl Default for DriverConfig {
             provider: String::new(),
             api_key: None,
             base_url: None,
-            format: None,
-            auth_header: types::brain::AuthHeaderType::default(),
             skip_permissions: true,
         }
     }

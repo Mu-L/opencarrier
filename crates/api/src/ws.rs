@@ -481,7 +481,6 @@ async fn handle_text_message(
                     .map(|e| e.manifest.model.modality.clone())
                     .unwrap_or_default();
                 // Allow vision by default — most modern models support it
-                // The model catalog no longer tracks vision support per-model
                 let _ = model_name; // used for informational purposes only
             }
 

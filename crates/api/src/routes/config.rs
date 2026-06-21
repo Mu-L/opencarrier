@@ -82,7 +82,7 @@ pub async fn config_reload(State(state): State<Arc<AppState>>) -> impl IntoRespo
 
 /// GET /api/config/schema — Return a simplified JSON description of the config structure.
 pub async fn config_schema(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Build modality options from Brain config (or legacy model catalog)
+    // Build modality options from Brain config
     let modalities: Vec<String> = state
         .kernel
         .brain_info()

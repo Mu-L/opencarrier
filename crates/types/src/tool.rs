@@ -150,19 +150,14 @@ pub struct ToolResult {
 
 /// Normalize a JSON Schema for cross-provider compatibility.
 ///
-/// Some providers (Gemini, Groq) reject `anyOf` in tool schemas.
-/// This function:
+/// Some providers reject `anyOf` in tool schemas. This function:
 /// - Converts `anyOf` arrays of simple types to flat `enum` arrays
 /// - Strips `$schema` keys (not accepted by most providers)
 /// - Recursively walks `properties` and `items`
 pub fn normalize_schema_for_provider(
     schema: &serde_json::Value,
-    provider: &str,
+    _provider: &str,
 ) -> serde_json::Value {
-    // Anthropic handles anyOf natively — no normalization needed
-    if provider == "anthropic" {
-        return schema.clone();
-    }
     normalize_schema_recursive(schema)
 }
 
@@ -545,17 +540,6 @@ mod tests {
         // Gemini rejects type arrays — should flatten to first type
         assert_eq!(value_prop["type"], "string");
         assert!(value_prop.get("anyOf").is_none());
-    }
-
-    #[test]
-    fn test_normalize_schema_anthropic_passthrough() {
-        let schema = serde_json::json!({
-            "$schema": "http://json-schema.org/draft-07/schema#",
-            "anyOf": [{"type": "string"}]
-        });
-        let result = normalize_schema_for_provider(&schema, "anthropic");
-        // Anthropic should get the original schema unchanged
-        assert!(result.get("$schema").is_some());
     }
 
     #[test]

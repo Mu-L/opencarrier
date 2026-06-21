@@ -22,7 +22,6 @@ pub async fn brain_info(State(state): State<Arc<AppState>>) -> impl IntoResponse
                 "provider": ep.provider,
                 "model": ep.model,
                 "base_url": ep.base_url,
-                "format": ep.format.to_string(),
                 "ready": ready.contains(name),
             }),
         );
@@ -44,7 +43,6 @@ pub async fn brain_info(State(state): State<Arc<AppState>>) -> impl IntoResponse
         "default_modality": config.default_modality,
         "modalities": modalities,
         "endpoints": endpoints,
-        "supported_formats": vec!["openai"],
     }))
 }
 /// GET /api/brain/status — Brain health status (driver readiness, latency, success/failure).
@@ -96,20 +94,6 @@ pub async fn set_brain_provider(
         .unwrap_or("")
         .trim()
         .to_string();
-    let auth_type = body["auth_type"]
-        .as_str()
-        .unwrap_or("apikey")
-        .trim()
-        .to_string();
-    let params: std::collections::HashMap<String, String> = body
-        .get("params")
-        .and_then(|p| p.as_object())
-        .map(|obj| {
-            obj.iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect()
-        })
-        .unwrap_or_default();
 
     // If api_key is provided, persist to .env and set in current process
     if let Some(api_key) = body["api_key"].as_str() {
@@ -123,8 +107,6 @@ pub async fn set_brain_provider(
             name.clone(),
             types::brain::ProviderConfig {
                 api_key_env,
-                auth_type,
-                params,
             },
         );
     });
@@ -207,11 +189,6 @@ pub async fn set_brain_endpoint(
     let provider = body["provider"].as_str().unwrap_or("").trim().to_string();
     let model = body["model"].as_str().unwrap_or("").trim().to_string();
     let base_url = body["base_url"].as_str().unwrap_or("").trim().to_string();
-    let format_str = body["format"]
-        .as_str()
-        .unwrap_or("openai")
-        .trim()
-        .to_string();
 
     // Validate required fields
     if provider.is_empty() {
@@ -233,21 +210,6 @@ pub async fn set_brain_endpoint(
         );
     }
 
-    let _format: types::brain::ApiFormat = match serde_json::from_value(
-        serde_json::Value::String(format_str.clone()),
-    ) {
-        Ok(f) => f,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!(
-                    "Invalid format '{}'. Only 'openai' is supported",
-                    format_str
-                )})),
-            )
-        }
-    };
-
     // Validate provider exists
     {
         let guard = state.kernel.brain_read();
@@ -267,8 +229,8 @@ pub async fn set_brain_endpoint(
                 provider,
                 model,
                 base_url,
-                format: _format,
-                auth_header: Default::default(),
+                format: String::new(),
+                auth_header: String::new(),
             },
         );
     });

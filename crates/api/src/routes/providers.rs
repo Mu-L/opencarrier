@@ -39,8 +39,7 @@ pub async fn list_provider_keys(State(state): State<Arc<AppState>>) -> impl Into
 }
 /// POST /api/providers/{name}/key — Set API key for a provider.
 ///
-/// For `apikey` auth type: `{ "key": "sk-xxx" }`
-/// For `jwt` auth type: `{ "params": { "access_key_env": "val", "secret_key_env": "val" } }`
+/// `{ "key": "sk-xxx" }`
 pub async fn set_provider_key(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,

@@ -10,7 +10,7 @@ pub mod qwen_code;
 use crate::llm_driver::{DriverConfig, LlmDriver, LlmError};
 use std::sync::Arc;
 
-/// Create an LLM driver based on the format field in configuration.
+/// Create an LLM driver based on the provider name in configuration.
 ///
 /// Delegates to `llm_driver::create_driver()` which handles both CLI
 /// subprocess drivers and HTTP API drivers (via `UnifiedHttpDriver`).
@@ -28,8 +28,6 @@ mod tests {
             provider: "aginxbrain".to_string(),
             api_key: Some("test-key".to_string()),
             base_url: Some("https://brain.aginx.net/v1/chat/completions".to_string()),
-            format: None,
-            auth_header: types::brain::AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
@@ -46,8 +44,6 @@ mod tests {
             provider: "local".to_string(),
             api_key: None,
             base_url: Some("http://localhost:8080/v1/chat/completions".to_string()),
-            format: None,
-            auth_header: types::brain::AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
@@ -63,8 +59,6 @@ mod tests {
             provider: "aginxbrain".to_string(),
             api_key: Some("test-key".to_string()),
             base_url: None,
-            format: None,
-            auth_header: types::brain::AuthHeaderType::default(),
             skip_permissions: true,
         };
         let result = create_driver(&config);
@@ -83,8 +77,6 @@ mod tests {
             provider: "claude-code".to_string(),
             api_key: None,
             base_url: Some("/usr/local/bin/claude".to_string()),
-            format: None,
-            auth_header: types::brain::AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
@@ -100,8 +92,6 @@ mod tests {
             provider: "my-custom-llm".to_string(),
             api_key: Some("test".to_string()),
             base_url: Some("http://localhost:9999/v1/chat/completions".to_string()),
-            format: None,
-            auth_header: types::brain::AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);

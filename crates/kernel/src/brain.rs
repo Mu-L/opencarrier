@@ -2,7 +2,7 @@
 //!
 //! Three-layer architecture:
 //! - **Provider**: identity + credentials
-//! - **Endpoint**: complete callable unit (provider + model + base_url + format)
+//! - **Endpoint**: complete callable unit (provider + model + base_url)
 //! - **Modality**: task type → endpoint with fallback chain
 //!
 //! Drivers are pre-created and cached per endpoint at boot.
@@ -292,7 +292,7 @@ impl Brain {
     }
 
     /// Resolve credentials for a provider (for skill credential injection).
-    /// Reads all env vars declared in the provider config and returns them
+    /// Reads the API key env var declared in the provider config and returns it
     /// as a ProviderCredentials struct ready for injection into skill subprocesses.
     pub fn credentials_for(
         &self,
@@ -301,17 +301,9 @@ impl Brain {
         let config = self.config.providers.get(provider)?;
         let mut env_vars = HashMap::new();
 
-        // Legacy: api_key_env
         if !config.api_key_env.is_empty() {
             if let Some(val) = types::env::get_env(&config.api_key_env) {
                 env_vars.insert(config.api_key_env.clone(), val);
-            }
-        }
-
-        // New: params (each value is an env var name)
-        for env_name in config.params.values() {
-            if let Some(val) = types::env::get_env(env_name) {
-                env_vars.insert(env_name.clone(), val);
             }
         }
 
@@ -440,8 +432,6 @@ impl Brain {
             api_key,
             base_url: Some(endpoint.base_url.clone()),
             skip_permissions: true,
-            format: Some(endpoint.format),
-            auth_header: endpoint.auth_header,
         };
 
         drivers::create_driver(&driver_config).map_err(|e| BrainError::DriverCreation {
@@ -452,7 +442,6 @@ impl Brain {
 }
 
 // ---------------------------------------------------------------------------
-// JWT token generation for providers like Kling
 /// Implement the runtime Brain trait so agent_loop can use Brain methods.
 #[async_trait]
 impl BrainTrait for Brain {

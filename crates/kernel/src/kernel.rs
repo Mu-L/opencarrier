@@ -23,7 +23,7 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock, Weak};
 use tracing::{info, warn};
 
-/// LLM brain and model catalog subsystem.
+/// LLM brain subsystem.
 pub struct KernelBrain {
     /// The carrier's independent LLM brain. Always loaded — boot fails without a valid brain.json.
     /// Wrapped in RwLock to allow hot-reload of brain.json at runtime.
@@ -145,7 +145,7 @@ pub struct CarrierKernel {
     /// Wired up alongside channel_send_fn.
     pub channel_supports_proactive_fn: std::sync::RwLock<Option<ChannelProactivePushFn>>,
 
-    /// LLM brain and model catalog.
+    /// LLM brain.
     pub brain: KernelBrain,
     /// A2A communication subsystem.
     pub a2a: KernelA2a,

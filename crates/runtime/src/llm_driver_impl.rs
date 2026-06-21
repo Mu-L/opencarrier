@@ -62,8 +62,6 @@ struct OaiRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -142,12 +140,7 @@ struct OaiResponseMessage {
 struct OaiUsage { prompt_tokens: u64, completion_tokens: u64 }
 
 fn extract_reasoning_text(val: &serde_json::Value) -> String {
-    match val {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Array(arr) => arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(""),
-        serde_json::Value::Object(obj) => obj.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        _ => String::new(),
-    }
+    val.as_str().unwrap_or("").to_string()
 }
 
 fn mime_to_audio_format(mime: &str) -> &str {
@@ -371,7 +364,6 @@ impl UnifiedHttpDriver {
             tool_choice,
             stream: false,
             stream_options: None,
-            reasoning_effort: None,
         }
     }
 }
