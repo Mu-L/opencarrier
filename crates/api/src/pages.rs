@@ -531,7 +531,7 @@ pub async fn brain_page(
             providers => providers,
             endpoints => endpoints,
             modalities => modalities,
-            supported_formats => types::brain::SUPPORTED_FORMATS,
+            supported_formats => &["openai"],
         },
     ))
 }

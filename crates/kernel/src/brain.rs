@@ -428,44 +428,11 @@ impl Brain {
                     provider: endpoint.provider.clone(),
                 })?;
 
-        // Resolve API key based on auth_type
-        let api_key = match provider_config.auth_type.as_str() {
-            "jwt" => {
-                // JWT auth: generate token from access_key + secret_key params
-                let ak_env = provider_config
-                    .params
-                    .get("access_key_env")
-                    .ok_or_else(|| BrainError::MissingJwtParam {
-                        endpoint: name.to_string(),
-                        param: "access_key_env".to_string(),
-                    })?;
-                let sk_env = provider_config
-                    .params
-                    .get("secret_key_env")
-                    .ok_or_else(|| BrainError::MissingJwtParam {
-                        endpoint: name.to_string(),
-                        param: "secret_key_env".to_string(),
-                    })?;
-                let access_key =
-                    types::env::get_env(ak_env).ok_or_else(|| BrainError::MissingJwtCredential {
-                        endpoint: name.to_string(),
-                        env_var: ak_env.clone(),
-                    })?;
-                let secret_key =
-                    types::env::get_env(sk_env).ok_or_else(|| BrainError::MissingJwtCredential {
-                        endpoint: name.to_string(),
-                        env_var: sk_env.clone(),
-                    })?;
-                Some(generate_jwt_token(&access_key, &secret_key)?)
-            }
-            _ => {
-                // Default apikey auth
-                if provider_config.api_key_env.is_empty() {
-                    None
-                } else {
-                    types::env::get_env(&provider_config.api_key_env)
-                }
-            }
+        // Resolve API key — all providers use simple Bearer auth via aginxbrain
+        let api_key = if provider_config.api_key_env.is_empty() {
+            None
+        } else {
+            types::env::get_env(&provider_config.api_key_env)
         };
 
         let driver_config = DriverConfig {
@@ -486,48 +453,6 @@ impl Brain {
 
 // ---------------------------------------------------------------------------
 // JWT token generation for providers like Kling
-// ---------------------------------------------------------------------------
-
-/// Generate a JWT token using HMAC-SHA256 (HS256).
-///
-/// Compatible with Kling and similar providers that use `access_key` + `secret_key`
-/// for JWT-based authentication.
-///
-/// - Header: `{"alg":"HS256","typ":"JWT"}`
-/// - Payload: `{"iss": access_key, "exp": now + 1800, "nbf": now - 5}`
-/// - Signature: HMAC-SHA256 over `header.payload` using `secret_key`
-fn generate_jwt_token(access_key: &str, secret_key: &str) -> Result<String, String> {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use base64::Engine;
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-
-    type HmacSha256 = Hmac<Sha256>;
-
-    let header = serde_json::json!({"alg": "HS256", "typ": "JWT"});
-    let header_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&header).expect("JWT header serialization cannot fail"));
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let payload = serde_json::json!({
-        "iss": access_key,
-        "exp": now + 1800,
-        "nbf": now.saturating_sub(5),
-    });
-    let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&payload).expect("JWT payload serialization cannot fail"));
-
-    let signing_input = format!("{}.{}", header_b64, payload_b64);
-    let mut mac =
-        HmacSha256::new_from_slice(secret_key.as_bytes()).map_err(|_| "HMAC secret key cannot be empty")?;
-    mac.update(signing_input.as_bytes());
-    let signature = mac.finalize().into_bytes();
-    let sig_b64 = URL_SAFE_NO_PAD.encode(signature);
-
-    Ok(format!("{}.{}.{}", header_b64, payload_b64, sig_b64))
-}
-
 /// Implement the runtime Brain trait so agent_loop can use Brain methods.
 #[async_trait]
 impl BrainTrait for Brain {
@@ -573,18 +498,6 @@ pub enum BrainError {
     ProviderNotFound { endpoint: String, provider: String },
     /// Driver creation failed.
     DriverCreation { endpoint: String, error: String },
-    /// JWT auth requires a parameter (e.g., access_key_env) that is missing from provider config.
-    MissingJwtParam { endpoint: String, param: String },
-    /// JWT auth credential (env var) is not set.
-    MissingJwtCredential { endpoint: String, env_var: String },
-    /// JWT token generation failed.
-    JwtGeneration { endpoint: String, error: String },
-}
-
-impl From<String> for BrainError {
-    fn from(s: String) -> Self {
-        BrainError::JwtGeneration { endpoint: String::new(), error: s }
-    }
 }
 
 impl std::fmt::Display for BrainError {
@@ -601,64 +514,9 @@ impl std::fmt::Display for BrainError {
             BrainError::DriverCreation { endpoint, error } => {
                 write!(f, "Failed to create driver for '{}': {}", endpoint, error)
             }
-            BrainError::MissingJwtParam { endpoint, param } => {
-                write!(
-                    f,
-                    "Endpoint '{}': JWT provider missing param '{}'",
-                    endpoint, param
-                )
-            }
-            BrainError::MissingJwtCredential { endpoint, env_var } => {
-                write!(
-                    f,
-                    "Endpoint '{}': JWT credential '{}' not set in environment",
-                    endpoint, env_var
-                )
-            }
-            BrainError::JwtGeneration { endpoint, error } => {
-                write!(
-                    f,
-                    "Endpoint '{}': JWT token generation failed: {}",
-                    endpoint, error
-                )
-            }
         }
     }
 }
 
 impl std::error::Error for BrainError {}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_generate_jwt_token_structure() {
-        let token = generate_jwt_token("test_access_key", "test_secret_key").unwrap();
-        let parts: Vec<&str> = token.split('.').collect();
-        assert_eq!(parts.len(), 3, "JWT should have 3 parts separated by '.'");
-
-        // Decode header
-        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        use base64::Engine;
-        let header: serde_json::Value = serde_json::from_str(
-            String::from_utf8(URL_SAFE_NO_PAD.decode(parts[0]).unwrap())
-                .unwrap()
-                .as_str(),
-        )
-        .unwrap();
-        assert_eq!(header["alg"], "HS256");
-        assert_eq!(header["typ"], "JWT");
-
-        // Decode payload
-        let payload: serde_json::Value = serde_json::from_str(
-            String::from_utf8(URL_SAFE_NO_PAD.decode(parts[1]).unwrap())
-                .unwrap()
-                .as_str(),
-        )
-        .unwrap();
-        assert_eq!(payload["iss"], "test_access_key");
-        assert!(payload["exp"].is_number());
-        assert!(payload["nbf"].is_number());
-    }
-}

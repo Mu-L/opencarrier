@@ -21,199 +21,59 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use types::brain::{ApiFormat, AuthHeaderType};
 
     #[test]
-    fn test_anthropic_format_with_key_and_url() {
+    fn test_http_driver_with_key_and_url() {
         let config = DriverConfig {
-            provider: "anthropic".to_string(),
+            provider: "aginxbrain".to_string(),
             api_key: Some("test-key".to_string()),
-            base_url: Some("https://api.anthropic.com/v1/messages".to_string()),
-            format: Some(ApiFormat::Anthropic),
-            auth_header: AuthHeaderType::default(),
+            base_url: Some("https://brain.aginx.net/v1/chat/completions".to_string()),
+            format: None,
+            auth_header: types::brain::AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
         assert!(
             driver.is_ok(),
-            "Anthropic format with key + URL should succeed"
+            "HTTP driver with key + URL should succeed"
         );
     }
 
     #[test]
-    fn test_anthropic_format_no_key_errors() {
+    fn test_http_driver_no_key_succeeds() {
+        // HTTP driver does not require API key (e.g. local aginxbrain)
         let config = DriverConfig {
-            provider: "anthropic".to_string(),
+            provider: "local".to_string(),
             api_key: None,
-            base_url: Some("https://api.anthropic.com/v1/messages".to_string()),
-            format: Some(ApiFormat::Anthropic),
-            auth_header: AuthHeaderType::default(),
+            base_url: Some("http://localhost:8080/v1/chat/completions".to_string()),
+            format: None,
+            auth_header: types::brain::AuthHeaderType::default(),
             skip_permissions: true,
         };
-        let result = create_driver(&config);
-        assert!(result.is_err(), "Anthropic format without key should error");
+        let driver = create_driver(&config);
+        assert!(
+            driver.is_ok(),
+            "HTTP driver without key should succeed (local providers)"
+        );
     }
 
     #[test]
-    fn test_anthropic_format_no_url_errors() {
+    fn test_http_driver_no_url_errors() {
         let config = DriverConfig {
-            provider: "anthropic".to_string(),
+            provider: "aginxbrain".to_string(),
             api_key: Some("test-key".to_string()),
             base_url: None,
-            format: Some(ApiFormat::Anthropic),
-            auth_header: AuthHeaderType::default(),
+            format: None,
+            auth_header: types::brain::AuthHeaderType::default(),
             skip_permissions: true,
         };
         let result = create_driver(&config);
-        assert!(result.is_err(), "Anthropic format without URL should error");
-    }
-
-    #[test]
-    fn test_openai_format_with_key_and_url() {
-        let config = DriverConfig {
-            provider: "groq".to_string(),
-            api_key: Some("test-key".to_string()),
-            base_url: Some("https://api.groq.com/openai/v1/chat/completions".to_string()),
-            format: Some(ApiFormat::OpenAI),
-            auth_header: AuthHeaderType::default(),
-            skip_permissions: true,
-        };
-        let driver = create_driver(&config);
-        assert!(
-            driver.is_ok(),
-            "OpenAI format with key + URL should succeed"
-        );
-    }
-
-    #[test]
-    fn test_openai_format_no_key_succeeds() {
-        // OpenAI format does not require API key (e.g. Ollama)
-        let config = DriverConfig {
-            provider: "ollama".to_string(),
-            api_key: None,
-            base_url: Some("http://localhost:11434/v1/chat/completions".to_string()),
-            format: Some(ApiFormat::OpenAI),
-            auth_header: AuthHeaderType::default(),
-            skip_permissions: true,
-        };
-        let driver = create_driver(&config);
-        assert!(
-            driver.is_ok(),
-            "OpenAI format without key should succeed (local providers)"
-        );
-    }
-
-    #[test]
-    fn test_openai_format_no_url_errors() {
-        let config = DriverConfig {
-            provider: "openai".to_string(),
-            api_key: Some("test-key".to_string()),
-            base_url: None,
-            format: Some(ApiFormat::OpenAI),
-            auth_header: AuthHeaderType::default(),
-            skip_permissions: true,
-        };
-        let result = create_driver(&config);
-        assert!(result.is_err(), "OpenAI format without URL should error");
-    }
-
-    #[test]
-    fn test_gemini_format_with_key_and_url() {
-        let config = DriverConfig {
-            provider: "gemini".to_string(),
-            api_key: Some("test-key".to_string()),
-            base_url: Some("https://generativelanguage.googleapis.com/v1beta/models".to_string()),
-            format: Some(ApiFormat::Gemini),
-            auth_header: AuthHeaderType::default(),
-            skip_permissions: true,
-        };
-        let driver = create_driver(&config);
-        assert!(
-            driver.is_ok(),
-            "Gemini format with key + URL should succeed"
-        );
-    }
-
-    #[test]
-    fn test_gemini_format_no_key_errors() {
-        let config = DriverConfig {
-            provider: "gemini".to_string(),
-            api_key: None,
-            base_url: Some("https://generativelanguage.googleapis.com".to_string()),
-            format: Some(ApiFormat::Gemini),
-            auth_header: AuthHeaderType::default(),
-            skip_permissions: true,
-        };
-        let result = create_driver(&config);
-        assert!(result.is_err(), "Gemini format without key should error");
-    }
-
-    #[test]
-    fn test_azure_driver_with_key_and_url() {
-        let config = DriverConfig {
-            provider: "azure".to_string(),
-            api_key: Some("test-azure-key".to_string()),
-            base_url: Some("https://myresource.openai.azure.com/openai/deployments".to_string()),
-            format: Some(ApiFormat::OpenAI),
-            auth_header: AuthHeaderType::default(),
-            skip_permissions: true,
-        };
-        let driver = create_driver(&config);
-        assert!(driver.is_ok(), "Azure driver with key + URL should succeed");
-    }
-
-    #[test]
-    fn test_azure_driver_no_url_errors() {
-        let config = DriverConfig {
-            provider: "azure".to_string(),
-            api_key: Some("test-azure-key".to_string()),
-            base_url: None,
-            format: Some(ApiFormat::OpenAI),
-            auth_header: AuthHeaderType::default(),
-            skip_permissions: true,
-        };
-        let result = create_driver(&config);
-        assert!(result.is_err(), "Azure driver without URL should error");
+        assert!(result.is_err(), "HTTP driver without URL should error");
         let err = result.err().unwrap().to_string();
         assert!(
             err.contains("base_url"),
             "Error should mention base_url: {}",
             err
-        );
-    }
-
-    #[test]
-    fn test_azure_openai_alias_driver_creation() {
-        let config = DriverConfig {
-            provider: "azure-openai".to_string(),
-            api_key: Some("test-azure-key".to_string()),
-            base_url: Some("https://myresource.openai.azure.com/openai/deployments".to_string()),
-            format: Some(ApiFormat::OpenAI),
-            auth_header: AuthHeaderType::default(),
-            skip_permissions: true,
-        };
-        let driver = create_driver(&config);
-        assert!(
-            driver.is_ok(),
-            "azure-openai alias should create driver successfully"
-        );
-    }
-
-    #[test]
-    fn test_kimi_coding_anthropic_format() {
-        // kimi_coding with Anthropic format should use AnthropicDriver
-        let config = DriverConfig {
-            provider: "kimi".to_string(),
-            api_key: Some("test-kimi-key".to_string()),
-            base_url: Some("https://api.kimi.com/coding/v1/messages".to_string()),
-            format: Some(ApiFormat::Anthropic),
-            auth_header: AuthHeaderType::default(),
-            skip_permissions: true,
-        };
-        let driver = create_driver(&config);
-        assert!(
-            driver.is_ok(),
-            "kimi_coding with Anthropic format should succeed"
         );
     }
 
@@ -224,7 +84,7 @@ mod tests {
             api_key: None,
             base_url: Some("/usr/local/bin/claude".to_string()),
             format: None,
-            auth_header: AuthHeaderType::default(),
+            auth_header: types::brain::AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
@@ -235,32 +95,16 @@ mod tests {
     }
 
     #[test]
-    fn test_unknown_provider_openai_format() {
-        // Any provider with OpenAI format and base_url should work
+    fn test_custom_provider() {
         let config = DriverConfig {
             provider: "my-custom-llm".to_string(),
             api_key: Some("test".to_string()),
             base_url: Some("http://localhost:9999/v1/chat/completions".to_string()),
-            format: Some(ApiFormat::OpenAI),
-            auth_header: AuthHeaderType::default(),
+            format: None,
+            auth_header: types::brain::AuthHeaderType::default(),
             skip_permissions: true,
         };
         let driver = create_driver(&config);
         assert!(driver.is_ok());
-    }
-
-    #[test]
-    fn test_default_format_is_openai() {
-        // When format is None, defaults to OpenAI
-        let config = DriverConfig {
-            provider: "custom".to_string(),
-            api_key: Some("test".to_string()),
-            base_url: Some("http://localhost:1234/v1/chat/completions".to_string()),
-            format: None,
-            auth_header: AuthHeaderType::default(),
-            skip_permissions: true,
-        };
-        let driver = create_driver(&config);
-        assert!(driver.is_ok(), "Default format (OpenAI) should work");
     }
 }

@@ -126,7 +126,6 @@ async fn test_full_daemon_lifecycle() {
         kernel: kernel.clone(),
         started_at: Instant::now(),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        provider_probe_cache: runtime::provider_health::ProbeCache::new(),
         channel_manager: None,
     });
 
@@ -265,7 +264,6 @@ async fn test_server_immediate_responsiveness() {
         kernel: kernel.clone(),
         started_at: Instant::now(),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        provider_probe_cache: runtime::provider_health::ProbeCache::new(),
         channel_manager: None,
     });
 

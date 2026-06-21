@@ -27,7 +27,6 @@ tokio-stream = { workspace = true }
 wasmtime = { workspace = true }
 anyhow = { workspace = true }
 sha2 = { workspace = true }
-hmac = { workspace = true }
 hex = { workspace = true }
 zeroize = { workspace = true }
 dashmap = { workspace = true }

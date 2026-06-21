@@ -100,7 +100,6 @@ async fn start_test_server_with_provider(
         kernel,
         started_at: Instant::now(),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        provider_probe_cache: runtime::provider_health::ProbeCache::new(),
         channel_manager: None,
     });
 
@@ -592,7 +591,6 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         kernel,
         started_at: Instant::now(),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        provider_probe_cache: runtime::provider_health::ProbeCache::new(),
         channel_manager: None,
     });
 

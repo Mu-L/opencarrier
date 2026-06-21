@@ -19,7 +19,6 @@ pub mod media;
 pub mod memory;
 pub mod memory_tree;
 pub mod message;
-pub mod model_catalog;
 pub mod plugin;
 pub mod scheduler;
 pub mod serde_compat;

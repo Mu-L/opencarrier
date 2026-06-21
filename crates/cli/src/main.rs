@@ -3176,37 +3176,10 @@ fn cmd_models_list(provider_filter: Option<&str>, json: bool) {
             print_json(&body);
         }
     } else {
-        // Standalone: use ModelCatalog directly
-        let catalog = runtime::model_catalog::ModelCatalog::new();
-        let models = catalog.list_models();
-        if json {
-            let arr: Vec<serde_json::Value> = models
-                .iter()
-                .filter(|m| provider_filter.is_none_or(|p| m.provider == p))
-                .map(|m| {
-                    serde_json::json!({
-                        "id": m.id,
-                        "provider": m.provider,
-                    })
-                })
-                .collect();
-            print_json(&serde_json::Value::Array(arr));
-            return;
-        }
-        if models.is_empty() {
-            println!("No models in catalog.");
-            return;
-        }
-        println!("{:<40} {:<16}", "MODEL", "PROVIDER");
-        println!("{}", "-".repeat(60));
-        for m in models {
-            if let Some(p) = provider_filter {
-                if m.provider != p {
-                    continue;
-                }
-            }
-            println!("{:<40} {:<16}", m.id, m.provider,);
-        }
+        // Standalone: model listing requires a running daemon (aginxbrain manages models)
+        ui::error("Model listing requires a running opencarrier daemon.");
+        ui::hint("Start the daemon with: opencarrier start");
+        std::process::exit(1);
     }
 }
 
@@ -3228,21 +3201,10 @@ fn cmd_models_aliases(json: bool) {
             print_json(&body);
         }
     } else {
-        let catalog = runtime::model_catalog::ModelCatalog::new();
-        let aliases = catalog.list_aliases();
-        if json {
-            let obj: serde_json::Map<String, serde_json::Value> = aliases
-                .iter()
-                .map(|(a, t)| (a.to_string(), serde_json::Value::String(t.to_string())))
-                .collect();
-            print_json(&serde_json::Value::Object(obj));
-            return;
-        }
-        println!("{:<30} RESOLVES TO", "ALIAS");
-        println!("{}", "-".repeat(60));
-        for (alias, target) in aliases {
-            println!("{:<30} {}", alias, target);
-        }
+        // Standalone: aliases require a running daemon
+        ui::error("Model aliases require a running opencarrier daemon.");
+        ui::hint("Start the daemon with: opencarrier start");
+        std::process::exit(1);
     }
 }
 
@@ -3272,62 +3234,10 @@ fn cmd_models_set(model: Option<String>) {
 
 /// Interactive model picker — shows numbered list, accepts number or model ID.
 fn pick_model() -> String {
-    let catalog = runtime::model_catalog::ModelCatalog::new();
-    let models = catalog.list_models();
-
-    if models.is_empty() {
-        ui::error("No models in catalog.");
-        std::process::exit(1);
-    }
-
-    // Group by provider for display
-    let mut by_provider: std::collections::BTreeMap<
-        String,
-        Vec<&types::model_catalog::ModelCatalogEntry>,
-    > = std::collections::BTreeMap::new();
-    for m in models {
-        by_provider.entry(m.provider.clone()).or_default().push(m);
-    }
-
-    ui::section("Select a model");
-    ui::blank();
-
-    let mut numbered: Vec<&str> = Vec::new();
-    let mut idx = 1;
-    for (provider, provider_models) in &by_provider {
-        println!("  {}:", provider.bold());
-        for m in provider_models {
-            println!("    {idx:>3}. {:<36}", m.id);
-            numbered.push(&m.id);
-            idx += 1;
-        }
-    }
-    ui::blank();
-
-    loop {
-        let input = prompt_input("  Enter number or model ID: ");
-        if input.is_empty() {
-            continue;
-        }
-        // Try as number first
-        if let Ok(n) = input.parse::<usize>() {
-            if n >= 1 && n <= numbered.len() {
-                return numbered[n - 1].to_string();
-            }
-            ui::error(&format!("Number out of range (1-{})", numbered.len()));
-            continue;
-        }
-        // Accept direct model ID if it exists in catalog
-        if models.iter().any(|m| m.id == input) {
-            return input;
-        }
-        // Accept as alias
-        if catalog.resolve_alias(&input).is_some() {
-            return input;
-        }
-        // Accept any string (user might know a model not in catalog)
-        return input;
-    }
+    // Model listing requires a running daemon (aginxbrain manages models)
+    ui::error("Model selection requires a running opencarrier daemon.");
+    ui::hint("Start the daemon with: opencarrier start");
+    std::process::exit(1);
 }
 
 fn cmd_cron_list(json: bool) {

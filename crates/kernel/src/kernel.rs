@@ -30,8 +30,6 @@ pub struct KernelBrain {
     pub(crate) brain: Arc<std::sync::RwLock<Arc<Brain>>>,
     /// Path to brain.json (saved at boot for hot-reload writes).
     pub(crate) brain_path: std::path::PathBuf,
-    /// Model catalog registry (RwLock for auth status refresh from API).
-    pub model_catalog: std::sync::RwLock<runtime::model_catalog::ModelCatalog>,
 }
 
 /// A2A (Agent-to-Agent) communication subsystem.
@@ -520,23 +518,6 @@ impl CarrierKernel {
         let wasm_sandbox = WasmSandbox::new()
             .map_err(|e| KernelError::BootFailed(format!("WASM sandbox init failed: {e}")))?;
 
-        // Initialize model catalog, detect provider auth, and apply URL overrides
-        let mut model_catalog = runtime::model_catalog::ModelCatalog::new();
-        model_catalog.detect_auth();
-        if !config.provider_urls.is_empty() {
-            model_catalog.apply_url_overrides(&config.provider_urls);
-            info!(
-                "applied {} provider URL override(s)",
-                config.provider_urls.len()
-            );
-        }
-        // Load user's custom models from ~/.carrier/custom_models.json
-        let custom_models_path = config.home_dir.join("custom_models.json");
-        model_catalog.load_custom_models(&custom_models_path);
-        let total_count = model_catalog.list_models().len();
-        let provider_count = model_catalog.list_providers().len();
-        info!("Model catalog: {total_count} models, {provider_count} providers");
-
         // MCP server list: use config directly (no extension merging)
         let all_mcp_servers = config.mcp_servers.clone();
 
@@ -585,7 +566,6 @@ impl CarrierKernel {
             brain: KernelBrain {
                 brain: Arc::new(std::sync::RwLock::new(brain_arc)),
                 brain_path: brain_path.clone(),
-                model_catalog: std::sync::RwLock::new(model_catalog),
             },
             a2a: KernelA2a {
                 a2a_task_store: runtime::a2a::A2aTaskStore::default(),

@@ -2,8 +2,11 @@
 //!
 //! Three-layer architecture:
 //! - **Provider**: identity + credentials (name + API key)
-//! - **Endpoint**: complete callable unit (provider + model + base_url + format)
+//! - **Endpoint**: complete callable unit (provider + model + base_url)
 //! - **Modality**: task type → endpoint with fallback chain
+//!
+//! All LLM traffic goes through aginxbrain (OpenAI-compatible proxy),
+//! so format is always "openai" and auth is always Bearer token.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -29,119 +32,83 @@ fn default_modality() -> String {
 /// Provider = identity + credentials.
 ///
 /// Only knows name and how to authenticate. No URLs, no formats, no models.
+/// All providers use simple API key auth (Bearer token) — aginxbrain handles
+/// any provider-specific authentication on the backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     /// Environment variable name holding the API key.
-    /// If empty/missing, this provider doesn't require authentication (e.g., Ollama).
+    /// If empty/missing, this provider doesn't require authentication (e.g., local aginxbrain).
     #[serde(default)]
     pub api_key_env: String,
-    /// Authentication type: "apikey" (default), "jwt", etc.
-    /// Determines how credentials are used to authenticate API calls.
-    #[serde(default = "default_auth_type")]
+    /// Legacy fields accepted from old brain.json but no longer used.
+    /// All auth goes through aginxbrain with simple Bearer token.
+    #[serde(default, skip_serializing)]
     pub auth_type: String,
-    /// Additional parameters (env var names) for multi-credential providers.
-    /// Maps a logical name → environment variable name to read at runtime.
-    /// Example: Kling needs access_key + secret_key:
-    ///   { "access_key_env": "KLING_ACCESS_KEY", "secret_key_env": "KLING_SECRET_KEY" }
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub params: HashMap<String, String>,
 }
 
-fn default_auth_type() -> String {
-    "apikey".to_string()
-}
-
-/// Endpoint = format + base_url + model (complete callable unit).
+/// Endpoint = base_url + model (complete callable unit).
 ///
 /// Contains everything needed to make an LLM API call:
 /// - Which provider to get credentials from
-/// - Which model to request
+/// - Which model (tag) to request — for aginxbrain, this is a routing tag
 /// - Where to send the request (base_url)
-/// - How to format the request/response (format/protocol)
+///
+/// Format is always OpenAI (aginxbrain proxy). Auth is always Bearer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EndpointConfig {
     /// Provider name — used to look up API key.
     pub provider: String,
-    /// Model identifier (e.g., "glm-5.1", "deepseek-chat").
+    /// Model identifier / routing tag (e.g., "chat", "reasoning", "tts").
+    /// For aginxbrain, this is a tag that routes to the appropriate backend.
     pub model: String,
     /// Complete API base URL.
     pub base_url: String,
-    /// Protocol format: determines which driver to use.
-    /// "openai" → OpenAIDriver, "anthropic" → AnthropicDriver, "gemini" → GeminiDriver
-    #[serde(default = "default_format")]
+    /// Legacy fields accepted from old brain.json but no longer used.
+    /// All endpoints use OpenAI format through aginxbrain.
+    #[serde(default, skip_serializing)]
     pub format: ApiFormat,
-    /// Authentication header style. Only used by `OpenAI` format drivers;
-    /// ignored by Anthropic/Gemini drivers which have fixed auth schemes.
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pub auth_header: AuthHeaderType,
 }
 
-fn default_format() -> ApiFormat {
-    ApiFormat::OpenAI
-}
-
-/// API protocol format.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ApiFormat {
-    #[default]
-    OpenAI,
-    Anthropic,
-    Gemini,
-    #[serde(rename = "dashscope_tts")]
-    DashScopeTts,
-    #[serde(rename = "dashscope_image")]
-    DashScopeImage,
-    #[serde(rename = "dashscope_video")]
-    DashScopeVideo,
-    Kling,
-    #[serde(rename = "openai_images")]
-    OpenAIImages,
-    #[serde(rename = "minimax_image")]
-    MiniMaxImage,
-}
-
-/// All supported API format names (for dashboard UI).
-pub const SUPPORTED_FORMATS: &[&str] = &[
-    "openai",
-    "anthropic",
-    "gemini",
-    "dashscope_tts",
-    "dashscope_image",
-    "dashscope_video",
-    "kling",
-    "openai_images",
-    "minimax_image",
-];
-
-/// Authentication header type for HTTP API drivers.
+/// API protocol format — always OpenAI since aginxbrain proxies all LLM traffic.
 ///
-/// Only meaningful for `OpenAI` format drivers; `Anthropic` and `Gemini`
-/// drivers use their own fixed authentication schemes.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AuthHeaderType {
-    /// `Authorization: Bearer {key}` — standard OpenAI-compatible.
-    #[default]
-    Bearer,
-    /// `api-key: {key}` — Azure OpenAI style.
-    ApiKey,
+/// This is a unit struct that always serializes as `"openai"` and accepts any
+/// string during deserialization (for backward compatibility with old brain.json
+/// files that may specify `"anthropic"`, `"gemini"`, etc.).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct ApiFormat;
+
+impl Serialize for ApiFormat {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str("openai")
+    }
+}
+
+impl<'de> Deserialize<'de> for ApiFormat {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // Accept any string value for backward compatibility, always produce OpenAI
+        let _ = <String>::deserialize(d);
+        Ok(ApiFormat)
+    }
 }
 
 impl std::fmt::Display for ApiFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ApiFormat::OpenAI => write!(f, "openai"),
-            ApiFormat::Anthropic => write!(f, "anthropic"),
-            ApiFormat::Gemini => write!(f, "gemini"),
-            ApiFormat::DashScopeTts => write!(f, "dashscope_tts"),
-            ApiFormat::DashScopeImage => write!(f, "dashscope_image"),
-            ApiFormat::DashScopeVideo => write!(f, "dashscope_video"),
-            ApiFormat::Kling => write!(f, "kling"),
-            ApiFormat::OpenAIImages => write!(f, "openai_images"),
-            ApiFormat::MiniMaxImage => write!(f, "minimax_image"),
-        }
+        write!(f, "openai")
     }
+}
+
+/// Legacy type accepted from old brain.json but no longer used.
+/// All auth goes through aginxbrain with Bearer token.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthHeaderType {
+    #[default]
+    Bearer,
+    ApiKey,
 }
 
 /// Modality = task type → endpoint routing.
@@ -257,22 +224,19 @@ mod tests {
     fn test_brain_config_parse() {
         let json = r#"{
             "providers": {
-                "zhipu": { "api_key_env": "ANTHROPIC_API_KEY" },
-                "deepseek": { "api_key_env": "DEEPSEEK_API_KEY" },
+                "aginxbrain": { "api_key_env": "AGINXBRAIN_API_KEY" },
                 "ollama": {}
             },
             "endpoints": {
-                "zhipu_anthropic": {
-                    "provider": "zhipu",
-                    "model": "glm-5.1",
-                    "base_url": "https://open.bigmodel.cn/api/anthropic",
-                    "format": "anthropic"
+                "brain_chat": {
+                    "provider": "aginxbrain",
+                    "model": "chat",
+                    "base_url": "https://brain.aginx.net/v1/chat/completions"
                 },
-                "deepseek_chat": {
-                    "provider": "deepseek",
-                    "model": "deepseek-chat",
-                    "base_url": "https://api.deepseek.com/v1",
-                    "format": "openai"
+                "brain_reasoning": {
+                    "provider": "aginxbrain",
+                    "model": "reasoning",
+                    "base_url": "https://brain.aginx.net/v1/chat/completions"
                 },
                 "ollama_local": {
                     "provider": "ollama",
@@ -282,8 +246,8 @@ mod tests {
             },
             "modalities": {
                 "chat": {
-                    "primary": "zhipu_anthropic",
-                    "fallbacks": ["deepseek_chat"]
+                    "primary": "brain_chat",
+                    "fallbacks": ["brain_reasoning"]
                 },
                 "fast": {
                     "primary": "ollama_local"
@@ -293,56 +257,64 @@ mod tests {
 
         let config: BrainConfig = serde_json::from_str(json).unwrap();
 
-        assert_eq!(config.providers.len(), 3);
-        assert_eq!(config.providers["zhipu"].api_key_env, "ANTHROPIC_API_KEY");
+        assert_eq!(config.providers.len(), 2);
+        assert_eq!(config.providers["aginxbrain"].api_key_env, "AGINXBRAIN_API_KEY");
         assert!(config.providers["ollama"].api_key_env.is_empty());
 
         assert_eq!(config.endpoints.len(), 3);
-        assert_eq!(config.endpoints["zhipu_anthropic"].model, "glm-5.1");
-        assert_eq!(
-            config.endpoints["zhipu_anthropic"].format,
-            ApiFormat::Anthropic
-        );
-        assert_eq!(config.endpoints["ollama_local"].format, ApiFormat::OpenAI); // default
+        assert_eq!(config.endpoints["brain_chat"].model, "chat");
+        assert_eq!(config.endpoints["ollama_local"].format, ApiFormat); // always OpenAI
 
-        assert_eq!(config.modalities["chat"].primary, "zhipu_anthropic");
-        assert_eq!(config.modalities["chat"].fallbacks, vec!["deepseek_chat"]);
+        assert_eq!(config.modalities["chat"].primary, "brain_chat");
+        assert_eq!(config.modalities["chat"].fallbacks, vec!["brain_reasoning"]);
         assert!(config.modalities["fast"].fallbacks.is_empty());
 
         assert_eq!(config.default_modality, "chat"); // default
     }
 
     #[test]
-    fn test_provider_auth_type_default() {
-        // Missing auth_type defaults to "apikey"
-        let json = r#"{"api_key_env": "FOO"}"#;
-        let pc: ProviderConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(pc.auth_type, "apikey");
+    fn test_api_format_always_openai() {
+        // Always serializes as "openai"
+        assert_eq!(
+            serde_json::to_string(&ApiFormat).unwrap(),
+            "\"openai\""
+        );
 
-        // Explicit auth_type
-        let json =
-            r#"{"auth_type": "jwt", "params": {"access_key_env": "AK", "secret_key_env": "SK"}}"#;
-        let pc: ProviderConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(pc.auth_type, "jwt");
-        assert_eq!(pc.params["access_key_env"], "AK");
+        // Accepts any string (backward compatibility) and produces ApiFormat
+        let f: ApiFormat = serde_json::from_str("\"anthropic\"").unwrap();
+        assert_eq!(f, ApiFormat);
+
+        let f: ApiFormat = serde_json::from_str("\"gemini\"").unwrap();
+        assert_eq!(f, ApiFormat);
+
+        let f: ApiFormat = serde_json::from_str("\"openai\"").unwrap();
+        assert_eq!(f, ApiFormat);
     }
 
     #[test]
-    fn test_api_format_serde() {
-        assert_eq!(
-            serde_json::to_string(&ApiFormat::OpenAI).unwrap(),
-            "\"openai\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ApiFormat::Anthropic).unwrap(),
-            "\"anthropic\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ApiFormat::Gemini).unwrap(),
-            "\"gemini\""
-        );
+    fn test_legacy_fields_ignored() {
+        // Old brain.json with "format": "anthropic" and "auth_type": "jwt" still parses
+        let json = r#"{
+            "provider": "aginxbrain",
+            "model": "chat",
+            "base_url": "https://brain.aginx.net/v1/chat/completions",
+            "format": "anthropic",
+            "auth_header": "api_key"
+        }"#;
+        let ep: EndpointConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(ep.model, "chat");
+        assert_eq!(ep.format, ApiFormat); // always OpenAI regardless of input
 
-        let f: ApiFormat = serde_json::from_str("\"anthropic\"").unwrap();
-        assert_eq!(f, ApiFormat::Anthropic);
+        // Old provider config with auth_type/params still parses
+        let json = r#"{
+            "api_key_env": "FOO",
+            "auth_type": "jwt",
+            "params": {"access_key_env": "AK", "secret_key_env": "SK"}
+        }"#;
+        let pc: ProviderConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(pc.api_key_env, "FOO");
+        // auth_type and params are accepted but skip_serializing
+        assert_eq!(pc.auth_type, "jwt");
+        assert_eq!(pc.params["access_key_env"], "AK");
     }
 }

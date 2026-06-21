@@ -38,7 +38,6 @@ pub async fn build_router(
         kernel: kernel.clone(),
         started_at: Instant::now(),
         shutdown_notify: Arc::new(tokio::sync::Notify::new()),
-        provider_probe_cache: runtime::provider_health::ProbeCache::new(),
         channel_manager: channel_manager.map(|cm| Arc::new(tokio::sync::Mutex::new(cm))),
     });
 

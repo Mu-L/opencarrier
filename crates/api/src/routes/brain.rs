@@ -44,7 +44,7 @@ pub async fn brain_info(State(state): State<Arc<AppState>>) -> impl IntoResponse
         "default_modality": config.default_modality,
         "modalities": modalities,
         "endpoints": endpoints,
-        "supported_formats": types::brain::SUPPORTED_FORMATS,
+        "supported_formats": vec!["openai"],
     }))
 }
 /// GET /api/brain/status — Brain health status (driver readiness, latency, success/failure).
@@ -233,7 +233,7 @@ pub async fn set_brain_endpoint(
         );
     }
 
-    let format: types::brain::ApiFormat = match serde_json::from_value(
+    let _format: types::brain::ApiFormat = match serde_json::from_value(
         serde_json::Value::String(format_str.clone()),
     ) {
         Ok(f) => f,
@@ -241,7 +241,7 @@ pub async fn set_brain_endpoint(
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": format!(
-                    "Invalid format '{}'. Supported: openai, anthropic, gemini, dashscope_tts, dashscope_image, dashscope_video, kling, openai_images, minimax_image",
+                    "Invalid format '{}'. Only 'openai' is supported",
                     format_str
                 )})),
             )
@@ -267,7 +267,7 @@ pub async fn set_brain_endpoint(
                 provider,
                 model,
                 base_url,
-                format,
+                format: _format,
                 auth_header: Default::default(),
             },
         );

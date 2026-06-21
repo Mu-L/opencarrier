@@ -59,15 +59,15 @@ impl ToolModule for MediaTools {
             // --- Image generation tool ---
             ToolDefinition {
                 name: "image_generate".to_string(),
-                description: "Generate images from a text prompt. Uses the configured image modality (MiniMax image-01, Wan2.7, DALL-E, etc.). Generated images are saved to the user's output directory. Response includes base64 data for the first image — pass it directly to upload tools.".to_string(),
+                description: "Generate images from a text prompt. Uses the configured image modality. Generated images are saved to the user's output directory. Response includes base64 data for the first image — pass it directly to upload tools.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "prompt": { "type": "string", "description": "Text description of the image to generate" },
                         "size": { "type": "string", "description": "Image size. Minimum 768x768 (589824 pixels). Common values: '1024x1024' (default), '1024x1792', '1792x1024', '768x768'. Smaller sizes will be auto-upscaled to 768x768." },
                         "count": { "type": "integer", "description": "Number of images to generate (1-4, default: 1)" },
-                        "aspect_ratio": { "type": "string", "description": "Image aspect ratio (MiniMax only): '1:1', '16:9', '4:3', '3:2', '2:3', '3:4', '9:16', '21:9'" },
-                        "prompt_optimizer": { "type": "boolean", "description": "Whether to auto-optimize the prompt (MiniMax only, default: false)" }
+                        "aspect_ratio": { "type": "string", "description": "Image aspect ratio: '1:1', '16:9', '4:3', '3:2', '2:3', '3:4', '9:16', '21:9'" },
+                        "prompt_optimizer": { "type": "boolean", "description": "Whether to auto-optimize the prompt (default: false)" }
                     },
                     "required": ["prompt"]
                 }),

@@ -35,8 +35,6 @@ pub enum HotAction {
     ReloadA2aConfig,
     /// Fallback provider chain changed.
     ReloadFallbackProviders,
-    /// Provider base URL overrides changed.
-    ReloadProviderUrls,
     /// Default model changed — update in-place without restart.
     UpdateDefaultModel,
 }
@@ -209,7 +207,8 @@ pub fn build_reload_plan(old: &KernelConfig, new: &KernelConfig) -> ReloadPlan {
     }
 
     if field_changed(&old.provider_urls, &new.provider_urls) {
-        plan.hot_actions.push(HotAction::ReloadProviderUrls);
+        plan.noop_changes
+            .push("provider_urls changed (no longer used — aginxbrain handles routing)".to_string());
     }
 
     if field_changed(&old.provider_api_keys, &new.provider_api_keys) {
@@ -384,14 +383,15 @@ mod tests {
     }
 
     #[test]
-    fn test_provider_urls_hot_reload() {
+    fn test_provider_urls_noop() {
         let a = default_cfg();
         let mut b = default_cfg();
         b.provider_urls
             .insert("ollama".to_string(), "http://10.0.0.5:11434/v1".to_string());
         let plan = build_reload_plan(&a, &b);
         assert!(!plan.restart_required);
-        assert!(plan.hot_actions.contains(&HotAction::ReloadProviderUrls));
+        // provider_urls is now a no-op change (aginxbrain handles routing)
+        assert!(plan.noop_changes.iter().any(|c| c.contains("provider_urls")));
     }
 
     // -----------------------------------------------------------------------

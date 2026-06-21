@@ -1,14 +1,10 @@
 //! Embedding driver for vector-based semantic memory.
 //!
 //! Provides an `EmbeddingDriver` trait and an OpenAI-compatible implementation
-//! that works with any provider offering a `/v1/embeddings` endpoint (OpenAI,
-//! Groq, Together, Fireworks, Ollama, etc.).
+//! that works with any provider offering a `/v1/embeddings` endpoint.
+//! All embedding traffic goes through aginxbrain.
 
 use async_trait::async_trait;
-use types::model_catalog::{
-    FIREWORKS_BASE_URL, GROQ_BASE_URL, LMSTUDIO_BASE_URL, MISTRAL_BASE_URL, OLLAMA_BASE_URL,
-    OPENAI_BASE_URL, TOGETHER_BASE_URL, VLLM_BASE_URL,
-};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 use zeroize::Zeroizing;
@@ -175,56 +171,34 @@ impl EmbeddingDriver for OpenAIEmbeddingDriver {
 }
 
 /// Create an embedding driver from kernel config.
+///
+/// All embedding traffic goes through aginxbrain — `base_url` must be provided.
 pub fn create_embedding_driver(
-    provider: &str,
     model: &str,
     api_key_env: &str,
-    custom_base_url: Option<&str>,
+    base_url: &str,
 ) -> Result<Box<dyn EmbeddingDriver + Send + Sync>, EmbeddingError> {
+    if base_url.is_empty() {
+        return Err(EmbeddingError::MissingApiKey(
+            "Embedding base_url is required (configure via brain.json embedding modality)".to_string(),
+        ));
+    }
+
     let api_key = if api_key_env.is_empty() {
         String::new()
     } else {
         std::env::var(api_key_env).unwrap_or_default()
     };
 
-    let base_url = custom_base_url
-        .filter(|u| !u.is_empty())
-        .map(|u| {
-            let trimmed = u.trim_end_matches('/');
-            // All OpenAI-compatible embedding providers need /v1 in the path.
-            // If the user supplied a bare host URL (e.g. "http://192.168.0.1:11434"),
-            // append /v1 so the final request hits {base}/v1/embeddings.
-            let needs_v1 = matches!(
-                provider,
-                "openai"
-                    | "groq"
-                    | "together"
-                    | "fireworks"
-                    | "mistral"
-                    | "ollama"
-                    | "vllm"
-                    | "lmstudio"
-            );
-            if needs_v1 && !trimmed.ends_with("/v1") {
-                format!("{trimmed}/v1")
-            } else {
-                trimmed.to_string()
-            }
-        })
-        .unwrap_or_else(|| match provider {
-            "openai" => OPENAI_BASE_URL.to_string(),
-            "groq" => GROQ_BASE_URL.to_string(),
-            "together" => TOGETHER_BASE_URL.to_string(),
-            "fireworks" => FIREWORKS_BASE_URL.to_string(),
-            "mistral" => MISTRAL_BASE_URL.to_string(),
-            "ollama" => OLLAMA_BASE_URL.to_string(),
-            "vllm" => VLLM_BASE_URL.to_string(),
-            "lmstudio" => LMSTUDIO_BASE_URL.to_string(),
-            other => {
-                warn!("Unknown embedding provider '{other}', using OpenAI-compatible format");
-                format!("https://{other}/v1")
-            }
-        });
+    let base_url = {
+        let trimmed = base_url.trim_end_matches('/');
+        // All OpenAI-compatible embedding providers need /v1 in the path.
+        if !trimmed.ends_with("/v1") {
+            format!("{trimmed}/v1")
+        } else {
+            trimmed.to_string()
+        }
+    };
 
     // SECURITY: Warn when embedding requests will be sent to an external API
     let is_local = base_url.contains("localhost")
@@ -232,14 +206,13 @@ pub fn create_embedding_driver(
         || base_url.contains("[::1]");
     if !is_local {
         warn!(
-            provider = %provider,
             base_url = %base_url,
             "Embedding driver configured to send data to external API — text content will leave this machine"
         );
     }
 
     let config = EmbeddingConfig {
-        provider: provider.to_string(),
+        provider: "aginxbrain".to_string(),
         model: model.to_string(),
         api_key,
         base_url,
@@ -374,33 +347,31 @@ mod tests {
     }
 
     #[test]
-    fn test_create_embedding_driver_ollama() {
-        // Should succeed even without API key (ollama is local)
-        let driver = create_embedding_driver("ollama", "all-MiniLM-L6-v2", "", None);
+    fn test_create_embedding_driver_local() {
+        // Should succeed even without API key (local provider)
+        let driver = create_embedding_driver("all-MiniLM-L6-v2", "", "http://localhost:11434");
         assert!(driver.is_ok());
         assert_eq!(driver.unwrap().dimensions(), 384);
     }
 
     #[test]
     fn test_create_embedding_driver_custom_url_with_v1() {
-        // Custom URL already containing /v1 should be used as-is
+        // URL already containing /v1 should be used as-is
         let driver = create_embedding_driver(
-            "ollama",
             "nomic-embed-text",
             "",
-            Some("http://192.168.0.1:11434/v1"),
+            "http://192.168.0.1:11434/v1",
         );
         assert!(driver.is_ok());
     }
 
     #[test]
     fn test_create_embedding_driver_custom_url_without_v1() {
-        // Custom URL missing /v1 should get it appended for known providers
+        // URL missing /v1 should get it appended
         let driver = create_embedding_driver(
-            "ollama",
             "nomic-embed-text",
             "",
-            Some("http://192.168.0.1:11434"),
+            "http://192.168.0.1:11434",
         );
         assert!(driver.is_ok());
     }
@@ -409,11 +380,16 @@ mod tests {
     fn test_create_embedding_driver_custom_url_trailing_slash() {
         // Trailing slash should be trimmed before appending /v1
         let driver = create_embedding_driver(
-            "ollama",
             "nomic-embed-text",
             "",
-            Some("http://192.168.0.1:11434/"),
+            "http://192.168.0.1:11434/",
         );
         assert!(driver.is_ok());
+    }
+
+    #[test]
+    fn test_create_embedding_driver_empty_url_errors() {
+        let result = create_embedding_driver("all-MiniLM-L6-v2", "", "");
+        assert!(result.is_err());
     }
 }

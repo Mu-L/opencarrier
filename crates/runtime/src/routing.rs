@@ -161,38 +161,6 @@ impl ModelRouter {
         let model = self.model_for_complexity(complexity).to_string();
         (complexity, model)
     }
-
-    /// Validate that all configured models exist in the catalog.
-    ///
-    /// Returns a list of warning messages for models not found in the catalog.
-    pub fn validate_models(&self, catalog: &crate::model_catalog::ModelCatalog) -> Vec<String> {
-        let mut warnings = vec![];
-        for model in [
-            &self.config.simple_model,
-            &self.config.medium_model,
-            &self.config.complex_model,
-        ] {
-            if catalog.find_model(model).is_none() {
-                warnings.push(format!("Model '{}' not found in catalog", model));
-            }
-        }
-        warnings
-    }
-
-    /// Resolve aliases in the routing config using the catalog.
-    ///
-    /// For example, if "sonnet" is configured, resolves to "claude-sonnet-4-6".
-    pub fn resolve_aliases(&mut self, catalog: &crate::model_catalog::ModelCatalog) {
-        if let Some(resolved) = catalog.resolve_alias(&self.config.simple_model) {
-            self.config.simple_model = resolved.to_string();
-        }
-        if let Some(resolved) = catalog.resolve_alias(&self.config.medium_model) {
-            self.config.medium_model = resolved.to_string();
-        }
-        if let Some(resolved) = catalog.resolve_alias(&self.config.complex_model) {
-            self.config.complex_model = resolved.to_string();
-        }
-    }
 }
 
 #[cfg(test)]
@@ -320,84 +288,6 @@ mod tests {
         assert_eq!(TaskComplexity::Simple.to_string(), "simple");
         assert_eq!(TaskComplexity::Medium.to_string(), "medium");
         assert_eq!(TaskComplexity::Complex.to_string(), "complex");
-    }
-
-    fn make_test_catalog() -> crate::model_catalog::ModelCatalog {
-        use types::model_catalog::ModelCatalogEntry;
-        let mut catalog = crate::model_catalog::ModelCatalog::new();
-        catalog.add_custom_model(ModelCatalogEntry {
-            id: "llama-3.3-70b-versatile".to_string(),
-            provider: "groq".to_string(),
-            aliases: vec!["llama".to_string()],
-        });
-        catalog.add_custom_model(ModelCatalogEntry {
-            id: "claude-sonnet-4-6".to_string(),
-            provider: "anthropic".to_string(),
-            aliases: vec!["sonnet".to_string()],
-        });
-        catalog.add_custom_model(ModelCatalogEntry {
-            id: "claude-opus-4-6".to_string(),
-            provider: "anthropic".to_string(),
-            aliases: vec!["opus".to_string()],
-        });
-        catalog
-    }
-
-    #[test]
-    fn test_validate_models_all_found() {
-        let catalog = make_test_catalog();
-        let config = ModelRoutingConfig {
-            simple_model: "llama-3.3-70b-versatile".to_string(),
-            medium_model: "claude-sonnet-4-6".to_string(),
-            complex_model: "claude-opus-4-6".to_string(),
-            simple_threshold: 200,
-            complex_threshold: 800,
-        };
-        let router = ModelRouter::new(config);
-        let warnings = router.validate_models(&catalog);
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn test_validate_models_unknown() {
-        let catalog = make_test_catalog();
-        let config = ModelRoutingConfig {
-            simple_model: "unknown-model".to_string(),
-            medium_model: "claude-sonnet-4-6".to_string(),
-            complex_model: "claude-opus-4-6".to_string(),
-            simple_threshold: 200,
-            complex_threshold: 800,
-        };
-        let router = ModelRouter::new(config);
-        let warnings = router.validate_models(&catalog);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("unknown-model"));
-    }
-
-    #[test]
-    fn test_resolve_aliases() {
-        let catalog = make_test_catalog();
-        let config = ModelRoutingConfig {
-            simple_model: "llama".to_string(),
-            medium_model: "sonnet".to_string(),
-            complex_model: "opus".to_string(),
-            simple_threshold: 200,
-            complex_threshold: 800,
-        };
-        let mut router = ModelRouter::new(config);
-        router.resolve_aliases(&catalog);
-        assert_eq!(
-            router.model_for_complexity(TaskComplexity::Simple),
-            "llama-3.3-70b-versatile"
-        );
-        assert_eq!(
-            router.model_for_complexity(TaskComplexity::Medium),
-            "claude-sonnet-4-6"
-        );
-        assert_eq!(
-            router.model_for_complexity(TaskComplexity::Complex),
-            "claude-opus-4-6"
-        );
     }
 
     #[test]

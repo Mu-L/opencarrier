@@ -123,15 +123,6 @@ impl CarrierKernel {
                     self.cron_scheduler
                         .set_max_total_jobs(new_config.max_cron_jobs);
                 }
-                HotAction::ReloadProviderUrls => {
-                    info!("Hot-reload: applying provider URL overrides");
-                    let mut catalog = self
-                        .brain
-                        .model_catalog
-                        .write()
-                        .unwrap_or_else(|e| e.into_inner());
-                    catalog.apply_url_overrides(&new_config.provider_urls);
-                }
                 HotAction::ReloadMcpServers => {
                     info!("Hot-reload: reloading MCP servers");
                     let new_mcp = &new_config.mcp_servers;

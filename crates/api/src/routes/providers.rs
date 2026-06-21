@@ -24,33 +24,12 @@ pub async fn list_provider_keys(State(state): State<Arc<AppState>>) -> impl Into
                 .map(|ep| ep.model.clone())
                 .collect();
 
-            let has_key = if pc.auth_type == "jwt" {
-                // JWT auth: check that all param env vars are set
-                pc.params
-                    .values()
-                    .all(|env_name| kernel::dotenv::has_env_key(env_name))
-            } else {
-                kernel::dotenv::has_env_key(&pc.api_key_env)
-            };
-
-            let params_status: Vec<serde_json::Value> = pc
-                .params
-                .iter()
-                .map(|(logical_name, env_name)| {
-                    serde_json::json!({
-                        "name": logical_name,
-                        "env": env_name,
-                        "has_value": kernel::dotenv::has_env_key(env_name),
-                    })
-                })
-                .collect();
+            let has_key = kernel::dotenv::has_env_key(&pc.api_key_env);
 
             serde_json::json!({
                 "name": name,
                 "api_key_env": pc.api_key_env,
-                "auth_type": pc.auth_type,
                 "has_key": has_key,
-                "params": params_status,
                 "endpoints": endpoints,
             })
         })
@@ -80,50 +59,19 @@ pub async fn set_provider_key(
         }
     };
 
-    match pc.auth_type.as_str() {
-        "jwt" => {
-            // JWT auth: save each param value to its corresponding env var
-            let params = match body.get("params").and_then(|p| p.as_object()) {
-                Some(p) => p,
-                None => {
-                    return (
-                        StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({"error": "JWT provider requires 'params' object"})),
-                    );
-                }
-            };
-
-            for (logical_name, env_name) in &pc.params {
-                if let Some(val) = params.get(logical_name).and_then(|v| v.as_str()) {
-                    let val = val.trim();
-                    if val.is_empty() {
-                        continue;
-                    }
-                    if let Err(e) = kernel::dotenv::save_env_key(env_name, val) {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({"error": e})),
-                        );
-                    }
-                }
-            }
-        }
-        _ => {
-            // Default apikey auth
-            let key = body["key"].as_str().unwrap_or("").trim();
-            if key.is_empty() {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "Missing 'key' field"})),
-                );
-            }
-            if let Err(e) = kernel::dotenv::save_env_key(&pc.api_key_env, key) {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e})),
-                );
-            }
-        }
+    // Simple API key auth
+    let key = body["key"].as_str().unwrap_or("").trim();
+    if key.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Missing 'key' field"})),
+        );
+    }
+    if let Err(e) = kernel::dotenv::save_env_key(&pc.api_key_env, key) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        );
     }
 
     let reload_result = state.kernel.reload_brain();
@@ -165,14 +113,7 @@ pub async fn delete_provider_key(
         }
     };
 
-    if pc.auth_type == "jwt" {
-        // Delete all param env vars
-        for env_name in pc.params.values() {
-            let _ = kernel::dotenv::delete_env_key(env_name);
-        }
-    } else {
-        let _ = kernel::dotenv::delete_env_key(&pc.api_key_env);
-    }
+    let _ = kernel::dotenv::delete_env_key(&pc.api_key_env);
 
     let _ = state.kernel.reload_brain();
     state.kernel.audit_log.record(

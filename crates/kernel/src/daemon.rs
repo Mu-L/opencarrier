@@ -484,54 +484,6 @@ impl CarrierKernel {
 
         self.start_heartbeat_monitor();
 
-        // Probe local providers for reachability and model discovery
-        {
-            let kernel = Arc::clone(self);
-            tokio::spawn(async move {
-                let local_providers: Vec<(String, String)> = {
-                    let catalog = kernel
-                        .brain
-                        .model_catalog
-                        .read()
-                        .unwrap_or_else(|e| e.into_inner());
-                    catalog
-                        .list_providers()
-                        .iter()
-                        .filter(|p| !p.key_required)
-                        .map(|p| (p.id.clone(), p.base_url.clone()))
-                        .collect()
-                };
-
-                for (provider_id, base_url) in &local_providers {
-                    let result =
-                        runtime::provider_health::probe_provider(provider_id, base_url)
-                            .await;
-                    if result.reachable {
-                        info!(
-                            provider = %provider_id,
-                            models = result.discovered_models.len(),
-                            latency_ms = result.latency_ms,
-                            "Local provider online"
-                        );
-                        if !result.discovered_models.is_empty() {
-                            if let Ok(mut catalog) = kernel.brain.model_catalog.write() {
-                                catalog.merge_discovered_models(
-                                    provider_id,
-                                    &result.discovered_models,
-                                );
-                            }
-                        }
-                    } else {
-                        warn!(
-                            provider = %provider_id,
-                            error = result.error.as_deref().unwrap_or("unknown"),
-                            "Local provider offline"
-                        );
-                    }
-                }
-            });
-        }
-
         // Periodic usage data cleanup (every 24 hours, retain 90 days)
         {
             let kernel = Arc::clone(self);

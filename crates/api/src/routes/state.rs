@@ -14,10 +14,6 @@ pub struct AppState {
     pub started_at: Instant,
     /// Notify handle to trigger graceful HTTP server shutdown from the API.
     pub shutdown_notify: Arc<tokio::sync::Notify>,
-    /// Probe cache for local provider health checks (ollama/vllm/lmstudio).
-    /// Avoids blocking the `/api/providers` endpoint on TCP timeouts to
-    /// unreachable local services. 60-second TTL.
-    pub provider_probe_cache: runtime::provider_health::ProbeCache,
     /// Channel manager (optional — only if channels are configured).
     #[allow(clippy::type_complexity)]
     pub channel_manager: Option<Arc<tokio::sync::Mutex<ChannelManager>>>,

@@ -3,7 +3,7 @@
 //! Abstracts over multiple LLM providers (Anthropic, OpenAI, Ollama, etc.).
 
 use async_trait::async_trait;
-use types::brain::{ApiFormat, AuthHeaderType, EndpointReport};
+use types::brain::EndpointReport;
 use types::error::{CarrierError, CarrierResult};
 use types::media::MediaOutput;
 use types::message::{ContentBlock, Message, StopReason, TokenUsage};
@@ -335,12 +335,12 @@ pub struct DriverConfig {
     pub api_key: Option<String>,
     /// Base URL — the complete API endpoint URL (no path suffix appended by drivers).
     pub base_url: Option<String>,
-    /// API protocol format — determines which driver to instantiate.
-    #[serde(default)]
-    pub format: Option<ApiFormat>,
-    /// Authentication header style. Only used by `OpenAI` format drivers.
-    #[serde(default)]
-    pub auth_header: AuthHeaderType,
+    /// Legacy fields accepted from old configs but no longer used.
+    /// All HTTP drivers use OpenAI format with Bearer auth through aginxbrain.
+    #[serde(default, skip_serializing)]
+    pub format: Option<types::brain::ApiFormat>,
+    #[serde(default, skip_serializing)]
+    pub auth_header: types::brain::AuthHeaderType,
     /// Skip interactive permission prompts (Claude Code provider only).
     ///
     /// When `true`, adds `--dangerously-skip-permissions` to the spawned
@@ -363,7 +363,7 @@ impl Default for DriverConfig {
             api_key: None,
             base_url: None,
             format: None,
-            auth_header: AuthHeaderType::default(),
+            auth_header: types::brain::AuthHeaderType::default(),
             skip_permissions: true,
         }
     }
@@ -376,8 +376,6 @@ impl std::fmt::Debug for DriverConfig {
             .field("provider", &self.provider)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("base_url", &self.base_url)
-            .field("format", &self.format)
-            .field("auth_header", &self.auth_header)
             .field("skip_permissions", &self.skip_permissions)
             .finish()
     }
@@ -386,7 +384,7 @@ impl std::fmt::Debug for DriverConfig {
 /// Create an LLM driver based on configuration.
 ///
 /// - CLI subprocess drivers (claude-code, qwen-code) dispatched by provider name
-/// - HTTP API drivers dispatched by `ApiFormat`, all handled by `UnifiedHttpDriver`
+/// - HTTP API driver — UnifiedHttpDriver (OpenAI format via aginxbrain)
 pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmError> {
     let provider = config.provider.as_str();
 
@@ -404,45 +402,17 @@ pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmErr
         )));
     }
 
-    // All HTTP API drivers — UnifiedHttpDriver handles all formats
-    let format = config.format.unwrap_or_default();
-
+    // All HTTP API drivers — UnifiedHttpDriver (OpenAI format)
     // Validate base_url for HTTP drivers
     let base_url = config.base_url.clone().ok_or_else(|| LlmError::Config(
-        format!("base_url required for {format:?} format"),
+        "base_url required for HTTP driver".to_string(),
     ))?;
 
-    // Kling needs access_key:secret_key in api_key field
-    let (api_key, secret_key) = if format == ApiFormat::Kling {
-        let combined = config.api_key.clone().ok_or_else(|| {
-            LlmError::MissingApiKey("Kling requires access_key:secret_key in api_key field".to_string())
-        })?;
-        let mut parts = combined.splitn(2, ':');
-        let ak = parts.next().unwrap_or_default().to_string();
-        let sk = parts.next().unwrap_or_default().to_string();
-        if ak.is_empty() || sk.is_empty() {
-            return Err(LlmError::Config(
-                "Kling api_key must be in 'access_key:secret_key' format".to_string(),
-            ));
-        }
-        (ak, Some(sk))
-    } else {
-        // Most formats require an API key (except OpenAI for local providers like Ollama)
-        let api_key = config.api_key.clone().unwrap_or_default();
-        if api_key.is_empty() && format != ApiFormat::OpenAI && format != ApiFormat::OpenAIImages {
-            return Err(LlmError::MissingApiKey(
-                format!("API key required for {format:?} format"),
-            ));
-        }
-        (api_key, None)
-    };
+    let api_key = config.api_key.clone().unwrap_or_default();
 
     Ok(Arc::new(crate::llm_driver_impl::UnifiedHttpDriver::new(
-        format,
         api_key,
-        secret_key,
         base_url,
-        config.auth_header,
     )))
 }
 
