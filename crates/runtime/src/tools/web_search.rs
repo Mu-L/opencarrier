@@ -10,6 +10,7 @@
 //! Not set → tool returns "Search not available".
 
 use super::ToolModule;
+use super::{aginxbrowser_url_opt, AGINXBROWSER_TIMEOUT_SECS};
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
 use types::tool::{PermissionLevel, ToolDefinition};
@@ -39,7 +40,7 @@ impl ToolModule for WebSearchTools {
                     },
                     "categories": {
                         "type": "string",
-                        "description": "SearXNG category: general, news, images, etc. Default: general"
+                        "description": "Search category: general, news, images, etc. Default: general"
                     },
                     "language": {
                         "type": "string",
@@ -69,7 +70,7 @@ impl ToolModule for WebSearchTools {
             return None;
         }
 
-        let base = match std::env::var("AGINXBROWSER_URL").ok().filter(|s| !s.is_empty()) {
+        let base = match aginxbrowser_url_opt() {
             Some(u) => u,
             None => return Some(Err("Search not available: AGINXBROWSER_URL not set".into())),
         };
@@ -110,7 +111,7 @@ async fn do_search(base_url: &str, input: &Value) -> Result<String, String> {
     }
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(90)) // fetch_top>0 can be slow
+        .timeout(std::time::Duration::from_secs(AGINXBROWSER_TIMEOUT_SECS + 30)) // search+fetch needs more time
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
 
@@ -191,9 +192,10 @@ async fn do_search(base_url: &str, input: &Value) -> Result<String, String> {
         backend
     ));
 
-    // Truncate very long outputs
+    // Truncate very long outputs (char-boundary-safe to avoid panic on multi-byte UTF-8)
     if output.len() > 60_000 {
-        output = format!("{}... [truncated, {} total chars]", &output[..50_000.min(output.len())], output.len());
+        let truncated = crate::str_utils::safe_truncate_str(&output, 50_000);
+        output = format!("{}... [truncated, {} total chars]", truncated, output.len());
     }
 
     Ok(output)

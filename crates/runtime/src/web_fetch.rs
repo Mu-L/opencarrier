@@ -217,18 +217,12 @@ impl WebFetchEngine {
     /// 请求格式对齐 browser.rs 的 do_fetch_request；响应解析 {content, title, url}。
     async fn fetch_via_aginxbrowser(&self, url: &str) -> Result<String, String> {
         let base = aginxbrowser_url().expect("caller guards aginxbrowser_url().is_some()");
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(
-                self.config.timeout_secs.max(30),
-            ))
-            .build()
-            .map_err(|e| format!("client build failed: {e}"))?;
         let body = serde_json::json!({
             "url": url,
             "format": "markdown",
             "wait_secs": 4, // 等 JS 渲染（微信/动态页必需）
         });
-        let resp: serde_json::Value = client
+        let resp: serde_json::Value = self.client
             .post(format!("{}/fetch", base.trim_end_matches('/')))
             .json(&body)
             .send()

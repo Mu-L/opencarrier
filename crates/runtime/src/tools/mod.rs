@@ -29,6 +29,28 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+// ---------------------------------------------------------------------------
+// Shared AginBrowser helpers (used by browser.rs and web_search.rs)
+// ---------------------------------------------------------------------------
+
+/// Default AginBrowser endpoint. Override via `AGINXBROWSER_URL` env var.
+pub(crate) const AGINXBROWSER_DEFAULT_URL: &str = "http://127.0.0.1:8089";
+
+/// Default timeout for AginBrowser HTTP requests (seconds).
+pub(crate) const AGINXBROWSER_TIMEOUT_SECS: u64 = 60;
+
+/// Read the AginBrowser URL from `AGINXBROWSER_URL` env var.
+/// Returns `None` if not set or empty (e.g. web_search disables itself).
+pub(crate) fn aginxbrowser_url_opt() -> Option<String> {
+    std::env::var("AGINXBROWSER_URL").ok().filter(|s| !s.is_empty())
+}
+
+/// Read the AginBrowser URL from `AGINXBROWSER_URL` env var.
+/// Returns the default URL if not set (e.g. browser_* tools are always enabled).
+pub(crate) fn aginxbrowser_url() -> String {
+    aginxbrowser_url_opt().unwrap_or_else(|| AGINXBROWSER_DEFAULT_URL.to_string())
+}
+
 /// A category of related tools.
 ///
 /// Modules are tried in order; the first one returning `Some` handles the tool.
@@ -71,6 +93,7 @@ pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
         Box::new(sqlite::SqliteTools),
         Box::new(shell::ShellTools),
         Box::new(browser::BrowserTools),
+        Box::new(web_search::WebSearchTools),
         Box::new(misc::MiscTools),
         Box::new(toolset::ToolSearchTools),
         Box::new(knowledge::KnowledgeTools),
@@ -83,7 +106,6 @@ pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
         Box::new(scheduling::SchedulingTools),
         Box::new(collaboration::CollaborationTools),
         Box::new(a2a::A2aTools),
-        Box::new(web_search::WebSearchTools),
     ]
 }
 

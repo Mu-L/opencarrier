@@ -13,17 +13,11 @@
 //! possible, or return an error explaining the limitation.
 
 use super::ToolModule;
+use super::{aginxbrowser_url, AGINXBROWSER_TIMEOUT_SECS};
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
-
-/// Default AginxBrowser endpoint. Override via `AGINXBROWSER_URL` env var.
-const DEFAULT_URL: &str = "http://127.0.0.1:8089";
-
-fn aginxbrowser_url() -> String {
-    std::env::var("AGINXBROWSER_URL").unwrap_or_else(|_| DEFAULT_URL.to_string())
-}
 
 pub struct BrowserTools;
 
@@ -232,13 +226,14 @@ Use browser_navigate to extract page content instead."
 // HTTP client helpers
 // ---------------------------------------------------------------------------
 
-async fn do_fetch_request(req_body: Value) -> Result<Value, String> {
+/// Shared AginBrowser HTTP request — POST to a given path, return JSON response.
+async fn do_aginxbrowser_request(path: &str, req_body: Value) -> Result<Value, String> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(AGINXBROWSER_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
 
-    let url = format!("{}/fetch", aginxbrowser_url());
+    let url = format!("{}/{}", aginxbrowser_url(), path);
     let resp = client
         .post(&url)
         .json(&req_body)
@@ -258,62 +253,18 @@ async fn do_fetch_request(req_body: Value) -> Result<Value, String> {
     }
 
     Ok(body)
+}
+
+async fn do_fetch_request(req_body: Value) -> Result<Value, String> {
+    do_aginxbrowser_request("fetch", req_body).await
 }
 
 async fn do_click_request(req_body: Value) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
-
-    let url = format!("{}/click", aginxbrowser_url());
-    let resp = client
-        .post(&url)
-        .json(&req_body)
-        .send()
-        .await
-        .map_err(|e| format!("AginxBrowser request failed: {e}"))?;
-
-    let status = resp.status();
-    let body = resp
-        .json::<Value>()
-        .await
-        .map_err(|e| format!("Failed to parse AginxBrowser response: {e}"))?;
-
-    if !status.is_success() {
-        let err = body["error"].as_str().unwrap_or("Unknown error");
-        return Err(format!("AginxBrowser error ({}): {}", status, err));
-    }
-
-    Ok(body)
+    do_aginxbrowser_request("click", req_body).await
 }
 
 async fn do_eval_request(req_body: Value) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
-
-    let url = format!("{}/eval", aginxbrowser_url());
-    let resp = client
-        .post(&url)
-        .json(&req_body)
-        .send()
-        .await
-        .map_err(|e| format!("AginxBrowser request failed: {e}"))?;
-
-    let status = resp.status();
-    let body = resp
-        .json::<Value>()
-        .await
-        .map_err(|e| format!("Failed to parse AginxBrowser response: {e}"))?;
-
-    if !status.is_success() {
-        let err = body["error"].as_str().unwrap_or("Unknown error");
-        return Err(format!("AginxBrowser error ({}): {}", status, err));
-    }
-
-    Ok(body)
+    do_aginxbrowser_request("eval", req_body).await
 }
 
 // ---------------------------------------------------------------------------
