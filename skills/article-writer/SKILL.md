@@ -18,6 +18,20 @@ tools:
 - 读文件 = `file_read`
 - 搜索 = `web_search`
 
+## web_search 用法
+
+`web_search(q="关键词")` 默认走 baidu/google/sogou。**搜微信公众号文章**时指定引擎：
+
+```
+web_search(q="关键词", engines=["sogou_wechat"])
+```
+
+需要同时搜正文时加 `fetch_top`（搜完自动抓前 N 条正文，一步完成"搜→读"）：
+
+```
+web_search(q="关键词", engines=["sogou_wechat"], fetch_top=3)
+```
+
 ## 写作风格
 
 你的 system prompt 中的 knowledge 部分包含当前用户的专属写作风格（writing-style）。正文的语气、术语、句式、排版必须严格遵循该风格。如果风格未指定，使用通用新媒体写作风格。
