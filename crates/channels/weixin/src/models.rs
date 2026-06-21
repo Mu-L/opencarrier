@@ -236,11 +236,19 @@ pub struct SendItem {
     pub type_: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_item: Option<SendTextItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_item: Option<SendImageItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SendTextItem {
     pub text: String,
+}
+
+/// Outbound image item — just a URL to the image.
+#[derive(Debug, Clone, Serialize)]
+pub struct SendImageItem {
+    pub image_url: String,
 }
 
 // ---------------------------------------------------------------------------

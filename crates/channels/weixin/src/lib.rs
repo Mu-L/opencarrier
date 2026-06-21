@@ -4,6 +4,7 @@
 //! - `SessionWatcher` — dynamic session discovery and polling
 //! - `WeixinQrLoginTool` — trigger QR code login
 //! - `WeixinSendMessageTool` — send messages to WeChat users
+//! - `WeixinSendImageTool` — send images to WeChat users
 //! - `WeixinStatusTool` — show bot status
 
 pub mod api;
@@ -15,7 +16,7 @@ pub mod tools;
 pub mod models;
 
 pub use channel::SessionWatcher;
-pub use tools::{WeixinQrLoginTool, WeixinSendMessageTool, WeixinStatusTool};
+pub use tools::{WeixinQrLoginTool, WeixinSendImageTool, WeixinSendMessageTool, WeixinStatusTool};
 
 /// Build an HTTP client that bypasses ambient/system proxies and forces
 /// HTTP/1.1. The iLink API must be reached directly; reqwest's default

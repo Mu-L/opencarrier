@@ -110,6 +110,74 @@ impl ToolProvider for WeixinSendMessageTool {
 }
 
 // ---------------------------------------------------------------------------
+// Send Image tool
+// ---------------------------------------------------------------------------
+
+pub struct WeixinSendImageTool;
+
+impl ToolProvider for WeixinSendImageTool {
+    fn definition(&self) -> PluginToolDef {
+        PluginToolDef {
+            name: "weixin_send_image".to_string(),
+            description: "Send an image to a WeChat user via iLink. Provide the image URL. Requires an active QR-logged-in session. You can only reply to users who have already sent a message.".to_string(),
+            parameters_json: r#"{"type":"object","properties":{"bot_id":{"type":"string","description":"Bot ID (WeChat account)"},"user_id":{"type":"string","description":"iLink user ID to send to"},"image_url":{"type":"string","description":"URL of the image to send"}},"required":["bot_id","user_id","image_url"]}"#.to_string(),
+        }
+    }
+
+    fn execute(&self, args: &Value, _context: &PluginToolContext) -> Result<String, PluginToolError> {
+        let bot_id = args["bot_id"]
+            .as_str()
+            .ok_or_else(|| PluginToolError::tool("missing bot_id"))?;
+        let user_id = args["user_id"]
+            .as_str()
+            .ok_or_else(|| PluginToolError::tool("missing user_id"))?;
+        let image_url = args["image_url"]
+            .as_str()
+            .ok_or_else(|| PluginToolError::tool("missing image_url"))?;
+
+        let state = WEIXIN_STATE
+            .get_session_for_send(bot_id, user_id)
+            .ok_or_else(|| PluginToolError::tool(format!("No session for bot {bot_id}, user {user_id}")))?;
+
+        if state.is_expired() {
+            return Err(PluginToolError::tool("Token expired, please re-scan QR code"));
+        }
+
+        let context_token = state.get_context_token(user_id).ok_or_else(|| {
+            PluginToolError::tool(format!(
+                "No context_token for user {user_id} — can only reply to received messages"
+            ))
+        })?;
+
+        let bot_token = state.bot_token.clone();
+        let baseurl = state.baseurl.clone();
+        let http = state.http.clone();
+        let client_id = format!("openclaw-weixin-{}", uuid::Uuid::new_v4().as_simple());
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PluginToolError::tool(format!("Runtime error: {e}")))?;
+
+        rt.block_on(async {
+            crate::api::send_image(
+                &http,
+                &bot_token,
+                &baseurl,
+                user_id,
+                &context_token,
+                &client_id,
+                image_url,
+            )
+            .await
+            .map_err(PluginToolError::tool)
+        })?;
+
+        Ok("Image sent".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Status tool
 // ---------------------------------------------------------------------------
 

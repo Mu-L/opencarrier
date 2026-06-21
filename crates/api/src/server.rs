@@ -273,6 +273,7 @@ pub async fn run_daemon(
             );
             builtin.register_tool(Box::new(channel_weixin::WeixinQrLoginTool));
             builtin.register_tool(Box::new(channel_weixin::WeixinSendMessageTool));
+            builtin.register_tool(Box::new(channel_weixin::WeixinSendImageTool));
             builtin.register_tool(Box::new(channel_weixin::WeixinStatusTool));
             dispatcher.register(std::sync::Arc::new(builtin));
         }
