@@ -378,7 +378,18 @@ impl UnifiedHttpDriver {
         let resp = self.send_openai_with_retry(&mut oai_request).await?;
 
         let body = resp.text().await.map_err(|e| LlmError::Http(e.to_string()))?;
-        let oai_response: OaiResponse = serde_json::from_str(&body).map_err(|e| LlmError::Parse(e.to_string()))?;
+
+        // aginxbrain wraps some responses in {"code":"Success","output":{...}}
+        // Try standard OpenAI format first; if missing `choices`, unwrap from `output`
+        let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| LlmError::Parse(e.to_string()))?;
+        let oai_json = if parsed.get("choices").is_some() {
+            parsed
+        } else if let Some(output) = parsed.get("output") {
+            output.clone()
+        } else {
+            parsed
+        };
+        let oai_response: OaiResponse = serde_json::from_value(oai_json).map_err(|e| LlmError::Parse(e.to_string()))?;
 
         let choice = oai_response.choices.into_iter().next()
             .ok_or_else(|| LlmError::Parse("No choices in response".to_string()))?;
