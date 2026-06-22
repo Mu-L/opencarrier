@@ -166,6 +166,7 @@ pub async fn send_message(
                     text: text.to_string(),
                 }),
                 image_item: None,
+                video_item: None,
             }]),
         },
         base_info: BaseInfo::default(),
@@ -221,6 +222,7 @@ pub async fn send_image(
                 image_item: Some(SendImageItem {
                     image_url: image_url.to_string(),
                 }),
+                video_item: None,
             }]),
         },
         base_info: BaseInfo::default(),
@@ -245,6 +247,63 @@ pub async fn send_image(
         .text()
         .await
         .map_err(|e| format!("send_image read body error: {e}"))?;
+
+    Ok(())
+}
+
+/// POST `/ilink/bot/sendmessage` with ITEM_TYPE_VIDEO
+///
+/// Send a video message to a WeChat user via iLink.
+pub async fn send_video(
+    http: &Client,
+    bot_token: &str,
+    baseurl: &str,
+    to_user_id: &str,
+    context_token: &str,
+    client_id: &str,
+    video_url: &str,
+) -> Result<(), String> {
+    let url = format!("{baseurl}/ilink/bot/sendmessage");
+
+    let req = SendMessageRequest {
+        msg: SendMessageMsg {
+            from_user_id: String::new(),
+            to_user_id: to_user_id.to_string(),
+            client_id: client_id.to_string(),
+            message_type: MSG_TYPE_BOT,
+            message_state: MSG_STATE_FINISH,
+            context_token: Some(context_token.to_string()),
+            item_list: Some(vec![SendItem {
+                type_: ITEM_TYPE_VIDEO,
+                text_item: None,
+                image_item: None,
+                video_item: Some(SendVideoItem {
+                    video_url: video_url.to_string(),
+                }),
+            }]),
+        },
+        base_info: BaseInfo::default(),
+    };
+
+    let resp = http
+        .post(&url)
+        .headers(ilink_headers(Some(bot_token)))
+        .json(&req)
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("send_video request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("send_video HTTP {status}: {body}"));
+    }
+
+    let _ = resp
+        .text()
+        .await
+        .map_err(|e| format!("send_video read body error: {e}"))?;
 
     Ok(())
 }

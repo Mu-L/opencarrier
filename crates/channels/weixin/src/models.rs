@@ -238,6 +238,8 @@ pub struct SendItem {
     pub text_item: Option<SendTextItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_item: Option<SendImageItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_item: Option<SendVideoItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -249,6 +251,12 @@ pub struct SendTextItem {
 #[derive(Debug, Clone, Serialize)]
 pub struct SendImageItem {
     pub image_url: String,
+}
+
+/// Outbound video item — just a URL to the video.
+#[derive(Debug, Clone, Serialize)]
+pub struct SendVideoItem {
+    pub video_url: String,
 }
 
 // ---------------------------------------------------------------------------

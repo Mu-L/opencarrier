@@ -72,6 +72,19 @@ impl ToolModule for MediaTools {
                     "required": ["prompt"]
                 }),
             },
+            // --- Video generation tool ---
+            ToolDefinition {
+                name: "video_generate".to_string(),
+                description: "Generate a short video from a text prompt. Uses AI video generation (e.g. Kling, Runway). The generated video URL is returned — use weixin_send_video to send it to a WeChat user.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "prompt": { "type": "string", "description": "Text description of the video to generate" },
+                        "duration": { "type": "integer", "description": "Approximate duration in seconds (e.g. 5 for 5s, default: 5)" }
+                    },
+                    "required": ["prompt"]
+                }),
+            },
             // --- TTS/STT tools ---
             ToolDefinition {
                 name: "text_to_speech".to_string(),
@@ -192,6 +205,11 @@ impl ToolModule for MediaTools {
                 Some(tool_image_generate(input, ctx.brain, ctx.home_dir, ctx.agent_name, ctx.owner_id, ctx.sender_id).await)
             }
 
+            // Video generation
+            "video_generate" => {
+                Some(tool_video_generate(input, ctx.brain).await)
+            }
+
             // TTS/STT
             "text_to_speech" => {
                 Some(tool_text_to_speech(input, ctx.brain, ctx.home_dir, ctx.agent_name, ctx.owner_id, ctx.sender_id).await)
@@ -236,7 +254,7 @@ impl ToolModule for MediaTools {
         match tool_name {
             "image_analyze" | "media_describe" | "media_transcribe"
             | "speech_to_text" => types::tool::PermissionLevel::ReadOnly,
-            "image_generate" | "text_to_speech" | "canvas_present" => types::tool::PermissionLevel::Write,
+            "image_generate" | "video_generate" | "text_to_speech" | "canvas_present" => types::tool::PermissionLevel::Write,
             "process_start" | "process_poll"
             | "process_write" | "process_list" => types::tool::PermissionLevel::Execute,
             "process_kill" => types::tool::PermissionLevel::Dangerous,
@@ -795,6 +813,68 @@ async fn tool_image_generate(
     }
 
     serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Video generation tool
+// ---------------------------------------------------------------------------
+
+async fn tool_video_generate(
+    input: &serde_json::Value,
+    brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
+) -> Result<String, String> {
+    let brain = brain.ok_or("Brain not available. Ensure video modality is configured.")?;
+    let prompt = input["prompt"]
+        .as_str()
+        .ok_or("Missing 'prompt' parameter")?;
+
+    let mut extra = serde_json::Map::new();
+    if let Some(duration) = input["duration"].as_u64() {
+        extra.insert("duration".to_string(), serde_json::json!(duration));
+    }
+
+    let request = crate::llm_driver::CompletionRequest {
+        model: String::new(),
+        messages: vec![types::message::Message {
+            role: types::message::Role::User,
+            content: types::message::MessageContent::Text(prompt.to_string()),
+        }],
+        tools: vec![],
+        max_tokens: 0,
+        temperature: 0.0,
+        system: None,
+        thinking: None,
+        extra: serde_json::Value::Object(extra),
+    };
+
+    let response = brain
+        .complete("video", request)
+        .await
+        .map_err(|e| {
+            format!(
+                "Video generation failed: {e}. \
+                 Do NOT retry video_generate with the same prompt. \
+                 Tell the user the video generation service is currently unavailable \
+                 and suggest trying again later."
+            )
+        })?;
+
+    let video_url = match response.media {
+        Some(types::media::MediaOutput::Video { url, .. }) => url,
+        _ => return Err("Video generation returned no video".into()),
+    };
+
+    let mut result = serde_json::Map::new();
+    result.insert("video_url".into(), serde_json::json!(video_url));
+    result.insert("provider".into(), serde_json::json!("brain"));
+    result.insert(
+        "note".into(),
+        serde_json::json!(
+            "Use weixin_send_video to send this video to a WeChat user, or download it directly."
+        ),
+    );
+
+    serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
 }
 
 // ---------------------------------------------------------------------------

@@ -384,19 +384,19 @@ pub enum MediaOutput {
         /// Generated image items.
         items: Vec<GeneratedImage>,
     },
+    /// Generated video.
+    Video {
+        /// Video download URL (may expire).
+        url: String,
+        /// Cover/thumbnail image URL.
+        cover_url: Option<String>,
+    },
     /// Async task submitted (video/long-running generation).
     AsyncTask {
         /// Task ID for polling.
         task_id: String,
         /// Endpoint ID that owns the task.
         endpoint_id: String,
-    },
-    /// Completed video with download URL.
-    Video {
-        /// Video download URL (may expire).
-        url: String,
-        /// Cover/thumbnail image URL.
-        cover_url: Option<String>,
     },
 }
 

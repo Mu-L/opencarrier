@@ -16,7 +16,7 @@ pub mod tools;
 pub mod models;
 
 pub use channel::SessionWatcher;
-pub use tools::{WeixinQrLoginTool, WeixinSendImageTool, WeixinSendMessageTool, WeixinStatusTool};
+pub use tools::{WeixinQrLoginTool, WeixinSendImageTool, WeixinSendMessageTool, WeixinSendVideoTool, WeixinStatusTool};
 
 /// Build an HTTP client that bypasses ambient/system proxies and forces
 /// HTTP/1.1. The iLink API must be reached directly; reqwest's default
