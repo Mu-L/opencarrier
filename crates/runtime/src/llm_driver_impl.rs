@@ -19,6 +19,16 @@ use zeroize::Zeroizing;
 // OpenAI driver struct
 // ---------------------------------------------------------------------------
 
+/// Total HTTP timeout for a single LLM request (seconds).
+/// Must be ≤ the agent loop's `PER_LLM_CALL_TIMEOUT_SECS` so the HTTP layer
+/// acts as a hard backstop even if the outer `tokio::time::timeout` somehow
+/// doesn't fire (observed when the server accepts the connection then stalls).
+pub(crate) const LLM_HTTP_TIMEOUT_SECS: u64 = 180;
+
+/// Timeout for reading a response body after headers are received (seconds).
+/// Prevents hangs when the server sends headers slowly but then stalls on body.
+const LLM_BODY_READ_TIMEOUT_SECS: u64 = 120;
+
 pub struct UnifiedHttpDriver {
     api_key: Zeroizing<String>,
     base_url: String,
@@ -31,7 +41,7 @@ impl UnifiedHttpDriver {
             .user_agent(USER_AGENT)
             .pool_max_idle_per_host(0)
             .connect_timeout(std::time::Duration::from_secs(10))
-            .timeout(std::time::Duration::from_secs(300))
+            .timeout(std::time::Duration::from_secs(LLM_HTTP_TIMEOUT_SECS))
             .build()
             .unwrap_or_default();
         Self {
@@ -377,7 +387,13 @@ impl UnifiedHttpDriver {
         let mut oai_request = self.build_oai_request(&request);
         let resp = self.send_openai_with_retry(&mut oai_request).await?;
 
-        let body = resp.text().await.map_err(|e| LlmError::Http(e.to_string()))?;
+        let body = tokio::time::timeout(
+            std::time::Duration::from_secs(LLM_BODY_READ_TIMEOUT_SECS),
+            resp.text(),
+        )
+        .await
+        .map_err(|_| LlmError::Http(format!("Response body read timed out after {LLM_BODY_READ_TIMEOUT_SECS}s")))?
+        .map_err(|e| LlmError::Http(e.to_string()))?;
 
         // aginxbrain wraps some responses in {"code":"Success","output":{...}}
         // Try standard OpenAI format first; if missing `choices`, unwrap from `output`
@@ -549,7 +565,19 @@ impl UnifiedHttpDriver {
                 return Ok(resp);
             }
 
-            let body = resp.text().await.unwrap_or_default();
+            let body = match tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                resp.text(),
+            )
+            .await
+            {
+                Ok(Ok(text)) => text,
+                Ok(Err(e)) => {
+                    warn!("Error reading error response body: {e}");
+                    String::new()
+                }
+                Err(_) => "[body read timed out]".to_string(),
+            };
 
             // Log 400 errors with tool details for debugging provider schema issues
             if status == 400 && body.contains("arguments") && attempt == 0 {

@@ -27,7 +27,8 @@ pub const BASE_RETRY_DELAY_MS: u64 = 1000;
 
 /// Timeout for a single LLM API call (seconds).
 /// Catches mid-stream hangs where the server goes silent after connection.
-pub(in crate::agent_loop) const PER_LLM_CALL_TIMEOUT_SECS: u64 = 180;
+/// Must match `LLM_HTTP_TIMEOUT_SECS` in llm_driver_impl.rs.
+pub(in crate::agent_loop) const PER_LLM_CALL_TIMEOUT_SECS: u64 = crate::llm_driver_impl::LLM_HTTP_TIMEOUT_SECS;
 
 /// Wall-clock timeout for streaming LLM calls (seconds).
 /// Even though the driver has a per-chunk idle timeout (120s), keepalive bytes
