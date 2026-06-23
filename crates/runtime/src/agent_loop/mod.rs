@@ -53,6 +53,11 @@ const MAX_ITERATIONS: u32 = 25;
 /// Overall timeout for the entire agent loop (seconds).
 const AGENT_LOOP_TIMEOUT_SECS: u64 = 600;
 
+/// When this many seconds remain, hand off to reasoning to decide
+/// whether to wrap up or continue. Must be well above the 30s hard
+/// cutoff in call_with_fallback so the LLM has time to respond.
+const BUDGET_WARNING_THRESHOLD_SECS: u64 = 120;
+
 /// Agent lifecycle phase within the execution loop.
 /// Used for UX indicators (typing, reactions) without coupling to channel types.
 #[derive(Debug, Clone, PartialEq)]
@@ -334,6 +339,7 @@ async fn run_agent_loop_impl(
     let mut tools: &[ToolDefinition] = &tools_owned;
     let mut discovered_tool_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut loaded_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut budget_warning_sent = false;
 
     for iteration in 0..max_iterations {
         debug!(iteration, "Streaming agent loop iteration");
@@ -393,8 +399,45 @@ async fn run_agent_loop_impl(
         } else {
             &manifest.model.modality
         };
-        let modality = helpers::pick_modality(brain.as_ref(), iteration, default_modality);
-        let mut response = helpers::call_with_fallback(
+
+        // Graceful budget handoff: when time is running low, let reasoning
+        // decide whether to wrap up or continue — instead of hard-stopping.
+        let remaining_secs = loop_deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .as_secs();
+        let modality = if remaining_secs < BUDGET_WARNING_THRESHOLD_SECS
+            && brain.as_ref().is_some_and(|b| b.has_modality(helpers::REASONING_MODALITY))
+        {
+            if !budget_warning_sent {
+                budget_warning_sent = true;
+                let remaining_hint = if remaining_secs > 60 {
+                    format!("~{}s", remaining_secs)
+                } else {
+                    "under a minute".to_string()
+                };
+                info!(
+                    iteration,
+                    remaining_secs,
+                    "Budget warning: handing off to reasoning for wrap-up decision"
+                );
+                messages.push(Message::system(format!(
+                    "⏱️ Time budget running low ({remaining_hint} remaining). \
+                     Assess your progress: if you have enough information to respond, \
+                     produce your final answer now. If one more tool call is truly critical, \
+                     you may continue — but avoid unnecessary iterations.",
+                )));
+            }
+            tracing::info!(
+                iteration,
+                remaining_secs,
+                selected = helpers::REASONING_MODALITY,
+                "Forcing reasoning modality for budget-aware decision"
+            );
+            helpers::REASONING_MODALITY.to_string()
+        } else {
+            helpers::pick_modality(brain.as_ref(), iteration, default_modality)
+        };
+        let mut response = match helpers::call_with_fallback(
             brain.as_ref(),
             &*driver,
             &modality,
@@ -403,7 +446,60 @@ async fn run_agent_loop_impl(
             Some(loop_deadline),
             llm_concurrency_limit.as_ref(),
         )
-        .await?;
+        .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                // If the error is budget exhaustion and we haven't tried a
+                // final wrap-up yet, give reasoning one last chance to
+                // produce a partial answer from whatever we have so far.
+                let err_str = format!("{e}");
+                if err_str.contains("time budget exhausted")
+                    && brain.as_ref().is_some_and(|b| b.has_modality(helpers::REASONING_MODALITY))
+                {
+                    warn!(
+                        iteration,
+                        "Time budget exhausted — attempting final reasoning wrap-up"
+                    );
+                    messages.push(Message::system(
+                        "⏱️ Time budget is now exhausted. Based on everything you have \
+                         so far, produce the best possible final answer. Do not call any \
+                         more tools — just summarize and conclude.",
+                    ));
+
+                    // Build a minimal request for the final reasoning call.
+                    // Use a shorter per-call timeout so we don't overshoot.
+                    let final_deadline = loop_deadline
+                        - std::time::Duration::from_secs(5);  // 5s safety margin
+                    let final_request = CompletionRequest {
+                        model: String::new(),
+                        messages: messages.clone(),
+                        tools: vec![],  // no tools — force text output
+                        max_tokens: manifest.model.max_tokens,
+                        temperature: manifest.model.temperature,
+                        system: Some(system_prompt.clone()),
+                        thinking: None,
+                        extra: Default::default(),
+                    };
+                    match helpers::call_with_fallback(
+                        brain.as_ref(),
+                        &*driver,
+                        helpers::REASONING_MODALITY,
+                        final_request,
+                        stream_tx.clone(),
+                        Some(final_deadline),
+                        llm_concurrency_limit.as_ref(),
+                    )
+                    .await
+                    {
+                        Ok(final_resp) => final_resp,
+                        Err(_) => return Err(e),  // final attempt failed, return original
+                    }
+                } else {
+                    return Err(e);
+                }
+            }
+        };
 
         total_usage.input_tokens += response.usage.input_tokens;
         total_usage.output_tokens += response.usage.output_tokens;
