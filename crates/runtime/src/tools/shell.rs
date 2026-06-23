@@ -206,3 +206,165 @@ async fn exec_shell(
         Err(_) => Err(format!("Command timed out after {timeout_secs}s")),
     }
 }
+
+// ---------------------------------------------------------------------------
+// cli_exec — whitelisted CLI command execution
+// ---------------------------------------------------------------------------
+
+/// Whitelisted CLI command execution tool.
+///
+/// Unlike `shell_exec` (Dangerous), `cli_exec` only allows commands
+/// explicitly listed in the config. Arguments are parsed with `shlex`
+/// and executed directly — no shell wrapper. Safe for low-privilege agents.
+pub struct CliExecTools {
+    config: types::config::CliExecConfig,
+}
+
+impl CliExecTools {
+    pub fn new(config: types::config::CliExecConfig) -> Self {
+        Self { config }
+    }
+}
+
+#[async_trait]
+impl ToolModule for CliExecTools {
+    fn definitions(&self) -> Vec<ToolDefinition> {
+        if self.config.commands.is_empty() {
+            return vec![];
+        }
+
+        // Build a description that lists available commands and examples.
+        let mut cmd_lines = Vec::new();
+        for cmd in &self.config.commands {
+            let examples = if cmd.examples.is_empty() {
+                String::new()
+            } else {
+                format!(" (e.g. {})", cmd.examples.join(", "))
+            };
+            cmd_lines.push(format!("- {}: {}{}", cmd.name, cmd.description, examples));
+        }
+        let description = format!(
+            "Execute a whitelisted CLI command. Available commands:\n{}",
+            cmd_lines.join("\n")
+        );
+
+        vec![ToolDefinition {
+            name: "cli_exec".to_string(),
+            description,
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Command name (e.g. 'gh', 'todoist')" },
+                    "args": { "type": "string", "description": "Arguments as a single string (e.g. 'pr list --repo owner/repo')" }
+                },
+                "required": ["command"]
+            }),
+        }]
+    }
+
+    async fn execute(
+        &self,
+        name: &str,
+        input: &Value,
+        ctx: &ToolContext<'_>,
+    ) -> Option<Result<String, String>> {
+        if name != "cli_exec" {
+            return None;
+        }
+
+        let command_name = input["command"].as_str().unwrap_or("").trim();
+
+        // 1. Check whitelist
+        let allowed = self.config.commands.iter().find(|c| c.name == command_name);
+        if allowed.is_none() {
+            let available: Vec<&str> = self.config.commands.iter().map(|c| c.name.as_str()).collect();
+            return Some(Err(format!(
+                "Command '{command_name}' not in cli_exec allowlist. Available: {}",
+                available.join(", ")
+            )));
+        }
+
+        // 2. Parse args with shlex — never start a shell
+        let args_str = input["args"].as_str().unwrap_or("");
+        let mut argv = vec![command_name.to_string()];
+        if !args_str.is_empty() {
+            // SECURITY: reject shell metacharacters in args
+            if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(args_str) {
+                return Some(Err(format!(
+                    "cli_exec blocked: args contain {reason}. \
+                     Shell metacharacters (pipes, redirects, subshells) are not allowed."
+                )));
+            }
+            let parsed = shlex::split(args_str).ok_or_else(|| {
+                "Arguments contain unmatched quotes or invalid syntax".to_string()
+            });
+            match parsed {
+                Ok(parts) => argv.extend(parts),
+                Err(e) => return Some(Err(e)),
+            }
+        }
+
+        // 3. Execute directly — no shell wrapper
+        let allowed_env = ctx.allowed_env_vars.unwrap_or(&[]);
+        let workspace_root = ctx.workspace_root;
+
+        let mut cmd = tokio::process::Command::new(&argv[0]);
+        if argv.len() > 1 {
+            cmd.args(&argv[1..]);
+        }
+
+        if let Some(ws) = workspace_root {
+            cmd.current_dir(ws);
+        }
+
+        crate::subprocess_sandbox::sandbox_command(&mut cmd, allowed_env);
+
+        #[cfg(windows)]
+        cmd.env("PYTHONIOENCODING", "utf-8");
+
+        cmd.stdin(std::process::Stdio::null());
+
+        let timeout_secs = 30u64;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output()).await;
+
+        match result {
+            Ok(Ok(output)) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let exit_code = output.status.code().unwrap_or(-1);
+
+                let max_output = 100_000;
+                let stdout_str = if stdout.len() > max_output {
+                    format!(
+                        "{}...\n[truncated, {} total bytes]",
+                        crate::str_utils::safe_truncate_str(&stdout, max_output),
+                        stdout.len()
+                    )
+                } else {
+                    stdout.to_string()
+                };
+                let stderr_str = if stderr.len() > max_output {
+                    format!(
+                        "{}...\n[truncated, {} total bytes]",
+                        crate::str_utils::safe_truncate_str(&stderr, max_output),
+                        stderr.len()
+                    )
+                } else {
+                    stderr.to_string()
+                };
+
+                Some(Ok(format!(
+                    "Exit code: {exit_code}\n\nSTDOUT:\n{stdout_str}\nSTDERR:\n{stderr_str}"
+                )))
+            }
+            Ok(Err(e)) => Some(Err(format!("Failed to execute command: {e}"))),
+            Err(_) => Some(Err(format!("Command timed out after {timeout_secs}s"))),
+        }
+    }
+
+    fn permission_level(&self, _tool_name: &str) -> types::tool::PermissionLevel {
+        // cli_exec is restricted to whitelisted commands only — safe for Write-level agents
+        types::tool::PermissionLevel::Write
+    }
+}

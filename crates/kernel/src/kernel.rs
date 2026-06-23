@@ -732,6 +732,10 @@ impl CarrierKernel {
         if manifest.exec_policy.is_none() {
             manifest.exec_policy = Some(self.config.exec_policy.clone());
         }
+        // Inherit kernel cli_exec config as fallback if agent manifest doesn't have one
+        if manifest.cli_exec.is_none() && !self.config.cli_exec.commands.is_empty() {
+            manifest.cli_exec = Some(self.config.cli_exec.clone());
+        }
         info!(agent = %name, id = %agent_id, exec_mode = ?manifest.exec_policy.as_ref().map(|p| &p.mode), "Agent exec_policy resolved");
 
         // Overlay kernel default_model onto agent if agent didn't explicitly choose.
@@ -1236,6 +1240,7 @@ mod tests {
             generate_identity_files: true,
             clone_source: None,
             exec_policy: None,
+            cli_exec: None,
             tool_allowlist: vec![],
             tool_blocklist: vec![],
             knowledge_files: vec![],
@@ -1274,6 +1279,7 @@ mod tests {
             generate_identity_files: true,
             clone_source: None,
             exec_policy: None,
+            cli_exec: None,
             tool_allowlist: vec![],
             tool_blocklist: vec![],
             knowledge_files: vec![],

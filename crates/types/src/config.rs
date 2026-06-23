@@ -473,6 +473,30 @@ impl Default for ExecPolicy {
 // Gap 2: No-output idle timeout for subprocess sandbox
 // ---------------------------------------------------------------------------
 
+/// A whitelisted CLI command for the `cli_exec` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CliCommand {
+    /// Binary name (e.g. "gh", "todoist", "git").
+    pub name: String,
+    /// Human-readable description shown to the LLM.
+    pub description: String,
+    /// Example subcommands/args the LLM can use.
+    #[serde(default)]
+    pub examples: Vec<String>,
+}
+
+/// Configuration for the `cli_exec` tool — a restricted alternative to `shell_exec`.
+///
+/// Unlike `shell_exec` (PermissionLevel::Dangerous), `cli_exec` only allows
+/// commands explicitly listed in `commands`. Arguments are parsed with `shlex`
+/// and executed directly (no shell wrapper), making it safe for low-privilege agents.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CliExecConfig {
+    /// Whitelisted CLI commands. Empty = cli_exec disabled (tool not registered).
+    #[serde(default)]
+    pub commands: Vec<CliCommand>,
+}
+
 /// Reason a subprocess was terminated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminationReason {
@@ -668,6 +692,9 @@ pub struct KernelConfig {
     /// Shell/exec security policy.
     #[serde(default)]
     pub exec_policy: ExecPolicy,
+    /// CLI exec whitelist — restricted alternative to shell_exec for low-privilege agents.
+    #[serde(default)]
+    pub cli_exec: CliExecConfig,
     /// Agent bindings for multi-account routing.
     #[serde(default)]
     pub bindings: Vec<AgentBinding>,
@@ -927,6 +954,7 @@ impl Default for KernelConfig {
             max_cron_jobs: default_max_cron_jobs(),
             include: Vec::new(),
             exec_policy: ExecPolicy::default(),
+            cli_exec: CliExecConfig::default(),
             bindings: Vec::new(),
             broadcast: BroadcastConfig::default(),
             canvas: CanvasConfig::default(),

@@ -31,6 +31,7 @@ pub struct ToolContext<'a> {
     pub workspace_root: Option<&'a Path>,
     pub brain: Option<&'a Arc<dyn Brain>>,
     pub exec_policy: Option<&'a ExecPolicy>,
+    pub cli_exec_config: Option<&'a types::config::CliExecConfig>,
     pub process_manager: Option<&'a ProcessManager>,
     pub sender_id: Option<&'a str>,
     pub owner_id: Option<&'a str>,

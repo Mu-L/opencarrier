@@ -170,6 +170,7 @@ impl SetupWizard {
             generate_identity_files: true,
             profile: None,
             exec_policy: None,
+            cli_exec: None,
             tool_allowlist: vec![],
             tool_blocklist: vec![],
             clone_source: None,

@@ -365,6 +365,7 @@ mod tests {
                 workspace: None,
                 generate_identity_files: true,
                 exec_policy: None,
+                cli_exec: None,
                 tool_allowlist: vec![],
                 tool_blocklist: vec![],
                 clone_source: None,

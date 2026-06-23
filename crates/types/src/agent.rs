@@ -244,23 +244,24 @@ impl ToolProfile {
     /// Expand profile to tool name list.
     pub fn tools(&self) -> Vec<String> {
         match self {
-            Self::Minimal => vec!["file_read", "file_list"],
+            Self::Minimal => vec!["file_read", "file_list", "cli_exec"],
             Self::Coding => vec![
                 "file_read",
                 "file_write",
                 "file_list",
                 "shell_exec",
                 "web_fetch",
+                "cli_exec",
             ],
-            Self::Research => vec!["web_fetch",  "file_read", "file_write"],
-            Self::Messaging => vec!["agent_send", "agent_list"],
+            Self::Research => vec!["web_fetch", "file_read", "file_write", "cli_exec"],
+            Self::Messaging => vec!["agent_send", "agent_list", "cli_exec"],
             Self::Automation => vec![
                 "file_read",
                 "file_write",
                 "file_list",
                 "shell_exec",
                 "web_fetch",
-                
+                "cli_exec",
                 "agent_send",
                 "agent_list",
             ],
@@ -407,6 +408,10 @@ pub struct AgentManifest {
     /// Accepts string shorthand ("allow", "deny", "full", "allowlist") or full table.
     #[serde(default, deserialize_with = "crate::serde_compat::exec_policy_lenient")]
     pub exec_policy: Option<crate::config::ExecPolicy>,
+    /// Per-agent CLI exec allowlist. If empty, cli_exec uses the global config.
+    /// If non-empty, overrides the global config for this agent.
+    #[serde(default)]
+    pub cli_exec: Option<crate::config::CliExecConfig>,
     /// Tool allowlist — only these tools are available (empty = all tools).
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub tool_allowlist: Vec<String>,
@@ -528,6 +533,7 @@ impl Default for AgentManifest {
             workspace: None,
             generate_identity_files: true,
             exec_policy: None,
+            cli_exec: None,
             tool_allowlist: Vec::new(),
             tool_blocklist: Vec::new(),
             clone_source: None,
@@ -741,6 +747,7 @@ mod tests {
             workspace: None,
             generate_identity_files: true,
             exec_policy: None,
+            cli_exec: None,
             tool_allowlist: Vec::new(),
             tool_blocklist: Vec::new(),
             clone_source: None,
@@ -759,7 +766,7 @@ mod tests {
     #[test]
     fn test_tool_profile_minimal() {
         let tools = ToolProfile::Minimal.tools();
-        assert_eq!(tools, vec!["file_read", "file_list"]);
+        assert_eq!(tools, vec!["file_read", "file_list", "cli_exec"]);
     }
 
     #[test]
@@ -768,28 +775,30 @@ mod tests {
         assert!(tools.contains(&"file_read".to_string()));
         assert!(tools.contains(&"shell_exec".to_string()));
         assert!(tools.contains(&"web_fetch".to_string()));
-        assert_eq!(tools.len(), 5);
+        assert!(tools.contains(&"cli_exec".to_string()));
+        assert_eq!(tools.len(), 6);
     }
 
     #[test]
     fn test_tool_profile_research() {
         let tools = ToolProfile::Research.tools();
         assert!(tools.contains(&"web_fetch".to_string()));
-        assert!(tools.contains(&"web_fetch".to_string()));
-        assert_eq!(tools.len(), 3);
+        assert!(tools.contains(&"cli_exec".to_string()));
+        assert_eq!(tools.len(), 4);
     }
 
     #[test]
     fn test_tool_profile_messaging() {
         let tools = ToolProfile::Messaging.tools();
         assert!(tools.contains(&"agent_send".to_string()));
-        assert_eq!(tools.len(), 2);
+        assert!(tools.contains(&"cli_exec".to_string()));
+        assert_eq!(tools.len(), 3);
     }
 
     #[test]
     fn test_tool_profile_automation() {
         let tools = ToolProfile::Automation.tools();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 8);
     }
 
     #[test]

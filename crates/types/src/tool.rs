@@ -103,6 +103,9 @@ impl PermissionLevel {
             // Dangerous — irreversible operations
             "shell_exec" | "process_kill" | "agent_kill" => Self::Dangerous,
 
+            // Whitelisted CLI execution — restricted to config allowlist, safe for Write-level agents
+            "cli_exec" => Self::Write,
+
             // MCP tools default to Write (user-configured, trusted by default)
             n if n.starts_with("mcp_") || name.starts_with("mcp_") => Self::Write,
 

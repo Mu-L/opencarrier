@@ -50,6 +50,7 @@ pub async fn execute_tool(
         subagent_configs: _,
         channel_type: _,
         max_tool_level,
+        cli_exec_config: _,
     } = *ctx;
 
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
@@ -59,7 +60,8 @@ pub async fn execute_tool(
     let input_ref = input;
 
     // Permission enforcement: reject tools above max_tool_level or Dangerous
-    let modules = crate::tools::builtin_modules();
+    let cli_exec_config = ctx.cli_exec_config.cloned().unwrap_or_default();
+    let modules = crate::tools::builtin_modules(cli_exec_config);
     let mut permission_checked = false;
     for module in &modules {
         if module.definitions().iter().any(|d| d.name == tool_name) {
@@ -108,7 +110,8 @@ pub async fn execute_tool(
     debug!(tool_name, "Executing tool");
 
     // Phase 1: Try extracted tool modules (filesystem, shell, misc, ...)
-    let modules = crate::tools::builtin_modules();
+    let cli_exec_config = ctx.cli_exec_config.cloned().unwrap_or_default();
+    let modules = crate::tools::builtin_modules(cli_exec_config);
     for module in &modules {
         if let Some(result) = module.execute(tool_name, input_ref, ctx).await {
             return match result {
@@ -293,7 +296,7 @@ fn smart_truncate(content: &str, max_chars: usize) -> String {
 /// Get definitions for all built-in tools.
 pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
     // All built-in tool definitions come from ToolModules now.
-    crate::tools::builtin_modules()
+    crate::tools::builtin_modules(types::config::CliExecConfig::default())
         .into_iter()
         .flat_map(|m| m.definitions())
         .collect()
@@ -315,6 +318,7 @@ mod tests {
             workspace_root: None,
             brain: None,
             exec_policy: None,
+            cli_exec_config: None,
             process_manager: None,
             sender_id: None,
             owner_id: None,

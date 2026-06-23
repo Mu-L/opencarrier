@@ -189,6 +189,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             workspace_root,
             brain,
             exec_policy: effective_exec_policy,
+            cli_exec_config: manifest.cli_exec.as_ref(),
 
             process_manager,
             sender_id,

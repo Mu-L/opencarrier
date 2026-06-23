@@ -88,8 +88,8 @@ pub trait ToolModule: Send + Sync {
 }
 
 /// All built-in tool modules in dispatch order.
-pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
-    vec![
+pub fn builtin_modules(cli_exec_config: types::config::CliExecConfig) -> Vec<Box<dyn ToolModule>> {
+    let mut modules: Vec<Box<dyn ToolModule>> = vec![
         Box::new(filesystem::FilesystemTools),
         Box::new(sqlite::SqliteTools),
         Box::new(shell::ShellTools),
@@ -108,7 +108,12 @@ pub fn builtin_modules() -> Vec<Box<dyn ToolModule>> {
         Box::new(scheduling::SchedulingTools),
         Box::new(collaboration::CollaborationTools),
         Box::new(a2a::A2aTools),
-    ]
+    ];
+    // Only register cli_exec if there are whitelisted commands configured.
+    if !cli_exec_config.commands.is_empty() {
+        modules.push(Box::new(shell::CliExecTools::new(cli_exec_config)));
+    }
+    modules
 }
 
 // ---------------------------------------------------------------------------
