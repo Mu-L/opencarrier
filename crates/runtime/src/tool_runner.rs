@@ -294,9 +294,9 @@ fn smart_truncate(content: &str, max_chars: usize) -> String {
 }
 
 /// Get definitions for all built-in tools.
-pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
+pub fn builtin_tool_definitions(cli_exec_config: types::config::CliExecConfig) -> Vec<ToolDefinition> {
     // All built-in tool definitions come from ToolModules now.
-    crate::tools::builtin_modules(types::config::CliExecConfig::default())
+    crate::tools::builtin_modules(cli_exec_config)
         .into_iter()
         .flat_map(|m| m.definitions())
         .collect()
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn test_builtin_tool_definitions() {
-        let tools = builtin_tool_definitions();
+        let tools = builtin_tool_definitions(types::config::CliExecConfig::default());
         assert!(
             tools.len() >= 25,
             "Expected at least 25 tools, got {}",
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_collaboration_tool_schemas() {
-        let tools = builtin_tool_definitions();
+        let tools = builtin_tool_definitions(types::config::CliExecConfig::default());
         let collab_tools = [
             "agent_find",
             "task_post",

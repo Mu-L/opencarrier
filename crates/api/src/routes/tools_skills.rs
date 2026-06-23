@@ -86,7 +86,7 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
 
 /// GET /api/tools — List all tool definitions (built-in + MCP).
 pub async fn list_tools(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let mut tools: Vec<serde_json::Value> = builtin_tool_definitions()
+    let mut tools: Vec<serde_json::Value> = builtin_tool_definitions(state.kernel.config.cli_exec.clone())
         .iter()
         .map(|t| {
             serde_json::json!({
@@ -126,7 +126,7 @@ pub async fn mcp_http(
     Json(request): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     // Gather all available tools (builtin + MCP)
-    let mut tools = builtin_tool_definitions();
+    let mut tools = builtin_tool_definitions(state.kernel.config.cli_exec.clone());
     if let Ok(mcp_tools) = state.kernel.plugins.mcp_tools.lock() {
         tools.extend(mcp_tools.iter().cloned());
     }

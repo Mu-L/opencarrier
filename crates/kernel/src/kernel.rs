@@ -857,7 +857,7 @@ impl CarrierKernel {
             std::collections::HashMap::new();
 
         // Group builtin tools by toolset
-        let all_builtins = runtime::tool_runner::builtin_tool_definitions();
+        let all_builtins = runtime::tool_runner::builtin_tool_definitions(self.config.cli_exec.clone());
         for tool in &all_builtins {
             if let Some(ts_name) = Self::tool_to_toolset(&tool.name) {
                 registry

@@ -126,7 +126,7 @@ impl CarrierKernel {
         };
 
         // Build agent's core tool set (bootstrap tools + delegate tools)
-        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions()
+        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions(self.config.cli_exec.clone())
             .into_iter()
             .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
             .collect();
