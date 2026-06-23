@@ -53,11 +53,6 @@ const MAX_ITERATIONS: u32 = 25;
 /// Overall timeout for the entire agent loop (seconds).
 const AGENT_LOOP_TIMEOUT_SECS: u64 = 600;
 
-/// When this many seconds remain, hand off to reasoning to decide
-/// whether to wrap up or continue. Must be well above the 30s hard
-/// cutoff in call_with_fallback so the LLM has time to respond.
-const BUDGET_WARNING_THRESHOLD_SECS: u64 = 120;
-
 /// Agent lifecycle phase within the execution loop.
 /// Used for UX indicators (typing, reactions) without coupling to channel types.
 #[derive(Debug, Clone, PartialEq)]
@@ -400,39 +395,61 @@ async fn run_agent_loop_impl(
             &manifest.model.modality
         };
 
-        // Graceful budget handoff: when time is running low, let reasoning
-        // decide whether to wrap up or continue — instead of hard-stopping.
+        // Inject loop status into every reasoning turn so the LLM can make
+        // informed decisions about whether to continue or wrap up.
         let remaining_secs = loop_deadline
             .saturating_duration_since(std::time::Instant::now())
             .as_secs();
-        let modality = if remaining_secs < BUDGET_WARNING_THRESHOLD_SECS
-            && brain.as_ref().is_some_and(|b| b.has_modality(helpers::REASONING_MODALITY))
+        let is_reasoning = brain
+            .as_ref()
+            .is_some_and(|b| b.has_modality(helpers::REASONING_MODALITY));
+
+        if is_reasoning && iteration.is_multiple_of(2) {
+            // Build status hint: iteration count, time remaining, budget pressure level
+            let pressure = if remaining_secs > 300 {
+                "comfortable"
+            } else if remaining_secs > 120 {
+                "moderate"
+            } else if remaining_secs > 60 {
+                "tight"
+            } else {
+                "critical"
+            };
+            let status_msg = format!(
+                "📊 Loop status: iteration {}/{} | ~{}s remaining | budget: {pressure}",
+                iteration + 1,
+                max_iterations,
+                remaining_secs,
+            );
+            // Only inject if the last system message isn't already a loop status
+            let should_inject = messages.last().is_none_or(|m| {
+                !m.content.text_content().starts_with("📊 Loop status")
+            });
+            if should_inject {
+                tracing::info!(
+                    iteration,
+                    remaining_secs,
+                    pressure,
+                    "Injecting loop status for reasoning decision"
+                );
+                messages.push(Message::system(status_msg));
+            }
+        }
+
+        // When time is tight/critical, force reasoning modality so the LLM
+        // can make a deliberate wrap-up decision instead of blindly continuing
+        // with tool calls that won't complete in time.
+        let modality = if remaining_secs < 120
+            && is_reasoning
         {
             if !budget_warning_sent {
                 budget_warning_sent = true;
-                let remaining_hint = if remaining_secs > 60 {
-                    format!("~{}s", remaining_secs)
-                } else {
-                    "under a minute".to_string()
-                };
                 info!(
                     iteration,
                     remaining_secs,
-                    "Budget warning: handing off to reasoning for wrap-up decision"
+                    "Budget tight: forcing reasoning for wrap-up decision"
                 );
-                messages.push(Message::system(format!(
-                    "⏱️ Time budget running low ({remaining_hint} remaining). \
-                     Assess your progress: if you have enough information to respond, \
-                     produce your final answer now. If one more tool call is truly critical, \
-                     you may continue — but avoid unnecessary iterations.",
-                )));
             }
-            tracing::info!(
-                iteration,
-                remaining_secs,
-                selected = helpers::REASONING_MODALITY,
-                "Forcing reasoning modality for budget-aware decision"
-            );
             helpers::REASONING_MODALITY.to_string()
         } else {
             helpers::pick_modality(brain.as_ref(), iteration, default_modality)
