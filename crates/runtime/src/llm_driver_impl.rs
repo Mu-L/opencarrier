@@ -660,21 +660,47 @@ const STREAM_IDLE_TIMEOUT_SECS: u64 = 120;
 /// stalled — byte-level idle timeout cannot detect this.
 const STREAM_CONTENT_IDLE_SECS: u64 = 120;
 
-/// Read the next chunk from a byte stream with an idle timeout.
-async fn next_chunk_with_idle_timeout(
+/// Read the next chunk, racing against BOTH:
+/// - byte-level idle (no bytes at all for STREAM_IDLE_TIMEOUT_SECS)
+/// - content-level idle (no meaningful token output for STREAM_CONTENT_IDLE_SECS,
+///   even if keepalive bytes keep the connection nominally alive)
+///
+/// The content idle is a `tokio::select!` branch with its own sleep timer,
+/// so it fires independently of whether `stream.next()` ever resolves —
+/// this is the key difference from wrapping the whole call in
+/// `tokio::time::timeout`, which can fail to fire when the reqwest future
+/// cannot be dropped mid-await.
+async fn next_chunk_with_timeouts(
     stream: &mut (impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin),
+    last_content_at: std::time::Instant,
 ) -> Result<Option<bytes::Bytes>, LlmError> {
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(STREAM_IDLE_TIMEOUT_SECS),
-        stream.next(),
-    )
-    .await
-    {
-        Ok(Some(chunk_result)) => chunk_result.map(Some).map_err(|e| LlmError::Http(e.to_string())),
-        Ok(None) => Ok(None),
-        Err(_) => Err(LlmError::Http(format!(
-            "Streaming idle timeout: no data received in {STREAM_IDLE_TIMEOUT_SECS}s"
-        ))),
+    // How long until content idle fires (since last genuine token output).
+    let content_remaining = std::time::Duration::from_secs(STREAM_CONTENT_IDLE_SECS)
+        .saturating_sub(last_content_at.elapsed());
+    // Byte idle is the outer cap; content idle is usually tighter.
+    let byte_cap = std::time::Duration::from_secs(STREAM_IDLE_TIMEOUT_SECS);
+    let idle_cap = std::cmp::min(content_remaining, byte_cap);
+
+    tokio::select! {
+        chunk_result = stream.next() => match chunk_result {
+            Some(Ok(c)) => Ok(Some(c)),
+            Some(Err(e)) => Err(LlmError::Http(e.to_string())),
+            None => Ok(None),
+        },
+        _ = tokio::time::sleep(idle_cap) => {
+            // Distinguish which timer fired for clearer errors.
+            if content_remaining <= byte_cap {
+                Err(LlmError::Http(format!(
+                    "Streaming content idle timeout: no token output in {}s \
+                     (only keepalive frames). The upstream LLM appears stalled.",
+                    STREAM_CONTENT_IDLE_SECS
+                )))
+            } else {
+                Err(LlmError::Http(format!(
+                    "Streaming idle timeout: no data received in {STREAM_IDLE_TIMEOUT_SECS}s"
+                )))
+            }
+        }
     }
 }
 
@@ -774,20 +800,12 @@ impl LlmDriver for UnifiedHttpDriver {
         // connection alive with SSE comments/empty frames while the
         // upstream LLM is stalled (byte-level idle timeout won't fire
         // because keepalive bytes keep arriving). Reset only when we
-        // receive genuine token output (text/reasoning/tool_call delta).
+        // receive genuine token output (text/reasoning/tool_call delta
+        // — NOT empty `{"choices":[{"delta":{}}]}` frames).
         let mut last_content_at = std::time::Instant::now();
 
         let mut byte_stream = resp.bytes_stream();
-        while let Some(chunk) = next_chunk_with_idle_timeout(&mut byte_stream).await? {
-            // Check content idle: if no meaningful token arrived recently
-            // (even though keepalive bytes did), bail out rather than hang.
-            if last_content_at.elapsed().as_secs() > STREAM_CONTENT_IDLE_SECS {
-                return Err(LlmError::Http(format!(
-                    "Streaming content idle timeout: no token output in {}s \
-                     (only keepalive frames). The upstream LLM appears stalled.",
-                    STREAM_CONTENT_IDLE_SECS
-                )));
-            }
+        while let Some(chunk) = next_chunk_with_timeouts(&mut byte_stream, last_content_at).await? {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
@@ -817,15 +835,19 @@ impl LlmDriver for UnifiedHttpDriver {
                     None => continue,
                 };
 
-                // A data frame carrying choices is genuine LLM progress
-                // (not a keepalive comment), so reset the content idle timer.
-                last_content_at = std::time::Instant::now();
+                // Determine if this frame carries genuine token output
+                // (non-empty content/reasoning/tool_call). Only genuine
+                // tokens reset the content-idle timer — empty frames like
+                // `{"choices":[{"delta":{}}]}` must NOT, or a stalled proxy
+                // emitting empty frames would defeat the idle timeout.
+                let mut got_real_content = false;
 
                 for choice in choices {
                     let delta = &choice["delta"];
 
                     if let Some(text) = delta["content"].as_str() {
                         if !text.is_empty() {
+                            got_real_content = true;
                             text_content.push_str(text);
                             for action in think_filter.process(text) {
                                 match action {
@@ -842,12 +864,16 @@ impl LlmDriver for UnifiedHttpDriver {
 
                     if let Some(reasoning) = delta["reasoning_content"].as_str() {
                         if !reasoning.is_empty() {
+                            got_real_content = true;
                             reasoning_content.push_str(reasoning);
                             let _ = tx.send(StreamEvent::ThinkingDelta { text: reasoning.to_string() }).await;
                         }
                     }
 
                     if let Some(calls) = delta["tool_calls"].as_array() {
+                        if !calls.is_empty() {
+                            got_real_content = true;
+                        }
                         for call in calls {
                             let idx = call["index"].as_u64().unwrap_or(0) as usize;
                             if idx > 100 {
@@ -879,6 +905,14 @@ impl LlmDriver for UnifiedHttpDriver {
                     if let Some(fr) = choice["finish_reason"].as_str() {
                         if !fr.is_empty() { finish_reason = Some(fr.to_string()); }
                     }
+                }
+
+                // Reset content-idle timer only when genuine token output
+                // arrived this frame. finish_reason alone (end of stream)
+                // also counts as progress so we don't time out on the
+                // final frame.
+                if got_real_content || finish_reason.is_some() {
+                    last_content_at = std::time::Instant::now();
                 }
             }
         }
