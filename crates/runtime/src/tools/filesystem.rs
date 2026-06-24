@@ -98,6 +98,29 @@ impl super::ToolModule for FilesystemTools {
 // Private tool implementations
 // ---------------------------------------------------------------------------
 
+/// Detect common binary file types from magic bytes.
+/// Returns a human-readable kind (e.g. "PNG 图片") so we can tell the LLM
+/// to use image_analyze instead of file_read.
+fn detect_binary_kind(header: &[u8]) -> Option<&'static str> {
+    if header.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+        Some("PNG 图片")
+    } else if header.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("JPEG 图片")
+    } else if header.starts_with(b"GIF87a") || header.starts_with(b"GIF89a") {
+        Some("GIF 图片")
+    } else if header.starts_with(b"RIFF") && header.len() > 11 && &header[8..12] == b"WEBP" {
+        Some("WebP 图片")
+    } else if header.len() > 4 && &header[4..8] == b"ftyp" {
+        Some("视频文件")
+    } else if header.starts_with(&[0x25, 0x50, 0x44, 0x46]) {
+        Some("PDF 文档")
+    } else if header.starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
+        Some("ZIP 压缩包")
+    } else {
+        None
+    }
+}
+
 /// Resolve output/memory (and catch-all) paths to the top-level senders directory.
 ///
 /// Returns `None` if the path is a workspace-internal path (knowledge/, skills/, etc.)
@@ -162,9 +185,41 @@ async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> Result<String, 
     };
 
     tracing::info!(raw_path, resolved = %resolved.display(), "file_read resolved path");
+
+    // Friendly error: detect binary files (images, etc.) before reading.
+    // file_read only handles text; binary files should use image_analyze etc.
+    if let Ok(metadata) = tokio::fs::metadata(&resolved).await {
+        if metadata.is_file() {
+            // Check magic bytes to detect common binary formats
+            if let Ok(header) = tokio::fs::read(&resolved).await {
+                let kind = detect_binary_kind(&header);
+                if let Some(kind) = kind {
+                    return Err(format!(
+                        "文件 '{raw_path}' 是二进制文件（{kind}），file_read 只能读取文本文件。\
+                         如果是图片，请用 image_analyze 工具分析；如果是其他二进制文件，\
+                         请直接使用它的路径/URL，不需要读取内容。"
+                    ));
+                }
+            }
+        }
+    }
+
     tokio::fs::read_to_string(&resolved)
         .await
-        .map_err(|e| format!("Failed to read file: {e}"))
+        .map_err(|e| {
+            // Friendly message for UTF-8 decode failures on text files
+            if e.to_string().contains("stream did not contain valid UTF-8")
+                || e.to_string().contains("invalid utf-8")
+            {
+                format!(
+                    "文件 '{raw_path}' 包含非 UTF-8 内容（可能是二进制文件）。\
+                     file_read 只能读文本。如果是图片，请用 image_analyze；\
+                     如果是文档，请确认文件格式或使用对应的解析工具。"
+                )
+            } else {
+                format!("Failed to read file: {e}")
+            }
+        })
 }
 
 async fn tool_file_write(input: &Value, ctx: &ToolContext<'_>) -> Result<String, String> {
@@ -228,6 +283,19 @@ async fn tool_file_list(input: &Value, ctx: &ToolContext<'_>) -> Result<String, 
     // For user-data paths (output/ memory/), treat missing directory as empty
     let is_user_data = raw_path.starts_with("output/") || raw_path == "output"
         || raw_path.starts_with("memory/") || raw_path == "memory";
+
+    // Friendly error: if path points to a file (not a directory), tell the
+    // LLM clearly instead of returning the cryptic OS "Not a directory" error.
+    if let Ok(metadata) = tokio::fs::metadata(&resolved).await {
+        if metadata.is_file() {
+            return Err(format!(
+                "路径 '{raw_path}' 是一个文件，不是目录。file_list 只能列出目录内容。\n\
+                 修正方法：\n\
+                 - 想读取这个文件内容 → 用 file_read(path=\"{raw_path}\")\n\
+                 - 想列出它所在的目录 → 用 file_list 并去掉文件名（例如列出上级目录）"
+            ));
+        }
+    }
 
     let read_dir_result = tokio::fs::read_dir(&resolved).await;
     let mut entries = match read_dir_result {

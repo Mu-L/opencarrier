@@ -25,8 +25,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-/// Maximum consecutive errors for a single tool before removal.
-pub(in crate::agent_loop) const MAX_CONSECUTIVE_TOOL_ERRORS: u32 = 3;
+/// When a tool fails this many consecutive times, escalate the feedback
+/// to urge the LLM to change approach entirely. (Tools are NOT removed —
+/// we educate, not punish.)
+pub(in crate::agent_loop) const ERROR_ESCALATION_THRESHOLD: u32 = 3;
 
 /// Action the main loop should take after handling a ToolUse.
 pub(in crate::agent_loop) enum ToolUseAction {
@@ -337,66 +339,66 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     }
 
     if error_count > 0 {
-        // Collect failed tool names to detect repeated failures
-        let failed_tools: Vec<&str> = tool_result_blocks
+        // Collect failed tool names AND their error messages for actionable feedback
+        let failed_tools: Vec<(&str, &str)> = tool_result_blocks
             .iter()
             .filter_map(|b| match b {
                 ContentBlock::ToolResult {
                     is_error: true,
                     tool_name,
+                    content,
                     ..
-                } => Some(tool_name.as_str()),
+                } => Some((tool_name.as_str(), content.as_str())),
                 _ => None,
             })
             .collect();
 
-        // Increment consecutive error counters
-        for name in &failed_tools {
-            *consecutive_tool_errors.entry(name.to_string()).or_insert(0) += 1;
-        }
+        let failed_names: Vec<&str> = failed_tools.iter().map(|(n, _)| *n).collect();
 
-        // Remove tools that have failed too many times consecutively
-        let mut removed_tools = Vec::new();
-        for (name, count) in consecutive_tool_errors.iter() {
-            if *count >= MAX_CONSECUTIVE_TOOL_ERRORS
-                && tools_owned.iter().any(|t| t.name == *name)
-            {
-                warn!(
-                    agent = %manifest.name,
-                    tool = %name,
-                    consecutive_errors = count,
-                    "Tool failed {MAX_CONSECUTIVE_TOOL_ERRORS} times consecutively — removing"
-                );
-                tools_owned.retain(|t| t.name != *name);
-                removed_tools.push(name.clone());
-            }
-        }
-        for name in &removed_tools {
-            consecutive_tool_errors.remove(name);
+        // Increment consecutive error counters (keep counting, but do NOT remove tools)
+        for name in &failed_names {
+            *consecutive_tool_errors.entry(name.to_string()).or_insert(0) += 1;
         }
 
         info!(
             agent = %manifest.name,
             iteration,
             error_count,
-            failed_tools = ?failed_tools,
+            failed_tools = ?failed_names,
             "Tool errors in agent loop iteration"
         );
 
-        let mut guidance = format!(
-            "[System: {} tool(s) returned errors. Report the error honestly \
-             to the user. Do NOT fabricate results or pretend the tool succeeded. \
-             Do NOT retry the same failed tool call. \
-             If a search or fetch failed, tell the user it failed and suggest \
-             alternatives instead of making up data.]",
-            error_count
+        // Build actionable, per-tool error analysis with escalating detail.
+        // We do NOT remove tools — the LLM can still succeed with correct params.
+        let mut guidance = String::from(
+            "[工具错误分析 — 不要编造结果，也不要用相同参数重试。\n",
         );
-        if !removed_tools.is_empty() {
+        for (name, err_msg) in &failed_tools {
+            let count = consecutive_tool_errors.get(*name).copied().unwrap_or(1);
+            // Truncate long error messages for readability
+            let short_err: String = err_msg.chars().take(200).collect();
+            let ellipsis = if err_msg.chars().count() > 200 { "..." } else { "" };
+
+            // Escalating detail based on how many times this tool has failed
+            let suggestion = if count >= ERROR_ESCALATION_THRESHOLD {
+                format!(
+                    " ⚠️ 这个工具已经连续失败 {count} 次。你可能一直用错了方法——\
+                     仔细看上面的错误原因，换个完全不同的参数或方案，或者直接告诉用户遇到了什么困难。"
+                )
+            } else if count == 2 {
+                " 上次也失败了，请仔细确认参数后再试。".to_string()
+            } else {
+                String::new()
+            };
+
             guidance.push_str(&format!(
-                " 工具 {} 连续失败已被移除，请勿再调用。",
-                removed_tools.join(", ")
+                " ❌ {name} → {short_err}{ellipsis}{suggestion}\n"
             ));
         }
+        guidance.push_str(
+            "修正方法：分析上面的错误原因，用不同的参数或换一个合适的工具重试。]",
+        );
+
         tool_result_blocks.push(ContentBlock::Text {
             text: guidance,
             provider_metadata: None,

@@ -345,7 +345,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let guidance_seen = session.messages.iter().any(|msg| {
             match &msg.content {
             MessageContent::Blocks(blocks) => blocks.iter().any(|block| {
-                matches!(block, ContentBlock::Text { text, .. } if text.contains("tool(s) returned errors"))
+                matches!(block, ContentBlock::Text { text, .. } if text.contains("工具错误分析"))
             }),
             _ => false,
         }

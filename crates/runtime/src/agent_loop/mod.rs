@@ -415,12 +415,23 @@ async fn run_agent_loop_impl(
             } else {
                 "critical"
             };
-            let status_msg = format!(
+            let mut status_msg = format!(
                 "📊 Loop status: iteration {}/{} | ~{}s remaining | budget: {pressure}",
                 iteration + 1,
                 max_iterations,
                 remaining_secs,
             );
+            // Append tool error history so reasoning knows what's been failing.
+            if !consecutive_tool_errors.is_empty() {
+                let errors: Vec<String> = consecutive_tool_errors
+                    .iter()
+                    .map(|(name, count)| format!("{name}(×{count})"))
+                    .collect();
+                status_msg.push_str(&format!(
+                    "\n⚠️ 连续出错工具: {} — 这些工具可能用错了参数，换不同方式调用。",
+                    errors.join(", ")
+                ));
+            }
             // Only inject if the last system message isn't already a loop status
             let should_inject = messages.last().is_none_or(|m| {
                 !m.content.text_content().starts_with("📊 Loop status")
@@ -430,6 +441,7 @@ async fn run_agent_loop_impl(
                     iteration,
                     remaining_secs,
                     pressure,
+                    error_tools = ?consecutive_tool_errors.keys().collect::<Vec<_>>(),
                     "Injecting loop status for reasoning decision"
                 );
                 messages.push(Message::system(status_msg));
