@@ -674,9 +674,24 @@ async fn next_chunk_with_timeouts(
     stream: &mut (impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin),
     last_content_at: std::time::Instant,
 ) -> Result<Option<bytes::Bytes>, LlmError> {
+    // How long since the last genuine token output.
+    let content_elapsed = last_content_at.elapsed();
+    // Hard check: if content idle already exceeded, bail immediately
+    // WITHOUT entering select!. This is critical for high-frequency
+    // keepalive: if the proxy emits empty frames faster than the sleep
+    // timer can fire, select! would always pick the ready chunk branch
+    // and the sleep branch would never win. Checking here (before select!)
+    // guarantees the timeout fires regardless of keepalive cadence.
+    if content_elapsed >= std::time::Duration::from_secs(STREAM_CONTENT_IDLE_SECS) {
+        return Err(LlmError::Http(format!(
+            "Streaming content idle timeout: no token output in {}s \
+             (only keepalive frames). The upstream LLM appears stalled.",
+            STREAM_CONTENT_IDLE_SECS
+        )));
+    }
     // How long until content idle fires (since last genuine token output).
     let content_remaining = std::time::Duration::from_secs(STREAM_CONTENT_IDLE_SECS)
-        .saturating_sub(last_content_at.elapsed());
+        .saturating_sub(content_elapsed);
     // Byte idle is the outer cap; content idle is usually tighter.
     let byte_cap = std::time::Duration::from_secs(STREAM_IDLE_TIMEOUT_SECS);
     let idle_cap = std::cmp::min(content_remaining, byte_cap);
