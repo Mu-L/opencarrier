@@ -653,6 +653,13 @@ impl UnifiedHttpDriver {
 /// Maximum idle time (no bytes received) before aborting a streaming response.
 const STREAM_IDLE_TIMEOUT_SECS: u64 = 120;
 
+/// Content-level idle timeout for streaming: max seconds without any
+/// genuine token output (text/reasoning/tool_call delta), even if the
+/// connection keeps sending SSE keepalive frames. Defends against proxies
+/// that hold the connection open with comments while the upstream LLM is
+/// stalled — byte-level idle timeout cannot detect this.
+const STREAM_CONTENT_IDLE_SECS: u64 = 120;
+
 /// Read the next chunk from a byte stream with an idle timeout.
 async fn next_chunk_with_idle_timeout(
     stream: &mut (impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin),
@@ -763,8 +770,24 @@ impl LlmDriver for UnifiedHttpDriver {
         let mut finish_reason: Option<String> = None;
         let mut usage = TokenUsage::default();
 
+        // Content-level idle tracking: catches proxies that keep the
+        // connection alive with SSE comments/empty frames while the
+        // upstream LLM is stalled (byte-level idle timeout won't fire
+        // because keepalive bytes keep arriving). Reset only when we
+        // receive genuine token output (text/reasoning/tool_call delta).
+        let mut last_content_at = std::time::Instant::now();
+
         let mut byte_stream = resp.bytes_stream();
         while let Some(chunk) = next_chunk_with_idle_timeout(&mut byte_stream).await? {
+            // Check content idle: if no meaningful token arrived recently
+            // (even though keepalive bytes did), bail out rather than hang.
+            if last_content_at.elapsed().as_secs() > STREAM_CONTENT_IDLE_SECS {
+                return Err(LlmError::Http(format!(
+                    "Streaming content idle timeout: no token output in {}s \
+                     (only keepalive frames). The upstream LLM appears stalled.",
+                    STREAM_CONTENT_IDLE_SECS
+                )));
+            }
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
@@ -793,6 +816,10 @@ impl LlmDriver for UnifiedHttpDriver {
                     Some(c) => c,
                     None => continue,
                 };
+
+                // A data frame carrying choices is genuine LLM progress
+                // (not a keepalive comment), so reset the content idle timer.
+                last_content_at = std::time::Instant::now();
 
                 for choice in choices {
                     let delta = &choice["delta"];
