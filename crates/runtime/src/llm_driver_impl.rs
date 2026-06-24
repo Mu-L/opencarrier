@@ -543,7 +543,24 @@ impl UnifiedHttpDriver {
                 .header("authorization", format!("Bearer {}", self.api_key.as_str()))
                 .json(&*oai_request);
 
-            let resp = match builder.send().await {
+            // Response-header timeout: defend against servers that accept the
+            // connection but never return headers (stalled upstream). We use
+            // select! + an independent sleep timer rather than relying on the
+            // reqwest client-level timeout, which empirically fails to fire in
+            // this stalled-connection state (same class of bug as the streaming
+            // idle timeout). 60s is generous for first-byte; genuine responses
+            // arrive far faster.
+            let header_timeout = std::time::Duration::from_secs(60);
+            let resp = match tokio::select! {
+                r = builder.send() => r,
+                _ = tokio::time::sleep(header_timeout) => {
+                    return Err(LlmError::Http(format!(
+                        "Response header timeout: no HTTP response in {}s. \
+                         The upstream accepted the connection but appears stalled.",
+                        header_timeout.as_secs()
+                    )));
+                }
+            } {
                 Ok(r) => r,
                 Err(e) => {
                     let err_str = e.to_string();
