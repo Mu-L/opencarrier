@@ -1,4 +1,7 @@
-//! Provider API key management endpoints.
+//! Brain API key management endpoints.
+//!
+//! Single-layer model: there is one brain backend (aginxbrain) with one
+//! API key env var. These endpoints manage that single key.
 
 use crate::routes::state::AppState;
 use axum::extract::{Path, State};
@@ -6,57 +9,45 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use std::sync::Arc;
-// ── Provider API Key management ────────────────────────────────────────────
 
-/// GET /api/providers/keys — List all providers with API key status.
+/// The single brain provider name.
+const BRAIN_PROVIDER: &str = "aginxbrain";
+
+/// GET /api/providers/keys — List the brain API key status.
 pub async fn list_provider_keys(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let brain = state.kernel.brain_info();
     let config = brain.config();
 
-    let providers: Vec<serde_json::Value> = config
-        .providers
-        .iter()
-        .map(|(name, pc)| {
-            let endpoints: Vec<String> = config
-                .endpoints
-                .values()
-                .filter(|ep| ep.provider == *name)
-                .map(|ep| ep.model.clone())
-                .collect();
+    let has_key = kernel::dotenv::has_env_key(&config.api_key_env);
 
-            let has_key = kernel::dotenv::has_env_key(&pc.api_key_env);
-
-            serde_json::json!({
-                "name": name,
-                "api_key_env": pc.api_key_env,
-                "has_key": has_key,
-                "endpoints": endpoints,
-            })
-        })
-        .collect();
-
-    Json(serde_json::json!({ "providers": providers }))
+    Json(serde_json::json!({
+        "providers": [{
+            "name": BRAIN_PROVIDER,
+            "api_key_env": config.api_key_env,
+            "has_key": has_key,
+            "base_url": config.base_url,
+        }]
+    }))
 }
-/// POST /api/providers/{name}/key — Set API key for a provider.
+
+/// POST /api/providers/{name}/key — Set the brain API key.
 ///
-/// `{ "key": "sk-xxx" }`
+/// `{ "key": "sk-xxx" }`. `name` is accepted for path compatibility but
+/// always refers to the single brain backend.
 pub async fn set_provider_key(
     State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
+    Path(_name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let brain = state.kernel.brain_info();
     let config = brain.config();
 
-    let pc = match config.providers.get(&name) {
-        Some(p) => p.clone(),
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Provider '{}' not found", name)})),
-            );
-        }
-    };
+    if config.api_key_env.is_empty() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "brain.json has no api_key_env configured"})),
+        );
+    }
 
     // Simple API key auth
     let key = body["key"].as_str().unwrap_or("").trim();
@@ -66,7 +57,7 @@ pub async fn set_provider_key(
             Json(serde_json::json!({"error": "Missing 'key' field"})),
         );
     }
-    if let Err(e) = kernel::dotenv::save_env_key(&pc.api_key_env, key) {
+    if let Err(e) = kernel::dotenv::save_env_key(&config.api_key_env, key) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e})),
@@ -77,7 +68,7 @@ pub async fn set_provider_key(
     state.kernel.audit_log.record(
         "system",
         runtime::audit::AuditAction::ConfigChange,
-        format!("API key set for provider '{}'", name),
+        "API key set for brain".to_string(),
         if reload_result.is_ok() {
             "ok"
         } else {
@@ -94,31 +85,22 @@ pub async fn set_provider_key(
         ),
     }
 }
-/// DELETE /api/providers/{name}/key — Remove API key for a provider.
+
+/// DELETE /api/providers/{name}/key — Remove the brain API key.
 pub async fn delete_provider_key(
     State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
+    Path(_name): Path<String>,
 ) -> impl IntoResponse {
     let brain = state.kernel.brain_info();
     let config = brain.config();
 
-    let pc = match config.providers.get(&name) {
-        Some(p) => p.clone(),
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Provider '{}' not found", name)})),
-            );
-        }
-    };
-
-    let _ = kernel::dotenv::delete_env_key(&pc.api_key_env);
+    let _ = kernel::dotenv::delete_env_key(&config.api_key_env);
 
     let _ = state.kernel.reload_brain();
     state.kernel.audit_log.record(
         "system",
         runtime::audit::AuditAction::ConfigChange,
-        format!("API key removed for provider '{}'", name),
+        "API key removed for brain",
         "ok",
     );
     (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))

@@ -2530,26 +2530,6 @@ fn boot_kernel(config: Option<PathBuf>) -> CarrierKernel {
 // Provider / API key helpers
 // ---------------------------------------------------------------------------
 
-/// Map a provider name to its conventional environment variable name.
-fn provider_to_env_var(provider: &str) -> String {
-    match provider.to_lowercase().as_str() {
-        "groq" => "GROQ_API_KEY".to_string(),
-        "anthropic" => "ANTHROPIC_API_KEY".to_string(),
-        "openai" => "OPENAI_API_KEY".to_string(),
-        "gemini" => "GEMINI_API_KEY".to_string(),
-        "google" => "GOOGLE_API_KEY".to_string(),
-        "deepseek" => "DEEPSEEK_API_KEY".to_string(),
-        "openrouter" => "OPENROUTER_API_KEY".to_string(),
-        "together" => "TOGETHER_API_KEY".to_string(),
-        "mistral" => "MISTRAL_API_KEY".to_string(),
-        "fireworks" => "FIREWORKS_API_KEY".to_string(),
-        "perplexity" => "PERPLEXITY_API_KEY".to_string(),
-        "cohere" => "COHERE_API_KEY".to_string(),
-        "xai" => "XAI_API_KEY".to_string(),
-        other => format!("{}_API_KEY", other.to_uppercase()),
-    }
-}
-
 /// Test an API key by hitting the provider's models/health endpoint.
 ///
 /// Returns true if the key is accepted (status != 401/403).
@@ -2631,83 +2611,49 @@ fn cmd_providers() {
             std::process::exit(1);
         });
 
-    // Collect unique providers referenced by endpoints, with endpoint count
-    let mut provider_names: Vec<String> = brain
-        .endpoints
-        .values()
-        .map(|e| e.provider.clone())
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
-    provider_names.sort();
-
-    if provider_names.is_empty() {
-        ui::error("No providers found in brain.json.");
+    // Single-layer model: one brain backend with one api_key_env.
+    let env_var = brain.api_key_env.clone();
+    if env_var.is_empty() {
+        ui::error("brain.json has no api_key_env configured. Edit brain.json to set one.");
         return;
     }
 
-    // Load .env to check which keys are set
+    // Load .env to check whether the key is set
     kernel::dotenv::load_dotenv();
 
     loop {
         println!();
-        println!("{}", "  Providers".bold().bright_cyan());
+        println!("{}", "  Brain Backend".bold().bright_cyan());
         println!(
             "{}",
             "  ──────────────────────────────────────────────────".bright_black()
         );
 
-        let mut any_missing = false;
-        for (i, provider) in provider_names.iter().enumerate() {
-            let env_var = provider_to_env_var(provider);
-            let key_set = std::env::var(&env_var)
-                .map(|v| !v.is_empty())
-                .unwrap_or(false);
+        let key_set = std::env::var(&env_var)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
 
-            // Also check brain provider config for providers that don't need keys
-            let no_key_needed = brain
-                .providers
-                .get(provider)
-                .map(|p| p.api_key_env.is_empty())
-                .unwrap_or(false);
+        let status = if key_set {
+            format!("{}", "✅ Key set".bright_green())
+        } else {
+            format!("{}", "❌ Key needed".bright_red())
+        };
 
-            let status = if no_key_needed {
-                format!("{}", "🏠 Local".bright_blue())
-            } else if key_set {
-                format!("{}", "✅ Key set".bright_green())
-            } else {
-                any_missing = true;
-                format!("{}", "❌ Key needed".bright_red())
-            };
+        println!("  {} {}", format!("{:<14}", "aginxbrain").bold(), status);
+        println!("  {} base_url: {}", " ".repeat(15), brain.base_url);
+        println!("  {} env var:  {}", " ".repeat(15), env_var);
 
-            // Count endpoints using this provider
-            let ep_count = brain
-                .endpoints
-                .values()
-                .filter(|e| e.provider == *provider)
-                .count();
-
-            println!(
-                "  {} {} {} ({} endpoint{})",
-                format!("[{}]", i + 1).bright_yellow(),
-                format!("{:<14}", provider).bold(),
-                status,
-                ep_count,
-                if ep_count != 1 { "s" } else { "" },
-            );
-        }
-
-        if any_missing {
+        if !key_set {
             println!(
                 "{}",
-                "\n  ⚠  Some providers need API keys. Select a number to set it.".bright_yellow()
+                "\n  ⚠  Brain needs an API key. Press Enter to set it.".bright_yellow()
             );
         }
 
         println!();
         println!(
             "{}",
-            "  Enter number to set key, 'q' to quit:".bright_black()
+            "  Press Enter to set/edit key, 'q' to quit:".bright_black()
         );
         print!("  > ");
         io::stdout().flush().unwrap();
@@ -2722,46 +2668,15 @@ fn cmd_providers() {
             break;
         }
 
-        // Parse selection
-        let idx: usize = match input.parse::<usize>() {
-            Ok(n) if n >= 1 && n <= provider_names.len() => n - 1,
-            _ => {
-                // Also allow typing provider name directly
-                if let Some(pos) = provider_names.iter().position(|p| p == input) {
-                    pos
-                } else {
-                    println!("{}", "  Invalid selection.".bright_red());
-                    continue;
-                }
-            }
-        };
-
-        let provider = &provider_names[idx];
-        let no_key_needed = brain
-            .providers
-            .get(provider)
-            .map(|p| p.api_key_env.is_empty())
-            .unwrap_or(false);
-
-        if no_key_needed {
-            println!(
-                "  {} doesn't need an API key (local provider).",
-                provider.bright_cyan()
-            );
-            continue;
-        }
-
-        let env_var = provider_to_env_var(provider);
         let existing = std::env::var(&env_var).unwrap_or_default();
         if !existing.is_empty() {
             println!(
-                "  {} already has a key set ({}...). Enter new key to replace, or press Enter to skip.",
-                provider.bright_cyan(),
+                "  aginxbrain already has a key set ({}...). Enter new key to replace, or press Enter to skip.",
                 &existing[..existing.len().min(8)]
             );
         }
 
-        let key = prompt_input(&format!("  API key for {}: ", provider.bright_cyan()));
+        let key = prompt_input("  API key for aginxbrain: ");
         if key.is_empty() {
             println!("  Skipped.");
             continue;
@@ -2773,13 +2688,13 @@ fn cmd_providers() {
                 // Test
                 print!("  Testing... ");
                 io::stdout().flush().unwrap();
-                if test_api_key(provider, &env_var) {
+                if test_api_key("aginxbrain", &env_var) {
                     println!("{}", "✔ OK".bright_green());
                 } else {
                     println!("{}", "⚠ could not verify (may still work)".bright_yellow());
                 }
 
-                ui::success(&format!("Saved key for {provider}"));
+                ui::success("Saved key for aginxbrain");
             }
             Err(e) => {
                 ui::error(&format!("Failed to save key: {e}"));

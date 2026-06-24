@@ -476,34 +476,7 @@ pub async fn brain_page(
     let user = require_auth(&request, &state)?;
     let brain = state.kernel.brain_info();
     let config = brain.config();
-    let ready = brain.ready_endpoints();
-
-    let providers: Vec<minijinja::Value> = config
-        .providers
-        .iter()
-        .map(|(name, p)| {
-            let has_key = !p.api_key_env.is_empty() && types::env::get_env(&p.api_key_env).is_some();
-            minijinja::context! {
-                name => name,
-                api_key_env => p.api_key_env.clone(),
-                has_key => has_key,
-            }
-        })
-        .collect();
-
-    let endpoints: Vec<minijinja::Value> = config
-        .endpoints
-        .iter()
-        .map(|(name, ep)| {
-            minijinja::context! {
-                name => name,
-                provider => ep.provider.clone(),
-                model => ep.model.clone(),
-                base_url => ep.base_url.clone(),
-                ready => ready.contains(name),
-            }
-        })
-        .collect();
+    let driver_ready = brain.status().drivers_ready > 0;
 
     let modalities: Vec<minijinja::Value> = config
         .modalities
@@ -511,8 +484,6 @@ pub async fn brain_page(
         .map(|(name, m)| {
             minijinja::context! {
                 name => name,
-                primary => m.primary.clone(),
-                fallbacks => m.fallbacks.clone(),
                 description => m.description.clone(),
             }
         })
@@ -524,9 +495,10 @@ pub async fn brain_page(
             page => "brain",
             session_user => user,
             version => env!("CARGO_PKG_VERSION"),
+            base_url => config.base_url.clone(),
+            api_key_env => config.api_key_env.clone(),
             default_modality => config.default_modality.clone(),
-            providers => providers,
-            endpoints => endpoints,
+            driver_ready => driver_ready,
             modalities => modalities,
         },
     ))

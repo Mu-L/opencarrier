@@ -226,7 +226,7 @@ impl CarrierKernel {
             warn!("Brain RwLock poisoned, recovering");
             e.into_inner()
         });
-        let model = brain.model_for(modality).to_string();
+        let model = brain.model_for(modality);
         (modality.to_string(), model)
     }
 

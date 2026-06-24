@@ -305,8 +305,8 @@ pub trait Brain: Send + Sync {
 
     // --- Legacy methods ---
 
-    /// Get the model name for a given modality's primary endpoint.
-    fn model_for(&self, modality: &str) -> &str;
+    /// Get the model name for a given modality (the routing tag sent to the backend).
+    fn model_for(&self, modality: &str) -> String;
 
     /// Check if a modality is available.
     fn has_modality(&self, modality: &str) -> bool;

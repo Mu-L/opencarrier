@@ -412,7 +412,7 @@ impl CarrierKernel {
 
         // Use "fast" modality for compaction (cheaper, faster); fall back to agent modality
         let compaction_modality = if self.brain_read().has_modality("fast") { "fast" } else { &entry.manifest.model.modality };
-        let compaction_model = self.brain_read().model_for(compaction_modality).to_string();
+        let compaction_model = self.brain_read().model_for(compaction_modality);
         let driver = {
             let brain = self.brain_read();
             let endpoints = brain.endpoints_for(compaction_modality);
@@ -521,7 +521,7 @@ impl CarrierKernel {
         } else {
             &entry.manifest.model.modality
         };
-        let model = self.brain_read().model_for(modality).to_string();
+        let model = self.brain_read().model_for(modality);
         let driver = {
             let brain = self.brain_read();
             let endpoints = brain.endpoints_for(modality);

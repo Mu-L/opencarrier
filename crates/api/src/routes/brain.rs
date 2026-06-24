@@ -1,4 +1,7 @@
 //! Brain configuration and management endpoints.
+//!
+//! Single-layer model: one shared aginxbrain backend (base_url + api_key_env),
+//! routed by modality name. No provider/endpoint CRUD — those concepts are gone.
 
 use crate::routes::state::AppState;
 use axum::extract::{Path, State};
@@ -6,360 +9,88 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use std::sync::Arc;
+
 /// GET /api/brain — Brain configuration and status.
 ///
-/// Returns the Brain's modalities, endpoints, and which ones are ready.
+/// Returns base_url, api_key_env, default_modality, and supported modalities.
 pub async fn brain_info(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let brain = state.kernel.brain_info();
     let config = brain.config();
-    let ready = brain.ready_endpoints();
+    let driver_ready = brain.status().drivers_ready > 0;
 
-    let mut endpoints = serde_json::Map::new();
-    for (name, ep) in &config.endpoints {
-        endpoints.insert(
-            name.clone(),
-            serde_json::json!({
-                "provider": ep.provider,
-                "model": ep.model,
-                "base_url": ep.base_url,
-                "ready": ready.contains(name),
-            }),
-        );
-    }
-
-    let mut modalities = serde_json::Map::new();
-    for (name, mc) in &config.modalities {
-        modalities.insert(
-            name.clone(),
-            serde_json::json!({
-                "primary": mc.primary,
-                "fallbacks": mc.fallbacks,
-            }),
-        );
-    }
+    let modalities: serde_json::Map<String, serde_json::Value> = config
+        .modalities
+        .iter()
+        .map(|(name, me)| {
+            (
+                name.clone(),
+                serde_json::json!({ "description": me.description }),
+            )
+        })
+        .collect();
 
     Json(serde_json::json!({
         "loaded": true,
+        "base_url": config.base_url,
+        "api_key_env": config.api_key_env,
         "default_modality": config.default_modality,
         "modalities": modalities,
-        "endpoints": endpoints,
+        "driver_ready": driver_ready,
     }))
 }
+
 /// GET /api/brain/status — Brain health status (driver readiness, latency, success/failure).
 pub async fn brain_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let brain = state.kernel.brain_info();
     let status = brain.status();
     Json(serde_json::to_value(&status).unwrap_or_default())
 }
-/// GET /api/brain/modalities/{name} — Resolved endpoint chain for a single modality.
+
+/// GET /api/brain/modalities/{name} — Resolved endpoint for a single modality.
 pub async fn brain_modality_detail(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
     let brain = state.kernel.brain_info();
-    let endpoints = brain.endpoints_for(&name);
-    if endpoints.is_empty() {
-        // Check if modality exists at all
-        let config = brain.config();
-        if !config.modalities.contains_key(&name) {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("Modality '{}' not found", name)})),
-            );
-        }
-    }
     let config = brain.config();
-    let mc = config.modalities.get(&name);
+    let me = config.modalities.get(&name);
+    if me.is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("Modality '{}' not found", name)})),
+        );
+    }
+    let endpoints = brain.endpoints_for(&name);
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "modality": name,
-            "description": mc.map(|m| m.description.clone()).unwrap_or_default(),
-            "primary": mc.map(|m| m.primary.clone()).unwrap_or_default(),
-            "fallbacks": mc.map(|m| m.fallbacks.clone()).unwrap_or_default(),
+            "description": me.map(|m| m.description.clone()).unwrap_or_default(),
             "endpoints": endpoints,
         })),
     )
 }
+
 // ── Brain config management ────────────────────────────────────────────────
 
-/// PUT /api/brain/providers/{name} — create or update a Brain provider.
-pub async fn set_brain_provider(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let api_key_env = body["api_key_env"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-
-    // If api_key is provided, persist to .env and set in current process
-    if let Some(api_key) = body["api_key"].as_str() {
-        if !api_key.is_empty() && !api_key_env.is_empty() {
-            let _ = kernel::dotenv::save_env_key(&api_key_env, api_key);
-        }
-    }
-
-    let result = state.kernel.update_brain(|config| {
-        config.providers.insert(
-            name.clone(),
-            types::brain::ProviderConfig {
-                api_key_env,
-            },
-        );
-    });
-
-    match result {
-        Ok(()) => {
-            state.kernel.audit_log.record(
-                "system",
-                runtime::audit::AuditAction::ConfigChange,
-                format!("brain provider '{name}' updated"),
-                "ok",
-            );
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"status": "ok", "provider": name})),
-            )
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
-        ),
-    }
-}
-/// DELETE /api/brain/providers/{name} — remove a Brain provider.
-pub async fn delete_brain_provider(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-) -> impl IntoResponse {
-    // Check no endpoints reference this provider
-    let guard = state.kernel.brain_read();
-    {
-        let refs: Vec<String> = guard
-            .config()
-            .endpoints
-            .iter()
-            .filter(|(_, ep)| ep.provider == name)
-            .map(|(n, _)| n.clone())
-            .collect();
-        if !refs.is_empty() {
-            drop(guard);
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": format!("Provider '{name}' is used by endpoints: {}", refs.join(", "))
-                })),
-            );
-        }
-    }
-    drop(guard);
-
-    let result = state.kernel.update_brain(|config| {
-        config.providers.remove(&name);
-    });
-
-    match result {
-        Ok(()) => {
-            state.kernel.audit_log.record(
-                "system",
-                runtime::audit::AuditAction::ConfigChange,
-                format!("brain provider '{name}' deleted"),
-                "ok",
-            );
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"status": "ok", "deleted": name})),
-            )
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
-        ),
-    }
-}
-/// PUT /api/brain/endpoints/{name} — create or update a Brain endpoint.
-pub async fn set_brain_endpoint(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let provider = body["provider"].as_str().unwrap_or("").trim().to_string();
-    let model = body["model"].as_str().unwrap_or("").trim().to_string();
-    let base_url = body["base_url"].as_str().unwrap_or("").trim().to_string();
-
-    // Validate required fields
-    if provider.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing 'provider' field"})),
-        );
-    }
-    if model.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing 'model' field"})),
-        );
-    }
-    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "base_url must start with http:// or https://"})),
-        );
-    }
-
-    // Validate provider exists
-    {
-        let guard = state.kernel.brain_read();
-        if !guard.config().providers.contains_key(&provider) {
-            drop(guard);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("Provider '{provider}' not found")})),
-            );
-        }
-    }
-
-    let result = state.kernel.update_brain(|config| {
-        config.endpoints.insert(
-            name.clone(),
-            types::brain::EndpointConfig {
-                provider,
-                model,
-                base_url,
-                format: String::new(),
-                auth_header: String::new(),
-            },
-        );
-    });
-
-    match result {
-        Ok(()) => {
-            state.kernel.audit_log.record(
-                "system",
-                runtime::audit::AuditAction::ConfigChange,
-                format!("brain endpoint '{name}' updated"),
-                "ok",
-            );
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"status": "ok", "endpoint": name})),
-            )
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
-        ),
-    }
-}
-/// DELETE /api/brain/endpoints/{name} — remove a Brain endpoint.
-pub async fn delete_brain_endpoint(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-) -> impl IntoResponse {
-    // Check no modalities reference this endpoint
-    let guard = state.kernel.brain_read();
-    {
-        let refs: Vec<String> = guard
-            .config()
-            .modalities
-            .iter()
-            .filter(|(_, mc)| mc.primary == name || mc.fallbacks.contains(&name))
-            .map(|(n, _)| n.clone())
-            .collect();
-        if !refs.is_empty() {
-            drop(guard);
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": format!("Endpoint '{name}' is used by modalities: {}", refs.join(", "))
-                })),
-            );
-        }
-    }
-    drop(guard);
-
-    let result = state.kernel.update_brain(|config| {
-        config.endpoints.remove(&name);
-    });
-
-    match result {
-        Ok(()) => {
-            state.kernel.audit_log.record(
-                "system",
-                runtime::audit::AuditAction::ConfigChange,
-                format!("brain endpoint '{name}' deleted"),
-                "ok",
-            );
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"status": "ok", "deleted": name})),
-            )
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
-        ),
-    }
-}
 /// PUT /api/brain/modalities/{name} — create or update a Brain modality.
+///
+/// Body: { "description": "..." }. The modality name is the routing tag.
 pub async fn set_brain_modality(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let primary = body["primary"].as_str().unwrap_or("").trim().to_string();
-    let fallbacks: Vec<String> = body["fallbacks"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
     let description = body["description"]
         .as_str()
         .unwrap_or("")
         .trim()
         .to_string();
 
-    if primary.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing 'primary' field"})),
-        );
-    }
-
-    // Validate endpoints exist
-    let guard = state.kernel.brain_read();
-    if !guard.config().endpoints.contains_key(&primary) {
-        drop(guard);
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": format!("Primary endpoint '{primary}' not found")})),
-        );
-    }
-    for fb in &fallbacks {
-        if !guard.config().endpoints.contains_key(fb) {
-            drop(guard);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("Fallback endpoint '{fb}' not found")})),
-            );
-        }
-    }
-    drop(guard);
-
     let result = state.kernel.update_brain(|config| {
         config.modalities.insert(
             name.clone(),
-            types::brain::ModalityConfig {
-                primary,
-                fallbacks,
-                description,
-            },
+            types::brain::ModalityEntry { description },
         );
     });
 
@@ -382,6 +113,7 @@ pub async fn set_brain_modality(
         ),
     }
 }
+
 /// DELETE /api/brain/modalities/{name} — remove a Brain modality.
 pub async fn delete_brain_modality(
     State(state): State<Arc<AppState>>,
@@ -421,6 +153,7 @@ pub async fn delete_brain_modality(
         ),
     }
 }
+
 /// PUT /api/brain/default-modality — set the default modality.
 pub async fn set_brain_default_modality(
     State(state): State<Arc<AppState>>,
@@ -465,6 +198,7 @@ pub async fn set_brain_default_modality(
         ),
     }
 }
+
 /// POST /api/brain/reload — reload Brain from disk.
 pub async fn reload_brain(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     match state.kernel.reload_brain() {
@@ -486,6 +220,7 @@ pub async fn reload_brain(State(state): State<Arc<AppState>>) -> impl IntoRespon
         ),
     }
 }
+
 /// GET /api/brain/config — Return raw brain.json content.
 pub async fn get_brain_config_raw(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let path = state.kernel.brain_path();
@@ -500,6 +235,7 @@ pub async fn get_brain_config_raw(State(state): State<Arc<AppState>>) -> impl In
         ),
     }
 }
+
 /// PUT /api/brain/config — Update brain.json from raw JSON.
 pub async fn put_brain_config_raw(
     State(state): State<Arc<AppState>>,
@@ -572,18 +308,10 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
             routing::put(set_brain_default_modality),
         )
         .route(
-            "/api/brain/endpoints/{name}",
-            routing::delete(delete_brain_endpoint).put(set_brain_endpoint),
-        )
-        .route(
             "/api/brain/modalities/{name}",
             routing::delete(delete_brain_modality)
                 .get(brain_modality_detail)
                 .put(set_brain_modality),
-        )
-        .route(
-            "/api/brain/providers/{name}",
-            routing::delete(delete_brain_provider).put(set_brain_provider),
         )
         .route("/api/brain/reload", routing::post(reload_brain))
         .route("/api/brain/status", routing::get(brain_status))

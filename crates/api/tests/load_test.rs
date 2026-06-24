@@ -34,26 +34,14 @@ impl Drop for TestServer {
 async fn start_test_server() -> TestServer {
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
 
-    // Create minimal brain.json for tests
+    // Create minimal brain.json for tests (single-layer format)
     let brain_json = serde_json::json!({
-        "providers": {
-            "ollama": { "api_key_env": "" }
-        },
-        "endpoints": {
-            "ollama_chat": {
-                "provider": "ollama",
-                "model": "test-model",
-                "base_url": "http://localhost:11434/v1",
-                "format": "openai"
-            }
-        },
+        "base_url": "http://localhost:11434/v1/chat/completions",
+        "api_key_env": "",
+        "default_modality": "chat",
         "modalities": {
-            "chat": {
-                "primary": "ollama_chat",
-                "description": "Chat modality"
-            }
-        },
-        "default_modality": "chat"
+            "chat": { "description": "Chat modality" }
+        }
     });
     std::fs::write(
         tmp.path().join("brain.json"),

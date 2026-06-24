@@ -90,15 +90,12 @@ async fn test_full_daemon_lifecycle() {
     let tmp = tempfile::tempdir().unwrap();
     let daemon_info_path = tmp.path().join("daemon.json");
 
-    // Create minimal brain.json for tests
+    // Create minimal brain.json for tests (single-layer format)
     let brain_json = serde_json::json!({
-        "providers": { "ollama": { "api_key_env": "" } },
-        "endpoints": { "ollama_chat": {
-            "provider": "ollama", "model": "test",
-            "base_url": "http://localhost:11434/v1", "format": "openai"
-        }},
-        "modalities": { "chat": { "primary": "ollama_chat", "description": "Chat" } },
-        "default_modality": "chat"
+        "base_url": "http://localhost:11434/v1/chat/completions",
+        "api_key_env": "",
+        "default_modality": "chat",
+        "modalities": { "chat": { "description": "Chat" } }
     });
     std::fs::write(
         tmp.path().join("brain.json"),
@@ -229,15 +226,12 @@ fn test_stale_daemon_info_detection() {
 async fn test_server_immediate_responsiveness() {
     let tmp = tempfile::tempdir().unwrap();
 
-    // Create minimal brain.json for tests
+    // Create minimal brain.json for tests (single-layer format)
     let brain_json = serde_json::json!({
-        "providers": { "ollama": { "api_key_env": "" } },
-        "endpoints": { "ollama_chat": {
-            "provider": "ollama", "model": "test",
-            "base_url": "http://localhost:11434/v1", "format": "openai"
-        }},
-        "modalities": { "chat": { "primary": "ollama_chat", "description": "Chat" } },
-        "default_modality": "chat"
+        "base_url": "http://localhost:11434/v1/chat/completions",
+        "api_key_env": "",
+        "default_modality": "chat",
+        "modalities": { "chat": { "description": "Chat" } }
     });
     std::fs::write(
         tmp.path().join("brain.json"),

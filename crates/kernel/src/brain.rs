@@ -1,11 +1,9 @@
 //! Brain — the carrier's independent LLM brain.
 //!
-//! Three-layer architecture:
-//! - **Provider**: identity + credentials
-//! - **Endpoint**: complete callable unit (provider + model + base_url)
-//! - **Modality**: task type → endpoint with fallback chain
-//!
-//! Drivers are pre-created and cached per endpoint at boot.
+//! Single-layer architecture: one shared aginxbrain driver, routed by
+//! modality name (sent as the `model` field). Health tracking is per-
+//! modality so the circuit breaker can still take an individual modality
+//! out of rotation if its upstream stalls.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -16,22 +14,21 @@ use async_trait::async_trait;
 use runtime::drivers;
 use runtime::llm_driver::{Brain as BrainTrait, DriverConfig, LlmDriver};
 use types::brain::{
-    BrainConfig, BrainStatus, EndpointConfig, EndpointHealth, EndpointReport, ModalityInfo,
-    ResolvedEndpoint,
+    BrainConfig, BrainStatus, EndpointHealth, EndpointReport, ModalityInfo, ResolvedEndpoint,
 };
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use tracing::{info, warn, debug};
 
 // ---------------------------------------------------------------------------
-// Per-endpoint health tracker (lock-free atomics)
+// Per-modality health tracker (lock-free atomics)
 // ---------------------------------------------------------------------------
 
-/// Consecutive failures before circuit opens (endpoint is taken out of rotation).
+/// Consecutive failures before circuit opens (modality is taken out of rotation).
 const CIRCUIT_BREAKER_THRESHOLD: u32 = 3;
 /// How long to wait before allowing a probe request (half-open state).
 const CIRCUIT_BREAKER_COOLDOWN_MS: u64 = 60_000; // 60s
 
-/// Thread-safe health tracker for a single endpoint.
+/// Thread-safe health tracker for a single modality.
 struct EndpointTracker {
     success_count: AtomicU64,
     failure_count: AtomicU64,
@@ -75,8 +72,8 @@ impl EndpointTracker {
         self.last_failure_at.store(now_ms(), Ordering::Relaxed);
     }
 
-    /// Check if the circuit is open (endpoint should be skipped).
-    /// Returns true if the endpoint is available for requests.
+    /// Check if the circuit is open (modality should be skipped).
+    /// Returns true if the modality is available for requests.
     fn is_available(&self) -> bool {
         let consec = self.consecutive_failures.load(Ordering::Relaxed);
         if consec < CIRCUIT_BREAKER_THRESHOLD {
@@ -129,111 +126,124 @@ fn now_ms() -> u64 {
 // Brain
 // ---------------------------------------------------------------------------
 
-/// The carrier's brain — manages all LLM drivers and routes by modality.
+/// Provider name for the single aginxbrain backend.
+const PROVIDER_NAME: &str = "aginxbrain";
+
+/// The carrier's brain — a single shared driver, routed by modality.
 pub struct Brain {
     config: BrainConfig,
-    /// Lazily-created drivers, keyed by endpoint name.
-    drivers: DashMap<String, Arc<dyn LlmDriver>>,
-    /// Per-endpoint health tracking. Thread-safe for concurrent report() calls.
+    /// The single shared driver (all modalities use the same base_url + api_key).
+    driver: Option<Arc<dyn LlmDriver>>,
+    /// Per-modality health tracking. Key = modality name.
     health: DashMap<String, EndpointTracker>,
-    /// Endpoints whose driver creation failed (e.g. missing API key).
-    /// Prevents repeated creation attempts and log spam.
-    failed_endpoints: DashSet<String>,
 }
 
 impl Brain {
-    /// Create a new Brain from config. Drivers are created lazily on first use.
+    /// Create a new Brain from config. The single driver is created eagerly.
     pub fn new(config: BrainConfig) -> Result<Self, BrainError> {
-        if config.endpoints.is_empty() {
-            return Err(BrainError::NoEndpoints);
-        }
+        // Resolve API key from the configured env var.
+        let api_key = if config.api_key_env.is_empty() {
+            None
+        } else {
+            types::env::get_env(&config.api_key_env)
+        };
+
+        let driver_config = DriverConfig {
+            provider: PROVIDER_NAME.to_string(),
+            api_key,
+            base_url: Some(config.base_url.clone()),
+            skip_permissions: true,
+        };
+
+        let driver = match drivers::create_driver(&driver_config) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    base_url = %config.base_url,
+                    "Failed to create brain driver — all modality calls will fail"
+                );
+                None
+            }
+        };
 
         info!(
-            endpoints = config.endpoints.len(),
             modalities = config.modalities.len(),
             default_modality = %config.default_modality,
+            driver_ready = driver.is_some(),
             "Brain initialized"
         );
 
         Ok(Self {
             config,
-            drivers: DashMap::new(),
+            driver,
             health: DashMap::new(),
-            failed_endpoints: DashSet::new(),
         })
     }
 
-    // ── New query interface ─────────────────────────────────────
+    // ── Query interface ─────────────────────────────────────
 
     /// List all available modalities with descriptions.
     pub fn list_modalities(&self) -> Vec<ModalityInfo> {
         self.config
             .modalities
             .iter()
-            .map(|(name, mc)| ModalityInfo {
+            .map(|(name, me)| ModalityInfo {
                 name: name.clone(),
-                description: mc.description.clone(),
-                primary_endpoint: mc.primary.clone(),
-                fallback_count: mc.fallbacks.len(),
+                description: me.description.clone(),
             })
             .collect()
     }
 
-    /// Get the ordered list of resolved endpoints for a modality.
-    /// Returns primary first, then fallbacks. Filters out endpoints
-    /// with no live driver **or circuit-broken** (too many consecutive failures).
+    /// Get the resolved endpoint for a modality.
+    ///
+    /// Single-layer model: exactly one endpoint (the shared aginxbrain URL).
+    /// Returns an empty vec if the modality is unknown or circuit-broken.
+    /// Kept as a Vec so the existing fallback-iteration code in
+    /// call_with_fallback / Brain::complete() works unchanged.
     pub fn endpoints_for(&self, modality: &str) -> Vec<ResolvedEndpoint> {
-        let mod_config = self
-            .config
-            .modalities
-            .get(modality)
-            .or_else(|| self.config.modalities.get(&self.config.default_modality));
-
-        let Some(mod_config) = mod_config else {
+        // Resolve the modality (fall back to default_modality).
+        let resolved = if self.config.modalities.contains_key(modality) {
+            modality
+        } else if self.config.modalities.contains_key(&self.config.default_modality) {
+            &self.config.default_modality
+        } else {
             return vec![];
         };
 
-        let mut chain = vec![mod_config.primary.clone()];
-        chain.extend(mod_config.fallbacks.iter().cloned());
+        // Driver must exist.
+        if self.driver.is_none() {
+            debug!(modality = %resolved, "Brain driver not ready, no endpoints");
+            return vec![];
+        }
 
-        chain
-            .into_iter()
-            .filter_map(|name| {
-                let endpoint = self.config.endpoints.get(&name)?;
-                // Only include endpoints that can produce a driver
-                if self.get_or_create_driver(&name).is_none() {
-                    debug!(
-                        endpoint = %name,
-                        "Endpoint skipped: driver creation failed"
-                    );
-                    return None;
-                }
-                // Circuit-breaker: skip endpoints with too many consecutive failures
-                if let Some(tracker) = self.health.get(&name) {
-                    if !tracker.is_available() {
-                        warn!(
-                            endpoint = %name,
-                            consecutive = tracker.consecutive_failures.load(Ordering::Relaxed),
-                            "Endpoint circuit-broken, skipping"
-                        );
-                        return None;
-                    }
-                }
-                Some(ResolvedEndpoint {
-                    id: name,
-                    model: endpoint.model.clone(),
-                    provider: endpoint.provider.clone(),
-                })
-            })
-            .collect()
+        // Circuit-breaker: skip modalities with too many consecutive failures.
+        if let Some(tracker) = self.health.get(resolved) {
+            if !tracker.is_available() {
+                warn!(
+                    modality = %resolved,
+                    consecutive = tracker.consecutive_failures.load(Ordering::Relaxed),
+                    "Modality circuit-broken, skipping"
+                );
+                return vec![];
+            }
+        }
+
+        // The modality name IS the model routing tag sent to aginxbrain.
+        vec![ResolvedEndpoint {
+            id: resolved.to_string(),
+            model: resolved.to_string(),
+            provider: PROVIDER_NAME.to_string(),
+        }]
     }
 
-    /// Get a driver for a specific endpoint, creating it lazily if needed.
-    pub fn driver_for_endpoint(&self, endpoint_id: &str) -> Option<Arc<dyn LlmDriver>> {
-        self.get_or_create_driver(endpoint_id)
+    /// Get the shared driver. `endpoint_id` is the modality name but the
+    /// driver is the same for all modalities.
+    pub fn driver_for_endpoint(&self, _endpoint_id: &str) -> Option<Arc<dyn LlmDriver>> {
+        self.driver.clone()
     }
 
-    /// Report the result of an endpoint call. Non-blocking.
+    /// Report the result of a modality call. Non-blocking.
     pub fn report(&self, report: EndpointReport) {
         let tracker = self
             .health
@@ -253,9 +263,9 @@ impl Brain {
 
         let endpoints: Vec<EndpointHealth> = self
             .config
-            .endpoints
-            .iter()
-            .map(|(name, ep)| {
+            .modalities
+            .keys()
+            .map(|name| {
                 let snap = self
                     .health
                     .get(name)
@@ -270,9 +280,9 @@ impl Brain {
 
                 EndpointHealth {
                     endpoint: name.clone(),
-                    provider: ep.provider.clone(),
-                    model: ep.model.clone(),
-                    driver_ready: self.drivers.contains_key(name),
+                    provider: PROVIDER_NAME.to_string(),
+                    model: name.clone(),
+                    driver_ready: self.driver.is_some(),
                     success_count: snap.success,
                     failure_count: snap.failure,
                     avg_latency_ms: snap.avg_latency,
@@ -282,7 +292,7 @@ impl Brain {
             })
             .collect();
 
-        let drivers_ready = self.drivers.len();
+        let drivers_ready = if self.driver.is_some() { 1 } else { 0 };
 
         BrainStatus {
             modalities,
@@ -291,40 +301,33 @@ impl Brain {
         }
     }
 
-    /// Resolve credentials for a provider (for skill credential injection).
-    /// Reads the API key env var declared in the provider config and returns it
-    /// as a ProviderCredentials struct ready for injection into skill subprocesses.
+    /// Resolve credentials for the brain (for skill credential injection).
     pub fn credentials_for(
         &self,
-        provider: &str,
+        _provider: &str,
     ) -> Option<types::brain::ProviderCredentials> {
-        let config = self.config.providers.get(provider)?;
         let mut env_vars = HashMap::new();
-
-        if !config.api_key_env.is_empty() {
-            if let Some(val) = types::env::get_env(&config.api_key_env) {
-                env_vars.insert(config.api_key_env.clone(), val);
+        if !self.config.api_key_env.is_empty() {
+            if let Some(val) = types::env::get_env(&self.config.api_key_env) {
+                env_vars.insert(self.config.api_key_env.clone(), val);
             }
         }
-
         Some(types::brain::ProviderCredentials {
-            provider_name: provider.to_string(),
+            provider_name: PROVIDER_NAME.to_string(),
             env_vars,
         })
     }
 
-    // ── Legacy methods ─────────────────────────────────────────
+    // ── Convenience methods ─────────────────────────────────
 
-    /// Get the model name for a given modality's primary endpoint.
-    pub fn model_for(&self, modality: &str) -> &str {
-        let mod_config = self
-            .config
-            .modalities
-            .get(modality)
-            .or_else(|| self.config.modalities.get(&self.config.default_modality));
-        match mod_config {
-            Some(mc) => self.model_for_endpoint(&mc.primary),
-            None => "unknown",
+    /// Get the model name for a modality (== the modality name itself).
+    pub fn model_for(&self, modality: &str) -> String {
+        if self.config.modalities.contains_key(modality) {
+            modality.to_string()
+        } else if self.config.modalities.contains_key(&self.config.default_modality) {
+            self.config.default_modality.clone()
+        } else {
+            "unknown".to_string()
         }
     }
 
@@ -348,96 +351,9 @@ impl Brain {
         &self.config
     }
 
-    /// Get the driver for a modality's primary endpoint, creating lazily.
-    pub fn driver_for_modality(&self, modality: &str) -> Option<Arc<dyn LlmDriver>> {
-        let mod_config = self
-            .config
-            .modalities
-            .get(modality)
-            .or_else(|| self.config.modalities.get(&self.config.default_modality))?;
-        self.get_or_create_driver(&mod_config.primary)
-    }
-
-    /// Get the endpoint names that have been successfully initialized (have drivers).
-    pub fn ready_endpoints(&self) -> Vec<String> {
-        self.drivers
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect()
-    }
-
-    // ── Internal helpers ──────────────────────────────────────
-
-    /// Get a cached driver or create one lazily.
-    fn get_or_create_driver(&self, endpoint_name: &str) -> Option<Arc<dyn LlmDriver>> {
-        if let Some(entry) = self.drivers.get(endpoint_name) {
-            return Some(entry.value().clone());
-        }
-        if self.failed_endpoints.contains(endpoint_name) {
-            debug!(
-                endpoint = %endpoint_name,
-                "Skipping driver creation for previously failed endpoint"
-            );
-            return None;
-        }
-        let endpoint = self.config.endpoints.get(endpoint_name)?;
-        match Self::create_driver(endpoint_name, endpoint, &self.config.providers) {
-            Ok(driver) => {
-                self.drivers
-                    .insert(endpoint_name.to_string(), driver.clone());
-                Some(driver)
-            }
-            Err(e) => {
-                warn!(
-                    endpoint = %endpoint_name,
-                    error = %e,
-                    "Failed to create driver for endpoint (subsequent attempts will be silently skipped)"
-                );
-                self.failed_endpoints.insert(endpoint_name.to_string());
-                None
-            }
-        }
-    }
-
-    fn model_for_endpoint(&self, endpoint_name: &str) -> &str {
-        self.config
-            .endpoints
-            .get(endpoint_name)
-            .map(|e| e.model.as_str())
-            .unwrap_or("unknown")
-    }
-
-    fn create_driver(
-        name: &str,
-        endpoint: &EndpointConfig,
-        providers: &HashMap<String, types::brain::ProviderConfig>,
-    ) -> Result<Arc<dyn LlmDriver>, BrainError> {
-        let provider_config =
-            providers
-                .get(&endpoint.provider)
-                .ok_or_else(|| BrainError::ProviderNotFound {
-                    endpoint: name.to_string(),
-                    provider: endpoint.provider.clone(),
-                })?;
-
-        // Resolve API key — all providers use simple Bearer auth via aginxbrain
-        let api_key = if provider_config.api_key_env.is_empty() {
-            None
-        } else {
-            types::env::get_env(&provider_config.api_key_env)
-        };
-
-        let driver_config = DriverConfig {
-            provider: endpoint.provider.clone(),
-            api_key,
-            base_url: Some(endpoint.base_url.clone()),
-            skip_permissions: true,
-        };
-
-        drivers::create_driver(&driver_config).map_err(|e| BrainError::DriverCreation {
-            endpoint: name.to_string(),
-            error: e.to_string(),
-        })
+    /// Get the shared driver for a modality.
+    pub fn driver_for_modality(&self, _modality: &str) -> Option<Arc<dyn LlmDriver>> {
+        self.driver.clone()
     }
 }
 
@@ -462,14 +378,14 @@ impl BrainTrait for Brain {
     }
 
     fn status(&self) -> BrainStatus {
-        Brain::status(self)
+        Brain::status(self,)
     }
 
     fn credentials_for(&self, provider: &str) -> Option<types::brain::ProviderCredentials> {
         Brain::credentials_for(self, provider)
     }
 
-    fn model_for(&self, modality: &str) -> &str {
+    fn model_for(&self, modality: &str) -> String {
         Brain::model_for(self, modality)
     }
 
@@ -481,27 +397,15 @@ impl BrainTrait for Brain {
 /// Brain initialization errors.
 #[derive(Debug)]
 pub enum BrainError {
-    /// No endpoints could be initialized.
-    NoEndpoints,
-    /// Referenced provider not found.
-    ProviderNotFound { endpoint: String, provider: String },
     /// Driver creation failed.
-    DriverCreation { endpoint: String, error: String },
+    DriverCreation { error: String },
 }
 
 impl std::fmt::Display for BrainError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BrainError::NoEndpoints => write!(f, "No brain endpoints could be initialized"),
-            BrainError::ProviderNotFound { endpoint, provider } => {
-                write!(
-                    f,
-                    "Endpoint '{}' references unknown provider '{}'",
-                    endpoint, provider
-                )
-            }
-            BrainError::DriverCreation { endpoint, error } => {
-                write!(f, "Failed to create driver for '{}': {}", endpoint, error)
+            BrainError::DriverCreation { error } => {
+                write!(f, "Failed to create brain driver: {error}")
             }
         }
     }

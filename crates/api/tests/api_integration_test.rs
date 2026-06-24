@@ -53,26 +53,14 @@ async fn start_test_server_with_provider(
 ) -> TestServer {
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
 
-    // Create minimal brain.json for tests
+    // Create minimal brain.json for tests (single-layer format)
     let brain_json = serde_json::json!({
-        "providers": {
-            "test": { "api_key_env": "" }
-        },
-        "endpoints": {
-            "test_ep": {
-                "provider": "test",
-                "model": model,
-                "base_url": format!("http://localhost:{}", 11434),
-                "format": "openai"
-            }
-        },
+        "base_url": format!("http://localhost:{}/v1/chat/completions", 11434),
+        "api_key_env": "",
+        "default_modality": "chat",
         "modalities": {
-            "chat": {
-                "primary": "test_ep",
-                "description": "Test modality"
-            }
-        },
-        "default_modality": "chat"
+            "chat": { "description": "Test modality" }
+        }
     });
     std::fs::write(
         tmp.path().join("brain.json"),
@@ -554,15 +542,12 @@ memory_write = ["self.*"]
 async fn start_test_server_with_auth(api_key: &str) -> TestServer {
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
 
-    // Create minimal brain.json for tests
+    // Create minimal brain.json for tests (single-layer format)
     let brain_json = serde_json::json!({
-        "providers": { "test": { "api_key_env": "" } },
-        "endpoints": { "test_ep": {
-            "provider": "test", "model": "test-model",
-            "base_url": "http://localhost:11434/v1", "format": "openai"
-        }},
-        "modalities": { "chat": { "primary": "test_ep", "description": "Chat" } },
-        "default_modality": "chat"
+        "base_url": "http://localhost:11434/v1/chat/completions",
+        "api_key_env": "",
+        "default_modality": "chat",
+        "modalities": { "chat": { "description": "Chat" } }
     });
     std::fs::write(
         tmp.path().join("brain.json"),
