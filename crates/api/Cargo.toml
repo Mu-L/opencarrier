@@ -15,6 +15,7 @@ lifecycle = { path = "../lifecycle" }
 channel-feishu = { path = "../channels/feishu" }
 channel-wecom = { path = "../channels/wecom" }
 channel-weixin = { path = "../channels/weixin" }
+channel-weixin-oa = { path = "../channels/weixin-oa" }
 channel-dingtalk = { path = "../channels/dingtalk" }
 dashmap = { workspace = true }
 tokio = { workspace = true }

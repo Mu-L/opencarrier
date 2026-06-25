@@ -140,6 +140,14 @@ impl ChannelManager {
         info!(channels = count, "Channel manager started");
     }
 
+    /// Get a clone of the bridge's inbound message sender.
+    ///
+    /// Used by webhook-based channels (e.g. weixin-oa) to inject PluginMessages
+    /// received via HTTP callback directly into the bridge routing pipeline.
+    pub fn bridge_sender(&self) -> mpsc::Sender<PluginMessage> {
+        self.message_tx.clone()
+    }
+
     /// Send a text message through a channel by channel type and bot ID.
     pub fn channel_send(
         &self,

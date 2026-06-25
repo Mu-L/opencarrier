@@ -13,6 +13,7 @@ members = [
     "crates/channels/wecom",
     "crates/channels/weixin",
     "crates/channels/dingtalk",
+    "crates/channels/weixin-oa",
     "xtask",
     "tools/mcp-common",
     "tools/bilibili-mcp",
@@ -169,6 +170,7 @@ channel-feishu = { path = "crates/channels/feishu" }
 channel-wecom = { path = "crates/channels/wecom" }
 channel-weixin = { path = "crates/channels/weixin" }
 channel-dingtalk = { path = "crates/channels/dingtalk" }
+channel-weixin-oa = { path = "crates/channels/weixin-oa" }
 [profile.release]
 lto = true
 codegen-units = 1

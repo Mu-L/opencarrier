@@ -25,6 +25,7 @@ pub mod state;
 pub mod tools_skills;
 pub mod webhooks;
 pub mod weixin;
+pub mod weixin_oa;
 
 pub use common::*;
 pub use messaging::{inject_attachments_into_session, resolve_attachments};

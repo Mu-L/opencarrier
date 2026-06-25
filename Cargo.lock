@@ -148,6 +148,7 @@ dependencies = [
  "channel-feishu",
  "channel-wecom",
  "channel-weixin",
+ "channel-weixin-oa",
  "chrono",
  "clone",
  "dashmap",
@@ -561,6 +562,22 @@ dependencies = [
  "urlencoding",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "channel-weixin-oa"
+version = "0.3.0"
+dependencies = [
+ "dashmap",
+ "hex",
+ "reqwest",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tokio",
+ "tracing",
+ "types",
 ]
 
 [[package]]

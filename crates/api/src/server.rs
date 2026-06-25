@@ -151,6 +151,7 @@ pub async fn build_router(
         .merge(routes::tools_skills::router())
         .merge(routes::webhooks::router())
         .merge(routes::weixin::router())
+        .merge(routes::weixin_oa::router())
         .merge(routes::sender_routes::router())
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
         .route("/api/commands", axum::routing::get(routes::list_commands))
@@ -261,6 +262,15 @@ pub async fn run_daemon(
         cm.register("wecom", Box::new(channel_wecom::SessionWatcher::new()));
         cm.register("weixin", Box::new(channel_weixin::SessionWatcher::new()));
         cm.register("dingtalk", Box::new(channel_dingtalk::SessionWatcher::new()));
+
+        // weixin-oa: webhook-based WeChat Official Account channel.
+        // Loads senders/{app_id}/session.json files and exposes the OA reply
+        // capability (Customer Service Message API).
+        {
+            let watcher = channel_weixin_oa::SessionWatcher::new();
+            watcher.load_from_dir(&kernel.config.home_dir.join("senders"));
+            cm.register("weixin-oa", Box::new(watcher));
+        }
 
         // Register weixin tools with the tool dispatcher
         // (tools will be migrated to MCP servers in Phase 4)
