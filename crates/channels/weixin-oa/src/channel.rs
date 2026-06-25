@@ -140,6 +140,23 @@ impl SessionWatcher {
     pub fn get_account(&self, app_id: &str) -> Option<Arc<OaAccountState>> {
         self.state.accounts.get(app_id).map(|a| a.clone())
     }
+
+    /// Return (app_id → bind_agent) mappings for all loaded sessions.
+    ///
+    /// Called by the server bootstrap to register routes with the SenderRouter
+    /// so inbound messages (route_key = app_id) reach the bound agent.
+    pub fn route_mappings(&self) -> Vec<(String, String)> {
+        self.state
+            .accounts
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .bind_agent
+                    .as_ref()
+                    .map(|agent| (entry.app_id.clone(), agent.clone()))
+            })
+            .collect()
+    }
 }
 
 /// Convert an OaMessage to a PluginMessage ready for the bridge.

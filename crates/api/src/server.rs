@@ -269,6 +269,28 @@ pub async fn run_daemon(
         {
             let watcher = channel_weixin_oa::SessionWatcher::new();
             watcher.load_from_dir(&kernel.config.home_dir.join("senders"));
+            // Register route_key (app_id) → bind_agent so inbound messages
+            // reach the bound agent. All followers of one OA share one agent.
+            for (app_id, agent) in watcher.route_mappings() {
+                // Resolve a UUID bind_agent to an agent name for consistency
+                let agent_ref = if let Ok(id) = agent.parse::<types::agent::AgentId>() {
+                    kernel
+                        .registry
+                        .get(id)
+                        .map(|e| e.manifest.name.clone())
+                        .unwrap_or_else(|| agent.clone())
+                } else {
+                    agent.clone()
+                };
+                if cm.get_sender_route(&app_id).is_none() {
+                    cm.set_sender_route(&app_id, &agent_ref);
+                    info!(
+                        app_id = %app_id,
+                        agent = %agent_ref,
+                        "weixin-oa: registered route from session bind_agent"
+                    );
+                }
+            }
             cm.register("weixin-oa", Box::new(watcher));
         }
 
