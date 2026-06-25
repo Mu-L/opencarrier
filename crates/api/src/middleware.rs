@@ -100,6 +100,8 @@ pub async fn auth(
         // Share-page platform auth flows (pre-onboarding)
         || path == "/api/weixin/qrcode"
         || path == "/api/weixin/qrcode-status"
+        // WeChat OA webhook callback — signed by WeChat (checkSign), no API key
+        || (path.starts_with("/api/weixin-oa/") && path.ends_with("/callback"))
         || path == "/api/senders/wecom/smartbot/generate"
         || path == "/api/senders/wecom/smartbot/poll"
         || path == "/api/senders/feishu/device-auth"
