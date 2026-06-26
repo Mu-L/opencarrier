@@ -146,6 +146,20 @@ pub async fn weixin_oa_callback(
     };
 
     let from_user = msg.from_user.clone();
+
+    // Drop pure-receipt events (TEMPLATESENDJOBFINISH, unsubscribe, etc.)
+    // before they reach the agent — zero token cost.
+    if !channel_weixin_oa::needs_reply(&msg) {
+        tracing::debug!(
+            %app_id,
+            openid = %from_user,
+            msg_type = %msg.msg_type,
+            event = %msg.event,
+            "weixin-oa: dropped no-reply event"
+        );
+        return (StatusCode::OK, "success".to_string());
+    }
+
     let plugin_msg = build_plugin_message(&msg, &app_id);
 
     tracing::info!(

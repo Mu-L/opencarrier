@@ -194,6 +194,32 @@ fn extract_image_markers(text: &str) -> (Vec<String>, String) {
     (media_ids, cleaned)
 }
 
+/// Does this inbound message need an agent reply?
+///
+/// Pure-receipt / log events (template delivery receipts, unsubscribe, link
+/// clicks) are dropped at the channel level so they never reach the agent —
+/// zero token cost, no `[no reply needed]` round-trip.
+pub fn needs_reply(msg: &OaMessage) -> bool {
+    match msg.msg_type.as_str() {
+        // Real user messages always need a reply
+        "text" | "image" | "voice" | "video" | "shortvideo" | "location" | "link" => true,
+        "event" => match msg.event.as_str() {
+            // Interactive events the agent should respond to
+            "subscribe" | "SCAN" | "CLICK" => true,
+            // Receipts / passive events — drop silently
+            "unsubscribe"
+            | "TEMPLATESENDJOBFINISH"
+            | "MASSSENDJOBFINISH"
+            | "VIEW"
+            | "LOCATION" => false,
+            // Unknown events: let the agent decide (conservative)
+            _ => true,
+        },
+        // Unknown message types: let the agent handle it
+        _ => true,
+    }
+}
+
 /// Convert an OaMessage to a PluginMessage ready for the bridge.
 pub fn build_plugin_message(msg: &OaMessage, app_id: &str) -> PluginMessage {
     let text = build_message_text(msg);
