@@ -129,6 +129,19 @@ impl ChannelManager {
         });
         bridge.set_channel_send_fn(send_fn);
 
+        // Set up routing-mode probe so the bridge can branch on DirectBind vs SenderBased
+        let channels_for_mode = self.channels.clone();
+        let mode_fn: crate::plugin::bridge::RoutingModeFn = Arc::new(move |channel_type| {
+            let channels = channels_for_mode.lock().unwrap_or_else(|e| e.into_inner());
+            for channel in channels.values() {
+                if channel.channel_type() == channel_type {
+                    return channel.routing_mode();
+                }
+            }
+            types::channel::RoutingMode::SenderBased
+        });
+        bridge.set_routing_mode_fn(mode_fn);
+
         // Start bridge in a background task
         if let Some(rx) = self.message_rx.take() {
             tokio::spawn(async move {
@@ -199,6 +212,21 @@ impl ChannelManager {
             }
             false
         })
+    }
+
+    /// Look up the routing mode for a channel type.
+    ///
+    /// Used by the bridge to decide whether to run the multi-clone pipeline
+    /// (SenderBased) or route straight to the bound agent (DirectBind).
+    pub fn routing_mode(&self, channel_type: &str) -> types::channel::RoutingMode {
+        let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
+        for channel in channels.values() {
+            if channel.channel_type() == channel_type {
+                return channel.routing_mode();
+            }
+        }
+        // Unknown channel types default to SenderBased (current behavior).
+        types::channel::RoutingMode::SenderBased
     }
 
     /// Send a text message by searching all channels for a matching bot_id.

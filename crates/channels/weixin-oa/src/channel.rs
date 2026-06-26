@@ -7,7 +7,7 @@ use std::time::Instant;
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
-use types::channel::{Channel, ChannelError};
+use types::channel::{Channel, ChannelError, RoutingMode};
 use types::plugin::{PluginContent, PluginMessage};
 
 use crate::api;
@@ -264,6 +264,12 @@ impl Channel for SessionWatcher {
 
     fn bot_id(&self) -> &str {
         ""
+    }
+
+    /// One-to-one channel: a single OA binds to one fixed agent.
+    /// No per-user clones, naming, or switching.
+    fn routing_mode(&self) -> RoutingMode {
+        RoutingMode::DirectBind
     }
 
     fn start(

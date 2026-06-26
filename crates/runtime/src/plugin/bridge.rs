@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use types::channel::ChannelError;
+use types::channel::{ChannelError, RoutingMode};
 use types::plugin::{PluginContent, PluginMessage};
 use dashmap::DashMap;
 use tokio::sync::mpsc;
@@ -20,6 +20,10 @@ use crate::kernel_handle::KernelHandle;
 pub type ChannelSendFn =
     Arc<dyn Fn(&str, &str, &str, &str) -> Result<(), ChannelError> + Send + Sync>;
 
+/// A function that reports a channel type's routing mode.
+/// Used by the bridge to decide whether to run the multi-clone pipeline.
+pub type RoutingModeFn = Arc<dyn Fn(&str) -> RoutingMode + Send + Sync>;
+
 // ---------------------------------------------------------------------------
 // Bridge manager
 // ---------------------------------------------------------------------------
@@ -32,6 +36,8 @@ pub struct PluginBridgeManager {
     kernel: Arc<dyn KernelHandle>,
     /// Function to send responses through channels (channel_type, bot_id, user_id, text).
     channel_send_fn: Option<ChannelSendFn>,
+    /// Function to look up a channel's routing mode by channel_type.
+    routing_mode_fn: Option<RoutingModeFn>,
     /// Sender-based routing (route_key → agent_id).
     sender_router: Option<Arc<SenderRouter>>,
     /// Cron delivery: last-channel tracking + buffered notifications.
@@ -46,6 +52,7 @@ impl PluginBridgeManager {
         Self {
             kernel,
             channel_send_fn: None,
+            routing_mode_fn: None,
             sender_router: None,
             cron_delivery: None,
             pending_naming: Arc::new(DashMap::new()),
@@ -65,6 +72,11 @@ impl PluginBridgeManager {
     /// Set the channel send function for delivering responses.
     pub fn set_channel_send_fn(&mut self, f: ChannelSendFn) {
         self.channel_send_fn = Some(f);
+    }
+
+    /// Set the routing-mode probe (tells the bridge which channels are DirectBind).
+    pub fn set_routing_mode_fn(&mut self, f: RoutingModeFn) {
+        self.routing_mode_fn = Some(f);
     }
 
     /// Backward-compatible: add a loaded plugin to the bridge.
@@ -168,9 +180,21 @@ impl PluginBridgeManager {
             }
         }
 
-        // 1. Check if route is in naming flow
-        if let Some((_, agent_id)) = self.pending_naming.remove(&rk) {
-            let name = text.trim().to_string();
+        // Determine this channel's routing mode. DirectBind channels (weixin-oa,
+        // future one-to-one channels) skip the entire multi-clone pipeline and
+        // route straight to their fixed bind_agent.
+        let direct_bind = self
+            .routing_mode_fn
+            .as_ref()
+            .map(|f| f(&msg.channel_type) == RoutingMode::DirectBind)
+            .unwrap_or(false);
+
+        // Multi-clone pipeline: naming flow, rename detection, @-name switching,
+        // and /list — only relevant for SenderBased channels.
+        if !direct_bind {
+            // 1. Check if route is in naming flow
+            if let Some((_, agent_id)) = self.pending_naming.remove(&rk) {
+                let name = text.trim().to_string();
             if !name.is_empty() {
                 if let Some(ref router) = self.sender_router {
                     router.set_alias(&rk, &name, &agent_id);
@@ -241,6 +265,7 @@ impl PluginBridgeManager {
             self.send_response(&msg, &response).await;
             return;
         }
+        } // end multi-clone pipeline (!direct_bind)
 
         // 5. Default routing via route_key
         let agent_id = self.resolve_agent(&msg);
@@ -254,7 +279,9 @@ impl PluginBridgeManager {
             return;
         }
 
-        // 6. Check if this agent needs a name
+        // 6. Check if this agent needs a name (SenderBased only — DirectBind
+        // channels have a fixed agent that never needs naming)
+        if !direct_bind {
         if let Some(ref router) = self.sender_router {
             if router.needs_naming(&rk) {
                 info!(route_key = %rk, agent = %agent_id, "Agent needs naming, entering naming flow");
@@ -263,6 +290,7 @@ impl PluginBridgeManager {
                 return;
             }
         }
+        } // end needs-naming check (!direct_bind)
 
         info!(
             channel = %msg.channel_type,
