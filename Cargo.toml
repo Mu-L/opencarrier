@@ -25,6 +25,7 @@ members = [
     "tools/feishu-mcp",
     "tools/wecom-mcp",
     "tools/browser-mcp",
+    "tools/amap-mcp",
 ]
 
 [workspace.package]

@@ -1,0 +1,19 @@
+[package]
+name = "amap-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Amap (Gaode Maps) MCP Server — geocoding, driving directions with distance and tolls"
+
+[dependencies]
+rmcp = { version = "1.5", features = ["server", "transport-io"] }
+schemars = "1"
+reqwest = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+mcp-common = { path = "../mcp-common" }
+urlencoding = { workspace = true }
