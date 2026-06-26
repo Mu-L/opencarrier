@@ -7,6 +7,8 @@
 pub mod api;
 pub mod channel;
 pub mod models;
+pub mod tools;
 
-pub use channel::{build_plugin_message, SessionWatcher, WeixinOaState};
+pub use channel::{build_plugin_message, SessionWatcher, WeixinOaState, WEIXIN_OA_STATE};
 pub use models::{parse_xml_message, OaMessage, ProxyMessage, WeixinOaSessionFile};
+pub use tools::WeixinOaSendImageTool;

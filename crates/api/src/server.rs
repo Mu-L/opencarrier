@@ -311,6 +311,18 @@ pub async fn run_daemon(
             dispatcher.register(std::sync::Arc::new(builtin));
         }
 
+        // Register weixin-oa image send tool
+        {
+            let dispatcher = cm.tool_dispatcher();
+            let mut builtin = runtime::plugin::BuiltinPlugin::new(
+                "weixin-oa".to_string(),
+                "1.0.0".to_string(),
+                std::path::PathBuf::new(),
+            );
+            builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaSendImageTool));
+            dispatcher.register(std::sync::Arc::new(builtin));
+        }
+
         cm.start().await;
 
         // Inject channel send / proactive-push probe into kernel for cron delivery

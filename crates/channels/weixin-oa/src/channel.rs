@@ -90,6 +90,11 @@ impl OaAccountState {
 
 // --- SessionWatcher ---
 
+/// Global shared OA state — the SessionWatcher and the send_image tool both
+/// read from this Arc so runtime-added accounts are visible to both.
+pub static WEIXIN_OA_STATE: std::sync::LazyLock<Arc<WeixinOaState>> =
+    std::sync::LazyLock::new(|| Arc::new(WeixinOaState::new()));
+
 pub struct SessionWatcher {
     pub state: Arc<WeixinOaState>,
     pub shutdown: Arc<AtomicBool>,
@@ -104,7 +109,7 @@ impl Default for SessionWatcher {
 impl SessionWatcher {
     pub fn new() -> Self {
         SessionWatcher {
-            state: Arc::new(WeixinOaState::new()),
+            state: WEIXIN_OA_STATE.clone(),
             shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
