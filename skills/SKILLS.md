@@ -21,6 +21,12 @@ topic-researcher → outline-writer → article-writer → article-formatter →
 
 每步的中间产物存 `output/<pipeline_id>/` 目录，由主控 agent 手动推进下一步（不再用 cron 链式触发）。
 
+## 包车业务
+
+| Skill | 说明 |
+|-------|------|
+| `charter-quoter` | 包车报价与订单处理（收集信息→查表报价→推送通知→找车队） |
+
 ## 设计原则
 
 - **系统 skill = 通用工作流**：≥2 个分身会重复用的纯流程，与具体人格/语气无关
