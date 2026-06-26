@@ -25,6 +25,70 @@ pub type ChannelSendFn =
 pub type RoutingModeFn = Arc<dyn Fn(&str) -> RoutingMode + Send + Sync>;
 
 // ---------------------------------------------------------------------------
+// Notify routing — cross-channel push markers
+// ---------------------------------------------------------------------------
+
+/// Where to push a notification of a given type.
+///
+/// Configured in `~/.opencarrier/notify_routes.json`. The agent emits a
+/// `[NOTIFY:type]content[/NOTIFY]` marker in its reply; the bridge looks up
+/// the type here and pushes via channel_send_fn.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct NotifyTarget {
+    pub channel: String,
+    #[serde(default)]
+    pub bot_id: String,
+    pub user_id: String,
+    #[serde(default)]
+    pub prefix: Option<String>,
+}
+
+/// Parse `[NOTIFY:type]content[/NOTIFY]` markers from agent reply text.
+///
+/// Returns (list of (type, content), text with markers stripped). Reliable
+/// side-effect trigger — the agent just outputs text, no tool-calling needed.
+fn parse_notify_markers(text: &str) -> (Vec<(String, String)>, String) {
+    let open = "[NOTIFY:";
+    let close = "[/NOTIFY]";
+    let mut notifications = Vec::new();
+    let mut cleaned = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(open) {
+        cleaned.push_str(&rest[..start]);
+        let after_open = &rest[start + open.len()..];
+        // type ends at the first ']'
+        match after_open.find(']') {
+            Some(type_end) => {
+                let ntype = after_open[..type_end].trim().to_string();
+                let after_type = &after_open[type_end + 1..];
+                match after_type.find(close) {
+                    Some(content_end) => {
+                        let content = after_type[..content_end].trim().to_string();
+                        if !ntype.is_empty() {
+                            notifications.push((ntype, content));
+                        }
+                        rest = &after_type[content_end + close.len()..];
+                    }
+                    None => {
+                        // No closing tag — emit as-is and stop
+                        cleaned.push_str(open);
+                        cleaned.push_str(after_open);
+                        rest = "";
+                    }
+                }
+            }
+            None => {
+                cleaned.push_str(open);
+                cleaned.push_str(after_open);
+                rest = "";
+            }
+        }
+    }
+    cleaned.push_str(rest);
+    (notifications, cleaned)
+}
+
+// ---------------------------------------------------------------------------
 // Bridge manager
 // ---------------------------------------------------------------------------
 
@@ -38,6 +102,8 @@ pub struct PluginBridgeManager {
     channel_send_fn: Option<ChannelSendFn>,
     /// Function to look up a channel's routing mode by channel_type.
     routing_mode_fn: Option<RoutingModeFn>,
+    /// Notify routing: notify_type → push target. Loaded from notify_routes.json.
+    notify_routes: Option<Arc<std::collections::HashMap<String, NotifyTarget>>>,
     /// Sender-based routing (route_key → agent_id).
     sender_router: Option<Arc<SenderRouter>>,
     /// Cron delivery: last-channel tracking + buffered notifications.
@@ -53,6 +119,7 @@ impl PluginBridgeManager {
             kernel,
             channel_send_fn: None,
             routing_mode_fn: None,
+            notify_routes: None,
             sender_router: None,
             cron_delivery: None,
             pending_naming: Arc::new(DashMap::new()),
@@ -77,6 +144,11 @@ impl PluginBridgeManager {
     /// Set the routing-mode probe (tells the bridge which channels are DirectBind).
     pub fn set_routing_mode_fn(&mut self, f: RoutingModeFn) {
         self.routing_mode_fn = Some(f);
+    }
+
+    /// Set notify routing (enables `[NOTIFY:type]content[/NOTIFY] markers → cross-channel push).
+    pub fn set_notify_routes(&mut self, routes: Arc<std::collections::HashMap<String, NotifyTarget>>) {
+        self.notify_routes = Some(routes);
     }
 
     /// Backward-compatible: add a loaded plugin to the bridge.
@@ -621,6 +693,50 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     async fn send_response(&self, original: &PluginMessage, response: &str) {
+        // Parse cross-channel notify markers before sending to the user.
+        // Each [NOTIFY:type]content[/NOTIFY] triggers a push via channel_send_fn;
+        // the marker is stripped from the user-facing reply.
+        let (notifications, cleaned) = parse_notify_markers(response);
+        if !notifications.is_empty() {
+            if let (Some(send_fn), Some(routes)) =
+                (self.channel_send_fn.clone(), self.notify_routes.clone())
+            {
+                for (ntype, content) in &notifications {
+                    if let Some(target) = routes.get(ntype) {
+                        let msg = match &target.prefix {
+                            Some(p) if !p.is_empty() => {
+                                format!("{p}\n{content}\n来源用户: {}", original.sender_id)
+                            }
+                            _ => format!("{content}\n来源用户: {}", original.sender_id),
+                        };
+                        let send_fn = send_fn.clone();
+                        let channel = target.channel.clone();
+                        let bot_id = target.bot_id.clone();
+                        let user_id = target.user_id.clone();
+                        info!(
+                            notify_type = %ntype,
+                            target_channel = %channel,
+                            target_user = %user_id,
+                            "Notify marker matched, pushing cross-channel"
+                        );
+                        tokio::task::spawn_blocking(move || {
+                            if let Err(e) = send_fn(&channel, &bot_id, &user_id, &msg) {
+                                error!(%channel, %user_id, error = %e, "Notify push failed");
+                            }
+                        });
+                    } else {
+                        warn!(notify_type = %ntype, "Notify marker has no route in notify_routes.json");
+                    }
+                }
+            } else {
+                warn!(
+                    notify_count = notifications.len(),
+                    "Notify markers present but no notify_routes/send_fn configured"
+                );
+            }
+        }
+
+        let response = cleaned.as_str();
         info!(
             channel = %original.channel_type,
             bot = %original.bot_id,

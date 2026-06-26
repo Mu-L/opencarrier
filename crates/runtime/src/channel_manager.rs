@@ -142,6 +142,23 @@ impl ChannelManager {
         });
         bridge.set_routing_mode_fn(mode_fn);
 
+        // Load notify routes (~/.opencarrier/notify_routes.json) — enables
+        // [NOTIFY:type]content[/NOTIFY] markers → cross-channel push.
+        {
+            let path = types::config::home_dir().join("notify_routes.json");
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(routes) = serde_json::from_str::<
+                    std::collections::HashMap<String, crate::plugin::bridge::NotifyTarget>,
+                >(&content)
+                {
+                    if !routes.is_empty() {
+                        info!(route_count = routes.len(), "Loaded notify routes");
+                        bridge.set_notify_routes(Arc::new(routes));
+                    }
+                }
+            }
+        }
+
         // Start bridge in a background task
         if let Some(rx) = self.message_rx.take() {
             tokio::spawn(async move {
