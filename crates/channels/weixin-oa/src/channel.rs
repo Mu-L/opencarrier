@@ -164,6 +164,36 @@ impl SessionWatcher {
     }
 }
 
+/// Extract `[SEND_IMAGE:media_id]` markers from agent reply text.
+///
+/// The agent emits these markers in its reply to request image sends without
+/// needing a discoverable tool (which the LLM struggles to call reliably).
+/// Returns (list of media_ids, text with markers stripped).
+fn extract_image_markers(text: &str) -> (Vec<String>, String) {
+    let marker = "[SEND_IMAGE:";
+    let mut media_ids = Vec::new();
+    let mut cleaned = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(marker) {
+        cleaned.push_str(&rest[..start]);
+        let after = &rest[start + marker.len()..];
+        if let Some(end) = after.find(']') {
+            let media_id = after[..end].trim().to_string();
+            if !media_id.is_empty() {
+                media_ids.push(media_id);
+            }
+            rest = &after[end + 1..];
+        } else {
+            // Malformed (no closing ]), emit as-is and stop.
+            cleaned.push_str(marker);
+            cleaned.push_str(after);
+            rest = "";
+        }
+    }
+    cleaned.push_str(rest);
+    (media_ids, cleaned)
+}
+
 /// Convert an OaMessage to a PluginMessage ready for the bridge.
 pub fn build_plugin_message(msg: &OaMessage, app_id: &str) -> PluginMessage {
     let text = build_message_text(msg);
@@ -271,8 +301,24 @@ impl Channel for SessionWatcher {
                         return;
                     }
                 };
-                if let Err(e) = api::custom_send_text(&http, &token, &user_id, &text).await {
-                    warn!(%app_id, %user_id, error=%e, "weixin-oa: send failed");
+                // Parse [SEND_IMAGE:media_id] markers — the agent emits these in its
+                // reply text to request image sends without needing a discoverable tool.
+                let (media_ids, text_only) = extract_image_markers(&text);
+                for media_id in &media_ids {
+                    if let Err(e) =
+                        api::custom_send_image(&http, &token, &user_id, media_id).await
+                    {
+                        warn!(%app_id, %user_id, error=%e, "weixin-oa: image send failed");
+                    } else {
+                        info!(%app_id, %user_id, "weixin-oa: image sent via marker");
+                    }
+                }
+                // Send any remaining text (after stripping markers) if non-empty
+                if !text_only.trim().is_empty() {
+                    if let Err(e) = api::custom_send_text(&http, &token, &user_id, &text_only).await
+                    {
+                        warn!(%app_id, %user_id, error=%e, "weixin-oa: send failed");
+                    }
                 }
             });
         });
