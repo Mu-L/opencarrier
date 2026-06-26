@@ -288,11 +288,27 @@ impl WeixinState {
         _bot_id: &str,
         user_id: &str,
     ) -> Option<dashmap::mapref::one::Ref<'_, String, BotSession>> {
-        // Direct lookup by user_id (most common path)
-        if let Some(state) = self.bots.get(user_id) {
-            return Some(state);
+        // Prefer the RECEIVING bot's session — the context_token lives on the
+        // session of the bot that received the user's message, which differs
+        // from the user's own session when the user is itself a logged-in bot
+        // account. Sending via the target's own session becomes a no-op
+        // self-message (iLink accepts but doesn't deliver).
+        let receiver_key = self
+            .bots
+            .iter()
+            .find(|entry| entry.key() != user_id && entry.value().get_context_token(user_id).is_some())
+            .map(|entry| entry.key().clone());
+        if let Some(key) = receiver_key {
+            return self.bots.get(&key);
         }
-        // Fallback: find the key for a session with matching bot_id, then get() it
+        // Fallback 1: direct lookup (target is itself the receiving bot, e.g. it
+        // received its own message).
+        if let Some(state) = self.bots.get(user_id) {
+            if state.get_context_token(user_id).is_some() {
+                return Some(state);
+            }
+        }
+        // Fallback 2: session with matching bot_id.
         let found_key = self
             .bots
             .iter()
