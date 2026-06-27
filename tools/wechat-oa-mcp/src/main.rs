@@ -96,8 +96,9 @@ define_params!(GetAccessTokenParams {});
 define_params!(UploadMediaParams {
     #[schemars(description = "Media type: image, voice, video, thumb")]
     media_type: String,
-    #[schemars(description = "Filename (e.g. cover.jpg)")]
-    filename: String,
+    #[serde(default)]
+    #[schemars(description = "Filename (e.g. cover.jpg). Optional: defaults to 'upload' if omitted.")]
+    filename: Option<String>,
     #[serde(default)]
     #[schemars(description = "Base64-encoded media data (required if file_path not provided)")]
     data_base64: Option<String>,
@@ -109,8 +110,9 @@ define_params!(UploadMediaParams {
 define_params!(UploadMediaFromUrlParams {
     #[schemars(description = "Media type: image, voice, video, thumb")]
     media_type: String,
-    #[schemars(description = "Filename (e.g. cover.jpg)")]
-    filename: String,
+    #[serde(default)]
+    #[schemars(description = "Filename (e.g. cover.jpg). Optional: inferred from URL if omitted.")]
+    filename: Option<String>,
     #[schemars(description = "URL of the media to download and upload")]
     url: String,
 });
@@ -520,13 +522,15 @@ impl WeChatOaServer {
             return error_response("Either file_path or data_base64 must be provided");
         };
 
+        let filename = params.filename.as_deref().unwrap_or("upload");
+
         match self
             .client
             .upload_media(
                 &params.app_id,
                 &params.app_secret,
                 &params.media_type,
-                &params.filename,
+                filename,
                 &data,
             )
             .await
@@ -547,13 +551,21 @@ impl WeChatOaServer {
             Ok(d) => d,
             Err(e) => return error_response(format!("failed to download: {e}")),
         };
+        let filename = params.filename.unwrap_or_else(|| {
+            params
+                .url
+                .rsplit('/')
+                .next()
+                .unwrap_or("upload.jpg")
+                .to_string()
+        });
         match self
             .client
             .upload_media(
                 &params.app_id,
                 &params.app_secret,
                 &params.media_type,
-                &params.filename,
+                &filename,
                 &data,
             )
             .await
