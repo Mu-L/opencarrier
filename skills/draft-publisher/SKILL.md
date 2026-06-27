@@ -75,12 +75,15 @@ file_read(path="output/<pipeline_id>/正文.md")      // Markdown，取首行标
 
 ### 3. 封面图处理
 
-**⚠️ 不要直接调 image_generate！先检查已有图片：**
+按以下顺序查找封面图，**不要跳步**：
 
-1. `file_list(path="output/")` — 查看 output 目录下已有的图片（`image_*.png`）
-2. 找到合适的图片 → `mcp_wechat_oa_upload_media(file_path="output/image_xxx.png")` 上传取 media_id
-3. output 里没有图片 → `mcp_wechat_oa_list_materials(app_id, app_secret, type="image", count=1, offset=0)` 从素材库取最近一张
-4. 都没有 → 跳过 thumb_media_id（不调 image_generate，封面图由用户后续在后台添加）
+1. **检查已有图片**：`file_list(path="output/")` 查看 output 目录下已有的图片（`image_*.png`）
+   - 找到合适的 → 用 `mcp_wechat_oa_upload_media(file_path="output/image_xxx.png")` 上传取 media_id
+2. **生成新图片**：调 `image_generate(prompt="封面图描述")`
+   - 返回值中 `saved_to` 包含生成的图片路径（如 `output/image_20260627_090232.png`）
+   - 用 `saved_to` 里的路径调 `mcp_wechat_oa_upload_media(file_path=...)` 上传取 media_id
+3. **从素材库取**：`mcp_wechat_oa_list_materials(app_id, app_secret, type="image", count=1, offset=0)` 取最近一张
+4. 都没有 → 跳过 thumb_media_id
 
 ### 4. 创建草稿
 
