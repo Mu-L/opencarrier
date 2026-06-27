@@ -385,7 +385,10 @@ impl UnifiedHttpDriver {
 impl UnifiedHttpDriver {
     async fn complete_openai(&self, request: CompletionRequest) -> Result<CompletionResponse, LlmError> {
         let mut oai_request = self.build_oai_request(&request);
-        let resp = self.send_openai_with_retry(&mut oai_request).await?;
+        // Image generation needs a longer header timeout (up to 180s for first byte)
+        let is_image = request.extra.get("n").is_some() && request.extra.get("size").is_some();
+        let header_timeout = if is_image { 180 } else { 60 };
+        let resp = self.send_openai_with_retry(&mut oai_request, header_timeout).await?;
 
         let body = tokio::time::timeout(
             std::time::Duration::from_secs(LLM_BODY_READ_TIMEOUT_SECS),
@@ -531,7 +534,7 @@ impl UnifiedHttpDriver {
     }
 
     /// OpenAI-specific retry with request body mutation.
-    async fn send_openai_with_retry(&self, oai_request: &mut OaiRequest) -> Result<reqwest::Response, LlmError> {
+    async fn send_openai_with_retry(&self, oai_request: &mut OaiRequest, header_timeout_secs: u64) -> Result<reqwest::Response, LlmError> {
         let max_retries: u8 = 3;
         for attempt in 0..=max_retries {
             let url = self.base_url.clone();
@@ -550,7 +553,7 @@ impl UnifiedHttpDriver {
             // this stalled-connection state (same class of bug as the streaming
             // idle timeout). 60s is generous for first-byte; genuine responses
             // arrive far faster.
-            let header_timeout = std::time::Duration::from_secs(60);
+            let header_timeout = std::time::Duration::from_secs(header_timeout_secs);
             let resp = match tokio::select! {
                 r = builder.send() => r,
                 _ = tokio::time::sleep(header_timeout) => {
@@ -818,7 +821,7 @@ impl LlmDriver for UnifiedHttpDriver {
         oai_request.stream = true;
         oai_request.stream_options = Some(serde_json::json!({"include_usage": true}));
 
-        let resp = self.send_openai_with_retry(&mut oai_request).await?;
+        let resp = self.send_openai_with_retry(&mut oai_request, 60).await?;
 
         let mut buffer = String::new();
         let mut text_content = String::new();
