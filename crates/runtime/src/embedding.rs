@@ -92,7 +92,11 @@ impl OpenAIEmbeddingDriver {
             api_key: Zeroizing::new(config.api_key),
             base_url: config.base_url,
             model: config.model,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_default(),
             dims,
         })
     }

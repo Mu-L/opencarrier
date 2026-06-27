@@ -245,7 +245,11 @@ fn host_net_fetch(state: &GuestState, params: &serde_json::Value) -> serde_json:
     }
 
     state.tokio_handle.block_on(async {
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
         let request = match method.to_uppercase().as_str() {
             "POST" => client.post(url).body(body.to_string()),
             "PUT" => client.put(url).body(body.to_string()),
@@ -261,7 +265,11 @@ fn host_net_fetch(state: &GuestState, params: &serde_json::Value) -> serde_json:
                 let mut stream = resp.bytes_stream();
                 use futures::StreamExt;
                 let mut exceeded = false;
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
                 while let Some(chunk) = stream.next().await {
+                    if tokio::time::Instant::now() > deadline {
+                        return json!({"error": "Response stream timed out (30s)"});
+                    }
                     match chunk {
                         Ok(bytes) => {
                             total += bytes.len();
