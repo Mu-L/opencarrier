@@ -1,10 +1,10 @@
 ---
 name: draft-publisher
 description: 将排版好的文章发布到微信公众号草稿箱
-version: 8
+version: 9
 tools:
-  - file_list
   - file_read
+  - image_generate
   - mcp_wechat_oa_upload_media
   - mcp_wechat_oa_create_draft
   - mcp_wechat_oa_list_drafts
@@ -75,15 +75,11 @@ file_read(path="output/<pipeline_id>/正文.md")      // Markdown，取首行标
 
 ### 3. 封面图处理
 
-按以下顺序查找封面图，**不要跳步**：
-
-1. **检查已有图片**：`file_list(path="output/")` 查看 output 目录下已有的图片（`image_*.png`）
-   - 找到合适的 → 用 `mcp_wechat_oa_upload_media(file_path="output/image_xxx.png")` 上传取 media_id
-2. **生成新图片**：调 `image_generate(prompt="封面图描述")`
+1. **生成封面图**：`image_generate(prompt="与文章标题相关的封面图描述")`
    - 返回值中 `saved_to` 包含生成的图片路径（如 `output/image_20260627_090232.png`）
-   - 用 `saved_to` 里的路径调 `mcp_wechat_oa_upload_media(file_path=...)` 上传取 media_id
-3. **从素材库取**：`mcp_wechat_oa_list_materials(app_id, app_secret, type="image", count=1, offset=0)` 取最近一张
-4. 都没有 → 跳过 thumb_media_id
+   - **直接用 `saved_to` 的路径上传**：`mcp_wechat_oa_upload_media(file_path=saved_to路径)` 取 media_id
+2. **image_generate 失败** → `mcp_wechat_oa_list_materials(app_id, app_secret, type="image", count=1, offset=0)` 从素材库取最近一张
+3. 都没有 → 跳过 thumb_media_id
 
 ### 4. 创建草稿
 
