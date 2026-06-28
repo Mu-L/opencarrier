@@ -128,7 +128,7 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
         PluginToolDef {
             name: "weixin_oa_send_miniprogram".to_string(),
             description: "Send a mini-program card to the current WeChat Official Account user (the person you are replying to) via the customer service message API. The mini-program must be linked to the same WeChat Open Platform account. user_id/app_id are resolved automatically from context.".to_string(),
-            parameters_json: r#"{"type":"object","properties":{"title":{"type":"string","description":"Card title text displayed in the mini-program card"},"pagepath":{"type":"string","description":"Mini-program page path with params, e.g. pages/order/detail/detail?good_id=883"},"thumb_media_id":{"type":"string","description":"A pre-uploaded permanent material media_id for the card cover image"},"mini_appid":{"type":"string","description":"The mini-program appid (e.g. wx7c62aa603ab603f4)"}},"required":["title","pagepath","thumb_media_id","mini_appid"]}"#.to_string(),
+            parameters_json: r#"{"type":"object","properties":{"title":{"type":"string","description":"Card title text displayed in the mini-program card"},"pagepath":{"type":"string","description":"Mini-program page path with params, e.g. pages/index/type/type?id=883"},"mini_appid":{"type":"string","description":"The mini-program appid (e.g. wx7c62aa603ab603f4)"},"thumb_media_id":{"type":"string","description":"A pre-uploaded permanent material media_id for the card cover image. Use this OR thumb_url, not both."},"thumb_url":{"type":"string","description":"URL of the cover image to download and upload. Use this OR thumb_media_id, not both."}},"required":["title","pagepath","mini_appid"]}"#.to_string(),
         }
     }
 
@@ -158,12 +158,16 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
         let pagepath = args["pagepath"].as_str().ok_or_else(|| {
             PluginToolError::tool("missing required parameter: pagepath")
         })?;
-        let thumb_media_id = args["thumb_media_id"].as_str().ok_or_else(|| {
-            PluginToolError::tool("missing required parameter: thumb_media_id")
-        })?;
         let mini_appid = args["mini_appid"].as_str().ok_or_else(|| {
             PluginToolError::tool("missing required parameter: mini_appid")
         })?;
+        let thumb_media_id = args["thumb_media_id"].as_str();
+        let thumb_url = args["thumb_url"].as_str();
+        if thumb_media_id.is_none() && thumb_url.is_none() {
+            return Err(PluginToolError::tool(
+                "must provide either thumb_media_id or thumb_url",
+            ));
+        }
 
         let account = WEIXIN_OA_STATE
             .accounts
@@ -178,8 +182,9 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
         let openid = openid.to_string();
         let title = title.to_string();
         let pagepath = pagepath.to_string();
-        let thumb_media_id = thumb_media_id.to_string();
         let mini_appid = mini_appid.to_string();
+        let thumb_media_id = thumb_media_id.map(|s| s.to_string());
+        let thumb_url = thumb_url.map(|s| s.to_string());
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -189,8 +194,32 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
         rt.block_on(async move {
             let token = account.get_token().await.map_err(PluginToolError::tool)?;
 
+            let final_thumb_media_id = if let Some(mid) = thumb_media_id {
+                mid
+            } else {
+                // Download image from thumb_url and upload as permanent material
+                let url = thumb_url.unwrap();
+                let resp = account.http.get(&url).send().await.map_err(|e| {
+                    PluginToolError::tool(format!("failed to download thumb_url: {e}"))
+                })?;
+                let bytes = resp.bytes().await.map_err(|e| {
+                    PluginToolError::tool(format!("failed to read thumb_url body: {e}"))
+                })?;
+                let filename = url
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("image.png")
+                    .to_string();
+                let (mid, _url) = api::upload_media_permanent(
+                    &account.http, &token, bytes.to_vec(), &filename,
+                )
+                .await
+                .map_err(PluginToolError::tool)?;
+                mid
+            };
+
             api::custom_send_miniprogrampage(
-                &account.http, &token, &openid, &title, &pagepath, &thumb_media_id, &mini_appid,
+                &account.http, &token, &openid, &title, &pagepath, &final_thumb_media_id, &mini_appid,
             )
             .await
             .map_err(PluginToolError::tool)?;
