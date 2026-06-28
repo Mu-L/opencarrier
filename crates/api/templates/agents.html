@@ -139,12 +139,16 @@ function renderUsers() {
   if (totalPages <= 1) { pag.innerHTML = ''; return; }
 
   let html = '';
-  if (currentPage > 1) html += `<button class="btn btn-sm btn-ghost" onclick="goPage(${currentPage-1})">&laquo;</button>`;
+  html += currentPage > 1 ? `<button class="btn btn-sm btn-ghost" onclick="goPage(${currentPage-1})">&laquo;</button>` : '';
   for (let i = 1; i <= totalPages; i++) {
-    if (i === currentPage) html += `<span style="font-weight:600;min-width:28px;text-align:center">${i}</span>`;
-    else html += `<button class="btn btn-sm btn-ghost" onclick="goPage(${i})">${i}</button>`;
+    if (i === 1 || i === totalPages || (i >= currentPage - 1 && i <= currentPage + 1)) {
+      if (i === currentPage) html += `<span style="font-weight:600;min-width:28px;text-align:center">${i}</span>`;
+      else html += `<button class="btn btn-sm btn-ghost" onclick="goPage(${i})">${i}</button>`;
+    } else if (i === currentPage - 2 || i === currentPage + 2) {
+      html += `<span style="color:var(--text-dim);padding:0 4px">...</span>`;
+    }
   }
-  if (currentPage < totalPages) html += `<button class="btn btn-sm btn-ghost" onclick="goPage(${currentPage+1})">&raquo;</button>`;
+  html += currentPage < totalPages ? `<button class="btn btn-sm btn-ghost" onclick="goPage(${currentPage+1})">&raquo;</button>` : '';
   pag.innerHTML = html;
 }
 
