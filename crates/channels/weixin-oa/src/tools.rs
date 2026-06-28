@@ -128,7 +128,7 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
         PluginToolDef {
             name: "weixin_oa_send_miniprogram".to_string(),
             description: "Send a mini-program card to the current WeChat Official Account user (the person you are replying to) via the customer service message API. The mini-program must be linked to the same WeChat Open Platform account. user_id/app_id are resolved automatically from context.".to_string(),
-            parameters_json: r#"{"type":"object","properties":{"title":{"type":"string","description":"Card title text displayed in the mini-program card"},"pagepath":{"type":"string","description":"Mini-program page path with params, e.g. pages/order/detail/detail?good_id=883"},"thumb_media_id":{"type":"string","description":"A pre-uploaded permanent material media_id for the card cover image"}},"required":["title","pagepath","thumb_media_id"]}"#.to_string(),
+            parameters_json: r#"{"type":"object","properties":{"title":{"type":"string","description":"Card title text displayed in the mini-program card"},"pagepath":{"type":"string","description":"Mini-program page path with params, e.g. pages/order/detail/detail?good_id=883"},"thumb_media_id":{"type":"string","description":"A pre-uploaded permanent material media_id for the card cover image"},"mini_appid":{"type":"string","description":"The mini-program appid (e.g. wx7c62aa603ab603f4)"}},"required":["title","pagepath","thumb_media_id","mini_appid"]}"#.to_string(),
         }
     }
 
@@ -161,6 +161,9 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
         let thumb_media_id = args["thumb_media_id"].as_str().ok_or_else(|| {
             PluginToolError::tool("missing required parameter: thumb_media_id")
         })?;
+        let mini_appid = args["mini_appid"].as_str().ok_or_else(|| {
+            PluginToolError::tool("missing required parameter: mini_appid")
+        })?;
 
         let account = WEIXIN_OA_STATE
             .accounts
@@ -176,6 +179,7 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
         let title = title.to_string();
         let pagepath = pagepath.to_string();
         let thumb_media_id = thumb_media_id.to_string();
+        let mini_appid = mini_appid.to_string();
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -186,7 +190,7 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
             let token = account.get_token().await.map_err(PluginToolError::tool)?;
 
             api::custom_send_miniprogrampage(
-                &account.http, &token, &openid, &title, &pagepath, &thumb_media_id,
+                &account.http, &token, &openid, &title, &pagepath, &thumb_media_id, &mini_appid,
             )
             .await
             .map_err(PluginToolError::tool)?;

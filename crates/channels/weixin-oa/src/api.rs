@@ -130,7 +130,8 @@ pub async fn custom_send_image(
 /// Send a customer service mini-program card message via WeChat API.
 ///
 /// Requires the mini-program to be linked to the same WeChat Open Platform account
-/// as the official account. The appid is resolved by WeChat server-side.
+/// as the official account. `mini_appid` is the mini-program's appid (not the OA's
+/// appid), which is required when the OA has multiple linked mini-programs.
 /// Ref: https://developers.weixin.qq.com/doc/offiaccount/Message_Management/Service_Center_messages.html#%E5%B0%8F%E7%A8%8B%E5%BA%8F%E9%A1%B5%E9%9D%A2
 pub async fn custom_send_miniprogrampage(
     http: &reqwest::Client,
@@ -139,6 +140,7 @@ pub async fn custom_send_miniprogrampage(
     title: &str,
     pagepath: &str,
     thumb_media_id: &str,
+    mini_appid: &str,
 ) -> Result<(), String> {
     let url = format!(
         "{}/cgi-bin/message/custom/send?access_token={}",
@@ -151,6 +153,7 @@ pub async fn custom_send_miniprogrampage(
             "title": title,
             "pagepath": pagepath,
             "thumb_media_id": thumb_media_id,
+            "appid": mini_appid,
         },
     });
     let resp = http
