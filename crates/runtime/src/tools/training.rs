@@ -172,17 +172,6 @@ impl ToolModule for TrainingTools {
         let kernel = ctx.kernel;
         let caller_agent_id = ctx.caller_agent_id;
 
-        // Gate training tools on clone admin status when operating on own clone.
-        // Cross-clone operations (target != caller) are allowed for system-level use.
-        if let (Some(_sid), Some(an)) = (ctx.sender_id, ctx.agent_name) {
-            let target = input["target"].as_str().unwrap_or("");
-            if target == an && !ctx.is_clone_admin {
-                return Some(Err(
-                    "Permission denied: clone admin status required. Send '申请管理权限' to request admin access.".to_string()
-                ));
-            }
-        }
-
         match name {
             "train_read" => Some(tool_train_read(input, kernel, caller_agent_id).await),
             "train_write" => Some(tool_train_write(input, kernel, caller_agent_id).await),
