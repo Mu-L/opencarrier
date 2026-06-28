@@ -320,6 +320,7 @@ pub async fn run_daemon(
                 std::path::PathBuf::new(),
             );
             builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaSendImageTool));
+            builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaSendMiniprogramTool));
             dispatcher.register(std::sync::Arc::new(builtin));
         }
 

@@ -116,3 +116,84 @@ impl ToolProvider for WeixinOaSendImageTool {
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// Send mini-program card tool
+// ---------------------------------------------------------------------------
+
+pub struct WeixinOaSendMiniprogramTool;
+
+impl ToolProvider for WeixinOaSendMiniprogramTool {
+    fn definition(&self) -> PluginToolDef {
+        PluginToolDef {
+            name: "weixin_oa_send_miniprogram".to_string(),
+            description: "Send a mini-program card to the current WeChat Official Account user (the person you are replying to) via the customer service message API. The mini-program must be linked to the same WeChat Open Platform account. user_id/app_id are resolved automatically from context.".to_string(),
+            parameters_json: r#"{"type":"object","properties":{"title":{"type":"string","description":"Card title text displayed in the mini-program card"},"pagepath":{"type":"string","description":"Mini-program page path with params, e.g. pages/order/detail/detail?good_id=883"},"thumb_media_id":{"type":"string","description":"A pre-uploaded permanent material media_id for the card cover image"}},"required":["title","pagepath","thumb_media_id"]}"#.to_string(),
+        }
+    }
+
+    fn execute(
+        &self,
+        args: &Value,
+        context: &PluginToolContext,
+    ) -> Result<String, PluginToolError> {
+        let app_id = if context.bot_id.is_empty() {
+            return Err(PluginToolError::tool(
+                "no bot_id (app_id) in context — tool can only be used inside a weixin-oa conversation",
+            ));
+        } else {
+            &context.bot_id
+        };
+        let openid = if context.sender_id.is_empty() {
+            return Err(PluginToolError::tool(
+                "no sender_id (openid) in context — cannot determine recipient",
+            ));
+        } else {
+            &context.sender_id
+        };
+
+        let title = args["title"].as_str().ok_or_else(|| {
+            PluginToolError::tool("missing required parameter: title")
+        })?;
+        let pagepath = args["pagepath"].as_str().ok_or_else(|| {
+            PluginToolError::tool("missing required parameter: pagepath")
+        })?;
+        let thumb_media_id = args["thumb_media_id"].as_str().ok_or_else(|| {
+            PluginToolError::tool("missing required parameter: thumb_media_id")
+        })?;
+
+        let account = WEIXIN_OA_STATE
+            .accounts
+            .get(app_id)
+            .map(|a| a.clone())
+            .ok_or_else(|| {
+                PluginToolError::tool(format!(
+                    "no weixin-oa account registered for app_id {app_id}"
+                ))
+            })?;
+
+        let openid = openid.to_string();
+        let title = title.to_string();
+        let pagepath = pagepath.to_string();
+        let thumb_media_id = thumb_media_id.to_string();
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PluginToolError::tool(format!("runtime error: {e}")))?;
+
+        rt.block_on(async move {
+            let token = account.get_token().await.map_err(PluginToolError::tool)?;
+
+            api::custom_send_miniprogrampage(
+                &account.http, &token, &openid, &title, &pagepath, &thumb_media_id,
+            )
+            .await
+            .map_err(PluginToolError::tool)?;
+
+            Ok(format!(
+                "Mini-program card sent to user {openid} (pagepath={pagepath})"
+            ))
+        })
+    }
+}

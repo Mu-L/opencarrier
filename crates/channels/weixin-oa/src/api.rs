@@ -127,6 +127,45 @@ pub async fn custom_send_image(
     check_wechat_error(resp_text, "custom_send_image")
 }
 
+/// Send a customer service mini-program card message via WeChat API.
+///
+/// Requires the mini-program to be linked to the same WeChat Open Platform account
+/// as the official account. The appid is resolved by WeChat server-side.
+/// Ref: https://developers.weixin.qq.com/doc/offiaccount/Message_Management/Service_Center_messages.html#%E5%B0%8F%E7%A8%8B%E5%BA%8F%E9%A1%B5%E9%9D%A2
+pub async fn custom_send_miniprogrampage(
+    http: &reqwest::Client,
+    access_token: &str,
+    openid: &str,
+    title: &str,
+    pagepath: &str,
+    thumb_media_id: &str,
+) -> Result<(), String> {
+    let url = format!(
+        "{}/cgi-bin/message/custom/send?access_token={}",
+        WECHAT_API_BASE, access_token
+    );
+    let body = serde_json::json!({
+        "touser": openid,
+        "msgtype": "miniprogrampage",
+        "miniprogrampage": {
+            "title": title,
+            "pagepath": pagepath,
+            "thumb_media_id": thumb_media_id,
+        },
+    });
+    let resp = http
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("custom_send_miniprogrampage request failed: {e}"))?;
+    let resp_text = resp
+        .text()
+        .await
+        .map_err(|e| format!("custom_send_miniprogrampage read body failed: {e}"))?;
+    check_wechat_error(resp_text, "custom_send_miniprogrampage")
+}
+
 /// Response from uploading permanent material.
 #[derive(Debug, Deserialize)]
 pub struct UploadMaterialResponse {

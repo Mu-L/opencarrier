@@ -91,7 +91,7 @@ impl PermissionLevel {
             | "event_publish" | "schedule_create" | "schedule_delete"
             | "cron_create" | "cron_cancel"
             // Channel reply tools — send messages/media to platform users (Write-level)
-            | "weixin_oa_send_image" => Self::Write,
+            | "weixin_oa_send_image" | "weixin_oa_send_miniprogram" => Self::Write,
 
             // Execute — cross-boundary writes
             "process_start" | "process_poll"
