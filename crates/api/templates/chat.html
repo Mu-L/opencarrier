@@ -25,10 +25,13 @@
   </form>
 </div>
 
+<div id="agent-data" style="display:none" data-agent-name="{{ agent.name | e }}" data-api-key="{{ api_key | e }}"></div>
+
 <script>
 (function() {
-  var agentId = '{{ agent.name }}';
-  var apiKey = '{{ api_key|e }}';
+  var agentData = document.getElementById('agent-data');
+  var agentId = agentData.dataset.agentName;
+  var apiKey = agentData.dataset.apiKey;
   var messagesEl = document.getElementById('messages');
   var form = document.getElementById('chat-form');
   var input = document.getElementById('msg-input');

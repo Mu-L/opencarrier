@@ -118,10 +118,13 @@
 {# Safe JSON data stored in a hidden element to avoid </script> XSS #}
 <div id="users-data" style="display:none" data-users="{{ users_json | e }}"></div>
 
+<div id="agent-data" style="display:none" data-agent-name="{{ agent.name | e }}"></div>
+
 <script>
 const PAGE_SIZE = 20;
 let allUsers = JSON.parse(document.getElementById('users-data').dataset.users);
 let currentPage = 1;
+const agentName = document.getElementById('agent-data').dataset.agentName;
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
@@ -171,8 +174,6 @@ function toggleUsers() {
     icon.innerHTML = '&#9660;';
   }
 }
-
-const agentName = "{{ agent.name }}";
 
 // Use event delegation to avoid inline onclick with user-controlled data
 document.addEventListener('click', function(e) {

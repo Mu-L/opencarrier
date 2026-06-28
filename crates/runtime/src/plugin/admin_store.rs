@@ -2,8 +2,18 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::Mutex;
 
 const ADMINS_FILE: &str = "admins.json";
+
+/// Global lock for admins.json mutations. Admin operations are infrequent
+/// (once per user binding/approval), so a single lock is fine — it prevents
+/// TOCTOU races without per-workspace complexity.
+static GLOBAL_ADMIN_LOCK: Mutex<()> = Mutex::new(());
+
+fn get_lock() -> std::sync::MutexGuard<'static, ()> {
+    GLOBAL_ADMIN_LOCK.lock().unwrap()
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AdminsFile {
@@ -37,18 +47,23 @@ pub fn read_admins(workspace: &Path) -> AdminsFile {
     }
 }
 
-pub fn write_admins(workspace: &Path, admins: &AdminsFile) -> Result<(), String> {
+/// Atomic write: write to temp file then rename (crash-safe on POSIX).
+fn write_admins_atomic(workspace: &Path, admins: &AdminsFile) -> Result<(), String> {
     let path = workspace.join(ADMINS_FILE);
     let content = serde_json::to_string_pretty(admins).map_err(|e| format!("Serialize error: {e}"))?;
-    std::fs::write(&path, content).map_err(|e| format!("Write error: {e}"))
+    let tmp_path = path.with_extension("tmp");
+    std::fs::write(&tmp_path, &content).map_err(|e| format!("Write error: {e}"))?;
+    std::fs::rename(&tmp_path, &path).map_err(|e| format!("Rename error: {e}"))
 }
 
 pub fn is_admin(workspace: &Path, sender_id: &str) -> bool {
+    let _lock = get_lock();
     let admins = read_admins(workspace);
     admins.admins.iter().any(|a| a.sender_id == sender_id)
 }
 
 pub fn add_pending(workspace: &Path, sender_id: &str, sender_name: &str) -> Result<(), String> {
+    let _lock = get_lock();
     let mut admins = read_admins(workspace);
 
     if admins.admins.iter().any(|a| a.sender_id == sender_id) {
@@ -64,10 +79,11 @@ pub fn add_pending(workspace: &Path, sender_id: &str, sender_name: &str) -> Resu
         requested_at: chrono::Utc::now().to_rfc3339(),
     });
 
-    write_admins(workspace, &admins)
+    write_admins_atomic(workspace, &admins)
 }
 
 pub fn approve(workspace: &Path, sender_id: &str) -> Result<(), String> {
+    let _lock = get_lock();
     let mut admins = read_admins(workspace);
 
     let idx = admins
@@ -84,10 +100,11 @@ pub fn approve(workspace: &Path, sender_id: &str) -> Result<(), String> {
         approved_at: chrono::Utc::now().to_rfc3339(),
     });
 
-    write_admins(workspace, &admins)
+    write_admins_atomic(workspace, &admins)
 }
 
 pub fn revoke(workspace: &Path, sender_id: &str) -> Result<(), String> {
+    let _lock = get_lock();
     let mut admins = read_admins(workspace);
 
     let entry = admins
@@ -101,11 +118,12 @@ pub fn revoke(workspace: &Path, sender_id: &str) -> Result<(), String> {
     }
 
     admins.admins.retain(|a| a.sender_id != sender_id);
-    write_admins(workspace, &admins)
+    write_admins_atomic(workspace, &admins)
 }
 
 /// Auto-assign the first bound sender as creator. Only writes if admins is empty.
 pub fn auto_assign_creator(workspace: &Path, sender_id: &str, sender_name: &str) -> Result<bool, String> {
+    let _lock = get_lock();
     let admins = read_admins(workspace);
     if !admins.admins.is_empty() {
         return Ok(false);
@@ -119,7 +137,7 @@ pub fn auto_assign_creator(workspace: &Path, sender_id: &str, sender_name: &str)
         approved_at: chrono::Utc::now().to_rfc3339(),
     });
 
-    write_admins(workspace, &admins)?;
+    write_admins_atomic(workspace, &admins)?;
     Ok(true)
 }
 

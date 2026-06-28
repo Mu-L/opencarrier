@@ -28,9 +28,25 @@ lazy_static::lazy_static! {
     };
 }
 
-fn render(name: &str, ctx: minijinja::Value) -> Html<String> {
-    let tmpl = TEMPLATES.get_template(name).expect("template exists");
-    Html(tmpl.render(ctx).expect("template render"))
+fn render(name: &str, ctx: minijinja::Value) -> Result<Html<String>, Html<String>> {
+    let tmpl = match TEMPLATES.get_template(name) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(template = name, error = %e, "Template not found");
+            return Err(Html(
+                "<!DOCTYPE html><html><body><h1>500 Internal Server Error</h1><p>Template error</p></body></html>".to_string()
+            ));
+        }
+    };
+    match tmpl.render(ctx) {
+        Ok(html) => Ok(Html(html)),
+        Err(e) => {
+            tracing::error!(template = name, error = %e, "Template render failed");
+            Err(Html(
+                "<!DOCTYPE html><html><body><h1>500 Internal Server Error</h1><p>Render error</p></body></html>".to_string()
+            ))
+        }
+    }
 }
 
 // ── Auth helpers ──────────────────────────────────────────────────────────
@@ -60,20 +76,25 @@ fn require_auth(
 ) -> Result<String, Html<String>> {
     match get_session_user(request, state) {
         Some(user) => Ok(user),
-        None => Err(render(
-            "login.html",
-            minijinja::context! {
-                hide_sidebar => true,
-                version => env!("CARGO_PKG_VERSION"),
-            },
-        )),
+        None => {
+            // render() returns Result<Html, Html>; for require_auth we need Err(Html)
+            match render(
+                "login.html",
+                minijinja::context! {
+                    hide_sidebar => true,
+                    version => env!("CARGO_PKG_VERSION"),
+                },
+            ) {
+                Ok(html) | Err(html) => Err(html),
+            }
+        }
     }
 }
 
 // ── Page handlers ─────────────────────────────────────────────────────────
 
 /// GET /login — Login page (always public).
-pub async fn login_page() -> impl IntoResponse {
+pub async fn login_page() -> Result<Html<String>, Html<String>> {
     render(
         "login.html",
         minijinja::context! {
@@ -147,7 +168,7 @@ pub async fn overview_page(
         })
         .collect();
 
-    Ok(render(
+    render(
         "overview.html",
         minijinja::context! {
             page => "overview",
@@ -158,7 +179,7 @@ pub async fn overview_page(
             total_users => total_users,
             agents => agents,
         },
-    ))
+    )
 }
 
 /// GET /agents — Clone detail page (shows users for a specific clone).
@@ -173,7 +194,7 @@ pub async fn agents_page(
     // No specific agent selected — redirect to overview
     let agents_list = state.kernel.registry.list();
     if agents_list.is_empty() {
-        return Ok(render(
+        return render(
             "agents.html",
             minijinja::context! {
                 page => "agents",
@@ -195,7 +216,7 @@ pub async fn agents_page(
                 admins => Vec::<minijinja::Value>::new(),
                 pending_admins => Vec::<minijinja::Value>::new(),
             },
-        ));
+        );
     }
     // Show first agent by default
     let first = &agents_list[0];
@@ -221,7 +242,7 @@ pub async fn agent_detail_page(
     let entry = match entry {
         Some(e) => e,
         None => {
-            return Ok(render(
+            return render(
                 "agents.html",
                 minijinja::context! {
                     page => "agents",
@@ -243,7 +264,7 @@ pub async fn agent_detail_page(
                     admins => Vec::<minijinja::Value>::new(),
                     pending_admins => Vec::<minijinja::Value>::new(),
                 },
-            ));
+            );
         }
     };
 
@@ -329,7 +350,7 @@ async fn render_clone_detail(
         (Vec::new(), Vec::new())
     };
 
-    Ok(render(
+    render(
         "agents.html",
         minijinja::context! {
             page => "agents",
@@ -351,7 +372,7 @@ async fn render_clone_detail(
             admins => admins_data.0,
             pending_admins => admins_data.1,
         },
-    ))
+    )
 }
 
 /// Format an ISO timestamp as a human-readable "time ago" string.
@@ -398,7 +419,7 @@ pub async fn user_chat_page(
     let entry = match entry {
         Some(e) => e,
         None => {
-            return Ok(render(
+            return render(
                 "agents.html",
                 minijinja::context! {
                     page => "agents",
@@ -420,7 +441,7 @@ pub async fn user_chat_page(
                     admins => Vec::<minijinja::Value>::new(),
                     pending_admins => Vec::<minijinja::Value>::new(),
                 },
-            ));
+            );
         }
     };
 
@@ -484,7 +505,7 @@ pub async fn user_chat_page(
         })
         .collect();
 
-    Ok(render(
+    render(
         "user_chat.html",
         minijinja::context! {
             page => "user_chat",
@@ -499,7 +520,7 @@ pub async fn user_chat_page(
             sender_id => sender_id,
             messages => messages,
         },
-    ))
+    )
 }
 
 /// GET /tasks — Task scheduler page.
@@ -508,14 +529,14 @@ pub async fn tasks_page(
     request: Request<axum::body::Body>,
 ) -> Result<Html<String>, Html<String>> {
     let user = require_auth(&request, &state)?;
-    Ok(render(
+    render(
         "tasks.html",
         minijinja::context! {
             page => "tasks",
             session_user => user,
             version => env!("CARGO_PKG_VERSION"),
         },
-    ))
+    )
 }
 
 /// GET /brain — Brain config page.
@@ -539,7 +560,7 @@ pub async fn brain_page(
         })
         .collect();
 
-    Ok(render(
+    render(
         "brain.html",
         minijinja::context! {
             page => "brain",
@@ -551,5 +572,5 @@ pub async fn brain_page(
             driver_ready => driver_ready,
             modalities => modalities,
         },
-    ))
+    )
 }

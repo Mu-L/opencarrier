@@ -117,12 +117,14 @@ pub async fn weixin_oa_callback(
     };
 
     // Verify signature (WeChat signs both GET verification and POST messages)
-    if !session.token.is_empty() {
-        if let (Some(sig), Some(ts), Some(nc)) = (params.signature.as_ref(), params.timestamp.as_ref(), params.nonce.as_ref()) {
-            if !check_sign(&session.token, ts, nc, sig) {
-                tracing::warn!(%app_id, "weixin-oa callback: signature mismatch");
-                return (StatusCode::FORBIDDEN, "signature mismatch".to_string());
-            }
+    if session.token.is_empty() {
+        tracing::warn!(%app_id, "weixin-oa callback: no token configured, rejecting");
+        return (StatusCode::FORBIDDEN, "no token configured".to_string());
+    }
+    if let (Some(sig), Some(ts), Some(nc)) = (params.signature.as_ref(), params.timestamp.as_ref(), params.nonce.as_ref()) {
+        if !check_sign(&session.token, ts, nc, sig) {
+            tracing::warn!(%app_id, "weixin-oa callback: signature mismatch");
+            return (StatusCode::FORBIDDEN, "signature mismatch".to_string());
         }
     }
 

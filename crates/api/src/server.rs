@@ -171,10 +171,6 @@ pub async fn build_router(
         .route("/favicon.ico", axum::routing::get(webchat::favicon_ico))
         .route("/manifest.json", axum::routing::get(webchat::manifest_json))
         .route("/share", axum::routing::get(webchat::share_page))
-        .route(
-            "/api/hub/templates/{name}/install",
-            axum::routing::post(routes::hub::install_hub_template),
-        )
         .route("/sw.js", axum::routing::get(webchat::sw_js))
         .route(
             "/bd00e4fe4983179012e6ffdcc66d0c4b.txt",
