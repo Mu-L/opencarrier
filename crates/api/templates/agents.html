@@ -45,11 +45,11 @@
       <thead><tr><th>用户</th><th>申请时间</th><th>操作</th></tr></thead>
       <tbody>
         {% for p in pending_admins %}
-        <tr>
+        <tr data-sender-id="{{ p.sender_id }}">
           <td style="font-weight:500">{{ p.sender_name or p.sender_id }}</td>
           <td style="color:var(--text-dim);font-size:13px">{{ p.requested_at }}</td>
           <td>
-            <button onclick="approveAdmin('{{ agent.name }}','{{ p.sender_id }}')" class="btn btn-sm btn-primary">批准</button>
+            <button class="btn btn-sm btn-primary btn-approve">批准</button>
           </td>
         </tr>
         {% endfor %}
@@ -65,7 +65,7 @@
       <thead><tr><th>用户</th><th>角色</th><th>授权时间</th><th>操作</th></tr></thead>
       <tbody>
         {% for a in admins %}
-        <tr>
+        <tr data-sender-id="{{ a.sender_id }}">
           <td style="font-weight:500">{{ a.sender_name or a.sender_id }}</td>
           <td>
             {% if a.role == "creator" %}
@@ -77,7 +77,7 @@
           <td style="color:var(--text-dim);font-size:13px">{{ a.approved_at }}</td>
           <td>
             {% if a.role != "creator" %}
-            <button onclick="revokeAdmin('{{ agent.name }}','{{ a.sender_id }}')" class="btn btn-sm btn-danger">撤销</button>
+            <button class="btn btn-sm btn-danger btn-revoke">撤销</button>
             {% endif %}
           </td>
         </tr>
@@ -115,10 +115,15 @@
   </div>
 </div>
 
+{# Safe JSON data stored in a hidden element to avoid </script> XSS #}
+<div id="users-data" style="display:none" data-users="{{ users_json | e }}"></div>
+
 <script>
 const PAGE_SIZE = 20;
-let allUsers = {{ users_json | safe }};
+let allUsers = JSON.parse(document.getElementById('users-data').dataset.users);
 let currentPage = 1;
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 function renderUsers() {
   const tbody = document.getElementById('user-tbody');
@@ -128,9 +133,9 @@ function renderUsers() {
 
   tbody.innerHTML = pageUsers.map(u =>
     `<tr>
-      <td style="font-weight:500">${u.sender_id}</td>
+      <td style="font-weight:500">${esc(u.sender_id)}</td>
       <td>${u.session_count}</td>
-      <td style="color:var(--text-dim);font-size:13px">${u.last_active_ago}</td>
+      <td style="color:var(--text-dim);font-size:13px">${esc(u.last_active_ago)}</td>
       <td><a href="/agents/{{ agent.name }}/users/${encodeURIComponent(u.sender_id)}" class="btn btn-sm btn-primary">查看对话</a></td>
     </tr>`
   ).join('');
@@ -167,9 +172,22 @@ function toggleUsers() {
   }
 }
 
-async function approveAdmin(agentName, senderId) {
+const agentName = "{{ agent.name }}";
+
+// Use event delegation to avoid inline onclick with user-controlled data
+document.addEventListener('click', function(e) {
+  if (e.target.classList.contains('btn-approve')) {
+    const senderId = e.target.closest('tr').dataset.senderId;
+    approveAdmin(senderId);
+  } else if (e.target.classList.contains('btn-revoke')) {
+    const senderId = e.target.closest('tr').dataset.senderId;
+    revokeAdmin(senderId);
+  }
+});
+
+async function approveAdmin(senderId) {
   try {
-    const res = await fetch(`/api/clones/${agentName}/admins/approve`, {
+    const res = await fetch(`/api/clones/${encodeURIComponent(agentName)}/admins/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sender_id: senderId })
@@ -180,10 +198,10 @@ async function approveAdmin(agentName, senderId) {
   } catch (e) { alert('请求失败: ' + e.message); }
 }
 
-async function revokeAdmin(agentName, senderId) {
+async function revokeAdmin(senderId) {
   if (!confirm('确定撤销该管理员权限？')) return;
   try {
-    const res = await fetch(`/api/clones/${agentName}/admins/${encodeURIComponent(senderId)}`, {
+    const res = await fetch(`/api/clones/${encodeURIComponent(agentName)}/admins/${encodeURIComponent(senderId)}`, {
       method: 'DELETE'
     });
     const data = await res.json();

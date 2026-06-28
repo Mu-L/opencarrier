@@ -48,7 +48,8 @@ pub async fn approve_clone_admin(
 
     match admin_store::approve(&ws, &sender_id) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e}))),
+        Err(e) if e.contains("not_found") => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not found in pending list"}))),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to approve"}))),
     }
 }
 
@@ -64,7 +65,9 @@ pub async fn revoke_clone_admin(
 
     match admin_store::revoke(&ws, &sender_id) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e}))),
+        Err(e) if e.contains("cannot_revoke_creator") => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Cannot revoke creator"}))),
+        Err(e) if e.contains("not_found") => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Admin not found"}))),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to revoke"}))),
     }
 }
 
