@@ -868,21 +868,6 @@ impl CarrierKernel {
         }
 
         let mcp_count = self.plugins.mcp_tools.lock().map(|t| t.len()).unwrap_or(0);
-
-        // Collect tools from the plugin tool dispatcher (channel tools like
-        // weixin_oa_send_image, weixin_oa_send_miniprogram) which are registered
-        // separately from builtin_tool_definitions().
-        if let Some(dispatcher) = self.plugins.plugin_tool_dispatcher.lock().ok().and_then(|g| g.clone()) {
-            for tool in dispatcher.definitions() {
-                if let Some(ts_name) = Self::tool_to_toolset(&tool.name) {
-                    registry
-                        .entry(ts_name.to_string())
-                        .or_default()
-                        .push(tool);
-                }
-            }
-        }
-
         tracing::info!(
             builtin_toolsets = registry.len(),
             mcp_tools = mcp_count,

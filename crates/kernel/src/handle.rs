@@ -661,6 +661,37 @@ impl KernelHandle for CarrierKernel {
             }
         }
 
+        // Search plugin tool dispatcher — channel tools (e.g. weixin_oa_send_image,
+        // weixin_oa_send_miniprogram) registered as ToolProvider instances. These
+        // are exact-match candidates: skill-declared tool names must resolve here.
+        // Skill tool resolution passes the exact tool name as the query, so prefer
+        // a high exact-match score.
+        if let Some(dispatcher) = self
+            .plugins
+            .plugin_tool_dispatcher
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+        {
+            for tool in dispatcher.definitions() {
+                let name_lower = tool.name.to_lowercase();
+                let exact = name_lower == query_lower;
+                let score = if exact {
+                    1000 // skill-declared exact match — always wins
+                } else {
+                    CarrierKernel::score_tool(
+                        &query_lower, &keywords,
+                        &name_lower,
+                        &tool.description.to_lowercase(),
+                        "plugin",
+                    )
+                };
+                if score > 0 {
+                    scored.push((score, "plugin".to_string(), tool));
+                }
+            }
+        }
+
         scored.sort_by(|a, b| b.0.cmp(&a.0));
 
         // Filter by max_level + always exclude Dangerous
