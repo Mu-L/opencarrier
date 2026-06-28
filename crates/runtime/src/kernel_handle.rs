@@ -165,6 +165,21 @@ pub trait KernelHandle: Send + Sync {
         Vec::new()
     }
 
+    /// Execute a plugin (channel) tool by name via the PluginToolDispatcher.
+    ///
+    /// Returns `None` if no dispatcher is registered or the tool isn't a plugin
+    /// tool (so the caller can fall through to other dispatch paths).
+    /// Returns `Some(Ok(content))` on success, `Some(Err(message))` on failure.
+    fn execute_plugin_tool(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+        context: &types::plugin::PluginToolContext,
+    ) -> Option<Result<String, String>> {
+        let _ = (tool_name, args, context);
+        None
+    }
+
     /// Get the home directory path (~/.opencarrier/).
     fn home_dir(&self) -> Option<std::path::PathBuf> {
         None

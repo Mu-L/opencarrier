@@ -137,13 +137,6 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
         args: &Value,
         context: &PluginToolContext,
     ) -> Result<String, PluginToolError> {
-        let app_id = if context.bot_id.is_empty() {
-            return Err(PluginToolError::tool(
-                "no bot_id (app_id) in context — tool can only be used inside a weixin-oa conversation",
-            ));
-        } else {
-            &context.bot_id
-        };
         let openid = if context.sender_id.is_empty() {
             return Err(PluginToolError::tool(
                 "no sender_id (openid) in context — cannot determine recipient",
@@ -169,15 +162,32 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
             ));
         }
 
-        let account = WEIXIN_OA_STATE
-            .accounts
-            .get(app_id)
-            .map(|a| a.clone())
-            .ok_or_else(|| {
-                PluginToolError::tool(format!(
-                    "no weixin-oa account registered for app_id {app_id}"
-                ))
-            })?;
+        // Resolve the OA account: use context bot_id (app_id), or fall back to
+        // the only registered account when invoked without an inbound message
+        // context (single-OA deployments).
+        let account = if !context.bot_id.is_empty() {
+            WEIXIN_OA_STATE
+                .accounts
+                .get(&context.bot_id)
+                .map(|a| a.clone())
+                .ok_or_else(|| {
+                    PluginToolError::tool(format!(
+                        "no weixin-oa account registered for app_id {}",
+                        context.bot_id
+                    ))
+                })?
+        } else {
+            WEIXIN_OA_STATE
+                .accounts
+                .iter()
+                .next()
+                .map(|e| e.value().clone())
+                .ok_or_else(|| {
+                    PluginToolError::tool(
+                        "no bot_id (app_id) in context and no weixin-oa account registered",
+                    )
+                })?
+        };
 
         let openid = openid.to_string();
         let title = title.to_string();

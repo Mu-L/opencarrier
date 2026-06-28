@@ -711,6 +711,24 @@ impl KernelHandle for CarrierKernel {
         scored.into_iter().map(|(_, ts, def)| (ts, def)).collect()
     }
 
+    fn execute_plugin_tool(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+        context: &types::plugin::PluginToolContext,
+    ) -> Option<Result<String, String>> {
+        let dispatcher = self
+            .plugins
+            .plugin_tool_dispatcher
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())?;
+        if !dispatcher.has_tool(tool_name) {
+            return None;
+        }
+        Some(dispatcher.execute(tool_name, args, context))
+    }
+
 }
 
 // ── MemoryHandle trait implementation ─────────────────────
