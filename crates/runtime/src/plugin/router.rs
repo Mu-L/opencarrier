@@ -286,7 +286,10 @@ impl SenderRouter {
             first.clone()?
         };
 
-        self.persist_route(sender_id, &agent_name);
+        if let Err(e) = self.persist_route(sender_id, &agent_name) {
+            warn!(sender = %sender_id, "Failed to persist auto-assign: {e}");
+            return None;
+        }
         self.routes
             .insert(sender_id.to_string(), agent_name.clone());
         info!(sender = %sender_id, agent = %agent_name, "Auto-assigned sender to agent");
@@ -295,16 +298,16 @@ impl SenderRouter {
 
     /// Write a sender's route config and create directory structure.
     /// Adds the agent to clones if not already present.
-    fn persist_route(&self, sender_id: &str, agent_id: &str) {
+    fn persist_route(&self, sender_id: &str, agent_id: &str) -> Result<(), String> {
         let sender_dir = self.senders_dir.join(sender_id);
         if let Err(e) = std::fs::create_dir_all(&sender_dir) {
-            warn!(sender = %sender_id, "Failed to create sender dir: {e}");
+            return Err(format!("Failed to create sender dir: {e}"));
         }
 
         // Create per-agent directory
         let agent_dir = sender_dir.join(agent_id);
         if let Err(e) = std::fs::create_dir_all(&agent_dir) {
-            warn!(sender = %sender_id, agent = %agent_id, "Failed to create sender/agent dir: {e}");
+            return Err(format!("Failed to create sender/agent dir: {e}"));
         }
 
         // Add to clones if not present
@@ -343,15 +346,10 @@ impl SenderRouter {
                 .unwrap_or_default(),
             created_at,
         };
-        let config_path = sender_dir.join("config.json");
-        if let Ok(json) = serde_json::to_string_pretty(&config) {
-            if let Err(e) = std::fs::write(&config_path, json) {
-                warn!(sender = %sender_id, "Failed to write sender config: {e}");
-            }
-        }
+        self.write_config_atomic(sender_id, &config)
     }
 
-    /// Persist the full sender config to disk.
+    /// Persist the full sender config to disk (atomic write).
     fn persist_config(&self, sender_id: &str) {
         let sender_dir = self.senders_dir.join(sender_id);
         if let Err(e) = std::fs::create_dir_all(&sender_dir) {
@@ -380,22 +378,30 @@ impl SenderRouter {
             clones,
             created_at,
         };
-        let config_path = sender_dir.join("config.json");
-        match serde_json::to_string_pretty(&config) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(&config_path, json) {
-                    warn!(sender = %sender_id, "Failed to write sender config: {e}");
-                }
-            }
-            Err(e) => {
-                warn!(sender = %sender_id, "Failed to serialize sender config: {e}");
-            }
+        if let Err(e) = self.write_config_atomic(sender_id, &config) {
+            warn!(sender = %sender_id, "Failed to write sender config: {e}");
         }
     }
 
+    /// Atomic write: write to temp file then rename (crash-safe on POSIX).
+    fn write_config_atomic(&self, sender_id: &str, config: &SenderConfig) -> Result<(), String> {
+        let config_path = self.senders_dir.join(sender_id).join("config.json");
+        let json = serde_json::to_string_pretty(config).map_err(|e| format!("Serialize error: {e}"))?;
+        let tmp_path = config_path.with_extension("tmp");
+        std::fs::write(&tmp_path, &json).map_err(|e| format!("Write error: {e}"))?;
+        std::fs::rename(&tmp_path, &config_path).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Rename error: {e}")
+        })
+    }
+
     /// Explicitly set the route for a sender (e.g., user switches agent).
+    /// Rolls back in-memory state if disk write fails.
     pub fn set_route(&self, sender_id: &str, agent_id: &str) {
-        self.persist_route(sender_id, agent_id);
+        if let Err(e) = self.persist_route(sender_id, agent_id) {
+            warn!(sender = %sender_id, "Failed to persist route, skipping in-memory update: {e}");
+            return;
+        }
         self.routes
             .insert(sender_id.to_string(), agent_id.to_string());
         info!(sender = %sender_id, agent = %agent_id, "Sender route updated");

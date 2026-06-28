@@ -811,6 +811,11 @@ pub struct AuthConfig {
     pub password_hash: String,
     /// Session token lifetime in hours (default: 168 = 7 days).
     pub session_ttl_hours: u64,
+    /// Trusted reverse proxy IP(s) for rate limiting by real client IP.
+    /// When set, x-real-ip / x-forwarded-for headers are only trusted from these IPs.
+    /// When empty, those headers are always trusted (legacy behavior — secure only behind a proxy).
+    #[serde(default)]
+    pub trusted_proxy: Vec<String>,
 }
 
 impl Default for AuthConfig {
@@ -820,6 +825,7 @@ impl Default for AuthConfig {
             username: "admin".to_string(),
             password_hash: String::new(),
             session_ttl_hours: 168,
+            trusted_proxy: Vec::new(),
         }
     }
 }
@@ -1128,7 +1134,7 @@ pub fn sender_relative_path(owner_id: &str, agent_name: &str, user_id: Option<&s
 
 /// Sanitize a path component to prevent directory traversal.
 /// Returns "_" for empty/unsafe values.
-fn sanitize_path_component(s: &str) -> &str {
+pub fn sanitize_path_component(s: &str) -> &str {
     if s.is_empty() || s.contains('/') || s.contains('\\') || s.contains("..") {
         "_"
     } else {

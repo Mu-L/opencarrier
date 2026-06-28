@@ -321,11 +321,11 @@ pub async fn upload_file(
     }
 
     // Extract filename from header
-    let filename = headers
+    let raw_filename = headers
         .get("X-Filename")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("upload")
-        .to_string();
+        .unwrap_or("upload");
+    let filename = types::config::sanitize_path_component(raw_filename).to_string();
 
     // Extract sender_id from header (used to place file in per-user input dir)
     let sender_id = headers

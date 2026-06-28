@@ -8,6 +8,7 @@ use axum::http::{Request, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::Arc;
@@ -121,17 +122,7 @@ pub async fn auth_login(
         failures.retain(|_, (_, first_fail)| first_fail.elapsed().as_secs() < LOGIN_BAN_SECS);
     }
 
-    let client_ip = parts
-        .headers
-        .get("x-real-ip")
-        .or_else(|| parts.headers.get("x-forwarded-for"))
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .split(',')
-        .next()
-        .unwrap_or("unknown")
-        .trim()
-        .to_string();
+    let client_ip = extract_client_ip(&parts, &state.kernel.config.auth);
 
     {
         let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| { tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering"); e.into_inner() });
@@ -239,8 +230,9 @@ pub async fn auth_login(
         .into_response();
 
     // Set session cookie
+    let max_age_secs = auth_config.session_ttl_hours * 3600;
     let cookie_value = format!(
-        "opencarrier_session={}; HttpOnly; SameSite=Strict; Secure; Path=/",
+        "opencarrier_session={}; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age={max_age_secs}",
         token
     );
     response
@@ -281,27 +273,47 @@ pub async fn change_credentials(
         }
     };
 
-    // Verify session identity matches (if session cookie present)
-    if let Some(cookie_str) = parts.headers.get("cookie").and_then(|v| v.to_str().ok()) {
+    // Require a valid session — prevents credential changes via API key alone
+    {
+        let cookie_str = parts.headers.get("cookie").and_then(|v| v.to_str().ok());
         let session_token = cookie_str
-            .split(';')
-            .find_map(|part| part.trim().strip_prefix("opencarrier_session="));
-        if let Some(token) = session_token {
-            if let Some(info) =
-                session_auth::verify_session_token(token, &state.kernel.config.api_key)
-            {
-                // Session user must match the account being modified
-                let auth_config = &state.kernel.config.auth;
-                if info.username != auth_config.username {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(serde_json::json!({"error": "Session identity mismatch"})),
-                    )
-                        .into_response();
+            .and_then(|cs| {
+                cs.split(';')
+                    .find_map(|part| part.trim().strip_prefix("opencarrier_session="))
+            });
+        match session_token {
+            Some(token) => {
+                match session_auth::verify_session_token(token, &state.kernel.config.api_key) {
+                    Some(info) => {
+                        // Session user must match the account being modified
+                        let auth_config = &state.kernel.config.auth;
+                        if info.username != auth_config.username {
+                            return (
+                                StatusCode::FORBIDDEN,
+                                Json(serde_json::json!({"error": "Session identity mismatch"})),
+                            )
+                                .into_response();
+                        }
+                        info
+                    }
+                    None => {
+                        return (
+                            StatusCode::UNAUTHORIZED,
+                            Json(serde_json::json!({"error": "Invalid or expired session"})),
+                        )
+                            .into_response()
+                    }
                 }
             }
+            None => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({"error": "Session cookie required"})),
+                )
+                    .into_response()
+            }
         }
-    }
+    };
 
     let current_password = body["current_password"].as_str().unwrap_or("").trim();
     let new_username = body["new_username"]
@@ -455,8 +467,9 @@ pub async fn change_credentials(
         .into_response();
 
     // Set session cookie
+    let max_age_secs = state.kernel.config.auth.session_ttl_hours * 3600;
     let cookie_value = format!(
-        "opencarrier_session={}; HttpOnly; SameSite=Strict; Secure; Path=/",
+        "opencarrier_session={}; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age={max_age_secs}",
         token
     );
     response
@@ -476,4 +489,51 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
             "/api/auth/change-credentials",
             routing::post(change_credentials),
         )
+}
+
+/// Extract the real client IP for rate limiting.
+///
+/// If `trusted_proxy` is configured, only trust x-real-ip/x-forwarded-for
+/// when the direct connection comes from a trusted proxy IP.
+/// Otherwise (empty trusted_proxy), always trust the headers (legacy behavior).
+fn extract_client_ip(parts: &axum::http::request::Parts, auth_config: &types::config::AuthConfig) -> String {
+    let direct_ip = parts
+        .extensions
+        .get::<axum::extract::ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    if auth_config.trusted_proxy.is_empty() {
+        // Legacy behavior: always trust headers
+        return parts
+            .headers
+            .get("x-real-ip")
+            .or_else(|| parts.headers.get("x-forwarded-for"))
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(&direct_ip)
+            .split(',')
+            .next()
+            .unwrap_or(&direct_ip)
+            .trim()
+            .to_string();
+    }
+
+    // Only trust headers when the direct connection is from a trusted proxy
+    if auth_config.trusted_proxy.iter().any(|p| p == &direct_ip) {
+        parts
+            .headers
+            .get("x-real-ip")
+            .or_else(|| parts.headers.get("x-forwarded-for"))
+            .and_then(|v| v.to_str().ok())
+            .map(|v| {
+                v.split(',')
+                    .next()
+                    .unwrap_or(&direct_ip)
+                    .trim()
+                    .to_string()
+            })
+            .unwrap_or(direct_ip)
+    } else {
+        direct_ip
+    }
 }

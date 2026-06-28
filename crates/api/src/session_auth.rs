@@ -12,6 +12,21 @@ use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Derive a session-specific HMAC key from the API key.
+///
+/// This separates the trust boundary: knowing the API key lets you authenticate
+/// API requests, but you can't directly forge session tokens without also knowing
+/// the derivation convention. No extra configuration needed.
+fn derive_session_secret(api_key: &str) -> [u8; 32] {
+    use hmac::Mac;
+    let mut mac = HmacSha256::new_from_slice(b"opencarrier-session-v1").expect("HMAC key length is valid");
+    mac.update(api_key.as_bytes());
+    let result = mac.finalize().into_bytes();
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&result);
+    key
+}
+
 /// Information extracted from a verified session token.
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
@@ -40,7 +55,8 @@ pub fn create_session_token(
     let expiry = chrono::Utc::now().timestamp() + (ttl_hours as i64 * 3600);
     let tid = tenant_id.unwrap_or("_");
     let payload = format!("{tid}:{role}:{username}:{expiry}");
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
+    let session_key = derive_session_secret(secret);
+    let mut mac = HmacSha256::new_from_slice(&session_key).ok()?;
     mac.update(payload.as_bytes());
     let signature = hex::encode(mac.finalize().into_bytes());
     Some(base64::engine::general_purpose::STANDARD.encode(format!("{payload}:{signature}")))
@@ -70,7 +86,8 @@ pub fn verify_session_token(token: &str, secret: &str) -> Option<SessionInfo> {
             }
 
             let payload = format!("{}:{}:{}:{}", tenant_id_str, role, username, expiry_str);
-            let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
+            let session_key = derive_session_secret(secret);
+            let mut mac = HmacSha256::new_from_slice(&session_key).ok()?;
             mac.update(payload.as_bytes());
             let expected_sig = hex::encode(mac.finalize().into_bytes());
 

@@ -8,90 +8,65 @@ use rusqlite::Connection;
 const SCHEMA_VERSION: u32 = 20;
 
 /// Run all migrations to bring the database up to date.
+///
+/// Each migration is wrapped in its own transaction so that a partial failure
+/// doesn't leave the database in an inconsistent state.
 pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     let current_version = get_schema_version(conn);
 
-    if current_version < 1 {
-        migrate_v1(conn)?;
-    }
+    type MigrateFn = fn(&Connection) -> Result<(), rusqlite::Error>;
+    let migrations: Vec<(u32, MigrateFn)> = vec![
+        (1, migrate_v1),
+        (2, migrate_v2),
+        (3, migrate_v3),
+        (4, migrate_v4),
+        (5, migrate_v5),
+        (6, migrate_v6),
+        (7, migrate_v7),
+        (8, migrate_v8),
+        (9, migrate_v9),
+        (10, migrate_v10),
+        (11, migrate_v11),
+        (12, migrate_v12),
+        (13, migrate_v13),
+        (14, migrate_v14),
+        (15, migrate_v15),
+        (16, migrate_v16),
+        (17, migrate_v17),
+        (18, migrate_v18),
+        (19, migrate_v19),
+        (20, migrate_v20),
+    ];
 
-    if current_version < 2 {
-        migrate_v2(conn)?;
-    }
-
-    if current_version < 3 {
-        migrate_v3(conn)?;
-    }
-
-    if current_version < 4 {
-        migrate_v4(conn)?;
-    }
-
-    if current_version < 5 {
-        migrate_v5(conn)?;
-    }
-
-    if current_version < 6 {
-        migrate_v6(conn)?;
-    }
-
-    if current_version < 7 {
-        migrate_v7(conn)?;
-    }
-
-    if current_version < 8 {
-        migrate_v8(conn)?;
-    }
-
-    if current_version < 9 {
-        migrate_v9(conn)?;
-    }
-
-    if current_version < 10 {
-        migrate_v10(conn)?;
-    }
-
-    if current_version < 11 {
-        migrate_v11(conn)?;
-    }
-
-    if current_version < 12 {
-        migrate_v12(conn)?;
-    }
-
-    if current_version < 13 {
-        migrate_v13(conn)?;
-    }
-
-    if current_version < 14 {
-        migrate_v14(conn)?;
-    }
-
-    if current_version < 15 {
-        migrate_v15(conn)?;
-    }
-
-    if current_version < 16 {
-        migrate_v16(conn)?;
-    }
-
-    if current_version < 17 {
-        migrate_v17(conn)?;
-    }
-
-    if current_version < 18 {
-        migrate_v18(conn)?;
-    }
-
-    if current_version < 19 {
-        migrate_v19(conn)?;
-    }
-
-    if current_version < 20 {
-        migrate_v20(conn)?;
+    for (version, migrate_fn) in &migrations {
+        if current_version < *version {
+            conn.execute_batch("BEGIN")?;
+            if let Err(e) = migrate_fn(conn) {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(e);
+            }
+            conn.execute_batch("COMMIT")?;
+        }
     }
 
     set_schema_version(conn, SCHEMA_VERSION)?;
+
+    // Clean up old kv_history entries (older than 30 days)
+    match conn.execute(
+        "DELETE FROM kv_history WHERE archived_at < datetime('now', '-30 days')",
+        [],
+    ) {
+        Ok(deleted) => {
+            if deleted > 0 {
+                tracing::info!(deleted, "kv_history cleanup: removed entries older than 30 days");
+            }
+        }
+        Err(e) => {
+            // Non-fatal: old data just takes space
+            tracing::warn!("kv_history cleanup warning: {e}");
+        }
+    }
+
     Ok(())
 }
 
