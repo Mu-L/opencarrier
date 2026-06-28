@@ -36,33 +36,6 @@
 </div>
 
 <div class="card">
-  <h3 style="font-size:16px;margin-bottom:16px">用户列表</h3>
-  {% if users %}
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr><th>用户</th><th>会话数</th><th>最近活跃</th><th>操作</th></tr>
-      </thead>
-      <tbody>
-        {% for u in users %}
-        <tr>
-          <td style="font-weight:500">{{ u.sender_id }}</td>
-          <td>{{ u.session_count }}</td>
-          <td style="color:var(--text-dim);font-size:13px">{{ u.last_active_ago }}</td>
-          <td>
-            <a href="/agents/{{ agent.name }}/users/{{ u.sender_id }}" class="btn btn-sm btn-primary">查看对话</a>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <p style="color:var(--text-dim)">暂无用户</p>
-  {% endif %}
-</div>
-
-<div class="card">
   <h3 style="font-size:16px;margin-bottom:16px">管理权限</h3>
 
   {% if pending_admins %}
@@ -119,7 +92,77 @@
   {% endif %}
 </div>
 
+<div class="card">
+  <h3 style="font-size:16px;cursor:pointer;user-select:none" onclick="toggleUsers()">
+    用户列表 <span id="user-toggle-icon" style="font-size:12px;margin-left:4px">&#9660;</span>
+    <span style="font-size:13px;color:var(--text-dim);font-weight:400;margin-left:8px">{{ user_count }} 人</span>
+  </h3>
+  <div id="user-list" style="display:none">
+    {% if users %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>用户</th><th>会话数</th><th>最近活跃</th><th>操作</th></tr>
+        </thead>
+        <tbody id="user-tbody">
+        </tbody>
+      </table>
+    </div>
+    <div id="user-pagination" style="display:flex;gap:8px;align-items:center;justify-content:center;margin-top:12px"></div>
+    {% else %}
+    <p style="color:var(--text-dim)">暂无用户</p>
+    {% endif %}
+  </div>
+</div>
+
 <script>
+const PAGE_SIZE = 20;
+let allUsers = {{ users | json }};
+let currentPage = 1;
+
+function renderUsers() {
+  const tbody = document.getElementById('user-tbody');
+  const totalPages = Math.ceil(allUsers.length / PAGE_SIZE);
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const pageUsers = allUsers.slice(start, start + PAGE_SIZE);
+
+  tbody.innerHTML = pageUsers.map(u =>
+    `<tr>
+      <td style="font-weight:500">${u.sender_id}</td>
+      <td>${u.session_count}</td>
+      <td style="color:var(--text-dim);font-size:13px">${u.last_active_ago}</td>
+      <td><a href="/agents/{{ agent.name }}/users/${encodeURIComponent(u.sender_id)}" class="btn btn-sm btn-primary">查看对话</a></td>
+    </tr>`
+  ).join('');
+
+  const pag = document.getElementById('user-pagination');
+  if (totalPages <= 1) { pag.innerHTML = ''; return; }
+
+  let html = '';
+  if (currentPage > 1) html += `<button class="btn btn-sm btn-ghost" onclick="goPage(${currentPage-1})">&laquo;</button>`;
+  for (let i = 1; i <= totalPages; i++) {
+    if (i === currentPage) html += `<span style="font-weight:600;min-width:28px;text-align:center">${i}</span>`;
+    else html += `<button class="btn btn-sm btn-ghost" onclick="goPage(${i})">${i}</button>`;
+  }
+  if (currentPage < totalPages) html += `<button class="btn btn-sm btn-ghost" onclick="goPage(${currentPage+1})">&raquo;</button>`;
+  pag.innerHTML = html;
+}
+
+function goPage(p) { currentPage = p; renderUsers(); }
+
+function toggleUsers() {
+  const el = document.getElementById('user-list');
+  const icon = document.getElementById('user-toggle-icon');
+  if (el.style.display === 'none') {
+    el.style.display = 'block';
+    icon.innerHTML = '&#9650;';
+    if (allUsers.length > 0) renderUsers();
+  } else {
+    el.style.display = 'none';
+    icon.innerHTML = '&#9660;';
+  }
+}
+
 async function approveAdmin(agentName, senderId) {
   try {
     const res = await fetch(`/api/clones/${agentName}/admins/approve`, {
