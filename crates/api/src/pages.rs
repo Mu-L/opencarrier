@@ -191,6 +191,7 @@ pub async fn agents_page(
                 install_count => 0,
                 user_count => 0,
                 users => Vec::<minijinja::Value>::new(),
+                users_json => "[]".to_string(),
                 admins => Vec::<minijinja::Value>::new(),
                 pending_admins => Vec::<minijinja::Value>::new(),
             },
@@ -238,6 +239,7 @@ pub async fn agent_detail_page(
                     install_count => 0,
                     user_count => 0,
                     users => Vec::<minijinja::Value>::new(),
+                users_json => "[]".to_string(),
                     admins => Vec::<minijinja::Value>::new(),
                     pending_admins => Vec::<minijinja::Value>::new(),
                 },
@@ -289,6 +291,13 @@ async fn render_clone_detail(
         })
         .collect();
 
+    // Pre-serialize user list for JS pagination
+    let users_json = serde_json::to_string(&users_raw.iter().map(|u| serde_json::json!({
+        "sender_id": u["sender_id"].as_str().unwrap_or(""),
+        "session_count": u["session_count"].as_i64().unwrap_or(0),
+        "last_active_ago": format_time_ago(u["last_active"].as_str().unwrap_or("")),
+    })).collect::<Vec<_>>()).unwrap_or_default();
+
     // Admin data
     let admins_data = if let Some(ref ws) = entry.manifest.workspace {
         let admins = runtime::plugin::admin_store::read_admins(std::path::Path::new(ws));
@@ -338,6 +347,7 @@ async fn render_clone_detail(
             install_count => install_count,
             user_count => user_count,
             users => users,
+            users_json => users_json,
             admins => admins_data.0,
             pending_admins => admins_data.1,
         },
@@ -406,6 +416,7 @@ pub async fn user_chat_page(
                     install_count => 0,
                     user_count => 0,
                     users => Vec::<minijinja::Value>::new(),
+                users_json => "[]".to_string(),
                     admins => Vec::<minijinja::Value>::new(),
                     pending_admins => Vec::<minijinja::Value>::new(),
                 },

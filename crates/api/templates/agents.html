@@ -117,7 +117,7 @@
 
 <script>
 const PAGE_SIZE = 20;
-let allUsers = {{ users | json }};
+let allUsers = {{ users_json | safe }};
 let currentPage = 1;
 
 function renderUsers() {
