@@ -76,6 +76,10 @@ pub struct OaMessage {
     pub event: String,
     /// Event key (menu key, QR code key, etc.)
     pub event_key: String,
+    /// Voice recognition result (if the OA has voice-to-text enabled)
+    pub recognition: String,
+    /// Media ID for voice/image/video messages
+    pub media_id: String,
 }
 
 /// Parse WeChat XML into OaMessage.
@@ -96,6 +100,8 @@ pub fn parse_xml_message(xml: &str) -> Option<OaMessage> {
             "CreateTime" => msg.create_time = text.parse().unwrap_or(0),
             "Event" => msg.event = text,
             "EventKey" => msg.event_key = text,
+            "Recognition" => msg.recognition = text,
+            "MediaId" => msg.media_id = text,
             _ => {}
         }
     }

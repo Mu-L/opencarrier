@@ -271,7 +271,13 @@ fn build_message_text(msg: &OaMessage) -> String {
             }
         }
         "image" => "[图片消息]".to_string(),
-        "voice" => "[语音消息]".to_string(),
+        "voice" => {
+            if !msg.recognition.is_empty() {
+                msg.recognition.clone()
+            } else {
+                "[语音消息]".to_string()
+            }
+        }
         "video" => "[视频消息]".to_string(),
         _ => format!("[未知消息类型: {}]", msg_type),
     }
