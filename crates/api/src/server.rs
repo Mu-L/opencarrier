@@ -136,6 +136,7 @@ pub async fn build_router(
         .merge(routes::bots::router())
         .merge(routes::brain::router())
         .merge(routes::clones::router())
+        .merge(routes::clone_admins::router())
         .merge(routes::comms::router())
         .merge(routes::config::router())
         .merge(routes::cron::router())

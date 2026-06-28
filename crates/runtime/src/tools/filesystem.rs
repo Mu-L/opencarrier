@@ -232,7 +232,7 @@ async fn tool_file_write(input: &Value, ctx: &ToolContext<'_>) -> Result<String,
             None => {
                 // Internal path — go through sandbox
                 if let Some(root) = ctx.workspace_root {
-                    crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, ctx.sender_id, ctx.agent_name)?
+                    crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin)?
                 } else {
                     let _ = super::validate_path(raw_path)?;
                     PathBuf::from(raw_path)
@@ -240,7 +240,7 @@ async fn tool_file_write(input: &Value, ctx: &ToolContext<'_>) -> Result<String,
             }
         }
     } else if let Some(root) = ctx.workspace_root {
-        crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, ctx.sender_id, ctx.agent_name)?
+        crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin)?
     } else {
         let _ = super::validate_path(raw_path)?;
         PathBuf::from(raw_path)
@@ -357,7 +357,7 @@ async fn tool_file_convert(input: &Value, ctx: &ToolContext<'_>) -> Result<Strin
                 Some(Err(e)) => return Err(e),
                 None => {
                     if let Some(root) = ctx.workspace_root {
-                        crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, ctx.sender_id, ctx.agent_name)?
+                        crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin)?
                     } else {
                         let _ = super::validate_path(op)?;
                         PathBuf::from(op)
@@ -365,7 +365,7 @@ async fn tool_file_convert(input: &Value, ctx: &ToolContext<'_>) -> Result<Strin
                 }
             }
         } else if let Some(root) = ctx.workspace_root {
-            crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, ctx.sender_id, ctx.agent_name)?
+            crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin)?
         } else {
             let _ = super::validate_path(op)?;
             PathBuf::from(op)

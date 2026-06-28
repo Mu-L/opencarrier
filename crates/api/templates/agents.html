@@ -61,4 +61,88 @@
   <p style="color:var(--text-dim)">暂无用户</p>
   {% endif %}
 </div>
+
+<div class="card">
+  <h3 style="font-size:16px;margin-bottom:16px">管理权限</h3>
+
+  {% if pending_admins %}
+  <h4 style="font-size:14px;margin-bottom:8px">待审批</h4>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>用户</th><th>申请时间</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for p in pending_admins %}
+        <tr>
+          <td style="font-weight:500">{{ p.sender_name or p.sender_id }}</td>
+          <td style="color:var(--text-dim);font-size:13px">{{ p.requested_at }}</td>
+          <td>
+            <button onclick="approveAdmin('{{ agent.name }}','{{ p.sender_id }}')" class="btn btn-sm btn-primary">批准</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if admins %}
+  <h4 style="font-size:14px;margin-bottom:8px;{% if pending_admins %}margin-top:16px{% endif %}">管理员</h4>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>用户</th><th>角色</th><th>授权时间</th><th>操作</th></tr></thead>
+      <tbody>
+        {% for a in admins %}
+        <tr>
+          <td style="font-weight:500">{{ a.sender_name or a.sender_id }}</td>
+          <td>
+            {% if a.role == "creator" %}
+            <span class="badge badge-green">创建者</span>
+            {% else %}
+            <span class="badge badge-blue">管理员</span>
+            {% endif %}
+          </td>
+          <td style="color:var(--text-dim);font-size:13px">{{ a.approved_at }}</td>
+          <td>
+            {% if a.role != "creator" %}
+            <button onclick="revokeAdmin('{{ agent.name }}','{{ a.sender_id }}')" class="btn btn-sm btn-danger">撤销</button>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if not admins and not pending_admins %}
+  <p style="color:var(--text-dim)">暂无管理员（第一个绑定的用户将自动成为创建者）</p>
+  {% endif %}
+</div>
+
+<script>
+async function approveAdmin(agentName, senderId) {
+  try {
+    const res = await fetch(`/api/clones/${agentName}/admins/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sender_id: senderId })
+    });
+    const data = await res.json();
+    if (data.ok) { location.reload(); }
+    else { alert('审批失败: ' + (data.error || '未知错误')); }
+  } catch (e) { alert('请求失败: ' + e.message); }
+}
+
+async function revokeAdmin(agentName, senderId) {
+  if (!confirm('确定撤销该管理员权限？')) return;
+  try {
+    const res = await fetch(`/api/clones/${agentName}/admins/${encodeURIComponent(senderId)}`, {
+      method: 'DELETE'
+    });
+    const data = await res.json();
+    if (data.ok) { location.reload(); }
+    else { alert('撤销失败: ' + (data.error || '未知错误')); }
+  } catch (e) { alert('请求失败: ' + e.message); }
+}
+</script>
 {% endblock %}

@@ -40,4 +40,5 @@ pub struct ToolContext<'a> {
     pub subagent_configs: Option<&'a [SubagentConfig]>,
     pub channel_type: Option<&'a str>,
     pub max_tool_level: PermissionLevel,
+    pub is_clone_admin: bool,
 }

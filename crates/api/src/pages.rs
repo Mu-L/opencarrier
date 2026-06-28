@@ -191,6 +191,8 @@ pub async fn agents_page(
                 install_count => 0,
                 user_count => 0,
                 users => Vec::<minijinja::Value>::new(),
+                admins => Vec::<minijinja::Value>::new(),
+                pending_admins => Vec::<minijinja::Value>::new(),
             },
         ));
     }
@@ -236,6 +238,8 @@ pub async fn agent_detail_page(
                     install_count => 0,
                     user_count => 0,
                     users => Vec::<minijinja::Value>::new(),
+                    admins => Vec::<minijinja::Value>::new(),
+                    pending_admins => Vec::<minijinja::Value>::new(),
                 },
             ));
         }
@@ -285,6 +289,37 @@ async fn render_clone_detail(
         })
         .collect();
 
+    // Admin data
+    let admins_data = if let Some(ref ws) = entry.manifest.workspace {
+        let admins = runtime::plugin::admin_store::read_admins(std::path::Path::new(ws));
+        let admin_entries: Vec<minijinja::Value> = admins
+            .admins
+            .iter()
+            .map(|a| {
+                minijinja::context! {
+                    sender_id => a.sender_id.clone(),
+                    sender_name => a.sender_name.clone(),
+                    role => a.role.clone(),
+                    approved_at => format_time_ago(&a.approved_at),
+                }
+            })
+            .collect();
+        let pending_entries: Vec<minijinja::Value> = admins
+            .pending
+            .iter()
+            .map(|p| {
+                minijinja::context! {
+                    sender_id => p.sender_id.clone(),
+                    sender_name => p.sender_name.clone(),
+                    requested_at => format_time_ago(&p.requested_at),
+                }
+            })
+            .collect();
+        (admin_entries, pending_entries)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+
     Ok(render(
         "agents.html",
         minijinja::context! {
@@ -303,6 +338,8 @@ async fn render_clone_detail(
             install_count => install_count,
             user_count => user_count,
             users => users,
+            admins => admins_data.0,
+            pending_admins => admins_data.1,
         },
     ))
 }
@@ -369,6 +406,8 @@ pub async fn user_chat_page(
                     install_count => 0,
                     user_count => 0,
                     users => Vec::<minijinja::Value>::new(),
+                    admins => Vec::<minijinja::Value>::new(),
+                    pending_admins => Vec::<minijinja::Value>::new(),
                 },
             ));
         }

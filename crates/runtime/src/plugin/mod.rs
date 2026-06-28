@@ -3,6 +3,7 @@
 //! Channels bridge external messaging platforms to the kernel.
 //! Tools provide platform API capabilities that agents can call.
 
+pub mod admin_store;
 pub mod bridge;
 pub mod builtin;
 pub mod builtin_registry;

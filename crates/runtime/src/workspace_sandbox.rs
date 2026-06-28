@@ -130,6 +130,7 @@ pub fn resolve_sandbox_path_for_write(
     workspace_root: &Path,
     _sender_id: Option<&str>,
     _agent_name: Option<&str>,
+    is_clone_admin: bool,
 ) -> Result<PathBuf, String> {
     let normalized = user_path.replace('\\', "/");
     let path = Path::new(&normalized);
@@ -145,8 +146,8 @@ pub fn resolve_sandbox_path_for_write(
 
     let rel_str = relative.to_string_lossy();
 
-    // Block writes to protected config files
-    if rel_str == "agent.toml" || rel_str == "SOUL.md" {
+    // Block writes to protected config files (unless clone admin)
+    if (rel_str == "agent.toml" || rel_str == "SOUL.md") && !is_clone_admin {
         return Err(format!(
             "Write denied: '{}' is a protected config file (only trainer may modify)",
             rel_str

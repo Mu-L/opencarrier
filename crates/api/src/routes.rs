@@ -6,6 +6,7 @@ pub mod bindings;
 pub mod bots;
 pub mod brain;
 pub mod clones;
+pub mod clone_admins;
 pub mod common;
 pub mod comms;
 pub mod config;

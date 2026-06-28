@@ -177,6 +177,14 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         let effective_exec_policy = manifest.exec_policy.as_ref();
 
         let home_dir_buf = kernel.and_then(|k| k.home_dir());
+
+        // Check if sender is a clone admin
+        let is_clone_admin = if let (Some(sid), Some(root)) = (sender_id, workspace_root) {
+            crate::plugin::admin_store::is_admin(root, sid)
+        } else {
+            false
+        };
+
         let tool_ctx = ToolContext {
             kernel,
             memory: memory_handle,
@@ -205,6 +213,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             },
             channel_type,
             max_tool_level: manifest.max_tool_level,
+            is_clone_admin,
         };
 
         // Timeout-wrapped execution

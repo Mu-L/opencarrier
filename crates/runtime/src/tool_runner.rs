@@ -51,6 +51,7 @@ pub async fn execute_tool(
         channel_type,
         max_tool_level,
         cli_exec_config: _,
+        is_clone_admin: _,
     } = *ctx;
 
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
@@ -366,6 +367,7 @@ mod tests {
             subagent_configs: None,
             channel_type: None,
             max_tool_level: types::tool::PermissionLevel::Write,
+            is_clone_admin: false,
         }
     }
 

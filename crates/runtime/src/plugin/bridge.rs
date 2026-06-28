@@ -372,6 +372,41 @@ impl PluginBridgeManager {
             "Routing plugin message to agent"
         );
 
+        // Auto-assign first sender as creator admin (if admins.json is empty)
+        if !msg.sender_id.is_empty() {
+            if let Some(ws) = self.kernel.resolve_agent_workspace(&agent_id) {
+                let ws_path = std::path::Path::new(&ws);
+                match crate::plugin::admin_store::auto_assign_creator(ws_path, &msg.sender_id, &msg.sender_name) {
+                    Ok(true) => info!(agent = %agent_id, sender = %msg.sender_id, "Auto-assigned creator admin"),
+                    Ok(false) => {}
+                    Err(e) => warn!(agent = %agent_id, error = %e, "Failed to auto-assign creator admin"),
+                }
+            }
+        }
+
+        // Intercept admin permission request
+        let trimmed = text.trim();
+        if trimmed == "申请管理权限" || trimmed == "申请管理员" || trimmed == "申请管理员权限" {
+            if let Some(ws) = self.kernel.resolve_agent_workspace(&agent_id) {
+                let ws_path = std::path::Path::new(&ws);
+                match crate::plugin::admin_store::add_pending(ws_path, &msg.sender_id, &msg.sender_name) {
+                    Ok(()) => {
+                        self.send_response(&msg, "已收到您的管理权限申请，请等待管理员审批。").await;
+                    }
+                    Err(e) if e.contains("already_admin") => {
+                        self.send_response(&msg, "您已经是管理员了。").await;
+                    }
+                    Err(e) if e.contains("already_pending") => {
+                        self.send_response(&msg, "您已提交过申请，请耐心等待审批。").await;
+                    }
+                    Err(_) => {
+                        self.send_response(&msg, "申请提交失败，请稍后再试。").await;
+                    }
+                }
+            }
+            return;
+        }
+
         // Save media data (files and images) to the agent's workspace input/ directory
         let saved_filename = self.save_media_to_input(&msg, &agent_id, &rk).await;
 
