@@ -33,6 +33,12 @@ topic-researcher → outline-writer → article-writer → article-formatter →
 |-------|------|
 | `schedule-chart` | 生成排班表和全天在岗覆盖图，多班次多人可视化 |
 
+## 视频生产
+
+| Skill | 说明 |
+|-------|------|
+| `short-video` | 根据主题生成短视频（研究→脚本→图片→配音→合成），适合小红书/抖音/视频号 |
+
 ## 设计原则
 
 - **系统 skill = 通用工作流**：≥2 个分身会重复用的纯流程，与具体人格/语气无关
