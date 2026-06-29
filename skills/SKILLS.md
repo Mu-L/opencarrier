@@ -27,6 +27,12 @@ topic-researcher → outline-writer → article-writer → article-formatter →
 |-------|------|
 | `charter-quoter` | 包车报价与订单处理（收集信息→查表报价→推送通知→找车队） |
 
+## 餐饮运营
+
+| Skill | 说明 |
+|-------|------|
+| `schedule-chart` | 生成排班表和全天在岗覆盖图，多班次多人可视化 |
+
 ## 设计原则
 
 - **系统 skill = 通用工作流**：≥2 个分身会重复用的纯流程，与具体人格/语气无关
