@@ -7,6 +7,18 @@ use types::tool::{PluginToolDef, PluginToolError, ToolProvider};
 use crate::api;
 use crate::channel::WEIXIN_OA_STATE;
 
+/// Returns true if the error indicates an expired/invalid access_token (WeChat errcode 40001).
+fn is_token_expired(err: &str) -> bool {
+    err.contains("40001")
+}
+
+/// Get a fresh access_token. If a prior call failed with 40001, call this to
+/// invalidate the cache and get a new token for one retry.
+async fn refresh_token(account: &crate::channel::OaAccountState) -> Result<String, String> {
+    account.invalidate_token().await;
+    account.get_token().await
+}
+
 // ---------------------------------------------------------------------------
 // Send image tool
 // ---------------------------------------------------------------------------
@@ -73,7 +85,7 @@ impl ToolProvider for WeixinOaSendImageTool {
             .map_err(|e| PluginToolError::tool(format!("runtime error: {e}")))?;
 
         rt.block_on(async move {
-            let token = account.get_token().await.map_err(PluginToolError::tool)?;
+            let mut token = account.get_token().await.map_err(PluginToolError::tool)?;
 
             let final_media_id = if let Some(mid) = media_id {
                 mid
@@ -106,9 +118,16 @@ impl ToolProvider for WeixinOaSendImageTool {
                 mid
             };
 
-            api::custom_send_image(&account.http, &token, &openid, &final_media_id)
-                .await
-                .map_err(PluginToolError::tool)?;
+            let result = api::custom_send_image(&account.http, &token, &openid, &final_media_id).await;
+            if let Err(e) = result {
+                if is_token_expired(&e) {
+                    token = refresh_token(&account).await.map_err(PluginToolError::tool)?;
+                    api::custom_send_image(&account.http, &token, &openid, &final_media_id).await
+                        .map_err(PluginToolError::tool)?;
+                } else {
+                    return Err(PluginToolError::tool(e));
+                }
+            }
 
             Ok(format!(
                 "Image sent to user {openid} (media_id={final_media_id})"
@@ -202,7 +221,7 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
             .map_err(|e| PluginToolError::tool(format!("runtime error: {e}")))?;
 
         rt.block_on(async move {
-            let token = account.get_token().await.map_err(PluginToolError::tool)?;
+            let mut token = account.get_token().await.map_err(PluginToolError::tool)?;
 
             let final_thumb_media_id = if let Some(mid) = thumb_media_id {
                 mid
@@ -228,11 +247,19 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
                 mid
             };
 
-            api::custom_send_miniprogrampage(
+            let result = api::custom_send_miniprogrampage(
                 &account.http, &token, &openid, &title, &pagepath, &final_thumb_media_id, &mini_appid,
-            )
-            .await
-            .map_err(PluginToolError::tool)?;
+            ).await;
+            if let Err(e) = result {
+                if is_token_expired(&e) {
+                    token = refresh_token(&account).await.map_err(PluginToolError::tool)?;
+                    api::custom_send_miniprogrampage(
+                        &account.http, &token, &openid, &title, &pagepath, &final_thumb_media_id, &mini_appid,
+                    ).await.map_err(PluginToolError::tool)?;
+                } else {
+                    return Err(PluginToolError::tool(e));
+                }
+            }
 
             Ok(format!(
                 "Mini-program card sent to user {openid} (pagepath={pagepath})"
