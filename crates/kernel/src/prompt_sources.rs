@@ -570,13 +570,14 @@ pub async fn classify_skill_with_llm(
     }
 
     // Build classification prompt
-    let mut prompt = String::from(
-        "You are a skill classifier. Given a user message and available skills, respond with ONLY the best-matching skill name or \"none\".\n\nIMPORTANT: Your entire response must be a single skill name (e.g. \"article-writer\") or \"none\". Do NOT explain your reasoning.\n\nAvailable skills:\n",
-    );
+    let mut prompt = String::from("Available skills:\n");
     for (name, description, _) in &skill_summaries {
         prompt.push_str(&format!("- {}: {}\n", name, description));
     }
-    prompt.push_str(&format!("\nUser message: {}\n\nRespond with ONLY the skill name (e.g. article-writer) or none:", message));
+    prompt.push_str(&format!("\nUser message: {}\n\nSkill:", message));
+
+    let system = "You are a skill classifier. Your task: return EXACTLY ONE skill name from the list, or \"none\". Reply with ONLY the skill name (e.g. \"sop-builder\") or \"none\" — nothing else. No explanation, no markdown, no quotes.";
+    let max_tokens: u32 = 20;
 
     // Call LLM for classification
     let request = runtime::llm_driver::CompletionRequest {
@@ -586,9 +587,9 @@ pub async fn classify_skill_with_llm(
             content: types::message::MessageContent::Text(prompt),
         }],
         tools: Vec::new(),
-        max_tokens: 100,
+        max_tokens,
         temperature: 0.0,
-        system: None,
+        system: Some(system.to_string()),
         thinking: None,
         extra: Default::default(),
     };
