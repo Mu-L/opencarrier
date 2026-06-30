@@ -12,6 +12,8 @@ use async_trait::async_trait;
 pub struct AgentInfo {
     pub id: String,
     pub name: String,
+    /// Human-readable Chinese display name (e.g. "小剪"); falls back to `name` when unset.
+    pub display_name: String,
     pub state: String,
     pub modality: String,
     pub model: String,

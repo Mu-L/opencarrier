@@ -207,6 +207,7 @@ impl KernelHandle for CarrierKernel {
                 kernel_handle::AgentInfo {
                     id: e.id.to_string(),
                     name: e.name.clone(),
+                    display_name: e.manifest.display_name.clone(),
                     state: format!("{:?}", e.state),
                     modality,
                     model,
@@ -316,6 +317,7 @@ impl KernelHandle for CarrierKernel {
                 kernel_handle::AgentInfo {
                     id: e.id.to_string(),
                     name: e.name.clone(),
+                    display_name: e.manifest.display_name.clone(),
                     state: format!("{:?}", e.state),
                     modality,
                     model,

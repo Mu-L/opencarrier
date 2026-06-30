@@ -539,47 +539,40 @@ impl PluginBridgeManager {
         let mut lines = Vec::new();
 
         if let Some(ref router) = self.sender_router {
-            let aliases = router.list_aliases(route_key);
+            // Only the clones THIS sender installed — not the global agent registry.
+            let clones = router.list_clones(route_key);
             let current_agent = router.get_route(route_key);
 
-            if !aliases.is_empty() {
-                lines.push("你的助手：".to_string());
-                for (name, agent_id) in &aliases {
-                    let agent_name = agents
-                        .iter()
-                        .find(|a| &a.id == agent_id)
-                        .map(|a| a.name.as_str())
-                        .unwrap_or("?");
-                    let is_current = current_agent.as_ref() == Some(agent_id);
-                    let marker = if is_current { " ★" } else { "" };
-                    lines.push(format!("  {name}（{agent_name}）{marker}"));
-                }
-            }
-
-            // Show agents without aliases
-            let aliased_agents: Vec<String> = aliases.iter().map(|(_, aid)| aid.clone()).collect();
-            let unnamed: Vec<_> = agents
-                .iter()
-                .filter(|a| !aliased_agents.contains(&a.id))
-                .collect();
-            if !unnamed.is_empty() {
-                lines.push(String::new());
-                lines.push("可用但未命名的助手：".to_string());
-                for agent in unnamed {
-                    let is_current = current_agent.as_ref() == Some(&agent.id);
-                    let marker = if is_current { " ★" } else { "" };
-                    let desc = if agent.description.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" — {}", agent.description)
-                    };
-                    lines.push(format!("  {}（{}）{}{marker}", agent.id, agent.name, desc));
-                }
+            lines.push("你的助手：".to_string());
+            for (agent_id, entry) in &clones {
+                // Router keys clones by English name; AgentInfo.name is the same
+                // English name (AgentInfo.id is a UUID and must NOT be used here).
+                let display_name = agents
+                    .iter()
+                    .find(|a| &a.name == agent_id)
+                    .map(|a| a.display_name.clone())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| agent_id.clone());
+                // alias = the personal name the sender gave this clone ("起的名字")
+                let alias = if entry.alias.is_empty() {
+                    "-".to_string()
+                } else {
+                    entry.alias.clone()
+                };
+                let is_current = current_agent.as_ref() == Some(agent_id);
+                let marker = if is_current { " ★" } else { "" };
+                // 起的名字 | 显示的中文名 | 分身id(英文)
+                lines.push(format!("  {alias} | {display_name} | {agent_id}{marker}"));
             }
         } else {
             lines.push("助手列表：".to_string());
             for agent in &agents {
-                lines.push(format!("  {} — {}", agent.name, agent.description));
+                let display = if agent.display_name.is_empty() {
+                    agent.name.clone()
+                } else {
+                    agent.display_name.clone()
+                };
+                lines.push(format!("  - | {} | {}", display, agent.name));
             }
         }
 
