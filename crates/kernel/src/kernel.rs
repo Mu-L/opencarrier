@@ -1152,6 +1152,13 @@ impl CarrierKernel {
             user_profile_summary: sender_id.as_ref().and_then(|sid| {
                 crate::prompt_sources::read_user_profile_summary(&self.config.home_dir, oid, &manifest.name, Some(sid))
             }),
+            // Admin session signal — creator/approved admin per admins.json.
+            // Drives the [管理员会话] prompt section + admin-gated tools.
+            is_admin: manifest
+                .workspace
+                .as_ref()
+                .map(|w| runtime::plugin::admin_store::is_admin(w, sid))
+                .unwrap_or(false),
             clone_system_prompt_md: manifest
                 .workspace
                 .as_ref()

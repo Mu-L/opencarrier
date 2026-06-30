@@ -120,6 +120,29 @@ impl PermissionLevel {
     }
 }
 
+/// Whether a tool requires a clone admin (creator or approved admin) to execute.
+///
+/// This is an **additional gate, orthogonal to `PermissionLevel`**: even when an
+/// agent's `max_tool_level` would permit the tool, these irreversible /
+/// brand-affecting actions still require the caller to be an admin:
+/// - `shell_exec` — arbitrary system command execution
+/// - `*_publish_draft` — publishing content to a public account (e.g.
+///   `mcp_wechat_oa_publish_draft`); drafting (`create_draft`) stays open
+///
+/// Self-evolution tools (`skill_create`, `skill_update`, `knowledge_add`) are
+/// intentionally **not** gated — the clone uses them in its autonomous
+/// judgment/evolution loop. See `docs/ADMIN-MECHANISM.md`.
+pub fn is_admin_gated(name: &str) -> bool {
+    // Strip toolset prefix ("filesystem__shell_exec" → "shell_exec"); mcp_ prefix
+    // is left intact since `*_publish_draft` matches by suffix either way.
+    let base = if let Some(pos) = name.find("__") {
+        &name[pos + 2..]
+    } else {
+        name
+    };
+    base == "shell_exec" || base.ends_with("publish_draft")
+}
+
 /// Definition of a tool that an agent can use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
@@ -475,6 +498,25 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_admin_gated() {
+        // shell_exec and toolset-prefixed variant
+        assert!(is_admin_gated("shell_exec"));
+        assert!(is_admin_gated("filesystem__shell_exec"));
+
+        // publish_draft in any mcp namespace
+        assert!(is_admin_gated("mcp_wechat_oa_publish_draft"));
+        assert!(is_admin_gated("publish_draft"));
+
+        // NOT gated: self-evolution / drafting tools stay open
+        assert!(!is_admin_gated("create_draft"));
+        assert!(!is_admin_gated("skill_create"));
+        assert!(!is_admin_gated("skill_update"));
+        assert!(!is_admin_gated("knowledge_add"));
+        assert!(!is_admin_gated("file_write"));
+        assert!(!is_admin_gated("weixin_oa_send_miniprogram"));
+    }
 
     #[test]
     fn test_tool_definition_serialization() {

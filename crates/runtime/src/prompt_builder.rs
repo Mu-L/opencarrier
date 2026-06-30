@@ -80,6 +80,10 @@ pub struct PromptContext {
     /// User profile summary — preferences, habits, and interaction history
     /// between this clone and the current sender.
     pub user_profile_summary: Option<String>,
+    /// Whether the current sender is a clone admin (creator or approved admin).
+    /// When true, the prompt signals an admin session so the clone accepts
+    /// tuning / internal-task instructions. See docs/ADMIN-MECHANISM.md.
+    pub is_admin: bool,
     // --- Clone identity files (分身特有) ---
     /// Clone's system_prompt.md — behavioral instructions ("你怎么做事").
     /// Only present for agents loaded from .agx with a workspace system_prompt.md.
@@ -368,6 +372,15 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             build_sender_section(ctx.sender_name.as_deref(), ctx.sender_id.as_deref())
         {
             sections.push(sender_line);
+        }
+
+        // Section 9.1.5 — Admin session signal
+        // When the sender is a clone admin, tell the clone it may accept tuning
+        // and internal-task instructions. Non-admins get no line (default serve).
+        if ctx.is_admin {
+            sections.push(
+                "## 管理员会话\n当前对话者是本分身的管理员。可接受调教（纠偏/改规则）与对内任务指令（如写公众号、内部运营）；对外服务时仍遵守客服规范。".to_string(),
+            );
         }
 
         // Section 9.2 — User Profile (multi-tenancy)
@@ -1215,6 +1228,20 @@ mod tests {
         let prompt = build_system_prompt(&ctx);
         assert!(prompt.contains("Alice"));
         assert!(!prompt.contains("don't know the user's name"));
+    }
+
+    #[test]
+    fn test_admin_session_signal() {
+        // Non-admin (default): no admin section
+        let prompt = build_system_prompt(&basic_ctx());
+        assert!(!prompt.contains("管理员会话"));
+
+        // Admin: section present
+        let mut ctx = basic_ctx();
+        ctx.is_admin = true;
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("## 管理员会话"));
+        assert!(prompt.contains("管理员"));
     }
 
     #[test]

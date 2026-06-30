@@ -51,7 +51,7 @@ pub async fn execute_tool(
         channel_type,
         max_tool_level,
         cli_exec_config: _,
-        is_clone_admin: _,
+        is_clone_admin,
     } = *ctx;
 
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
@@ -59,6 +59,23 @@ pub async fn execute_tool(
     let tool_name = normalize_tool_name(tool_name);
 
     let input_ref = input;
+
+    // Admin gate — orthogonal to max_tool_level. A small set of irreversible /
+    // brand-affecting tools (shell execution, publishing to a public account)
+    // require the caller to be a clone admin (creator or approved admin, per
+    // admins.json). Self-evolution tools (skill_create/knowledge_add/create_draft)
+    // are intentionally NOT gated — the clone uses them in its judgment loop.
+    // See docs/ADMIN-MECHANISM.md.
+    if !is_clone_admin && types::tool::is_admin_gated(tool_name) {
+        warn!(tool_name, "Permission denied: admin-gated tool, caller is not a clone admin");
+        return ToolResult {
+            tool_use_id: tool_use_id.to_string(),
+            content: format!(
+                "Permission denied: '{tool_name}' 需要管理员权限，仅分身管理员可执行。"
+            ),
+            is_error: true,
+        };
+    }
 
     // Permission enforcement: reject tools above max_tool_level or Dangerous
     let cli_exec_config = ctx.cli_exec_config.cloned().unwrap_or_default();

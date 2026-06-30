@@ -38,9 +38,18 @@ pub struct NotifyTarget {
     pub channel: String,
     #[serde(default)]
     pub bot_id: String,
+    /// Explicit recipient. Ignored when `recipients == Some("admins")`.
+    #[serde(default)]
     pub user_id: String,
     #[serde(default)]
     pub prefix: Option<String>,
+    /// `"admins"` → fan out to every admin (creator + approved) of the agent
+    /// that produced the reply, using `channel`/`bot_id`/`prefix` as the
+    /// template. Resolved from the agent's `admins.json` at push time, so
+    /// adding/removing admins changes the recipient set automatically.
+    /// Absent → single push to `user_id` (legacy behavior).
+    #[serde(default)]
+    pub recipients: Option<String>,
 }
 
 /// Parse `[NOTIFY:type]content[/NOTIFY]` markers from agent reply text.
@@ -737,21 +746,65 @@ impl PluginBridgeManager {
                             }
                             _ => format!("{content}\n来源用户: {}", original.sender_id),
                         };
-                        let send_fn = send_fn.clone();
+
+                        // Resolve recipient user_ids.
+                        // recipients == "admins" → fan out to every admin of the
+                        // agent that produced this reply (from its admins.json).
+                        // Otherwise → single push to the route's user_id.
+                        let recipient_ids: Vec<String> =
+                            if target.recipients.as_deref() == Some("admins") {
+                                let agent_id = self.resolve_agent(original);
+                                let admins = if !agent_id.is_empty() {
+                                    self.kernel
+                                        .resolve_agent_workspace(&agent_id)
+                                        .map(|ws| {
+                                            crate::plugin::admin_store::read_admins(
+                                                std::path::Path::new(&ws),
+                                            )
+                                            .admins
+                                        })
+                                        .unwrap_or_default()
+                                } else {
+                                    Vec::new()
+                                };
+                                if admins.is_empty() {
+                                    warn!(
+                                        notify_type = %ntype,
+                                        agent = %agent_id,
+                                        "recipients=admins but no admins resolved \
+                                         (agent/workspace unresolved or admins.json empty)"
+                                    );
+                                }
+                                admins.into_iter().map(|a| a.sender_id).collect()
+                            } else if target.user_id.is_empty() {
+                                warn!(
+                                    notify_type = %ntype,
+                                    "Notify route has empty user_id and recipients != admins"
+                                );
+                                Vec::new()
+                            } else {
+                                vec![target.user_id.clone()]
+                            };
+
                         let channel = target.channel.clone();
                         let bot_id = target.bot_id.clone();
-                        let user_id = target.user_id.clone();
-                        info!(
-                            notify_type = %ntype,
-                            target_channel = %channel,
-                            target_user = %user_id,
-                            "Notify marker matched, pushing cross-channel"
-                        );
-                        tokio::task::spawn_blocking(move || {
-                            if let Err(e) = send_fn(&channel, &bot_id, &user_id, &msg) {
-                                error!(%channel, %user_id, error = %e, "Notify push failed");
-                            }
-                        });
+                        for user_id in recipient_ids {
+                            info!(
+                                notify_type = %ntype,
+                                target_channel = %channel,
+                                target_user = %user_id,
+                                "Notify marker matched, pushing cross-channel"
+                            );
+                            let send_fn = send_fn.clone();
+                            let channel = channel.clone();
+                            let bot_id = bot_id.clone();
+                            let msg = msg.clone();
+                            tokio::task::spawn_blocking(move || {
+                                if let Err(e) = send_fn(&channel, &bot_id, &user_id, &msg) {
+                                    error!(%channel, %user_id, error = %e, "Notify push failed");
+                                }
+                            });
+                        }
                     } else {
                         warn!(notify_type = %ntype, "Notify marker has no route in notify_routes.json");
                     }
