@@ -549,6 +549,7 @@ pub async fn classify_skill_with_llm(
     message: &str,
     workspace: &std::path::Path,
     brain: &std::sync::Arc<dyn runtime::llm_driver::Brain>,
+    recent_turns: &[(String, String)],
 ) -> Option<SkillMatch> {
     // Collect skill summaries from two sources, private first so it wins
     // on name collisions with shared system skills:
@@ -574,6 +575,21 @@ pub async fn classify_skill_with_llm(
     for (name, description, _) in &skill_summaries {
         prompt.push_str(&format!("- {}: {}\n", name, description));
     }
+
+    // Include recent conversation context so the classifier can match
+    // follow-up messages in ongoing multi-turn workflows (e.g. charter
+    // quoting: first message "39人包车" → charter-quoter, second message
+    // "138xxxx" needs to re-match charter-quoter via the earlier turn).
+    if !recent_turns.is_empty() {
+        prompt.push_str("\nRecent conversation:\n");
+        for (intent, outcome) in recent_turns.iter().rev().take(2) {
+            prompt.push_str(&format!(
+                "  Turn: {} → {}\n",
+                intent, outcome
+            ));
+        }
+    }
+
     prompt.push_str(&format!("\nUser message: {}\n\nSkill:", message));
 
     let system = "You are a skill classifier. Your task: return EXACTLY ONE skill name from the list, or \"none\". Reply with ONLY the skill name (e.g. \"sop-builder\") or \"none\" — nothing else. No explanation, no markdown, no quotes.";

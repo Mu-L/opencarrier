@@ -150,7 +150,22 @@ impl CarrierKernel {
                 as Arc<dyn runtime::llm_driver::Brain>);
 
         let (auto_matched_skill, skill_max_iterations) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
-            match crate::prompt_sources::classify_skill_with_llm(message, ws, brain).await {
+            // Give the classifier recent conversation context so it can
+            // match follow-up messages in multi-turn workflows (e.g.
+            // charter-quoter after the user sends their phone in turn 2).
+            let recent_turns: Vec<(String, String)> = session
+                .turn_summaries
+                .iter()
+                .rev()
+                .take(2)
+                .rev()
+                .map(|t| {
+                    let intent = if t.user_intent.is_empty() { "(no intent)".to_string() } else { t.user_intent.clone() };
+                    let outcome = if t.assistant_outcome.is_empty() { "(no outcome)".to_string() } else { t.assistant_outcome.clone() };
+                    (intent, outcome)
+                })
+                .collect();
+            match crate::prompt_sources::classify_skill_with_llm(message, ws, brain, &recent_turns).await {
                 Some(skill) => {
                     let skill_name = skill.name.clone();
                     let skill_body = skill.body.clone();
