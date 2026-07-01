@@ -143,8 +143,11 @@ pub(in crate::agent_loop) async fn handle_end_turn(
     // Prune NO_REPLY heartbeat turns to save context budget
     crate::session_repair::prune_heartbeat_turns(&mut session.messages, 10);
 
-    // Generate turn summary for this conversation turn
-    let turn_msgs = &session.messages[session_base_len..];
+    // Generate turn summary for this conversation turn.
+    // Clamp to the current message count — prune_heartbeat_turns may have
+    // removed messages that were included in session_base_len.
+    let base = session_base_len.min(session.messages.len());
+    let turn_msgs = &session.messages[base..];
     if let Some(brain_ref) = brain {
         if let Some(mut summary) =
             super::helpers::generate_turn_summary(turn_msgs, brain_ref).await
