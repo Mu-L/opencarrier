@@ -193,9 +193,11 @@ async fn process_inbound_message(
     http: &reqwest::Client,
 ) {
     if msg.message_type != Some(MSG_TYPE_USER) {
+        tracing::info!(session_key, msg_type = ?msg.message_type, "iLink: skipping non-user message");
         return;
     }
     if msg.message_state != Some(MSG_STATE_FINISH) {
+        tracing::info!(session_key, msg_state = ?msg.message_state, "iLink: skipping non-finished message");
         return;
     }
 
