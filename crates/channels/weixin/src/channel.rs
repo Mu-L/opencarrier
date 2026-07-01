@@ -394,13 +394,17 @@ impl Channel for SessionWatcher {
     fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
         let state = WEIXIN_STATE
             .get_session_for_send(bot_id, user_id)
-            .ok_or_else(|| ChannelError::UnknownBot(format!("No session for bot {bot_id}, user {user_id}")))?;
+            .ok_or_else(|| {
+                tracing::warn!(%bot_id, %user_id, "iLink send: no session found");
+                ChannelError::UnknownBot(format!("No session for bot {bot_id}, user {user_id}"))
+            })?;
 
         if state.is_expired() {
             return Err(ChannelError::TokenFailed(format!("Token expired for bot {bot_id}")));
         }
 
         let context_token = state.get_context_token(user_id).ok_or_else(|| {
+            tracing::warn!(%user_id, "iLink send: no context_token");
             ChannelError::NotSupported(format!("No context_token for user {user_id} — can only reply to received messages"))
         })?;
 
@@ -408,9 +412,11 @@ impl Channel for SessionWatcher {
         let bot_token = state.bot_token.clone();
         let baseurl = state.baseurl.clone();
         let http = state.http.clone();
-        let user_id = user_id.to_string();
+        let user_id_for_send = user_id.to_string();
         let context_token = context_token.to_string();
         let text = text.to_string();
+        let user_id_for_log = user_id.to_string();
+        tracing::info!(user_id = %user_id_for_log, ctx_len = context_token.len(), "iLink send: dispatching");
 
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -429,7 +435,7 @@ impl Channel for SessionWatcher {
                     &http,
                     &bot_token,
                     &baseurl,
-                    &user_id,
+                    &user_id_for_send,
                     &context_token,
                     &client_id,
                     &text,
@@ -441,7 +447,15 @@ impl Channel for SessionWatcher {
         });
 
         rx.recv()
-            .map_err(|e| ChannelError::Other(format!("Send thread disconnected: {e}")))?
+            .map_err(|e| {
+                tracing::warn!(%user_id, "iLink send: thread disconnected: {e}");
+                ChannelError::Other(format!("Send thread disconnected: {e}"))
+            })?
+            .map(|_| tracing::info!(%user_id, "iLink send: delivered OK"))
+            .map_err(|e| {
+                tracing::warn!(%user_id, error = %e, "iLink send: API error");
+                e
+            })
     }
 
     fn stop(&mut self) {
