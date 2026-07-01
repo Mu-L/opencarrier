@@ -373,6 +373,7 @@ impl WeixinState {
             // Load persisted context_tokens from the session file so iLink pushes
             // work after a restart without a fresh inbound message.
             let persisted_ctx = tf.context_tokens.clone();
+            info!(sender_id = %sender_id, ctx_count = persisted_ctx.len(), "Loaded persisted context_tokens from session.json");
             let state = BotSession {
                 bot_id: tf.bot_id.clone(),
                 bot_token: tf.bot_token,
