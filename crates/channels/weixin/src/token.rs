@@ -6,7 +6,6 @@
 use dashmap::DashMap;
 use reqwest::Client;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -75,33 +74,16 @@ impl BotSession {
     }
 
     /// Store a context_token for a user (from an inbound message).
-    /// Also persists to `~/.opencarrier/ilink_context_tokens.json` so the
-    /// token survives service restarts (iLink push needs it to send).
     pub fn store_context_token(&self, user_id: &str, token: &str) {
         self.context_tokens
             .lock()
             .unwrap()
             .insert(user_id.to_string(), token.to_string());
-        persist_context_token(user_id, token);
     }
 
     /// Get the cached context_token for a user.
-    /// Checks the in-memory cache first; if missing (e.g. after a restart),
-    /// falls back to the on-disk backup at `ilink_context_tokens.json`.
     pub fn get_context_token(&self, user_id: &str) -> Option<String> {
-        if let Some(token) = self.context_tokens.lock().unwrap_or_else(|e| e.into_inner()).get(user_id).cloned() {
-            return Some(token);
-        }
-        // After restart the in-memory cache is empty — try the disk backup.
-        // Also re-populate memory so subsequent lookups are fast.
-        if let Some(token) = load_context_token_from_disk(user_id) {
-            self.context_tokens
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(user_id.to_string(), token.clone());
-            return Some(token);
-        }
-        None
+        self.context_tokens.lock().unwrap_or_else(|e| e.into_inner()).get(user_id).cloned()
     }
 
     /// Cache a typing_ticket for a user (valid 24h, we cache for 23h).
@@ -423,38 +405,3 @@ impl WeixinState {
 /// Global singleton for iLink state management.
 pub static WEIXIN_STATE: std::sync::LazyLock<WeixinState> =
     std::sync::LazyLock::new(WeixinState::new);
-
-// ---------------------------------------------------------------------------
-// context_token persistence — survives service restarts so iLink pushes
-// work without requiring a fresh inbound message.
-// ---------------------------------------------------------------------------
-
-fn ilink_context_tokens_path() -> PathBuf {
-    types::config::home_dir().join("ilink_context_tokens.json")
-}
-
-/// Persist one user's context_token to the disk backup.
-fn persist_context_token(user_id: &str, token: &str) {
-    let path = ilink_context_tokens_path();
-    let mut map: HashMap<String, String> = if path.exists() {
-        std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
-    } else {
-        HashMap::new()
-    };
-    map.insert(user_id.to_string(), token.to_string());
-    let _ = std::fs::write(&path, serde_json::to_string(&map).unwrap_or_default());
-}
-
-/// Try to recover a context_token from the disk backup (used after restarts
-/// when the in-memory cache is empty).
-fn load_context_token_from_disk(user_id: &str) -> Option<String> {
-    let path = ilink_context_tokens_path();
-    let map: HashMap<String, String> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-    map.get(user_id).cloned()
-}

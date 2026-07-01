@@ -187,14 +187,11 @@ pub async fn send_message(
         return Err(format!("sendmessage HTTP {status}: {body}"));
     }
 
-    // iLink returns empty JSON or { } on success.
-    let body = resp
+    // iLink returns empty JSON or { } on success
+    let _ = resp
         .text()
         .await
         .map_err(|e| format!("sendmessage read body error: {e}"))?;
-    if !body.is_empty() && body != "{}" {
-        tracing::info!(body = %body, "iLink sendmessage response body");
-    }
 
     Ok(())
 }
