@@ -163,9 +163,12 @@ impl WeixinState {
                 );
                 continue;
             }
+            // Load persisted context_tokens so iLink pushes work after restart.
+            let persisted_ctx = tf.context_tokens.clone();
             info!(
                 user_id = %user_id,
                 expires_in = tf.expires_at - now,
+                ctx_count = persisted_ctx.len(),
                 "Loaded iLink token"
             );
             let state = BotSession {
@@ -176,7 +179,7 @@ impl WeixinState {
                 user_id: Some(user_id.clone()),
                 expires_at: AtomicI64::new(tf.expires_at),
                 http: crate::build_http_client(),
-                context_tokens: Mutex::new(HashMap::new()),
+                context_tokens: Mutex::new(persisted_ctx),
                 typing_tickets: Mutex::new(HashMap::new()),
                 cursor: Mutex::new(String::new()),
                 active: AtomicBool::new(false),
