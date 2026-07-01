@@ -242,6 +242,20 @@ impl WeixinState {
             return;
         }
 
+        // Merge in-memory context_tokens with what's already on disk so a
+        // poll-loop save_session never wipes tokens from another session.
+        let mut merged_ctx = state.context_tokens.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let path = dir.join("session.json");
+        if path.exists() {
+            if let Ok(existing) = std::fs::read_to_string(&path) {
+                if let Ok(existing_tf) = serde_json::from_str::<BotTokenFile>(&existing) {
+                    for (uid, tok) in &existing_tf.context_tokens {
+                        merged_ctx.entry(uid.clone()).or_insert_with(|| tok.clone());
+                    }
+                }
+            }
+        }
+
         let tf = BotTokenFile {
             channel: "weixin".to_string(),
             sender_key: "openid".to_string(),
@@ -252,7 +266,7 @@ impl WeixinState {
             user_id: state.user_id.clone(),
             expires_at: state.expires_at.load(Ordering::Relaxed),
             bind_agent: state.bind_agent.clone(),
-            context_tokens: state.context_tokens.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            context_tokens: merged_ctx,
         };
 
         let path = dir.join("session.json");
@@ -358,14 +372,15 @@ impl WeixinState {
                     existing.bind_agent = tf.bind_agent.clone();
                     self.save_session(&existing);
                 }
-                // Re-populate context_tokens from session file (survives restart).
-                if !tf.context_tokens.is_empty() {
-                    let mut ctx = existing.context_tokens.lock().unwrap_or_else(|e| e.into_inner());
-                    for (uid, tok) in &tf.context_tokens {
-                        ctx.entry(uid.clone()).or_insert_with(|| tok.clone());
-                    }
+                // Restore persisted context_tokens so iLink pushes work after a
+            // restart without a fresh inbound message.
+            {
+                let mut ctx = existing.context_tokens.lock().unwrap_or_else(|e| e.into_inner());
+                for (uid, tok) in &tf.context_tokens {
+                    ctx.entry(uid.clone()).or_insert_with(|| tok.clone());
                 }
-                continue;
+            }
+            continue;
             }
             if now >= tf.expires_at {
                 continue;
