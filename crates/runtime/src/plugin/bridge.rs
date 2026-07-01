@@ -747,11 +747,12 @@ impl PluginBridgeManager {
                             _ => format!("{content}\n来源用户: {}", original.sender_id),
                         };
 
-                        // Resolve recipient user_ids.
-                        // recipients == "admins" → fan out to every admin of the
-                        // agent that produced this reply (from its admins.json).
-                        // Otherwise → single push to the route's user_id.
-                        let recipient_ids: Vec<String> =
+                        // Resolve recipient user_ids with per-recipient channel routing.
+                        // iLink IDs ("xxx@im.wechat") go through the weixin (iLink)
+                        // channel; bare openids go through weixin-oa (customer-send API).
+                        // This ensures every admin receives the push on their actual
+                        // channel regardless of the route's default.
+                        let recipient_ids: Vec<(String, String, String)> =
                             if target.recipients.as_deref() == Some("admins") {
                                 let agent_id = self.resolve_agent(original);
                                 let admins = if !agent_id.is_empty() {
@@ -771,11 +772,19 @@ impl PluginBridgeManager {
                                     warn!(
                                         notify_type = %ntype,
                                         agent = %agent_id,
-                                        "recipients=admins but no admins resolved \
-                                         (agent/workspace unresolved or admins.json empty)"
+                                        "recipients=admins but no admins resolved"
                                     );
                                 }
-                                admins.into_iter().map(|a| a.sender_id).collect()
+                                admins.into_iter().map(|a| {
+                                    // Route by sender_id format:
+                                    //   @im.wechat → iLink (target channel/bot_id)
+                                    //   bare openid → weixin-oa (app_id from original msg)
+                                    if a.sender_id.contains("@im.wechat") {
+                                        (target.channel.clone(), target.bot_id.clone(), a.sender_id)
+                                    } else {
+                                        ("weixin-oa".to_string(), original.bot_id.clone(), a.sender_id)
+                                    }
+                                }).collect()
                             } else if target.user_id.is_empty() {
                                 warn!(
                                     notify_type = %ntype,
@@ -783,12 +792,10 @@ impl PluginBridgeManager {
                                 );
                                 Vec::new()
                             } else {
-                                vec![target.user_id.clone()]
+                                vec![(target.channel.clone(), target.bot_id.clone(), target.user_id.clone())]
                             };
 
-                        let channel = target.channel.clone();
-                        let bot_id = target.bot_id.clone();
-                        for user_id in recipient_ids {
+                        for (channel, bot_id, user_id) in recipient_ids {
                             info!(
                                 notify_type = %ntype,
                                 target_channel = %channel,
@@ -796,8 +803,6 @@ impl PluginBridgeManager {
                                 "Notify marker matched, pushing cross-channel"
                             );
                             let send_fn = send_fn.clone();
-                            let channel = channel.clone();
-                            let bot_id = bot_id.clone();
                             let msg = msg.clone();
                             tokio::task::spawn_blocking(move || {
                                 if let Err(e) = send_fn(&channel, &bot_id, &user_id, &msg) {
