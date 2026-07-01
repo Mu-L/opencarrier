@@ -132,7 +132,15 @@ fn resolve_user_data_path(
     owner_id: Option<&str>,
     agent_name: &str,
 ) -> Option<Result<PathBuf, String>> {
+    // Absolute paths — delegate to the workspace sandbox, which strips the
+    // workspace_root prefix and canonicalizes.  We MUST NOT strip the leading
+    // slash ourselves (that would turn "/home/…/output/file.md" into
+    // "home/…/output/file.md" and join it under the sender's output dir,
+    // creating a malformed nested path).
     let normalized = raw_path.replace('\\', "/");
+    if normalized.starts_with('/') {
+        return None;
+    }
     let rel = normalized.trim_start_matches('/');
 
     // Determine subdirectory and rest-of-path from the user's input
