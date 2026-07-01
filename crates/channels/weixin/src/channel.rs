@@ -206,7 +206,6 @@ async fn process_inbound_message(
 
     if let Some(ctx_token) = &msg.context_token {
         if let Some(state) = WEIXIN_STATE.bots.get(session_key) {
-            info!(from_user = %from_user_id, ctx_token = %ctx_token, "Stored iLink context_token");
             state.store_context_token(&from_user_id, ctx_token);
         }
     }
