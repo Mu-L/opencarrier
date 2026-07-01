@@ -312,4 +312,8 @@ pub struct BotTokenFile {
     pub expires_at: i64,
     /// Optional agent name to bind this channel to.
     pub bind_agent: Option<String>,
+    /// Per-user context_tokens (user_id → token), persisted so iLink
+    /// pushes survive service restarts. Updated on save_session.
+    #[serde(default)]
+    pub context_tokens: std::collections::HashMap<String, String>,
 }

@@ -252,6 +252,7 @@ impl WeixinState {
             user_id: state.user_id.clone(),
             expires_at: state.expires_at.load(Ordering::Relaxed),
             bind_agent: state.bind_agent.clone(),
+            context_tokens: state.context_tokens.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         };
 
         let path = dir.join("session.json");
@@ -357,12 +358,22 @@ impl WeixinState {
                     existing.bind_agent = tf.bind_agent.clone();
                     self.save_session(&existing);
                 }
+                // Re-populate context_tokens from session file (survives restart).
+                if !tf.context_tokens.is_empty() {
+                    let mut ctx = existing.context_tokens.lock().unwrap_or_else(|e| e.into_inner());
+                    for (uid, tok) in &tf.context_tokens {
+                        ctx.entry(uid.clone()).or_insert_with(|| tok.clone());
+                    }
+                }
                 continue;
             }
             if now >= tf.expires_at {
                 continue;
             }
             info!(sender_id = %sender_id, "Dynamic watcher loaded new iLink bot");
+            // Load persisted context_tokens from the session file so iLink pushes
+            // work after a restart without a fresh inbound message.
+            let persisted_ctx = tf.context_tokens.clone();
             let state = BotSession {
                 bot_id: tf.bot_id.clone(),
                 bot_token: tf.bot_token,
@@ -371,7 +382,7 @@ impl WeixinState {
                 user_id: Some(sender_id.clone()),
                 expires_at: AtomicI64::new(tf.expires_at),
                 http: crate::build_http_client(),
-                context_tokens: Mutex::new(HashMap::new()),
+                context_tokens: Mutex::new(persisted_ctx),
                 typing_tickets: Mutex::new(HashMap::new()),
                 cursor: Mutex::new(String::new()),
                 active: AtomicBool::new(false),
