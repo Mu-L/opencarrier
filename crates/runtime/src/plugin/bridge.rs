@@ -185,11 +185,16 @@ async fn handle_publish_marker(
         agent_id: agent_id.to_string(),
         channel_type: channel_type.to_string(),
     };
+    // Draft-only by design: AI-generated content must be human-reviewed before
+    // going public, so we never auto-publish (freepublish). The tool creates the
+    // draft (cover + content); a human publishes from the OA backend after
+    // review. This also avoids the 48001 "api unauthorized" gate that
+    // freepublish requires a verified service account for.
     let mut args = serde_json::json!({
         "app_id": app_id,
         "html_path": abs_html,
         "title": title,
-        "publish": true,
+        "publish": false,
     });
     if let Some(cp) = cover_path {
         args["cover_path"] = serde_json::Value::String(cp);
@@ -219,8 +224,8 @@ async fn handle_publish_marker(
                     "⚠️ 草稿已建,但自动发布失败\n《{title}》\n草稿 media_id:{media_id}\n失败原因:{err}\n→ 请到公众号后台草稿箱手动发布(此账号可能无 freepublish 权限,需认证服务号)"
                 )
             } else {
-                info!(%app_id, %media_id, cover_source = %cover_src, "Draft created (no publish requested)");
-                format!("✅ 草稿已建\n《{title}》\n封面来源:{cover_src}\nmedia_id:{media_id}")
+                info!(%app_id, %media_id, cover_source = %cover_src, "Draft created (awaiting human review)");
+                format!("✅ 草稿已建,待审核\n《{title}》\n封面来源:{cover_src}\n草稿 media_id:{media_id}\n→ 请到公众号后台草稿箱审核后发布")
             }
         }
         Ok(Some(Err(e))) => {
