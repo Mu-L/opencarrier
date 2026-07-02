@@ -1,105 +1,65 @@
 ---
 name: draft-publisher
-description: 将排版好的文章发布到微信公众号草稿箱
-version: 9
+description: 将排版好的文章发布到微信公众号(自动封面+建草稿+发布)
+version: 10
 tools:
   - file_read
-  - image_generate
-  - mcp_wechat_oa_upload_media
-  - mcp_wechat_oa_create_draft
-  - mcp_wechat_oa_list_drafts
-  - mcp_wechat_oa_publish_draft
-  - mcp_wechat_oa_list_materials
 ---
-# Draft Publisher
+# Draft Publisher(AI + API 模式)
 
-将排版好的文章发布到微信公众号草稿箱。本 skill 是系统级共享工作流，所有写作类分身通用；公众号账号、作者署名等个性化信息从 User Profile 读取。
+将排版好的文章发布到微信公众号。**发布动作(生成封面→上传→建草稿→正式发布)由后台确定性 handler 执行,不走 agent 工具链**——你只负责确认文件和发一个标记。这是 2026-07 改造后的稳定方案,取代之前反复失败的 `image_generate`/`mcp_wechat_oa_*` 工具链。
 
-## 工具名规范
+## 你要做的(只有两步)
 
-- 读文件 = `file_read`
-- 微信工具 = `mcp_wechat_oa_` 前缀（如 `mcp_wechat_oa_create_draft`）
+### 1. 确认文件就位
 
-## 公众号凭证
+```
+file_read(path="output/<pipeline_id>/正文.html")   // 排版后的 HTML(必须存在)
+```
 
-**凭证已在 User Profile 的 preferences.wechat_accounts 中自动提供。** JSON 数组：
+确认 `正文.html` 已由 article-formatter 产出。同时确认同目录有 `正文.md`,且**其首行是文章标题**(handler 据此取标题)。
 
+若 `正文.html` 不存在,先回到 article-formatter 排版,不要发标记。
+
+### 2. 取 app_id 并发 PUBLISH 标记
+
+从 User Profile 的 `preferences.wechat_accounts` 取目标公众号的 `app_id`(用户未指定取**第一个**;用户说"发到XX"按 name 匹配)。
+
+**回复的最后一行**发标记(必须是这个精确格式):
+
+```
+[PUBLISH:<app_id>]<正文.html 的路径>[/PUBLISH]
+```
+
+例如:
+```
+[PUBLISH:wx4e35abcebe78a249]output/pipeline-20260702-xxx/正文.html[/PUBLISH]
+```
+
+路径用你 `file_read` 时用的同一个路径(相对 `~/.opencarrier` 或绝对路径都行,handler 都认)。
+
+## 标记之后会发生什么(不用你管)
+
+后台 handler 自动:
+1. 读 `正文.html` 正文 + 同名 `.md` 首行作标题
+2. **生成封面图**(失败则取素材库第一张图,再失败才报错——公众号发布必须有封面)
+3. 建草稿 → 正式发布
+4. 把结果(`✅ 已发布` + media_id/publish_id,或 `❌ 失败原因`)作为新消息推给用户
+
+**你不需要、也不应该**调用 `image_generate`、`mcp_wechat_oa_upload_media`、`mcp_wechat_oa_create_draft`、`mcp_wechat_oa_publish_draft` 等任何发布相关工具。发了标记就够了。
+
+## 凭证
+
+`preferences.wechat_accounts` JSON 数组:
 ```json
 [{"name": "账号名", "app_id": "wx...", "app_secret": "..."}, ...]
 ```
-
-- 用户未指定账号时，取 **第一个** 账号
-- 用户说"发到XX公众号"时，按 name 匹配
-- 如果 preferences 中没有凭证，提示用户提供 app_id 和 app_secret
-
-**不要用 kv_get 获取凭证。** 凭证直接从 User Profile 读取。
-
-## ⚠️ MCP 工具调用规则（2026-06 实测）
-
-**所有 required 参数必须在一次调用中全部传齐。** 缺任何 required 字段都会报 `missing field xxx`。调用前先确认：这个工具有哪些 required 字段？我都备齐了吗？
-
-已知 required 清单：
-
-### `mcp_wechat_oa_create_draft`
-必传：`app_id`, `app_secret`, `title`, `content`, **`need_open_comment`**（0=关闭评论 / 1=开启）
-可选：`author`, `thumb_media_id`
-⚠️ `need_open_comment` 是新增强制字段，漏了会报 `missing field need_open_comment`。
-
-### `mcp_wechat_oa_list_materials`
-必传：`app_id`, `app_secret`, `type`(如 "image"), `count`, **`offset`**（从 0 开始）
-⚠️ `offset` 是强制字段。
-
-### `mcp_wechat_oa_publish_draft`
-必传：`app_id`, `app_secret`, `media_id`
-⚠️ 正式发布，必须用户明确说"发布"才执行。
-
-**不要调用 get_access_token —— token 自动管理。**
-**create_draft 自动执行，publish_draft 需用户确认。**
-
-## Process
-
-### 1. 读取排版结果和标题
-
-从触发 message 提取流水线 ID（如有）：
-
-```
-file_read(path="output/<pipeline_id>/正文.html")   // 排版后 HTML
-file_read(path="output/<pipeline_id>/正文.md")      // Markdown，取首行标题
-```
-
-若 message 无流水线 ID，走交互流程（用户提供 HTML 和标题）。
-
-### 2. 确认账号
-
-从 User Profile preferences.wechat_accounts 取凭证。指定账号名按 name 匹配，否则取第一个。
-
-### 3. 封面图处理
-
-1. **生成封面图**：`image_generate(prompt="与文章标题相关的封面图描述")`
-   - 返回值中 `saved_to` 包含生成的图片路径（如 `output/image_20260627_090232.png`）
-   - **直接用 `saved_to` 的路径上传**：`mcp_wechat_oa_upload_media(file_path=saved_to路径)` 取 media_id
-2. **image_generate 失败** → `mcp_wechat_oa_list_materials(app_id, app_secret, type="image", count=1, offset=0)` 从素材库取最近一张
-3. 都没有 → 跳过 thumb_media_id
-
-### 4. 创建草稿
-
-```
-mcp_wechat_oa_create_draft(
-  app_id, app_secret,
-  title="文章标题",
-  content="HTML 正文",
-  need_open_comment=0,
-  author="<作者署名>",
-  thumb_media_id="封面 media_id"
-)
-```
-
-成功返回 `{"item":[...],"media_id":"..."}`，把 media_id 回报用户。
+你只需要 `app_id` 放进标记;`app_secret` 由 handler 从已注册的 OA 账号自动取,不用你传。
 
 ## Important Principles
 
-- 流水线 ID 从 message 提取，文件从 `output/<pipeline_id>/` 读取
-- 凭证从 User Profile preferences.wechat_accounts 读取，不用 kv_get
-- 多公众号默认取第一个，用户指定按 name 匹配
-- 调用任何 MCP 工具前，先核对 required 字段全部备齐
-- 发布前告知用户这是正式操作
+- 只发**一个** `[PUBLISH:...]` 标记,放回复最后一行
+- 发布前用一句话告知用户「正在发布…」,标记会被自动剥离、用户看不到
+- 标记里的 app_id 必须正确(发错公众号就发错了)
+- `正文.md` 首行必须是标题——这决定发布后的文章标题
+- 不要重复发标记;不要在标记里塞多余内容

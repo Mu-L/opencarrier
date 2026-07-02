@@ -318,6 +318,7 @@ pub async fn run_daemon(
             );
             builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaSendImageTool));
             builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaSendMiniprogramTool));
+            builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaPublishArticleTool));
             dispatcher.register(std::sync::Arc::new(builtin));
         }
 

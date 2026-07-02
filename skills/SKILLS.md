@@ -10,7 +10,8 @@
 | `outline-writer` | 根据素材撰写文章大纲 |
 | `article-writer` | 根据大纲撰写完整 Markdown 文章正文 |
 | `article-formatter` | 将 Markdown 转换为微信公众号兼容的内联样式 HTML |
-| `draft-publisher` | 将排版好的文章发布到微信公众号草稿箱 |
+| `article-publisher` | 流水线 Step 4：排版 + 发 `[PUBLISH:app_id]` 标记，后台自动发布 |
+| `draft-publisher` | 发 `[PUBLISH:app_id]` 标记，后台自动生成封面 + 建草稿 + 发布（AI+API，不走 MCP 工具链） |
 
 ## 流水线顺序
 

@@ -52,29 +52,28 @@ pub struct NotifyTarget {
     pub recipients: Option<String>,
 }
 
-/// Parse `[NOTIFY:type]content[/NOTIFY]` markers from agent reply text.
+/// Parse `[OPEN:key]content[/CLOSE]` markers from agent reply text.
 ///
-/// Returns (list of (type, content), text with markers stripped). Reliable
+/// Returns (list of (key, content), text with markers stripped). Reliable
 /// side-effect trigger — the agent just outputs text, no tool-calling needed.
-fn parse_notify_markers(text: &str) -> (Vec<(String, String)>, String) {
-    let open = "[NOTIFY:";
-    let close = "[/NOTIFY]";
-    let mut notifications = Vec::new();
+/// Used by NOTIFY (cross-channel push) and PUBLISH (article publish).
+fn parse_markers(text: &str, open: &str, close: &str) -> (Vec<(String, String)>, String) {
+    let mut out = Vec::new();
     let mut cleaned = String::new();
     let mut rest = text;
     while let Some(start) = rest.find(open) {
         cleaned.push_str(&rest[..start]);
         let after_open = &rest[start + open.len()..];
-        // type ends at the first ']'
+        // key ends at the first ']'
         match after_open.find(']') {
             Some(type_end) => {
-                let ntype = after_open[..type_end].trim().to_string();
+                let key = after_open[..type_end].trim().to_string();
                 let after_type = &after_open[type_end + 1..];
                 match after_type.find(close) {
                     Some(content_end) => {
                         let content = after_type[..content_end].trim().to_string();
-                        if !ntype.is_empty() {
-                            notifications.push((ntype, content));
+                        if !key.is_empty() {
+                            out.push((key, content));
                         }
                         rest = &after_type[content_end + close.len()..];
                     }
@@ -94,7 +93,138 @@ fn parse_notify_markers(text: &str) -> (Vec<(String, String)>, String) {
         }
     }
     cleaned.push_str(rest);
-    (notifications, cleaned)
+    (out, cleaned)
+}
+
+/// Parse `[NOTIFY:type]content[/NOTIFY]` markers from agent reply text.
+fn parse_notify_markers(text: &str) -> (Vec<(String, String)>, String) {
+    parse_markers(text, "[NOTIFY:", "[/NOTIFY]")
+}
+
+/// Parse `[PUBLISH:app_id]html_path[/PUBLISH]` markers from agent reply text.
+/// Triggers the reliable publish handler (cover → draft → publish) for each.
+fn parse_publish_markers(text: &str) -> (Vec<(String, String)>, String) {
+    parse_markers(text, "[PUBLISH:", "[/PUBLISH]")
+}
+
+/// Resolve the article title: first non-empty line of the sibling `.md` file
+/// (with leading `#` stripped), else the html filename stem.
+fn resolve_article_title(html_path: &str) -> String {
+    let p = std::path::Path::new(html_path);
+    let md = p.with_extension("md");
+    if let Ok(content) = std::fs::read_to_string(&md) {
+        if let Some(line) = content.lines().find(|l| !l.trim().is_empty()) {
+            let t = line.trim().trim_start_matches('#').trim();
+            if !t.is_empty() {
+                return t.to_string();
+            }
+        }
+    }
+    p.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("未命名文章")
+        .to_string()
+}
+
+/// Handle a `[PUBLISH:app_id]html_path[/PUBLISH]` marker: generate a cover,
+/// create a WeChat OA draft, and publish it — all via in-process API (no MCP,
+/// no agent tool-chain; the "AI + API" pattern). Replies to the user with the
+/// result once it completes.
+#[allow(clippy::too_many_arguments)]
+async fn handle_publish_marker(
+    kernel: std::sync::Arc<dyn KernelHandle>,
+    send_fn: Option<ChannelSendFn>,
+    channel_type: &str,
+    bot_id: &str,
+    sender_id: &str,
+    app_id: &str,
+    html_path: &str,
+    agent_id: &str,
+) {
+    // Resolve html_path to absolute (relative → ~/.opencarrier) so both the
+    // title lookup and the publish tool see the same file.
+    let home = kernel.home_dir().unwrap_or_default();
+    let abs_html = if std::path::Path::new(html_path).is_absolute() {
+        html_path.to_string()
+    } else {
+        home.join(html_path).to_string_lossy().to_string()
+    };
+
+    let title = resolve_article_title(&abs_html);
+    let cover_prompt = format!(
+        "WeChat official account article cover image, theme: {title}, flat illustration style, vibrant, clean, no text"
+    );
+
+    // Generate cover into the article's directory. On failure, omit cover_path
+    // and let the publish tool fall back to the material library.
+    let out_dir = std::path::Path::new(&abs_html)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let cover_path = match kernel
+        .generate_image_to_file(&cover_prompt, &out_dir.to_string_lossy())
+        .await
+    {
+        Ok(p) => {
+            info!(cover = %p, "Cover generated for publish");
+            Some(p)
+        }
+        Err(e) => {
+            warn!(error = %e, "Cover generation failed; publish tool will try material-library fallback");
+            None
+        }
+    };
+
+    // Drive the publish tool deterministically.
+    let ctx = types::plugin::PluginToolContext {
+        bot_id: bot_id.to_string(),
+        sender_id: sender_id.to_string(),
+        agent_id: agent_id.to_string(),
+        channel_type: channel_type.to_string(),
+    };
+    let mut args = serde_json::json!({
+        "app_id": app_id,
+        "html_path": abs_html,
+        "title": title,
+        "publish": true,
+    });
+    if let Some(cp) = cover_path {
+        args["cover_path"] = serde_json::Value::String(cp);
+    }
+
+    let result_msg = match kernel.execute_plugin_tool("weixin_oa_publish_article", &args, &ctx) {
+        Some(Ok(body)) => {
+            let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+            let publish_id = v["publish_id"].as_str().unwrap_or("(草稿已建,未发布)");
+            let media_id = v["media_id"].as_str().unwrap_or("?");
+            let cover_src = v["cover_source"].as_str().unwrap_or("?");
+            info!(%app_id, %media_id, %publish_id, cover_source = %cover_src, "Article published via PUBLISH marker");
+            format!(
+                "✅ 文章已发布\n《{title}》\n封面来源:{cover_src}\nmedia_id:{media_id}\npublish_id:{publish_id}"
+            )
+        }
+        Some(Err(e)) => {
+            error!(%app_id, error = %e, "Publish tool failed");
+            format!("❌ 发布失败:{e}")
+        }
+        None => {
+            error!(%app_id, "weixin_oa_publish_article tool not registered in dispatcher");
+            "❌ 发布失败:publish 工具未注册".to_string()
+        }
+    };
+
+    // Push the result back to the user as a follow-up message.
+    if let Some(send_fn) = send_fn {
+        let channel_type = channel_type.to_string();
+        let bot_id = bot_id.to_string();
+        let sender_id = sender_id.to_string();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Err(e) = send_fn(&channel_type, &bot_id, &sender_id, &result_msg) {
+                error!(%channel_type, %sender_id, error = %e, "Publish result reply failed");
+            }
+        })
+        .await;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -822,7 +952,36 @@ impl PluginBridgeManager {
             }
         }
 
-        let response = cleaned.as_str();
+        // Parse [PUBLISH:app_id]html_path[/PUBLISH] markers. Each fires a
+        // reliable publish handler (cover → draft → publish) in the background;
+        // the marker is stripped from the user-facing reply and the result is
+        // pushed as a follow-up message when the publish completes.
+        let (publishes, final_cleaned) = parse_publish_markers(&cleaned);
+        if !publishes.is_empty() {
+            for (app_id, html_path) in &publishes {
+                let kernel = self.kernel.clone();
+                let send_fn = self.channel_send_fn.clone();
+                let channel_type = original.channel_type.clone();
+                let bot_id = original.bot_id.clone();
+                let sender_id = original.sender_id.clone();
+                let agent_id = self.resolve_agent(original);
+                let app_id = app_id.clone();
+                let html_path = html_path.clone();
+                info!(
+                    %app_id, %html_path, %agent_id,
+                    "PUBLISH marker matched, spawning publish handler"
+                );
+                tokio::spawn(async move {
+                    handle_publish_marker(
+                        kernel, send_fn, &channel_type, &bot_id, &sender_id,
+                        &app_id, &html_path, &agent_id,
+                    )
+                    .await;
+                });
+            }
+        }
+
+        let response = final_cleaned.as_str();
         info!(
             channel = %original.channel_type,
             bot = %original.bot_id,

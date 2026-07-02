@@ -221,3 +221,158 @@ pub async fn upload_media_permanent(
     })?;
     Ok((media_id, parsed.url))
 }
+
+/// Create a draft article in the OA draft box (`/cgi-bin/draft/add`).
+///
+/// `thumb_media_id` is the cover image's permanent media_id (required for
+/// publishing later — WeChat freepublish rejects drafts without a cover).
+/// Returns the draft's `media_id`.
+pub async fn add_draft(
+    http: &reqwest::Client,
+    access_token: &str,
+    title: &str,
+    content: &str,
+    thumb_media_id: Option<&str>,
+    author: Option<&str>,
+    digest: Option<&str>,
+) -> Result<String, String> {
+    let url = format!(
+        "{}/cgi-bin/draft/add?access_token={}",
+        WECHAT_API_BASE, access_token
+    );
+    let mut article = serde_json::json!({
+        "article_type": "news",
+        "title": title,
+        "content": content,
+        "author": author.unwrap_or(""),
+        "content_source_url": "",
+        "digest": digest.unwrap_or(""),
+        "need_open_comment": 0,
+        "only_fans_can_comment": 0,
+    });
+    if let Some(tid) = thumb_media_id {
+        if !tid.is_empty() {
+            article["thumb_media_id"] = serde_json::Value::String(tid.to_string());
+        }
+    }
+    let body = serde_json::json!({ "articles": [article] });
+    let resp = http
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("add_draft request failed: {e}"))?;
+    let resp_text = resp
+        .text()
+        .await
+        .map_err(|e| format!("add_draft read body failed: {e}"))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text)
+        .map_err(|e| format!("add_draft parse failed: {e} (body: {resp_text})"))?;
+    let errcode = v["errcode"].as_i64().unwrap_or(0);
+    if errcode != 0 {
+        return Err(format!(
+            "add_draft WeChat error {}: {}",
+            errcode,
+            v["errmsg"].as_str().unwrap_or("?")
+        ));
+    }
+    v["media_id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("add_draft: no media_id (body: {resp_text})"))
+}
+
+/// Submit a draft for publishing (`/cgi-bin/freepublish/submit`).
+///
+/// The draft MUST have a cover (thumb_media_id) or WeChat rejects the publish.
+/// Returns the `publish_id` for status tracking.
+pub async fn freepublish_submit(
+    http: &reqwest::Client,
+    access_token: &str,
+    media_id: &str,
+) -> Result<String, String> {
+    let url = format!(
+        "{}/cgi-bin/freepublish/submit?access_token={}",
+        WECHAT_API_BASE, access_token
+    );
+    let body = serde_json::json!({ "media_id": media_id });
+    let resp = http
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("freepublish request failed: {e}"))?;
+    let resp_text = resp
+        .text()
+        .await
+        .map_err(|e| format!("freepublish read body failed: {e}"))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text)
+        .map_err(|e| format!("freepublish parse failed: {e} (body: {resp_text})"))?;
+    let errcode = v["errcode"].as_i64().unwrap_or(0);
+    if errcode != 0 {
+        return Err(format!(
+            "freepublish WeChat error {}: {}",
+            errcode,
+            v["errmsg"].as_str().unwrap_or("?")
+        ));
+    }
+    v["publish_id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| format!("freepublish: no publish_id (body: {resp_text})"))
+}
+
+/// List permanent materials (`/cgi-bin/material/batchget_material`).
+///
+/// Returns `(media_id, url)` pairs. Used to pick a fallback cover from the
+/// existing image library when generated-cover upload fails.
+pub async fn list_materials(
+    http: &reqwest::Client,
+    access_token: &str,
+    material_type: &str,
+    offset: i64,
+    count: i64,
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let url = format!(
+        "{}/cgi-bin/material/batchget_material?access_token={}",
+        WECHAT_API_BASE, access_token
+    );
+    let body = serde_json::json!({
+        "type": material_type,
+        "offset": offset,
+        "count": count,
+    });
+    let resp = http
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("list_materials request failed: {e}"))?;
+    let resp_text = resp
+        .text()
+        .await
+        .map_err(|e| format!("list_materials read body failed: {e}"))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text)
+        .map_err(|e| format!("list_materials parse failed: {e} (body: {resp_text})"))?;
+    let errcode = v["errcode"].as_i64().unwrap_or(0);
+    if errcode != 0 {
+        return Err(format!(
+            "list_materials WeChat error {}: {}",
+            errcode,
+            v["errmsg"].as_str().unwrap_or("?")
+        ));
+    }
+    let items = v["item"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|it| {
+                    let mid = it["media_id"].as_str()?.to_string();
+                    let url = it["url"].as_str().map(|s| s.to_string());
+                    Some((mid, url))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(items)
+}

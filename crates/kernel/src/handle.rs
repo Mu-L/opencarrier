@@ -731,6 +731,86 @@ impl KernelHandle for CarrierKernel {
         Some(dispatcher.execute(tool_name, args, context))
     }
 
+    async fn generate_image_to_file(
+        &self,
+        prompt: &str,
+        out_dir: &str,
+    ) -> Result<String, String> {
+        use base64::Engine;
+        let brain: Arc<dyn runtime::llm_driver::Brain> =
+            Arc::clone(&*self.brain.brain.read().map_err(|e| format!("Brain lock: {e}"))?)
+                as Arc<dyn runtime::llm_driver::Brain>;
+
+        // Build an image-gen request (mirrors runtime/src/tools/media.rs).
+        let mut extra = serde_json::Map::new();
+        extra.insert("model".to_string(), serde_json::json!("dall-e-3"));
+        extra.insert("size".to_string(), serde_json::json!("1024x1024"));
+        extra.insert("quality".to_string(), serde_json::json!("hd"));
+        extra.insert("n".to_string(), serde_json::json!(1));
+        let request = CompletionRequest {
+            model: String::new(),
+            messages: vec![types::message::Message {
+                role: types::message::Role::User,
+                content: types::message::MessageContent::Text(prompt.to_string()),
+            }],
+            tools: vec![],
+            max_tokens: 0,
+            temperature: 0.0,
+            system: None,
+            thinking: None,
+            extra: serde_json::Value::Object(extra),
+        };
+
+        let response = brain
+            .complete("image", request)
+            .await
+            .map_err(|e| format!("Image generation failed: {e}"))?;
+
+        let image = match response.media {
+            Some(types::media::MediaOutput::Images { items }) => {
+                items.into_iter().next().ok_or("image generation returned empty list")?
+            }
+            Some(types::media::MediaOutput::Image { data, .. }) => types::media::GeneratedImage {
+                data_base64: base64::engine::general_purpose::STANDARD.encode(&data),
+                url: None,
+            },
+            _ => return Err("image generation returned no media".into()),
+        };
+
+        let bytes = if !image.data_base64.is_empty() {
+            base64::engine::general_purpose::STANDARD
+                .decode(&image.data_base64)
+                .map_err(|e| format!("decode image: {e}"))?
+        } else if let Some(url) = image.url {
+            reqwest::Client::new()
+                .get(&url)
+                .timeout(std::time::Duration::from_secs(60))
+                .send()
+                .await
+                .map_err(|e| format!("download image: {e}"))?
+                .bytes()
+                .await
+                .map_err(|e| format!("read image: {e}"))?
+                .to_vec()
+        } else {
+            return Err("image has neither base64 data nor url".into());
+        };
+
+        let out_dir = std::path::PathBuf::from(out_dir);
+        tokio::fs::create_dir_all(&out_dir)
+            .await
+            .map_err(|e| format!("create out_dir: {e}"))?;
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+        let path = out_dir.join(format!("cover_{timestamp}.png"));
+        tokio::fs::write(&path, &bytes)
+            .await
+            .map_err(|e| format!("write image: {e}"))?;
+
+        let path_str = path.to_string_lossy().to_string();
+        tracing::info!(path = %path_str, bytes = bytes.len(), "Cover image generated");
+        Ok(path_str)
+    }
+
 }
 
 // ── MemoryHandle trait implementation ─────────────────────

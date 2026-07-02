@@ -1,11 +1,21 @@
 //! WeChat Official Account plugin tools — built-in, no FFI.
 
 use serde_json::Value;
+use tracing::{info, warn};
 use types::plugin::PluginToolContext;
 use types::tool::{PluginToolDef, PluginToolError, ToolProvider};
 
 use crate::api;
 use crate::channel::WEIXIN_OA_STATE;
+
+/// Resolve a path that may be absolute or relative to `~/.opencarrier`.
+fn resolve_path(p: &str) -> std::path::PathBuf {
+    if p.starts_with('/') {
+        std::path::PathBuf::from(p)
+    } else {
+        types::config::home_dir().join(p)
+    }
+}
 
 /// Returns true if the error indicates an expired/invalid access_token (WeChat errcode 40001).
 fn is_token_expired(err: &str) -> bool {
@@ -264,6 +274,156 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
             Ok(format!(
                 "Mini-program card sent to user {openid} (pagepath={pagepath})"
             ))
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Publish article tool (AI + API pattern — no MCP)
+// ---------------------------------------------------------------------------
+
+/// Publish a formatted HTML article to a WeChat OA: resolve a cover, create a
+/// draft, and optionally submit it for publishing. Driven by the bridge's
+/// `[PUBLISH:app_id]` marker handler, so no agent tool-chain is involved.
+pub struct WeixinOaPublishArticleTool;
+
+impl ToolProvider for WeixinOaPublishArticleTool {
+    fn definition(&self) -> PluginToolDef {
+        PluginToolDef {
+            name: "weixin_oa_publish_article".to_string(),
+            description: "Publish a formatted HTML article to a WeChat Official Account: resolve a cover (upload the given cover_path, else fall back to the first image in the material library), create a draft, and optionally submit it for publishing. Credentials are resolved from the registered OA account for app_id.".to_string(),
+            parameters_json: r#"{"type":"object","properties":{"app_id":{"type":"string","description":"Target OA app_id"},"html_path":{"type":"string","description":"Path to the WeChat-ready HTML article (absolute or relative to ~/.opencarrier)"},"title":{"type":"string","description":"Article title"},"cover_path":{"type":"string","description":"Optional path to a generated cover image. If omitted/upload fails, falls back to the first image in the material library."},"publish":{"type":"boolean","default":true,"description":"Submit the draft for publishing immediately after creation."}},"required":["app_id","html_path","title"]}"#.to_string(),
+        }
+    }
+
+    fn execute(&self, args: &Value, _context: &PluginToolContext) -> Result<String, PluginToolError> {
+        let app_id = args["app_id"]
+            .as_str()
+            .ok_or_else(|| PluginToolError::tool("missing app_id"))?
+            .to_string();
+        let html_path = args["html_path"]
+            .as_str()
+            .ok_or_else(|| PluginToolError::tool("missing html_path"))?
+            .to_string();
+        let title = args["title"]
+            .as_str()
+            .ok_or_else(|| PluginToolError::tool("missing title"))?
+            .to_string();
+        let cover_path = args["cover_path"].as_str().map(|s| s.to_string());
+        let publish = args["publish"].as_bool().unwrap_or(true);
+
+        let account = WEIXIN_OA_STATE
+            .accounts
+            .get(&app_id)
+            .map(|a| a.clone())
+            .ok_or_else(|| {
+                PluginToolError::tool(format!("no weixin-oa account registered for app_id {app_id}"))
+            })?;
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PluginToolError::tool(format!("runtime error: {e}")))?;
+
+        rt.block_on(async move {
+            let mut token = account.get_token().await.map_err(PluginToolError::tool)?;
+
+            // --- Resolve cover (mandatory — WeChat publish requires one) ---
+            // Tier a: upload the generated cover_path. Tier b: first image in
+            // the material library. Both fail → abort (no coverless publish).
+            let mut thumb_media_id: Option<String> = None;
+            let mut cover_source = "none";
+
+            if let Some(cp) = &cover_path {
+                let resolved = resolve_path(cp);
+                match std::fs::read(&resolved) {
+                    Ok(bytes) => {
+                        let filename = resolved
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("cover.png")
+                            .to_string();
+                        match api::upload_media_permanent(&account.http, &token, bytes, &filename).await {
+                            Ok((mid, _)) => {
+                                thumb_media_id = Some(mid);
+                                cover_source = "generated";
+                            }
+                            Err(e) => warn!(error = %e, cover = %resolved.display(), "cover upload failed, falling back to material library"),
+                        }
+                    }
+                    Err(e) => warn!(error = %e, cover = %resolved.display(), "cover file unreadable, falling back to material library"),
+                }
+            }
+
+            if thumb_media_id.is_none() {
+                match api::list_materials(&account.http, &token, "image", 0, 1).await {
+                    Ok(items) => {
+                        if let Some((mid, _url)) = items.first() {
+                            thumb_media_id = Some(mid.clone());
+                            cover_source = "library";
+                            info!(media_id = %mid, "Using material-library image as cover");
+                        }
+                    }
+                    Err(e) => warn!(error = %e, "list_materials cover fallback failed"),
+                }
+            }
+
+            let thumb = thumb_media_id.ok_or_else(|| {
+                PluginToolError::tool(
+                    "封面生成失败且素材库无可用图片,无法发布(WeChat 发布必须有封面)".to_string(),
+                )
+            })?;
+
+            // --- Read article HTML ---
+            let resolved_html = resolve_path(&html_path);
+            let content = std::fs::read_to_string(&resolved_html)
+                .map_err(|e| PluginToolError::tool(format!("failed to read article {resolved_html:?}: {e}")))?;
+
+            // --- Create draft (token retry on 40001) ---
+            let draft_media_id = match api::add_draft(
+                &account.http, &token, &title, &content, Some(&thumb), None, None,
+            )
+            .await
+            {
+                Ok(mid) => mid,
+                Err(e) if is_token_expired(&e) => {
+                    token = refresh_token(&account).await.map_err(PluginToolError::tool)?;
+                    api::add_draft(&account.http, &token, &title, &content, Some(&thumb), None, None)
+                        .await
+                        .map_err(PluginToolError::tool)?
+                }
+                Err(e) => return Err(PluginToolError::tool(e)),
+            };
+            info!(draft_media_id = %draft_media_id, "Draft created");
+
+            // --- Publish (token retry on 40001) ---
+            let publish_id = if publish {
+                match api::freepublish_submit(&account.http, &token, &draft_media_id).await {
+                    Ok(pid) => Some(pid),
+                    Err(e) if is_token_expired(&e) => {
+                        token = refresh_token(&account).await.map_err(PluginToolError::tool)?;
+                        Some(
+                            api::freepublish_submit(&account.http, &token, &draft_media_id)
+                                .await
+                                .map_err(PluginToolError::tool)?,
+                        )
+                    }
+                    Err(e) => return Err(PluginToolError::tool(e)),
+                }
+            } else {
+                None
+            };
+
+            let status = if publish_id.is_some() { "published" } else { "draft" };
+            info!(draft_media_id = %draft_media_id, publish_id = ?publish_id, cover_source, status, "Article publish completed");
+
+            Ok(serde_json::json!({
+                "media_id": draft_media_id,
+                "publish_id": publish_id,
+                "cover_source": cover_source,
+                "status": status,
+            })
+            .to_string())
         })
     }
 }
