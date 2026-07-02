@@ -359,6 +359,55 @@ pub async fn restart_agent(
         })),
     )
 }
+
+/// POST /api/agents/{id}/reset-session — Clear the agent's current session
+/// (auto-saves a summary first) and start a fresh one. Use to unstick an agent
+/// whose session has grown bloated or confused (e.g. stuck in a tool loop).
+pub async fn reset_agent_session(
+    State(state): State<Arc<AppState>>,
+    _extensions: axum::http::Extensions,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let agent_name = entry.name.clone();
+    drop(entry);
+
+    // Cancel any running task first so the reset takes effect cleanly.
+    let was_running = state.kernel.stop_agent_run(agent_id).unwrap_or(false);
+
+    match state.kernel.reset_session(agent_id) {
+        Ok(()) => {
+            tracing::info!(
+                agent = %agent_name,
+                task_cancelled = was_running,
+                "Agent session reset via API"
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "session_reset",
+                    "agent": agent_name,
+                    "agent_id": id,
+                    "task_cancelled": was_running,
+                })),
+            )
+        }
+        Err(e) => {
+            tracing::warn!(agent = %agent_name, error = %e, "reset_session failed via API");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "status": "error",
+                    "agent": agent_name,
+                    "error": e.to_string(),
+                })),
+            )
+        }
+    }
+}
 /// PUT /api/agents/:id/mode — Change an agent's operational mode.
 pub async fn set_agent_mode(
     State(state): State<Arc<AppState>>,
@@ -1320,6 +1369,7 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/agents/{id}/mode", routing::put(set_agent_mode))
         .route("/api/agents/{id}/model", routing::put(set_model))
         .route("/api/agents/{id}/restart", routing::post(restart_agent))
+        .route("/api/agents/{id}/reset-session", routing::post(reset_agent_session))
         .route("/api/agents/{id}/start", routing::post(restart_agent))
         .route("/api/agents/{id}/stop", routing::post(stop_agent))
         .route("/api/agents/{id}/suspend", routing::post(suspend_agent))
