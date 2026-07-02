@@ -397,29 +397,47 @@ impl ToolProvider for WeixinOaPublishArticleTool {
             info!(draft_media_id = %draft_media_id, "Draft created");
 
             // --- Publish (token retry on 40001) ---
-            let publish_id = if publish {
+            // Soft-fail: if the draft was created but freepublish fails (e.g.
+            // 48001 "api unauthorized" — account isn't a verified service
+            // account), return the draft media_id + the error so the caller
+            // can tell the user to publish manually from the OA backend. Don't
+            // discard the successfully-created draft by hard-erroring.
+            let mut publish_id = None;
+            let mut publish_error = None;
+            if publish {
                 match api::freepublish_submit(&account.http, &token, &draft_media_id).await {
-                    Ok(pid) => Some(pid),
+                    Ok(pid) => publish_id = Some(pid),
                     Err(e) if is_token_expired(&e) => {
-                        token = refresh_token(&account).await.map_err(PluginToolError::tool)?;
-                        Some(
-                            api::freepublish_submit(&account.http, &token, &draft_media_id)
-                                .await
-                                .map_err(PluginToolError::tool)?,
-                        )
+                        match refresh_token(&account).await {
+                            Ok(new_tok) => {
+                                match api::freepublish_submit(&account.http, &new_tok, &draft_media_id).await {
+                                    Ok(pid) => publish_id = Some(pid),
+                                    Err(e2) => publish_error = Some(e2),
+                                }
+                            }
+                            Err(e2) => publish_error = Some(e2),
+                        }
                     }
-                    Err(e) => return Err(PluginToolError::tool(e)),
+                    Err(e) => publish_error = Some(e),
                 }
-            } else {
-                None
-            };
+            }
 
-            let status = if publish_id.is_some() { "published" } else { "draft" };
+            let status = if publish_id.is_some() {
+                "published"
+            } else if publish_error.is_some() {
+                "draft_created_publish_failed"
+            } else {
+                "draft"
+            };
+            if let Some(ref err) = publish_error {
+                warn!(draft_media_id = %draft_media_id, error = %err, "Draft created but freepublish failed (account may lack publish permission, e.g. 48001)");
+            }
             info!(draft_media_id = %draft_media_id, publish_id = ?publish_id, cover_source, status, "Article publish completed");
 
             Ok(serde_json::json!({
                 "media_id": draft_media_id,
                 "publish_id": publish_id,
+                "publish_error": publish_error,
                 "cover_source": cover_source,
                 "status": status,
             })

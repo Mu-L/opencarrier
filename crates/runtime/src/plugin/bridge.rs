@@ -206,13 +206,22 @@ async fn handle_publish_marker(
     let result_msg = match tool_result {
         Ok(Some(Ok(body))) => {
             let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
-            let publish_id = v["publish_id"].as_str().unwrap_or("(草稿已建,未发布)");
             let media_id = v["media_id"].as_str().unwrap_or("?");
             let cover_src = v["cover_source"].as_str().unwrap_or("?");
-            info!(%app_id, %media_id, %publish_id, cover_source = %cover_src, "Article published via PUBLISH marker");
-            format!(
-                "✅ 文章已发布\n《{title}》\n封面来源:{cover_src}\nmedia_id:{media_id}\npublish_id:{publish_id}"
-            )
+            if let Some(pid) = v["publish_id"].as_str() {
+                info!(%app_id, %media_id, %pid, cover_source = %cover_src, "Article published via PUBLISH marker");
+                format!(
+                    "✅ 文章已发布\n《{title}》\n封面来源:{cover_src}\nmedia_id:{media_id}\npublish_id:{pid}"
+                )
+            } else if let Some(err) = v["publish_error"].as_str() {
+                warn!(%app_id, %media_id, error = %err, "Draft created but freepublish failed");
+                format!(
+                    "⚠️ 草稿已建,但自动发布失败\n《{title}》\n草稿 media_id:{media_id}\n失败原因:{err}\n→ 请到公众号后台草稿箱手动发布(此账号可能无 freepublish 权限,需认证服务号)"
+                )
+            } else {
+                info!(%app_id, %media_id, cover_source = %cover_src, "Draft created (no publish requested)");
+                format!("✅ 草稿已建\n《{title}》\n封面来源:{cover_src}\nmedia_id:{media_id}")
+            }
         }
         Ok(Some(Err(e))) => {
             error!(%app_id, error = %e, "Publish tool failed");
