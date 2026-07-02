@@ -301,6 +301,18 @@ impl ToolProvider for WeixinOaPublishArticleTool {
             .as_str()
             .ok_or_else(|| PluginToolError::tool("missing app_id"))?
             .to_string();
+        // app_secret comes from the user's own profile (multi-user: each user's
+        // OA credentials live in their own directory). Required — without it we
+        // can't get an access_token.
+        let app_secret = args["app_secret"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                PluginToolError::tool(
+                    "用户资料里没有这个公众号的凭证(app_secret 缺失),请先把公众号 app_id+app_secret 告诉我,我存到你资料里后再发".to_string(),
+                )
+            })?
+            .to_string();
         let html_path = args["html_path"]
             .as_str()
             .ok_or_else(|| PluginToolError::tool("missing html_path"))?
@@ -312,13 +324,10 @@ impl ToolProvider for WeixinOaPublishArticleTool {
         let cover_path = args["cover_path"].as_str().map(|s| s.to_string());
         let publish = args["publish"].as_bool().unwrap_or(true);
 
-        let account = WEIXIN_OA_STATE
-            .accounts
-            .get(&app_id)
-            .map(|a| a.clone())
-            .ok_or_else(|| {
-                PluginToolError::tool(format!("no weixin-oa account registered for app_id {app_id}"))
-            })?;
+        // Build a fresh HTTP client and fetch an access_token directly from the
+        // user-supplied app_id/app_secret — no server-level WEIXIN_OA_STATE
+        // registration needed (publish is outbound, per-user).
+        let http = reqwest::Client::new();
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -326,7 +335,11 @@ impl ToolProvider for WeixinOaPublishArticleTool {
             .map_err(|e| PluginToolError::tool(format!("runtime error: {e}")))?;
 
         rt.block_on(async move {
-            let mut token = account.get_token().await.map_err(PluginToolError::tool)?;
+            let mut token = api::get_access_token(&http, &app_id, &app_secret)
+                .await
+                .map_err(PluginToolError::tool)?
+                .access_token
+                .ok_or_else(|| PluginToolError::tool("get_access_token returned no access_token"))?;
 
             // --- Resolve cover (mandatory — WeChat publish requires one) ---
             // Tier a: upload the generated cover_path. Tier b: first image in
@@ -343,7 +356,7 @@ impl ToolProvider for WeixinOaPublishArticleTool {
                             .and_then(|n| n.to_str())
                             .unwrap_or("cover.png")
                             .to_string();
-                        match api::upload_media_permanent(&account.http, &token, bytes, &filename).await {
+                        match api::upload_media_permanent(&http, &token, bytes, &filename).await {
                             Ok((mid, _)) => {
                                 thumb_media_id = Some(mid);
                                 cover_source = "generated";
@@ -356,7 +369,7 @@ impl ToolProvider for WeixinOaPublishArticleTool {
             }
 
             if thumb_media_id.is_none() {
-                match api::list_materials(&account.http, &token, "image", 0, 1).await {
+                match api::list_materials(&http, &token, "image", 0, 1).await {
                     Ok(items) => {
                         if let Some((mid, _url)) = items.first() {
                             thumb_media_id = Some(mid.clone());
@@ -381,14 +394,18 @@ impl ToolProvider for WeixinOaPublishArticleTool {
 
             // --- Create draft (token retry on 40001) ---
             let draft_media_id = match api::add_draft(
-                &account.http, &token, &title, &content, Some(&thumb), None, None,
+                &http, &token, &title, &content, Some(&thumb), None, None,
             )
             .await
             {
                 Ok(mid) => mid,
                 Err(e) if is_token_expired(&e) => {
-                    token = refresh_token(&account).await.map_err(PluginToolError::tool)?;
-                    api::add_draft(&account.http, &token, &title, &content, Some(&thumb), None, None)
+                    token = api::get_access_token(&http, &app_id, &app_secret)
+                        .await
+                        .map_err(PluginToolError::tool)?
+                        .access_token
+                        .ok_or_else(|| PluginToolError::tool("get_access_token returned no access_token"))?;
+                    api::add_draft(&http, &token, &title, &content, Some(&thumb), None, None)
                         .await
                         .map_err(PluginToolError::tool)?
                 }
@@ -405,17 +422,20 @@ impl ToolProvider for WeixinOaPublishArticleTool {
             let mut publish_id = None;
             let mut publish_error = None;
             if publish {
-                match api::freepublish_submit(&account.http, &token, &draft_media_id).await {
+                match api::freepublish_submit(&http, &token, &draft_media_id).await {
                     Ok(pid) => publish_id = Some(pid),
                     Err(e) if is_token_expired(&e) => {
-                        match refresh_token(&account).await {
-                            Ok(new_tok) => {
-                                match api::freepublish_submit(&account.http, &new_tok, &draft_media_id).await {
-                                    Ok(pid) => publish_id = Some(pid),
-                                    Err(e2) => publish_error = Some(e2),
+                        match api::get_access_token(&http, &app_id, &app_secret).await {
+                            Ok(resp) => match resp.access_token {
+                                Some(new_tok) => {
+                                    match api::freepublish_submit(&http, &new_tok, &draft_media_id).await {
+                                        Ok(pid) => publish_id = Some(pid),
+                                        Err(e2) => publish_error = Some(e2),
+                                    }
                                 }
-                            }
-                            Err(e2) => publish_error = Some(e2),
+                                None => publish_error = Some("get_access_token returned no access_token".to_string()),
+                            },
+                            Err(e2) => publish_error = Some(e2.to_string()),
                         }
                     }
                     Err(e) => publish_error = Some(e),

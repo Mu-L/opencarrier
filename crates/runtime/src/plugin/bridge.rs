@@ -107,6 +107,30 @@ fn parse_publish_markers(text: &str) -> (Vec<(String, String)>, String) {
     parse_markers(text, "[PUBLISH:", "[/PUBLISH]")
 }
 
+/// Read the app_secret for `app_id` from the sender's own profile.json
+/// (preferences.wechat_accounts array). Multi-user: each user's OA credentials
+/// live in their own directory; find the matching entry by app_id. Returns
+/// None if the profile or that account isn't configured.
+fn read_wechat_app_secret(
+    home: &std::path::Path,
+    sender_id: &str,
+    agent_id: &str,
+    app_id: &str,
+) -> Option<String> {
+    let profile_path =
+        types::config::sender_data_dir(home, sender_id, agent_id, Some(sender_id))
+            .join("profile.json");
+    let content = std::fs::read_to_string(&profile_path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let accounts = v["preferences"]["wechat_accounts"].as_array()?;
+    for acct in accounts {
+        if acct["app_id"].as_str() == Some(app_id) {
+            return acct["app_secret"].as_str().map(|s| s.to_string());
+        }
+    }
+    None
+}
+
 /// Resolve the article title: first non-empty line of the sibling `.md` file
 /// (with leading `#` stripped), else the html filename stem.
 fn resolve_article_title(html_path: &str) -> String {
@@ -178,6 +202,11 @@ async fn handle_publish_marker(
         }
     };
 
+    // Read app_secret from the user's OWN profile (multi-user: each user's OA
+    // credentials live in their own directory). Find by app_id in the
+    // wechat_accounts array. Empty if not configured — the tool reports it.
+    let app_secret = read_wechat_app_secret(&home, sender_id, agent_id, app_id);
+
     // Drive the publish tool deterministically.
     let ctx = types::plugin::PluginToolContext {
         bot_id: bot_id.to_string(),
@@ -192,6 +221,7 @@ async fn handle_publish_marker(
     // freepublish requires a verified service account for.
     let mut args = serde_json::json!({
         "app_id": app_id,
+        "app_secret": app_secret.unwrap_or_default(),
         "html_path": abs_html,
         "title": title,
         "publish": false,
