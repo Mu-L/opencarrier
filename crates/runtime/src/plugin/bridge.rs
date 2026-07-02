@@ -192,8 +192,16 @@ async fn handle_publish_marker(
         args["cover_path"] = serde_json::Value::String(cp);
     }
 
-    let result_msg = match kernel.execute_plugin_tool("weixin_oa_publish_article", &args, &ctx) {
-        Some(Ok(body)) => {
+    // The publish tool internally block_on's its own runtime (like the other OA
+    // tools), so it MUST run on a spawn_blocking thread — calling it directly on
+    // an async runtime worker panics ("cannot start a runtime from within a runtime").
+    let tool_result = tokio::task::spawn_blocking(move || {
+        kernel.execute_plugin_tool("weixin_oa_publish_article", &args, &ctx)
+    })
+    .await;
+
+    let result_msg = match tool_result {
+        Ok(Some(Ok(body))) => {
             let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
             let publish_id = v["publish_id"].as_str().unwrap_or("(草稿已建,未发布)");
             let media_id = v["media_id"].as_str().unwrap_or("?");
@@ -203,13 +211,17 @@ async fn handle_publish_marker(
                 "✅ 文章已发布\n《{title}》\n封面来源:{cover_src}\nmedia_id:{media_id}\npublish_id:{publish_id}"
             )
         }
-        Some(Err(e)) => {
+        Ok(Some(Err(e))) => {
             error!(%app_id, error = %e, "Publish tool failed");
             format!("❌ 发布失败:{e}")
         }
-        None => {
+        Ok(None) => {
             error!(%app_id, "weixin_oa_publish_article tool not registered in dispatcher");
             "❌ 发布失败:publish 工具未注册".to_string()
+        }
+        Err(join_err) => {
+            error!(%app_id, error = %join_err, "Publish task panicked");
+            "❌ 发布失败:内部任务异常".to_string()
         }
     };
 
