@@ -188,10 +188,26 @@ pub(in crate::agent_loop) async fn call_with_retry(
             None => std::time::Duration::from_secs(PER_LLM_CALL_TIMEOUT_SECS),
         };
 
+        // The agent loop always streams internally. `stream_tx` only controls
+        // whether incremental events are ALSO forwarded to a consumer (e.g. the
+        // dashboard SSE/WS client). When there is no consumer we still stream —
+        // draining into an internal sink — so every call (including all channel
+        // production traffic) benefits from streaming's idle-timeout resilience
+        // instead of non-streaming's 60s header timeout. See
+        // docs/STREAMING-UNIFICATION.md.
         let call = async {
             match &stream_tx {
                 Some(tx) => driver.stream(request.clone(), tx.clone()).await,
-                None => driver.complete(request.clone()).await,
+                None => {
+                    let (drain_tx, mut drain_rx) =
+                        mpsc::channel::<StreamEvent>(64);
+                    let drain = tokio::spawn(async move {
+                        while drain_rx.recv().await.is_some() {}
+                    });
+                    let result = driver.stream(request.clone(), drain_tx).await;
+                    drain.abort();
+                    result
+                }
             }
         };
 
@@ -236,28 +252,23 @@ pub(in crate::agent_loop) async fn call_with_retry(
             None
         };
 
-        // Streaming mode uses a higher wall-clock timeout to allow long generations,
-        // but still caps total time to prevent indefinite hangs (keepalive bytes can
-        // defeat the per-chunk idle timeout). Non-streaming uses the standard timeout.
-        let timeout = if stream_tx.is_some() {
-            std::cmp::min(
-                per_call_timeout,
-                std::time::Duration::from_secs(STREAM_WALL_CLOCK_TIMEOUT_SECS),
-            )
-        } else {
-            per_call_timeout
-        };
-        let is_stream = stream_tx.is_some();
+        // The loop always streams now (see call above), so always use the
+        // streaming wall-clock cap: long generations are allowed as long as the
+        // stream keeps producing tokens, but a total upper bound still prevents
+        // indefinite hangs (keepalive bytes can defeat the per-chunk idle).
+        let timeout = std::cmp::min(
+            per_call_timeout,
+            std::time::Duration::from_secs(STREAM_WALL_CLOCK_TIMEOUT_SECS),
+        );
         let result = match tokio::time::timeout(timeout, call).await {
             Ok(r) => r,
             Err(_) => {
-                warn!(attempt, timeout_secs = timeout.as_secs(), is_stream, "LLM call timed out");
+                warn!(attempt, timeout_secs = timeout.as_secs(), "LLM call timed out (wall-clock)");
                 last_error = Some("LLM call timed out".to_string());
                 if attempt == MAX_RETRIES {
                     return Err(CarrierError::LlmDriver(format!(
-                        "LLM call timed out after {}s{} — server may be unresponsive",
-                        timeout.as_secs(),
-                        if is_stream { " (wall-clock)" } else { "" }
+                        "LLM call timed out after {}s (wall-clock) — server may be unresponsive",
+                        timeout.as_secs()
                     )));
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(

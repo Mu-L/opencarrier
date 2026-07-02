@@ -680,10 +680,23 @@ const STREAM_IDLE_TIMEOUT_SECS: u64 = 120;
 /// stalled — byte-level idle timeout cannot detect this.
 const STREAM_CONTENT_IDLE_SECS: u64 = 120;
 
+/// First-token timeout: max seconds to wait for the FIRST genuine token of a
+/// stream before declaring the upstream stalled and retrying. Tighter than the
+/// inter-chunk idle because a genuinely-responsive model emits its first token
+/// quickly even when it will think for a while; only a truly stalled upstream
+/// (accepted the connection, produces nothing) blows this. Replaces the old
+/// non-streaming "60s header" stall detection with streaming's "20s first
+/// token". See AginxBrain spec §6 and docs/STREAMING-UNIFICATION.md.
+const STREAM_FIRST_TOKEN_SECS: u64 = 20;
+
 /// Read the next chunk, racing against BOTH:
 /// - byte-level idle (no bytes at all for STREAM_IDLE_TIMEOUT_SECS)
-/// - content-level idle (no meaningful token output for STREAM_CONTENT_IDLE_SECS,
+/// - content-level idle (no meaningful token output for `content_idle`,
 ///   even if keepalive bytes keep the connection nominally alive)
+///
+/// `content_idle` is the active content-idle budget: callers pass the tighter
+/// STREAM_FIRST_TOKEN_SECS before the first genuine token arrives, then the
+/// looser STREAM_CONTENT_IDLE_SECS once the stream is producing tokens.
 ///
 /// The content idle is a `tokio::select!` branch with its own sleep timer,
 /// so it fires independently of whether `stream.next()` ever resolves —
@@ -693,6 +706,7 @@ const STREAM_CONTENT_IDLE_SECS: u64 = 120;
 async fn next_chunk_with_timeouts(
     stream: &mut (impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin),
     last_content_at: std::time::Instant,
+    content_idle: std::time::Duration,
 ) -> Result<Option<bytes::Bytes>, LlmError> {
     // How long since the last genuine token output.
     let content_elapsed = last_content_at.elapsed();
@@ -702,16 +716,15 @@ async fn next_chunk_with_timeouts(
     // timer can fire, select! would always pick the ready chunk branch
     // and the sleep branch would never win. Checking here (before select!)
     // guarantees the timeout fires regardless of keepalive cadence.
-    if content_elapsed >= std::time::Duration::from_secs(STREAM_CONTENT_IDLE_SECS) {
+    if content_elapsed >= content_idle {
         return Err(LlmError::Http(format!(
             "Streaming content idle timeout: no token output in {}s \
              (only keepalive frames). The upstream LLM appears stalled.",
-            STREAM_CONTENT_IDLE_SECS
+            content_idle.as_secs()
         )));
     }
     // How long until content idle fires (since last genuine token output).
-    let content_remaining = std::time::Duration::from_secs(STREAM_CONTENT_IDLE_SECS)
-        .saturating_sub(content_elapsed);
+    let content_remaining = content_idle.saturating_sub(content_elapsed);
     // Byte idle is the outer cap; content idle is usually tighter.
     let byte_cap = std::time::Duration::from_secs(STREAM_IDLE_TIMEOUT_SECS);
     let idle_cap = std::cmp::min(content_remaining, byte_cap);
@@ -728,7 +741,7 @@ async fn next_chunk_with_timeouts(
                 Err(LlmError::Http(format!(
                     "Streaming content idle timeout: no token output in {}s \
                      (only keepalive frames). The upstream LLM appears stalled.",
-                    STREAM_CONTENT_IDLE_SECS
+                    content_idle.as_secs()
                 )))
             } else {
                 Err(LlmError::Http(format!(
@@ -838,9 +851,24 @@ impl LlmDriver for UnifiedHttpDriver {
         // receive genuine token output (text/reasoning/tool_call delta
         // — NOT empty `{"choices":[{"delta":{}}]}` frames).
         let mut last_content_at = std::time::Instant::now();
+        // Whether we have seen the first genuine token yet. Until then we use
+        // a tighter first-token budget (STREAM_FIRST_TOKEN_SECS) so a stalled
+        // upstream is detected quickly and retried, instead of waiting the full
+        // inter-chunk idle. Flipped to true on the first real token.
+        let mut got_first_token = false;
 
         let mut byte_stream = resp.bytes_stream();
-        while let Some(chunk) = next_chunk_with_timeouts(&mut byte_stream, last_content_at).await? {
+        while let Some(chunk) = next_chunk_with_timeouts(
+            &mut byte_stream,
+            last_content_at,
+            if got_first_token {
+                std::time::Duration::from_secs(STREAM_CONTENT_IDLE_SECS)
+            } else {
+                std::time::Duration::from_secs(STREAM_FIRST_TOKEN_SECS)
+            },
+        )
+        .await?
+        {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
@@ -948,6 +976,11 @@ impl LlmDriver for UnifiedHttpDriver {
                 // final frame.
                 if got_real_content || finish_reason.is_some() {
                     last_content_at = std::time::Instant::now();
+                    // First genuine token switches us from the tight first-token
+                    // budget to the looser inter-chunk idle budget.
+                    if got_real_content {
+                        got_first_token = true;
+                    }
                 }
             }
         }
