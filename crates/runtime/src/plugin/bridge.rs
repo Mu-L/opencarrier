@@ -141,13 +141,16 @@ async fn handle_publish_marker(
     html_path: &str,
     agent_id: &str,
 ) {
-    // Resolve html_path to absolute (relative → ~/.opencarrier) so both the
-    // title lookup and the publish tool see the same file.
+    // Resolve html_path to absolute, mirroring how the agent's file_read
+    // resolves relative paths: under the per-sender workspace
+    // (workspaces/<agent>/senders/<sender>/), NOT ~/.opencarrier. Absolute
+    // paths are used as-is.
     let home = kernel.home_dir().unwrap_or_default();
     let abs_html = if std::path::Path::new(html_path).is_absolute() {
         html_path.to_string()
     } else {
-        home.join(html_path).to_string_lossy().to_string()
+        let base = types::config::sender_data_dir(&home, sender_id, agent_id, Some(sender_id));
+        base.join(html_path).to_string_lossy().to_string()
     };
 
     let title = resolve_article_title(&abs_html);
