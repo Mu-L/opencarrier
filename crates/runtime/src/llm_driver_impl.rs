@@ -314,16 +314,23 @@ impl UnifiedHttpDriver {
     fn build_oai_request(&self, request: &CompletionRequest) -> OaiRequest {
         let mut messages = self.build_oai_messages(request);
 
-        // Sanitize tool_call arguments: strict providers reject
-        // non-JSON arguments like "null", empty strings, or malformed JSON.
+        // Sanitize tool_call arguments AND names: strict providers reject
+        // non-JSON arguments like "null", empty strings, or malformed JSON, and
+        // reject function_call entries with an empty name ("Invalid 'name' for
+        // function_call"). An empty name can sneak in from a gateway streaming
+        // edge case (see AginxBrain spec §5.4) and persist in session history;
+        // dropping the call here (and its paired tool_result below) repairs both
+        // new and historically-poisoned sessions.
         let mut removed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for msg in &mut messages {
             if let Some(calls) = &mut msg.tool_calls {
                 calls.retain(|tc| {
+                    let name_valid = !tc.function.name.is_empty();
                     let args = tc.function.arguments.trim();
-                    let valid = !args.is_empty() && args != "null" && serde_json::from_str::<serde_json::Value>(args).is_ok();
+                    let args_valid = !args.is_empty() && args != "null" && serde_json::from_str::<serde_json::Value>(args).is_ok();
+                    let valid = name_valid && args_valid;
                     if !valid {
-                        warn!(tool = %tc.function.name, raw_args = %tc.function.arguments, "Removing tool_call with invalid arguments from request");
+                        warn!(tool = %tc.function.name, raw_args = %tc.function.arguments, "Removing tool_call with invalid name or arguments from request");
                         removed_ids.insert(tc.id.clone());
                     }
                     valid
@@ -498,6 +505,16 @@ impl UnifiedHttpDriver {
 
         if let Some(calls) = choice.message.tool_calls {
             for call in calls {
+                // Defensive: skip tool_calls with an empty name (see streaming
+                // path for rationale) — they can't execute and poison history.
+                if call.function.name.is_empty() {
+                    warn!(
+                        id = %call.id,
+                        args_len = call.function.arguments.len(),
+                        "Dropping non-streamed tool_call with empty name; skipping to keep history valid"
+                    );
+                    continue;
+                }
                 let input: serde_json::Value = serde_json::from_str(&call.function.arguments).unwrap_or_default();
                 content.push(ContentBlock::ToolUse {
                     id: call.id.clone(),
@@ -1012,6 +1029,21 @@ impl LlmDriver for UnifiedHttpDriver {
         }
 
         for (id, name, args_json) in &tool_accum {
+            // Defensive: a tool_call must have a name. The gateway occasionally
+            // drops the function.name delta in streamed tool_calls (an edge case
+            // of the SSE tool-call conversion — see AginxBrain spec §5.4),
+            // leaving an empty name. Such a call cannot be executed and, worse,
+            // poisons the conversation history: the next request echoes it back
+            // and the API rejects it with "Invalid 'name' for function_call".
+            // Skip it and warn so we can tell if this becomes frequent.
+            if name.is_empty() {
+                warn!(
+                    id = %id,
+                    args_len = args_json.len(),
+                    "Dropping streamed tool_call with empty name (gateway dropped the name delta); skipping to keep history valid"
+                );
+                continue;
+            }
             let input: serde_json::Value = serde_json::from_str(args_json)
                 .unwrap_or(serde_json::Value::Object(Default::default()));
             content.push(ContentBlock::ToolUse {
@@ -1028,7 +1060,7 @@ impl LlmDriver for UnifiedHttpDriver {
             }).await;
         }
 
-        if content.is_empty() && tool_accum.is_empty() {
+        if content.is_empty() && tool_calls.is_empty() {
             content.push(ContentBlock::Text { text: text_content.clone(), provider_metadata: None });
         }
 
@@ -1036,7 +1068,7 @@ impl LlmDriver for UnifiedHttpDriver {
             Some("stop") => StopReason::EndTurn,
             Some("tool_calls") => StopReason::ToolUse,
             Some("length") => StopReason::MaxTokens,
-            _ => if !tool_accum.is_empty() { StopReason::ToolUse } else { StopReason::EndTurn },
+            _ => if !tool_calls.is_empty() { StopReason::ToolUse } else { StopReason::EndTurn },
         };
 
         if usage.output_tokens == 0 && (!content.is_empty() || !tool_accum.is_empty()) {
