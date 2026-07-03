@@ -26,6 +26,26 @@ pub(in crate::agent_loop) enum EndTurnAction {
     Complete(AgentLoopResult),
 }
 
+/// Count consecutive trailing assistant "[no response]" messages — each is a
+/// previous empty-response retry marker. Used to detect sustained gateway
+/// silent failures and stop retrying before the session bloats into a loop.
+fn count_trailing_retries(messages: &[Message]) -> usize {
+    let mut count = 0;
+    for m in messages.iter().rev() {
+        if matches!(m.role, types::message::Role::Assistant) {
+            if matches!(&m.content, types::message::MessageContent::Text(t) if t == "[no response]")
+            {
+                count += 1;
+            } else {
+                break; // a different assistant message ends the streak
+            }
+        }
+        // Non-assistant messages (user "Please respond" prompts, tool results)
+        // between retries don't break the streak.
+    }
+    count
+}
+
 /// Handle a `StopReason::EndTurn | StopReason::StopSequence` response.
 ///
 /// Returns an `EndTurnAction` indicating whether the loop should retry
@@ -91,22 +111,29 @@ pub(in crate::agent_loop) async fn handle_end_turn(
         }));
     }
 
-    // One-shot retry: if the LLM returns empty text with no tool use,
-    // try once more before accepting the empty result.
-    // Triggers on first call OR when the response looks bogus. input_tokens==0
-    // with a real conversation is impossible — it means the gateway returned a
-    // malformed response (didn't process the input, often with under-reported
-    // usage like output_tokens=2). Treat input==0 as a silent failure regardless
-    // of output_tokens, and retry once.
+    // One-shot retry with sustained-failure protection: if the LLM returns
+    // empty text with no tool use, try once more before accepting the empty
+    // result. Triggers on first call OR when input_tokens==0 (silent gateway
+    // failure — the response looks bogus and input wasn't processed).
+    //
+    // To avoid session bloat when the gateway is sustained-broken (each retry
+    // adds two messages, and if retries keep failing we loop until max_iters),
+    // count trailing "[no response]" markers already in the history and stop
+    // after MAX_SILENT_RETRIES consecutive silent failures.
     if text.trim().is_empty() && response.tool_calls.is_empty() {
         let is_silent_failure = response.usage.input_tokens == 0;
-        if iteration == 0 || is_silent_failure {
+        let trailing_retries = count_trailing_retries(messages);
+        const MAX_SILENT_RETRIES: usize = 2; // 3 total attempts, then give up
+        let exhausted = is_silent_failure && trailing_retries >= MAX_SILENT_RETRIES;
+        let should_retry = (iteration == 0 || is_silent_failure) && !exhausted;
+        if should_retry {
             warn!(
                 agent = %manifest.name,
                 iteration,
                 input_tokens = response.usage.input_tokens,
                 output_tokens = response.usage.output_tokens,
                 silent_failure = is_silent_failure,
+                trailing_retries,
                 "Empty response , retrying once"
             );
             // Re-validate messages before retry — the history may have
@@ -117,6 +144,16 @@ pub(in crate::agent_loop) async fn handle_end_turn(
             messages.push(Message::assistant("[no response]".to_string()));
             messages.push(Message::user("Please provide your response.".to_string()));
             return Ok(EndTurnAction::Retry);
+        }
+        if exhausted {
+            warn!(
+                agent = %manifest.name,
+                iteration,
+                trailing_retries,
+                messages_count = messages.len(),
+                "Silent gateway failure persisted across {} retries; stopping to avoid session bloat, falling back",
+                trailing_retries,
+            );
         }
     }
 
