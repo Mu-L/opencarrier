@@ -294,7 +294,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             result.response
         );
         assert!(
-            result.response.contains("Task completed"),
+            result.response.contains("已执行操作"),
             "Expected fallback message, got: {:?}",
             result.response
         );
@@ -507,7 +507,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
             result.response
         );
         assert!(
-            result.response.contains("Task completed"),
+            result.response.contains("已执行操作"),
             "Expected fallback message in streaming, got: {:?}",
             result.response
         );
@@ -681,7 +681,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
         // No tools were executed, so should get the empty response message
         assert!(
-            result.response.contains("empty response"),
+            result.response.contains("没有返回内容"),
             "Expected empty response fallback (no tools executed), got: {:?}",
             result.response
         );

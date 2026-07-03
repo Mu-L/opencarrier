@@ -93,10 +93,13 @@ pub(in crate::agent_loop) async fn handle_end_turn(
 
     // One-shot retry: if the LLM returns empty text with no tool use,
     // try once more before accepting the empty result.
-    // Triggers on first call OR when input_tokens=0 (silently failed request).
+    // Triggers on first call OR when the response looks bogus. input_tokens==0
+    // with a real conversation is impossible — it means the gateway returned a
+    // malformed response (didn't process the input, often with under-reported
+    // usage like output_tokens=2). Treat input==0 as a silent failure regardless
+    // of output_tokens, and retry once.
     if text.trim().is_empty() && response.tool_calls.is_empty() {
-        let is_silent_failure =
-            response.usage.input_tokens == 0 && response.usage.output_tokens == 0;
+        let is_silent_failure = response.usage.input_tokens == 0;
         if iteration == 0 || is_silent_failure {
             warn!(
                 agent = %manifest.name,
@@ -128,10 +131,10 @@ pub(in crate::agent_loop) async fn handle_end_turn(
             "Empty response from LLM  — guard activated"
         );
         if any_tools_executed {
-            "[Task completed — the agent executed tools but did not produce a text summary.]"
+            "(已执行操作,但这次没能生成回复文字。请稍后重试,或重新说一下你的需求。)"
                 .to_string()
         } else {
-            "[The model returned an empty response. This usually means the model is overloaded, the context is too large, or the API key lacks credits. Try again or check /status.]"
+            "(模型这次没有返回内容,可能是服务繁忙或上下文过长。请稍后重试,或简化一下你的请求。)"
                 .to_string()
         }
     } else {
