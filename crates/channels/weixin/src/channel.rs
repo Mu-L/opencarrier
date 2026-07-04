@@ -361,8 +361,10 @@ impl Channel for SessionWatcher {
     }
 
     fn supports_proactive_push(&self) -> bool {
-        // iLink replies require a context_token from a recent inbound message.
-        false
+        // iLink can push proactively when a context_token is available
+        // (persisted in session.json). The send() method returns an error
+        // when no context_token exists, and the caller falls back to buffering.
+        true
     }
 
     fn name(&self) -> &str {
