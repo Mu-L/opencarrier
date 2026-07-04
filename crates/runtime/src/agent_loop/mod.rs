@@ -395,8 +395,10 @@ async fn run_agent_loop_impl(
             &manifest.model.modality
         };
 
-        // Inject loop status into every reasoning turn so the LLM can make
-        // informed decisions about whether to continue or wrap up.
+        // Inject loop status periodically (every 2nd turn) so the reasoning
+        // model can make informed decisions about whether to continue or wrap
+        // up. This gate is now purely a rate limiter: since every turn uses
+        // reasoning (see pick_modality), model selection is decoupled from it.
         let remaining_secs = loop_deadline
             .saturating_duration_since(std::time::Instant::now())
             .as_secs();

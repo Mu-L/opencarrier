@@ -46,26 +46,35 @@ pub(in crate::agent_loop) const SUMMARY_MODALITY: &str = "fast";
 /// Reasoning modality — expensive model for planning and complex inference.
 pub(in crate::agent_loop) const REASONING_MODALITY: &str = "reasoning";
 
-/// Pick the optimal modality for the current agent loop iteration.
+/// Pick the modality for the current agent loop iteration.
 ///
-/// Alternating strategy:
-/// - Even turns (0, 2, 4, ...): `reasoning` — plan, decompose, review results
-/// - Odd turns (1, 3, 5, ...): `chat` — execute tools, collect data
-///
-/// Falls back gracefully: no `reasoning` modality → use default, same as before.
+/// Single-model strategy (see `docs/AGENT-LOOP-REMEDIATION.md`, Phase 1): use
+/// `reasoning` for *every* turn. The previous turn-parity alternation (even →
+/// reasoning, odd → chat) caused inconsistent capability and unreliable tool
+/// use, because the weaker `chat` model received tool schemas and a system
+/// prompt designed for the strong model. One capable model for the whole loop
+/// keeps behavior consistent. If `reasoning` is unavailable, fall back to the
+/// default modality.
 pub(in crate::agent_loop) fn pick_modality(
     brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
-    iteration: u32,
+    _iteration: u32,
     default_modality: &str,
 ) -> String {
     let Some(brain) = brain else {
         return default_modality.to_string();
     };
-    if iteration.is_multiple_of(2) && brain.has_modality(REASONING_MODALITY) {
-        tracing::info!(iteration, selected = REASONING_MODALITY, default = default_modality, "Adaptive modality: reasoning for planning/review turn");
+    if brain.has_modality(REASONING_MODALITY) {
+        tracing::info!(
+            selected = REASONING_MODALITY,
+            default = default_modality,
+            "Single-model modality: reasoning (turn-parity alternation removed)"
+        );
         return REASONING_MODALITY.to_string();
     }
-    tracing::info!(iteration, selected = default_modality, "Adaptive modality: chat for execution turn");
+    tracing::info!(
+        selected = default_modality,
+        "Single-model modality: reasoning unavailable, falling back to default"
+    );
     default_modality.to_string()
 }
 

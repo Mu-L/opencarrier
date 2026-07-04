@@ -1,5 +1,12 @@
 # Adaptive Modality — 三层模型动态切换
 
+> ⚠️ **已废弃（2026-07-03）**：本文描述的"按轮次切换 modality"方案经生产验证导致
+> 能力参差不齐、工具执行不可靠（弱模型拿到为强模型设计的工具 schema），已弃用。
+> 替代方案��� [`docs/AGENT-LOOP-REMEDIATION.md`](AGENT-LOOP-REMEDIATION.md)：去掉轮次切换，
+> 全程使用单一 `reasoning` 模型。注意：落地实现 `pick_modality` 早已偏离本文的原始设计意图
+> （本文原意是事件���动——首轮与最终回答用 reasoning——但实现简化成了纯奇偶切换）。
+> 若未来要恢复多模型，应走"任务级 routing"（分类一次定模型），而非轮次切换。
+
 ## 背景
 
 LLM 调用是 OpenCarrier 最大的运营成本。当前 agent loop 每一轮都用同一个 modality（通常是 `chat`），但不同轮次对模型能力的需求差异很大：
