@@ -101,6 +101,35 @@ impl CarrierKernel {
                     .map(|e| e.key().clone())
                     .collect();
                 for key in &keys {
+                    // Skip ping for servers already in backoff — they're known-broken
+                    // and we'll handle reconnection in Phase 3.
+                    let fail_count = kernel
+                        .plugins
+                        .mcp_reconnect_failures
+                        .get(key)
+                        .map(|g| *g)
+                        .unwrap_or(0);
+                    if fail_count > 0 {
+                        // Already in backoff, don't ping — just add to dead_servers
+                        // for Phase 3 to handle reconnection attempt (if backoff expired).
+                        let Some((_, conn)) = kernel.plugins.mcp_connections.remove(key) else {
+                            continue;
+                        };
+                        let name = conn.name().to_string();
+                        let config = conn.config().clone();
+                        // Only log periodically to reduce noise
+                        if fail_count <= 1 || fail_count.is_multiple_of(6) {
+                            warn!(
+                                server = %name,
+                                consecutive_failures = fail_count,
+                                "MCP server still in backoff, skipping health check"
+                            );
+                        }
+                        dead_servers.push((name, config));
+                        registry_dirty = true;
+                        continue;
+                    }
+
                     let Some((_, mut conn)) = kernel.plugins.mcp_connections.remove(key) else {
                         continue;
                     };
@@ -223,7 +252,10 @@ impl CarrierKernel {
                         .map(|g| *g)
                         .unwrap_or(0);
                     if fail_count > 0 {
-                        let backoff_secs = std::cmp::min(60 * 2u64.pow(fail_count), 3600);
+                        let backoff_secs = std::cmp::min(
+                            30 * 2u64.pow(fail_count.saturating_sub(1)),
+                            600,
+                        );
                         if backoff_secs > 60 {
                             if fail_count >= 5 && fail_count % 6 == 5 {
                                 warn!(
@@ -257,7 +289,10 @@ impl CarrierKernel {
                         Err(e) => {
                             let new_count = fail_count + 1;
                             kernel.plugins.mcp_reconnect_failures.insert(key, new_count);
-                            let backoff_secs = std::cmp::min(60 * 2u64.pow(new_count), 3600);
+                            let backoff_secs = std::cmp::min(
+                                30 * 2u64.pow(new_count.saturating_sub(1)),
+                                600,
+                            );
                             warn!(
                                 server = %name,
                                 error = %e,

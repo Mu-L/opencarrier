@@ -82,6 +82,8 @@ pub(in crate::agent_loop) async fn handle_end_turn(
     // NO_REPLY: agent intentionally chose not to reply
     if text.trim() == "NO_REPLY" || parsed_directives_s.silent {
         debug!(agent = %manifest.name, "Agent chose NO_REPLY/silent  — silent completion");
+        // O6: Single-track — sync loop messages before pushing the final response
+        super::helpers::sync_loop_messages(messages, session, session_base_len);
         session
             .messages
             .push(Message::assistant("[no reply needed]".to_string()));
@@ -178,6 +180,8 @@ pub(in crate::agent_loop) async fn handle_end_turn(
         text
     };
     let final_response = text.clone();
+    // O6: Single-track — sync loop messages before pushing the final response
+    super::helpers::sync_loop_messages(messages, session, session_base_len);
     session.messages.push(Message::assistant(text));
 
     // Prune NO_REPLY heartbeat turns to save context budget

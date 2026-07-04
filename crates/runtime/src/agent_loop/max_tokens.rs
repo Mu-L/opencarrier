@@ -53,6 +53,8 @@ pub(in crate::agent_loop) async fn handle_max_tokens(
         } else {
             text
         };
+        // O6: Single-track — sync before save, then push the final response
+        super::helpers::sync_loop_messages(messages, session, session_base_len);
         session.messages.push(Message::assistant(&text));
         // Save session (inline version of save_new! macro)
         let new_msgs = &session.messages[session_base_len..];
@@ -97,9 +99,8 @@ pub(in crate::agent_loop) async fn handle_max_tokens(
         })
     } else {
         let text = response.text();
-        session.messages.push(Message::assistant(&text));
+        // O6: Single-track — only push to messages
         messages.push(Message::assistant(&text));
-        session.messages.push(Message::user("Please continue."));
         messages.push(Message::user("Please continue."));
         warn!(iteration, "Max tokens hit , continuing");
         MaxTokensAction::Continue

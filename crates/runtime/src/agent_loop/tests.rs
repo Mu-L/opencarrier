@@ -98,8 +98,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
     fn test_loop_detection_requires_full_window() {
-        // 5 same calls is below threshold of 6
-        let recent: Vec<(String, u64)> = (0..5)
+        // 3 same calls is below threshold of 4
+        let recent: Vec<(String, u64)> = (0..3)
             .map(|_| make_call("test_query", serde_json::json!({"q": "rust"})))
             .collect();
         let result = detect_tool_loop(&recent, LOOP_DETECTION_WINDOW);
@@ -108,13 +108,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
     fn test_loop_detection_breaks_on_different_tool() {
-        // 5 test_query + 1 web_fetch + 5 test_query → no loop (window is 6, last 6 are mixed)
-        let mut recent: Vec<(String, u64)> = (0..5)
+        // 3 test_query + 1 web_fetch + 3 test_query → last 4 are mixed (window is 4)
+        let mut recent: Vec<(String, u64)> = (0..3)
             .map(|_| make_call("test_query", serde_json::json!({"q": "rust"})))
             .collect();
         recent.push(make_call("web_fetch", serde_json::json!({"url": "https://example.com"})));
         recent.extend(
-            (0..5).map(|_| make_call("test_query", serde_json::json!({"q": "rust"})))
+            (0..3).map(|_| make_call("test_query", serde_json::json!({"q": "rust"})))
         );
         let result = detect_tool_loop(&recent, LOOP_DETECTION_WINDOW);
         assert!(result.is_none(), "Mixed tail should not trigger loop detection");
@@ -122,7 +122,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
     fn test_loop_detection_window_constant() {
-        assert_eq!(LOOP_DETECTION_WINDOW, 6);
+        assert_eq!(LOOP_DETECTION_WINDOW, 4);
     }
 
     // --- Integration tests for empty response guards ---

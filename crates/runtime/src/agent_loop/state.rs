@@ -273,10 +273,7 @@ impl LoopState {
         });
     }
 
-    pub fn build_status_message(
-        &self,
-        consecutive_tool_errors: &HashMap<String, u32>,
-    ) -> String {
+    pub fn build_status_message(&self) -> String {
         let mut msg = format!(
             "📊 Turn {}/{} | ⏱️ ~{}s remaining | 📐 context: {} ({}%)",
             self.iteration + 1,
@@ -286,12 +283,22 @@ impl LoopState {
             (self.context_usage_pct() * 100.0) as u32,
         );
 
-        if !consecutive_tool_errors.is_empty() {
-            let errors: Vec<String> = consecutive_tool_errors
-                .iter()
-                .map(|(name, count)| format!("{name}(×{count})"))
-                .collect();
-            msg.push_str(&format!("\n⚠️ 连续出错: {}", errors.join(", ")));
+        // Soft loop detection: same tool called consecutively
+        if let Some(name) = super::helpers::detect_soft_loop(
+            &self.recent_tool_calls,
+            super::helpers::SOFT_LOOP_WINDOW,
+        ) {
+            msg.push_str(&format!(
+                "\n💡 工具 `{name}` 连续被调用，确认这不是重复操作？如果是分页/批量则忽略。"
+            ));
+        }
+
+        // Error tracking via sliding window
+        let failed: Vec<String> = self.error_tracker.failed_tools()
+            .map(|(name, count)| format!("{name}(×{count})"))
+            .collect();
+        if !failed.is_empty() {
+            msg.push_str(&format!("\n⚠️ 连续出错: {}", failed.join(", ")));
         }
 
         match self.context_pressure {

@@ -75,7 +75,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     tools_owned: &mut Vec<ToolDefinition>,
     discovered_tool_names: &mut std::collections::HashSet<String>,
     loaded_skills: &mut std::collections::HashSet<String>,
-    consecutive_tool_errors: &mut std::collections::HashMap<String, u32>,
+    error_tracker: &mut crate::agent_loop::state::ToolErrorTracker,
     // For task_plan save
     session_base_len: usize,
     iteration: u32,
@@ -86,10 +86,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
 
     let assistant_blocks = response.content.clone();
 
-    session.messages.push(Message {
-        role: Role::Assistant,
-        content: MessageContent::Blocks(assistant_blocks.clone()),
-    });
+    // O6: Single-track — only push to messages, not session
     messages.push(Message {
         role: Role::Assistant,
         content: MessageContent::Blocks(assistant_blocks),
@@ -124,6 +121,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         // Remove the looping tool from available tools
         tools_owned.retain(|t| t.name != looping_name);
         recent_tool_calls.clear();
+        error_tracker.remove(&looping_name);
         // Inject a system message telling the LLM to stop using this tool
         let warning = format!(
             "工具 `{looping_name}` 连续多次返回相同结果，已被临时移除。请用其他方式完成任务，不要再用这个工具。如果是因为 skill 声明的工具未加载，请用 skill_update 修复 skill 的 tools 字段。"
@@ -332,8 +330,8 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         .filter(|b| matches!(b, ContentBlock::ToolResult { is_error: true, .. }))
         .count();
 
-    // Track which tools succeeded this iteration (to reset their error counter)
-    let succeeded_tools: std::collections::HashSet<&str> = tool_result_blocks
+    // Record success/failure in sliding window tracker (O5: replaces HashMap reset-on-success)
+    let succeeded_tools: Vec<&str> = tool_result_blocks
         .iter()
         .filter_map(|b| match b {
             ContentBlock::ToolResult {
@@ -345,7 +343,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         })
         .collect();
     for name in &succeeded_tools {
-        consecutive_tool_errors.remove(*name);
+        error_tracker.record(name, true);
     }
 
     if error_count > 0 {
@@ -367,7 +365,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
 
         // Increment consecutive error counters (keep counting, but do NOT remove tools)
         for name in &failed_names {
-            *consecutive_tool_errors.entry(name.to_string()).or_insert(0) += 1;
+            error_tracker.record(name, false);
         }
 
         info!(
@@ -384,7 +382,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             "[工具错误分析 — 不要编造结果，也不要用相同参数重试。\n",
         );
         for (name, err_msg) in &failed_tools {
-            let count = consecutive_tool_errors.get(*name).copied().unwrap_or(1);
+            let count = error_tracker.consecutive_failures(name).max(1);
             // Truncate long error messages for readability
             let short_err: String = err_msg.chars().take(200).collect();
             let ellipsis = if err_msg.chars().count() > 200 { "..." } else { "" };
@@ -419,7 +417,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         role: Role::User,
         content: MessageContent::Blocks(tool_result_blocks.clone()),
     };
-    session.messages.push(tool_results_msg.clone());
+    // O6: Single-track — only push to messages, not session
     messages.push(tool_results_msg);
 
     // Dynamic tool refresh (streaming path)
@@ -473,22 +471,11 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             }
 
             if !found_tools.is_empty() {
-                // Evict previously discovered tools before adding new ones.
-                // Each tool_search represents a new intent — old discoveries
-                // are stale and waste tokens in CompletionRequest.tools.
-                if !discovered_tool_names.is_empty() {
-                    let before = tools_owned.len();
-                    let stale: std::collections::HashSet<String> =
-                        std::mem::take(discovered_tool_names);
-                    tools_owned.retain(|t| !stale.contains(&t.name));
-                    let evicted = before - tools_owned.len();
-                    if evicted > 0 {
-                        info!(evicted, "tool_search: evicted previous discovered tools");
-                    }
-                }
-
-                // Add discovered tools so the LLM API allows structured
-                // tool_use output. Cap total to prevent unbounded inflation.
+                // O11: Append discovered tools instead of evicting previous ones.
+                // Previously, each tool_search would evict tools from the last search.
+                // This caused the LLM to re-search when it needed tools from two
+                // different contexts in the same conversation. Now we accumulate,
+                // capped by MAX_TOTAL_TOOLS to prevent unbounded inflation.
                 const MAX_TOTAL_TOOLS: usize = 32;
                 let current_count = tools_owned.len();
                 let remaining_capacity = MAX_TOTAL_TOOLS.saturating_sub(current_count);
@@ -550,6 +537,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 "task_plan detected — breaking out of agent loop"
             );
             // Save session before breaking (inline version of save_new! macro)
+            super::helpers::sync_loop_messages(messages, session, session_base_len);
             let new_msgs = &session.messages[session_base_len..];
             if let Err(e) = memory
                 .save_session_append_async(

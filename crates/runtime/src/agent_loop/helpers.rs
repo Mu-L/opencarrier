@@ -93,13 +93,17 @@ pub const TOOL_LONG_TIMEOUT_NAMES: &[&str] =
 /// Maximum message history size before auto-trimming to prevent context overflow.
 pub const MAX_HISTORY_MESSAGES: usize = 30;
 
-/// Number of consecutive identical tool calls (same name AND same input) that
-/// constitute a loop. Picked at 6 because:
-/// - Below 4 risks blocking legitimate retries (e.g. eventual-consistency reads)
-/// - Above 8 wastes API calls before kicking in
+/// Hard loop detection window: same (tool_name, input_hash) repeated this many
+/// times triggers tool removal. Reduced from 6 to 4 to cut wasted iterations.
+/// Below 4 risks blocking legitimate retries (e.g. eventual-consistency reads).
 ///
-/// Same-name-different-input (e.g. paginated search) is NOT a loop.
-pub const LOOP_DETECTION_WINDOW: usize = 6;
+/// Same-name-different-input (e.g. paginated search) is NOT a hard loop.
+pub const LOOP_DETECTION_WINDOW: usize = 4;
+
+/// Soft loop detection window: same tool_name (regardless of input) called this
+/// many consecutive times triggers a gentle reminder in the loop status message,
+/// without removing the tool.
+pub const SOFT_LOOP_WINDOW: usize = 2;
 
 /// Default context window size (tokens) for token-based trimming.
 pub(in crate::agent_loop) const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
@@ -132,6 +136,48 @@ pub fn detect_tool_loop(recent: &[(String, u64)], window: usize) -> Option<(Stri
     } else {
         None
     }
+}
+
+/// Detect a soft loop: same tool name (regardless of input) called `window`
+/// consecutive times at the tail of `recent`. Returns the tool name if so.
+pub fn detect_soft_loop(recent: &[(String, u64)], window: usize) -> Option<String> {
+    if recent.len() < window {
+        return None;
+    }
+    let tail = &recent[recent.len() - window..];
+    let first_name = &tail[0].0;
+    if tail.iter().all(|(name, _)| name == first_name) {
+        Some(first_name.clone())
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Session sync (single-track messages)
+// ---------------------------------------------------------------------------
+
+/// Sync loop working messages back to session.messages.
+///
+/// During the loop, only `messages` (the working copy) is updated. This
+/// function copies the loop's working messages back to `session.messages`
+/// before any session save operation, so `session.messages` always reflects
+/// the full conversation state.
+///
+/// System-role messages are filtered out — they are loop-internal hints and
+/// should not be persisted to the session.
+pub(in crate::agent_loop) fn sync_loop_messages(
+    messages: &[Message],
+    session: &mut memory::session::Session,
+    session_base_len: usize,
+) {
+    let loop_msgs: Vec<Message> = messages
+        .iter()
+        .filter(|m| m.role != Role::System)
+        .cloned()
+        .collect();
+    session.messages.truncate(session_base_len);
+    session.messages.extend(loop_msgs);
 }
 
 // ---------------------------------------------------------------------------
