@@ -292,7 +292,7 @@ impl ToolProvider for WeixinOaPublishArticleTool {
         PluginToolDef {
             name: "weixin_oa_publish_article".to_string(),
             description: "Publish a formatted HTML article to a WeChat Official Account: resolve a cover (upload the given cover_path, else fall back to the first image in the material library), create a draft, and optionally submit it for publishing. Credentials are resolved from the registered OA account for app_id.".to_string(),
-            parameters_json: r#"{"type":"object","properties":{"app_id":{"type":"string","description":"Target OA app_id"},"html_path":{"type":"string","description":"Path to the WeChat-ready HTML article (absolute or relative to ~/.opencarrier)"},"title":{"type":"string","description":"Article title"},"cover_path":{"type":"string","description":"Optional path to a generated cover image. If omitted/upload fails, falls back to the first image in the material library."},"publish":{"type":"boolean","default":true,"description":"Submit the draft for publishing immediately after creation."}},"required":["app_id","html_path","title"]}"#.to_string(),
+            parameters_json: r#"{"type":"object","properties":{"app_id":{"type":"string","description":"Target OA app_id"},"html_path":{"type":"string","description":"Path to the WeChat-ready HTML article (absolute or relative to ~/.opencarrier)"},"title":{"type":"string","description":"Article title"},"cover_path":{"type":"string","description":"Optional path to a generated cover image. If omitted/upload fails, falls back to the first image in the material library."},"publish":{"type":"boolean","default":true,"description":"Submit the draft for publishing immediately after creation."},"digest":{"type":"string","description":"Optional article digest/summary (摘要). If omitted, WeChat auto-extracts from the article beginning."}},"required":["app_id","html_path","title"]}"#.to_string(),
         }
     }
 
@@ -323,6 +323,7 @@ impl ToolProvider for WeixinOaPublishArticleTool {
             .to_string();
         let cover_path = args["cover_path"].as_str().map(|s| s.to_string());
         let publish = args["publish"].as_bool().unwrap_or(true);
+        let digest = args["digest"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
 
         // Build a fresh HTTP client and fetch an access_token directly from the
         // user-supplied app_id/app_secret — no server-level WEIXIN_OA_STATE
@@ -394,7 +395,7 @@ impl ToolProvider for WeixinOaPublishArticleTool {
 
             // --- Create draft (token retry on 40001) ---
             let draft_media_id = match api::add_draft(
-                &http, &token, &title, &content, Some(&thumb), None, None,
+                &http, &token, &title, &content, Some(&thumb), None, digest.as_deref(),
             )
             .await
             {
@@ -405,7 +406,7 @@ impl ToolProvider for WeixinOaPublishArticleTool {
                         .map_err(PluginToolError::tool)?
                         .access_token
                         .ok_or_else(|| PluginToolError::tool("get_access_token returned no access_token"))?;
-                    api::add_draft(&http, &token, &title, &content, Some(&thumb), None, None)
+                    api::add_draft(&http, &token, &title, &content, Some(&thumb), None, digest.as_deref())
                         .await
                         .map_err(PluginToolError::tool)?
                 }

@@ -150,10 +150,11 @@ fn resolve_article_title(html_path: &str) -> String {
         .to_string()
 }
 
-/// Handle a `[PUBLISH:app_id]html_path[/PUBLISH]` marker: generate a cover,
-/// create a WeChat OA draft, and publish it — all via in-process API (no MCP,
-/// no agent tool-chain; the "AI + API" pattern). Replies to the user with the
-/// result once it completes.
+/// Handle a `[PUBLISH:app_id]html_path|digest[/PUBLISH]` marker: generate a
+/// cover, create a WeChat OA draft, and publish it — all via in-process API
+/// (no MCP, no agent tool-chain; the "AI + API" pattern). The `|digest` part
+/// is optional; if omitted, WeChat auto-extracts a digest from the article.
+/// Replies to the user with the result once it completes.
 #[allow(clippy::too_many_arguments)]
 async fn handle_publish_marker(
     kernel: std::sync::Arc<dyn KernelHandle>,
@@ -163,6 +164,7 @@ async fn handle_publish_marker(
     sender_id: &str,
     app_id: &str,
     html_path: &str,
+    digest: Option<&str>,
     agent_id: &str,
 ) {
     // Resolve html_path to absolute, mirroring how the agent's file_read
@@ -226,6 +228,11 @@ async fn handle_publish_marker(
         "title": title,
         "publish": false,
     });
+    if let Some(d) = digest {
+        if !d.is_empty() {
+            args["digest"] = serde_json::Value::String(d.to_string());
+        }
+    }
     if let Some(cp) = cover_path {
         args["cover_path"] = serde_json::Value::String(cp);
     }
@@ -1017,7 +1024,7 @@ impl PluginBridgeManager {
         // pushed as a follow-up message when the publish completes.
         let (publishes, final_cleaned) = parse_publish_markers(&cleaned);
         if !publishes.is_empty() {
-            for (app_id, html_path) in &publishes {
+            for (app_id, content) in &publishes {
                 let kernel = self.kernel.clone();
                 let send_fn = self.channel_send_fn.clone();
                 let channel_type = original.channel_type.clone();
@@ -1025,15 +1032,20 @@ impl PluginBridgeManager {
                 let sender_id = original.sender_id.clone();
                 let agent_id = self.resolve_agent(original);
                 let app_id = app_id.clone();
-                let html_path = html_path.clone();
+                // Parse "html_path|digest" — digest is optional
+                let (html_path, digest) = match content.split_once('|') {
+                    Some((path, d)) => (path.trim().to_string(), Some(d.trim().to_string())),
+                    None => (content.clone(), None),
+                };
+                let digest = digest.filter(|d| !d.is_empty());
                 info!(
-                    %app_id, %html_path, %agent_id,
+                    %app_id, %html_path, digest_provided = digest.is_some(), %agent_id,
                     "PUBLISH marker matched, spawning publish handler"
                 );
                 tokio::spawn(async move {
                     handle_publish_marker(
                         kernel, send_fn, &channel_type, &bot_id, &sender_id,
-                        &app_id, &html_path, &agent_id,
+                        &app_id, &html_path, digest.as_deref(), &agent_id,
                     )
                     .await;
                 });
