@@ -1505,6 +1505,57 @@ async fn register_bot_from_scan(
     }
 }
 
+/// POST /api/push — push a text message to any user.
+///
+/// Simpler than `/api/senders/{id}/send`: no need to know the bot_id.
+/// The user_id is used as both bot_id and recipient — the iLink channel
+/// resolves sessions by user_id directly.
+pub async fn push_to_user(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let user_id = match body.get("user_id").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "缺少 user_id"})),
+            )
+        }
+    };
+    let text = match body.get("text").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "缺少 text"})),
+            )
+        }
+    };
+
+    let Some(ref pm) = state.channel_manager else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Channel manager not available"})),
+        );
+    };
+    let pm = pm.lock().await;
+
+    // Use user_id as both bot_id and user_id — the iLink channel's
+    // get_session_for_send looks up by user_id first, so this works
+    // for any user with an active session.
+    match pm.channel_send_by_bot(&user_id, &user_id, &text) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "sent"})),
+        ),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -1523,6 +1574,7 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
             routing::put(bind_sender).delete(unbind_sender),
         )
         .route("/api/senders/{id}/send", routing::post(sender_send_message))
+        .route("/api/push", routing::post(push_to_user))
         // Device auth flows
         .route(
             "/api/senders/wecom/smartbot/generate",
