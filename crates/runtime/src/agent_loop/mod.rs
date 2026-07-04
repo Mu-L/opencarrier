@@ -10,10 +10,12 @@
 //! - `max_tokens` — handler for MaxTokens (continuation / partial response)
 
 mod helpers;
+mod state;
 mod end_turn;
 mod tool_use;
 mod max_tokens;
 
+use crate::agent_loop::state::LoopState;
 use crate::context_budget::{apply_context_guard, ContextBudget};
 use crate::context_overflow::{recover_from_overflow, RecoveryStage};
 use crate::kernel_handle::KernelHandle;
@@ -298,7 +300,6 @@ async fn run_agent_loop_impl(
         }
     }
 
-    let mut total_usage = TokenUsage::default();
 
     // Safety valve: trim excessively long message histories
     if messages.len() > helpers::MAX_HISTORY_MESSAGES {
@@ -318,26 +319,23 @@ async fn run_agent_loop_impl(
         .map(|a| a.max_iterations)
         .unwrap_or(MAX_ITERATIONS);
 
-    let mut consecutive_max_tokens: u32 = 0;
-    let mut text_recovery_retries: u32 = 0;
     const MAX_TEXT_RECOVERY_RETRIES: u32 = 2;
 
     let ctx_window = context_window_tokens.unwrap_or(helpers::DEFAULT_CONTEXT_WINDOW);
     let context_budget = ContextBudget::new(ctx_window);
-    let mut any_tools_executed = false;
+
+    let mut state = LoopState::new(max_iterations, loop_deadline, ctx_window);
 
     let mut detected_plan: Option<TaskPlan> = None;
-    let mut recent_tool_calls: Vec<(String, u64)> = Vec::new();
     let mut consecutive_tool_errors: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
 
     let mut tools_owned: Vec<ToolDefinition> = tools.to_vec();
     let mut tools: &[ToolDefinition] = &tools_owned;
     let mut discovered_tool_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut loaded_skills: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut budget_warning_sent = false;
 
-    for iteration in 0..max_iterations {
-        debug!(iteration, "Streaming agent loop iteration");
+    while state.iteration < state.max_iterations {
+        debug!(iteration = state.iteration, "Streaming agent loop iteration");
 
         // Context overflow recovery pipeline
         let recovery =
@@ -382,7 +380,7 @@ async fn run_agent_loop_impl(
         };
 
         if let Some(cb) = on_phase {
-            if stream_tx.is_some() && iteration == 0 {
+            if stream_tx.is_some() && state.iteration == 0 {
                 cb(LoopPhase::Streaming);
             } else {
                 cb(LoopPhase::Thinking);
@@ -395,56 +393,24 @@ async fn run_agent_loop_impl(
             &manifest.model.modality
         };
 
-        // Inject loop status periodically (every 2nd turn) so the reasoning
-        // model can make informed decisions about whether to continue or wrap
-        // up. This gate is now purely a rate limiter: since every turn uses
-        // reasoning (see pick_modality), model selection is decoupled from it.
-        let remaining_secs = loop_deadline
-            .saturating_duration_since(std::time::Instant::now())
-            .as_secs();
         let is_reasoning = brain
             .as_ref()
             .is_some_and(|b| b.has_modality(helpers::REASONING_MODALITY));
 
-        if is_reasoning && iteration.is_multiple_of(2) {
-            // Build status hint: iteration count, time remaining, budget pressure level
-            let pressure = if remaining_secs > 300 {
-                "comfortable"
-            } else if remaining_secs > 120 {
-                "moderate"
-            } else if remaining_secs > 60 {
-                "tight"
-            } else {
-                "critical"
-            };
-            let mut status_msg = format!(
-                "📊 Loop status: iteration {}/{} | ~{}s remaining | budget: {pressure}",
-                iteration + 1,
-                max_iterations,
-                remaining_secs,
-            );
-            // Append tool error history so reasoning knows what's been failing.
-            if !consecutive_tool_errors.is_empty() {
-                let errors: Vec<String> = consecutive_tool_errors
-                    .iter()
-                    .map(|(name, count)| format!("{name}(×{count})"))
-                    .collect();
-                status_msg.push_str(&format!(
-                    "\n⚠️ 连续出错工具: {} — 这些工具可能用错了参数，换不同方式调用。",
-                    errors.join(", ")
-                ));
-            }
-            // Only inject if the last system message isn't already a loop status
+        // Inject loop status every turn so the model always has full context.
+        {
+            let status_msg = state.build_status_message(&consecutive_tool_errors);
             let should_inject = messages.last().is_none_or(|m| {
-                !m.content.text_content().starts_with("📊 Loop status")
+                !m.content.text_content().starts_with("📊 Turn")
             });
             if should_inject {
                 tracing::info!(
-                    iteration,
-                    remaining_secs,
-                    pressure,
+                    iteration = state.iteration,
+                    remaining_secs = state.remaining_secs(),
+                    pressure = ?state.budget_state,
+                    context_pressure = ?state.context_pressure,
                     error_tools = ?consecutive_tool_errors.keys().collect::<Vec<_>>(),
-                    "Injecting loop status for reasoning decision"
+                    "Injecting loop status"
                 );
                 messages.push(Message::system(status_msg));
             }
@@ -453,20 +419,20 @@ async fn run_agent_loop_impl(
         // When time is tight/critical, force reasoning modality so the LLM
         // can make a deliberate wrap-up decision instead of blindly continuing
         // with tool calls that won't complete in time.
-        let modality = if remaining_secs < 120
-            && is_reasoning
-        {
-            if !budget_warning_sent {
-                budget_warning_sent = true;
+        // Refresh budget state and pick modality
+        state.refresh_budget();
+        let modality = if state.remaining_secs() < 120 && is_reasoning {
+            if !state.budget_warning_sent {
+                state.budget_warning_sent = true;
                 info!(
-                    iteration,
-                    remaining_secs,
+                    iteration = state.iteration,
+                    remaining_secs = state.remaining_secs(),
                     "Budget tight: forcing reasoning for wrap-up decision"
                 );
             }
             helpers::REASONING_MODALITY.to_string()
         } else {
-            helpers::pick_modality(brain.as_ref(), iteration, default_modality)
+            helpers::pick_modality(brain.as_ref(), state.iteration, default_modality)
         };
         let mut response = match helpers::call_with_fallback(
             brain.as_ref(),
@@ -489,7 +455,7 @@ async fn run_agent_loop_impl(
                     && brain.as_ref().is_some_and(|b| b.has_modality(helpers::REASONING_MODALITY))
                 {
                     warn!(
-                        iteration,
+                        state.iteration,
                         "Time budget exhausted — attempting final reasoning wrap-up"
                     );
                     messages.push(Message::system(
@@ -532,8 +498,8 @@ async fn run_agent_loop_impl(
             }
         };
 
-        total_usage.input_tokens += response.usage.input_tokens;
-        total_usage.output_tokens += response.usage.output_tokens;
+        state.total_usage.input_tokens += response.usage.input_tokens;
+        state.total_usage.output_tokens += response.usage.output_tokens;
 
         // Recover tool calls output as text (streaming path)
         if matches!(
@@ -583,20 +549,20 @@ async fn run_agent_loop_impl(
                 }
                 response.content = new_blocks;
             } else if has_discovered || !result.needs_retry.is_empty() {
-                if text_recovery_retries >= MAX_TEXT_RECOVERY_RETRIES {
+                if state.text_recovery_retries >= MAX_TEXT_RECOVERY_RETRIES {
                     warn!(
                         agent = %manifest.name,
-                        retries = text_recovery_retries,
-                        iteration,
+                        retries = state.text_recovery_retries,
+                        state.iteration,
                         "Giving up text-based tool recovery — LLM keeps outputting text instead of tool_use"
                     );
                 } else {
-                    text_recovery_retries += 1;
+                    state.text_recovery_retries += 1;
                     warn!(
                         agent = %manifest.name,
                         tools = ?result.needs_retry,
-                        iteration,
-                        retry = text_recovery_retries,
+                        state.iteration,
+                        retry = state.text_recovery_retries,
                         "LLM described tool calls as text — retrying with discovered tools"
                     );
                     let tool_names = result.needs_retry.join("、");
@@ -604,6 +570,7 @@ async fn run_agent_loop_impl(
                     messages.push(Message::system(
                         "你刚才用文本描述了工具调用，但用户看到的是原始文本。这些工具已添加到你的可用工具列表中，请直接用 tool_use 功能调用，带上完整的参数。不要再输出 [Called ...] 格式的文本。"
                     ));
+                    state.iteration += 1;
                     continue;
                 }
             }
@@ -628,13 +595,13 @@ async fn run_agent_loop_impl(
                     sender_id,
                     channel_type,
                     &agent_id_str,
-                    iteration,
-                    total_usage,
-                    any_tools_executed,
+                    state.iteration,
+                    state.total_usage,
+                    state.any_tools_executed,
                 )
                 .await?
                 {
-                    end_turn::EndTurnAction::Retry => continue,
+                    end_turn::EndTurnAction::Retry => { state.iteration += 1; continue },
                     end_turn::EndTurnAction::Complete(result) => return Ok(result),
                 }
             }
@@ -660,15 +627,15 @@ async fn run_agent_loop_impl(
                     sender_id,
                     owner_id,
                     channel_type,
-                    &mut consecutive_max_tokens,
-                    &mut any_tools_executed,
-                    &mut recent_tool_calls,
+                    &mut state.consecutive_max_tokens,
+                    &mut state.any_tools_executed,
+                    &mut state.recent_tool_calls,
                     &mut tools_owned,
                     &mut discovered_tool_names,
                     &mut loaded_skills,
                     &mut consecutive_tool_errors,
                     session_base_len,
-                    iteration,
+                    state.iteration,
                 )
                 .await
                 {
@@ -688,12 +655,12 @@ async fn run_agent_loop_impl(
                     &mut messages,
                     memory,
                     &stream_tx,
-                    &mut consecutive_max_tokens,
+                    &mut state.consecutive_max_tokens,
                     hooks,
                     &agent_id_str,
                     manifest,
-                    iteration,
-                    total_usage,
+                    state.iteration,
+                    state.total_usage,
                     session_base_len,
                 )
                 .await
@@ -703,6 +670,7 @@ async fn run_agent_loop_impl(
                 }
             }
         }
+        state.iteration += 1;
     }
 
     // Plan B: on failure, save only user message + error summary (discard tool noise)
@@ -710,7 +678,7 @@ async fn run_agent_loop_impl(
         let discarded = session.messages.len() - session_base_len;
         let summary = format!(
             "[Agent loop failed: max iterations ({}) exceeded. {} messages discarded.]",
-            max_iterations, discarded,
+            state.max_iterations, discarded,
         );
         let user_msg = session.messages[session_base_len..]
             .iter()
@@ -745,15 +713,15 @@ async fn run_agent_loop_impl(
     if let Some(plan) = detected_plan {
         return Ok(AgentLoopResult {
             response: format!("Plan '{}' created with {} steps. Executing...", plan.title, plan.steps.len()),
-            total_usage,
-            iterations: max_iterations,
+            total_usage: state.total_usage,
+            iterations: state.iteration + 1,
             silent: false,
             directives: Default::default(),
             plan: Some(plan),
         });
     }
 
-    Err(CarrierError::MaxIterationsExceeded(max_iterations))
+    Err(CarrierError::MaxIterationsExceeded(state.max_iterations))
 }
 
 #[cfg(test)]
