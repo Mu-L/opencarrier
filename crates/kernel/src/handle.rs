@@ -422,7 +422,13 @@ impl KernelHandle for CarrierKernel {
         let delivery: CronDelivery = {
             let val = job_json.get("delivery").cloned().unwrap_or(serde_json::Value::Null);
             if val.is_null() {
-                CronDelivery::None
+                // Default to LastChannel when owner_id is set so cron results
+                // are pushed to the user automatically.
+                if owner_id.is_some() {
+                    CronDelivery::LastChannel
+                } else {
+                    CronDelivery::None
+                }
             } else {
                 let resolved = match &val {
                     serde_json::Value::String(s) => {
