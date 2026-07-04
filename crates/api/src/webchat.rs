@@ -4,8 +4,9 @@
 //! bundled into the binary via `include_str!`/`include_bytes!` for
 //! single-binary deployment.
 
+use axum::extract::Path;
 use axum::http::header;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Redirect};
 
 /// Embedded logo PNG for single-binary deployment.
 const LOGO_PNG: &[u8] = include_bytes!("../static/logo.png");
@@ -164,6 +165,12 @@ pub async fn verification_txt() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
         VERIFICATION_TXT,
     )
+}
+
+/// Redirect `/v/{phone}` to `tel:{phone}` so tapping the link in WeChat
+/// triggers the phone dialer (no page rendered — just an HTTP 302).
+pub async fn vcard_redirect(Path(phone): Path<String>) -> Redirect {
+    Redirect::to(&format!("tel:{}", phone))
 }
 
 // ── Compile-time assembled HTML ─────────────────────────────────────────

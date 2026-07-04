@@ -180,6 +180,7 @@ pub async fn build_router(
             "/katex-fonts/{name}",
             axum::routing::get(webchat::katex_font),
         )
+        .route("/v/{phone}", axum::routing::get(webchat::vcard_redirect))
         .with_state(state.clone());
 
     let app = Router::new()
