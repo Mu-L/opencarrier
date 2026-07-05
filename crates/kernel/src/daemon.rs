@@ -48,6 +48,13 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
             let timeout = std::time::Duration::from_secs(timeout_s);
             let delivery = job.delivery.clone();
             let owner_id = job.owner_id.clone();
+            // Generate task_id: {job_name}-{YYYYMMDD}
+            let task_id = format!(
+                "{}-{}",
+                job_name,
+                chrono::Local::now().format("%Y%m%d")
+            );
+            tracing::info!(job = %job_name, task_id = %task_id, "Cron: generated task_id");
             let kh: std::sync::Arc<dyn runtime::kernel_handle::KernelHandle> =
                 kernel.clone();
             match tokio::time::timeout(
@@ -60,6 +67,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
                     None,
                     job.owner_id.clone(),
                     None,
+                    Some(task_id),
                 ),
             )
             .await

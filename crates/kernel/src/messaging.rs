@@ -51,6 +51,7 @@ impl CarrierKernel {
         sender_name: Option<String>,
         owner_id: &Option<String>,
         channel_type: &Option<String>,
+        task_id: Option<&str>,
     ) -> KernelResult<PreparedContext> {
         // Load session: per-user when sender_id is present (multi-tenancy),
         // otherwise use the agent's default session.
@@ -281,7 +282,7 @@ impl CarrierKernel {
         // Drawer entries from kv memory
         let drawer_entries = self.prefetch_drawer_entries(&manifest.name, owner_id.as_deref().unwrap_or(sender_id.as_deref().unwrap_or("")));
 
-        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, sender_id, sender_name, owner_id, prompt_auto_match.clone(), turn_summaries, drawer_entries);
+        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, sender_id, sender_name, owner_id, prompt_auto_match.clone(), turn_summaries, drawer_entries, task_id.map(|s| s.to_string()));
 
         Ok(PreparedContext {
             session,
@@ -309,7 +310,7 @@ impl CarrierKernel {
             .get()
             .and_then(|w| w.upgrade())
             .map(|arc| arc as Arc<dyn KernelHandle>);
-        self.send_message_with_handle(agent_id, message, handle, None, None, None, None)
+        self.send_message_with_handle(agent_id, message, handle, None, None, None, None, None)
             .await
     }
 
@@ -326,6 +327,7 @@ impl CarrierKernel {
         sender_name: Option<String>,
         owner_id: Option<String>,
         channel_type: Option<String>,
+        task_id: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
         self.send_message_with_handle_and_blocks(
             agent_id,
@@ -336,6 +338,7 @@ impl CarrierKernel {
             sender_name,
             owner_id,
             channel_type,
+            task_id,
         )
         .await
     }
@@ -360,6 +363,7 @@ impl CarrierKernel {
         sender_name: Option<String>,
         owner_id: Option<String>,
         channel_type: Option<String>,
+        task_id: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
         // NOTE: The per-owner execution lock has been removed. Concurrent messages
         // for the same agent+owner now run in parallel (like nginx). Session
@@ -420,6 +424,7 @@ impl CarrierKernel {
                 sender_name,
                 owner_id,
                 channel_type.clone(),
+                task_id,
             )
             .await
         };
@@ -558,7 +563,7 @@ impl CarrierKernel {
 
         // LLM agent: true streaming via agent loop
         let ctx = self.prepare_agent_context(
-            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type,
+            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type, None,
         ).await?;
         let PreparedContext { mut session, needs_compact, tools, manifest, driver, ctx_window, .. } = ctx;
 
@@ -927,10 +932,11 @@ impl CarrierKernel {
         sender_name: Option<String>,
         owner_id: Option<String>,
         channel_type: Option<String>,
+        task_id: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
         // Prepare shared context (session, tools, skill/subagent matching, manifest)
         let ctx = self.prepare_agent_context(
-            agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type,
+            agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type, task_id.as_deref(),
         ).await?;
         let PreparedContext { mut session, needs_compact, tools, manifest, .. } = ctx;
 

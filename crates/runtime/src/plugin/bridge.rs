@@ -188,21 +188,35 @@ fn read_wechat_app_secret(
 }
 
 /// Recursively search for a file by name under a directory.
-/// Returns the first match as an absolute path string.
+/// Returns the most recently modified match as an absolute path string.
 fn find_file_recursive(dir: &std::path::Path, filename: &str) -> Option<String> {
+    let mut best: Option<(String, std::time::SystemTime)> = None;
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
                 if let Some(found) = find_file_recursive(&path, filename) {
-                    return Some(found);
+                    // The recursive call already picked the newest in that subtree;
+                    // we just need to get its mtime for comparison.
+                    if let Ok(meta) = std::fs::metadata(&found) {
+                        let mtime = meta.modified().ok()?;
+                        if best.as_ref().is_none_or(|(_, t)| mtime > *t) {
+                            best = Some((found, mtime));
+                        }
+                    }
                 }
             } else if path.file_name().and_then(|n| n.to_str()) == Some(filename) {
-                return Some(path.to_string_lossy().to_string());
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    if let Ok(mtime) = meta.modified() {
+                        if best.as_ref().is_none_or(|(_, t)| mtime > *t) {
+                            best = Some((path.to_string_lossy().to_string(), mtime));
+                        }
+                    }
+                }
             }
         }
     }
-    None
+    best.map(|(p, _)| p)
 }
 
 /// Resolve the article title: first non-empty line of the sibling `.md` file

@@ -142,6 +142,7 @@ pub async fn send_message(
             req.sender_name,
             None,
             None,
+            None,
         )
         .await
     {

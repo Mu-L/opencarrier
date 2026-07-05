@@ -72,6 +72,7 @@ impl KernelHandle for CarrierKernel {
                 sender_name.map(|s| s.to_string()),
                 owner_id.map(|s| s.to_string()),
                 channel_type.map(|s| s.to_string()),
+                None,
             )
             .await
             .map_err(|e| format!("Send failed: {e}"))?;

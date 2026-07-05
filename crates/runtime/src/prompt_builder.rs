@@ -120,6 +120,10 @@ pub struct PromptContext {
     pub turn_summaries: Vec<TurnSummary>,
     /// Drawer entries from kv memory — user profile, preferences, entities, events.
     pub drawer_entries: Vec<DrawerEntry>,
+    /// Task ID assigned by the initiator (e.g. cron job). When present, the agent
+    /// must use this ID as the output directory and in PUBLISH markers, ensuring
+    /// file paths and publish paths are always consistent.
+    pub task_id: Option<String>,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -262,6 +266,17 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     // Section 1.5 — Current Date/Time (always present when set)
     if let Some(ref date) = ctx.current_date {
         sections.push(format!("## Current Date\nToday is {date}."));
+    }
+
+    // Section 1.6 — Task ID (when assigned by initiator, e.g. cron job)
+    if let Some(ref tid) = ctx.task_id {
+        sections.push(format!(
+            "## 任务 ID\n\
+             当前任务 ID: {tid}\n\
+             文件输出目录: output/{tid}/\n\
+             发布标记格式: [PUBLISH:app_id]output/{tid}/正文.html|文章标题|摘要[/PUBLISH]\n\
+             你必须将所有文件写入 output/{tid}/ 目录，PUBLISH 标记中的路径也必须使用 output/{tid}/ 开头。不要自己编造目录名。"
+        ));
     }
 
     // Section 2 — Tool Call Behavior (skip for subagents)

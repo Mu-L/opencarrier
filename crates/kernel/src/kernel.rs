@@ -1063,6 +1063,7 @@ impl CarrierKernel {
         auto_matched_skill: Option<String>,
         turn_summaries: Vec<types::message::TurnSummary>,
         drawer_entries: Vec<runtime::prompt_builder::DrawerEntry>,
+        task_id: Option<String>,
     ) {
         let sid = sender_id.as_deref().unwrap_or("");
         let oid = owner_id.as_deref().unwrap_or(sid);
@@ -1207,6 +1208,7 @@ impl CarrierKernel {
             auto_matched_skill,
             turn_summaries,
             drawer_entries,
+            task_id,
         };
         manifest.model.system_prompt =
             runtime::prompt_builder::build_system_prompt(&prompt_ctx);
