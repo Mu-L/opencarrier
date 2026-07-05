@@ -152,9 +152,18 @@ impl MemorySubstrate {
                         types::message::Role::Assistant => "assistant",
                         types::message::Role::System => "system",
                     };
+                    let truncated = if text.len() > 200 {
+                        let mut end = 200;
+                        while !text.is_char_boundary(end) && end > 0 {
+                            end -= 1;
+                        }
+                        format!("{}...", &text[..end])
+                    } else {
+                        text
+                    };
                     recent_summary.push(serde_json::json!({
                         "role": role_str,
-                        "text": if text.len() > 200 { format!("{}...", &text[..200]) } else { text },
+                        "text": truncated,
                     }));
                     count += 1;
                 }
