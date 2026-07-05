@@ -52,11 +52,57 @@ pub struct NotifyTarget {
     pub recipients: Option<String>,
 }
 
-/// Parse `[OPEN:key]content[/CLOSE]` markers from agent reply text.
-///
-/// Returns (list of (key, content), text with markers stripped). Reliable
-/// side-effect trigger — the agent just outputs text, no tool-calling needed.
-/// Used by NOTIFY (cross-channel push) and PUBLISH (article publish).
+/// Strip characters that WeChat iLink/OA cannot render (shows as ???).
+/// Keeps: CJK, ASCII, common punctuation, newlines. Removes: emoji,
+/// variation selectors, miscellaneous symbols, ornamental characters.
+fn sanitize_wechat_text(text: &str) -> String {
+    text.chars()
+        .filter(|c| {
+            // Basic ASCII (printable + newline/tab)
+            if c.is_ascii() {
+                return !c.is_control() || *c == '\n' || *c == '\t';
+            }
+            // CJK Unified Ideographs
+            if matches!(c, '\u{4E00}'..='\u{9FFF}') {
+                return true;
+            }
+            // CJK Extension A & B
+            if matches!(c, '\u{3400}'..='\u{4DBF}' | '\u{20000}'..='\u{2A6DF}') {
+                return true;
+            }
+            // Fullwidth forms (fullwidth ASCII, punctuation)
+            if matches!(c, '\u{FF01}'..='\u{FF5E}' | '\u{3000}'..='\u{303F}') {
+                return true;
+            }
+            // CJK compatibility, Kangxi radical, Bopomofo, Hiragana, Katakana
+            if matches!(c, '\u{F900}'..='\u{FAFF}' | '\u{2F00}'..='\u{2FDF}'
+                        | '\u{3100}'..='\u{318F}' | '\u{3040}'..='\u{309F}'
+                        | '\u{30A0}'..='\u{30FF}') {
+                return true;
+            }
+            // Common punctuation (general + CJK-specific)
+            if matches!(c, '—' | '–' | '…' | '·' | '×' | '÷' | '°' | '℃'
+                        | '←' | '→' | '↑' | '↓' | '■' | '□' | '▪' | '▶'
+                        | '《' | '》' | '〈' | '〉' | '【' | '】' | '〖' | '〗'
+                        | '「' | '」' | '『' | '』' | '﹏' | '￥' | '＄' | '€') {
+                return true;
+            }
+            // Latin-1 Supplement (accented chars, copyright, registered, etc.)
+            if matches!(c, '\u{00A0}'..='\u{00FF}') {
+                return true;
+            }
+            // Common letter/number ranges (Latin Extended, Greek, Cyrillic)
+            if c.is_alphanumeric() {
+                return true;
+            }
+            // General punctuation (quotes, dashes, brackets)
+            if matches!(c, '\u{2010}'..='\u{205F}') {
+                return true;
+            }
+            false
+        })
+        .collect::<String>()
+}
 fn parse_markers(text: &str, open: &str, close: &str) -> (Vec<(String, String)>, String) {
     let mut out = Vec::new();
     let mut cleaned = String::new();
@@ -1080,6 +1126,12 @@ impl PluginBridgeManager {
             let bot_id = original.bot_id.clone();
             let sender_id = original.sender_id.clone();
             let text = response.to_string();
+            // WeChat iLink and OA don't support some Unicode characters (emoji,
+            // special symbols, variation selectors) — they show as ???. Strip them.
+            let text = match original.channel_type.as_str() {
+                "weixin" | "weixin-oa" => sanitize_wechat_text(&text),
+                _ => text,
+            };
             let _ = tokio::task::spawn_blocking(move || {
                 if let Err(e) = send_fn(&channel_type, &bot_id, &sender_id, &text) {
                     error!(
