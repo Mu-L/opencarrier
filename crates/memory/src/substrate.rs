@@ -6,6 +6,8 @@
 use crate::cron_delivery::CronDeliveryStore;
 use crate::cron_store::CronJobStore;
 use crate::invites::InviteStore;
+use crate::weixin_store::WeixinSessionStore;
+use crate::notify_store::NotifyRouteStore;
 use crate::migration::run_migrations;
 use crate::session::{Session, SessionStore};
 use crate::system_kv::SystemKV;
@@ -35,6 +37,8 @@ pub struct MemorySubstrate {
     invites: InviteStore,
     cron_delivery: CronDeliveryStore,
     cron_store: CronJobStore,
+    weixin_store: WeixinSessionStore,
+    notify_store: NotifyRouteStore,
     content_root: PathBuf,
 }
 
@@ -62,6 +66,8 @@ impl MemorySubstrate {
             invites: InviteStore::new(Arc::clone(&shared)),
             cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
             cron_store: CronJobStore::new(Arc::clone(&shared)),
+            weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
+            notify_store: NotifyRouteStore::new(Arc::clone(&shared)),
             content_root,
         })
     }
@@ -79,6 +85,8 @@ impl MemorySubstrate {
             invites: InviteStore::new(Arc::clone(&shared)),
             cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
             cron_store: CronJobStore::new(Arc::clone(&shared)),
+            weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
+            notify_store: NotifyRouteStore::new(Arc::clone(&shared)),
             content_root: PathBuf::from("/tmp/opencarrier_tree_content"),
         })
     }
@@ -91,6 +99,119 @@ impl MemorySubstrate {
     /// Get a reference to the cron job store (persistent cron_jobs table).
     pub fn cron_store(&self) -> &CronJobStore {
         &self.cron_store
+    }
+
+    /// Get a reference to the weixin session store.
+    pub fn weixin_store(&self) -> &WeixinSessionStore {
+        &self.weixin_store
+    }
+
+    /// Get a reference to the notify route store.
+    pub fn notify_store(&self) -> &NotifyRouteStore {
+        &self.notify_store
+    }
+
+    // -----------------------------------------------------------------
+    // Analytics operations (for data_analyze tool)
+    // -----------------------------------------------------------------
+
+    /// User statistics: total users, active users, new users.
+    pub fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> CarrierResult<serde_json::Value> {
+        let users = self.sessions.list_agent_users(agent_id)?;
+        let total_users = users.len() as u32;
+        let active_users = self.sessions.count_active_users(agent_id, active_days)?;
+        let new_users = self.sessions.count_new_users(agent_id, active_days)?;
+        Ok(serde_json::json!({
+            "total_users": total_users,
+            "active_users": active_users,
+            "new_users": new_users,
+            "active_days": active_days,
+        }))
+    }
+
+    /// Per-user lookup: session count, last active, recent conversation summary.
+    pub fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> CarrierResult<serde_json::Value> {
+        let user_sessions = self.sessions.list_user_sessions(agent_id, sender_id)?;
+        let total_sessions = user_sessions.len();
+        let mut total_messages = 0;
+        let mut recent_summary = Vec::new();
+
+        for (_session_id, messages) in &user_sessions {
+            total_messages += messages.len();
+        }
+
+        // Extract summary from the most recent session's last few user/assistant messages
+        if let Some((_last_id, last_msgs)) = user_sessions.last() {
+            let mut count = 0;
+            for msg in last_msgs.iter().rev() {
+                if count >= 3 { break; }
+                let text = msg.content.text_content();
+                if !text.is_empty() && msg.role != types::message::Role::System {
+                    let role_str = match msg.role {
+                        types::message::Role::User => "user",
+                        types::message::Role::Assistant => "assistant",
+                        types::message::Role::System => "system",
+                    };
+                    recent_summary.push(serde_json::json!({
+                        "role": role_str,
+                        "text": if text.len() > 200 { format!("{}...", &text[..200]) } else { text },
+                    }));
+                    count += 1;
+                }
+            }
+            recent_summary.reverse();
+        }
+
+        // Get last_active from list_agent_users for this sender
+        let last_active = self.sessions.list_agent_users(agent_id)?
+            .into_iter()
+            .find(|u| u.get("sender_id").and_then(|v| v.as_str()) == Some(sender_id))
+            .and_then(|u| u.get("last_active").and_then(|v| v.as_str()).map(String::from))
+            .unwrap_or_default();
+
+        Ok(serde_json::json!({
+            "sender_id": sender_id,
+            "session_count": total_sessions,
+            "total_messages": total_messages,
+            "last_active": last_active,
+            "recent_summary": recent_summary,
+        }))
+    }
+
+    /// Usage analytics: token consumption, daily trends, per-model breakdown.
+    pub fn analytics_usage(&self, agent_id: &str, days: u32) -> CarrierResult<serde_json::Value> {
+        let usage = self.usage();
+        let summary = usage.query_summary(Some(types::agent::AgentId::from_string(agent_id)))?;
+        let daily = usage.query_daily_breakdown_for_agent(agent_id, days)?;
+        let by_model = usage.query_by_model()?;
+
+        Ok(serde_json::json!({
+            "summary": {
+                "total_input_tokens": summary.total_input_tokens,
+                "total_output_tokens": summary.total_output_tokens,
+                "call_count": summary.call_count,
+                "total_tool_calls": summary.total_tool_calls,
+            },
+            "daily_trend": daily.iter().map(|d| serde_json::json!({
+                "date": d.date,
+                "tokens": d.tokens,
+                "calls": d.calls,
+            })).collect::<Vec<_>>(),
+            "by_model": by_model.iter().map(|m| serde_json::json!({
+                "model": m.model,
+                "total_input_tokens": m.total_input_tokens,
+                "total_output_tokens": m.total_output_tokens,
+                "call_count": m.call_count,
+            })).collect::<Vec<_>>(),
+        }))
+    }
+
+    /// Recent conversations list (metadata only, no message content).
+    pub fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> CarrierResult<serde_json::Value> {
+        let sessions = self.sessions.recent_sessions(agent_id, limit)?;
+        Ok(serde_json::json!({
+            "conversations": sessions,
+        }))
     }
 
     /// Get a reference to the invite store.

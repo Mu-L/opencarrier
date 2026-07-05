@@ -68,7 +68,7 @@ impl PermissionLevel {
             | "a2a_discover" | "clone_evaluate"
             | "knowledge_lint" | "knowledge_index" | "knowledge_extract"
             | "train_knowledge_lint"
-            | "memory_tree" => Self::None,
+            | "memory_tree" | "data_analyze" => Self::None,
 
             // ReadOnly — reads from external sources
             "file_read" | "file_list" | "file_convert"
@@ -140,7 +140,7 @@ pub fn is_admin_gated(name: &str) -> bool {
     } else {
         name
     };
-    base == "shell_exec" || base.ends_with("publish_draft")
+    base == "shell_exec" || base == "data_analyze" || base.ends_with("publish_draft")
 }
 
 /// Definition of a tool that an agent can use.

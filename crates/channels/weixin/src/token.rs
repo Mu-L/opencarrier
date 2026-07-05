@@ -1,17 +1,27 @@
 //! Token storage and management for the WeChat iLink Bot plugin.
 //!
 //! Manages per-bot bot_tokens (24h expiry) and per-user context_tokens.
-//! Tokens are persisted to `~/.opencarrier/senders/{user_id}/session.json`.
+//! When DB-backed persistence is available (via set_persist_fn),
+//! sessions and context_tokens are stored in SQLite instead of JSON files.
 
 use dashmap::DashMap;
 use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 use crate::models::*;
+
+// ---------------------------------------------------------------------------
+// DB persistence callbacks (set from server.rs when memory is available)
+// ---------------------------------------------------------------------------
+
+/// Persist a session (BotTokenFile) to the database.
+pub type SessionPersistFn = Arc<dyn Fn(&BotTokenFile) + Send + Sync>;
+/// Load all persisted sessions from the database.
+pub type SessionsLoadFn = Arc<dyn Fn() -> Vec<BotTokenFile> + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // Per-bot runtime state
@@ -121,6 +131,10 @@ pub struct WeixinState {
     pub bots: DashMap<String, BotSession>,
     /// Shared HTTP client for API routes (QR code login).
     pub http: Client,
+    /// DB-backed session persist callback. When set, save_session writes to DB instead of JSON.
+    pub session_persist: Mutex<Option<SessionPersistFn>>,
+    /// DB-backed session load callback. When set, load_from_dir reads from DB.
+    pub sessions_load: Mutex<Option<SessionsLoadFn>>,
 }
 
 impl WeixinState {
@@ -128,18 +142,35 @@ impl WeixinState {
         Self {
             bots: DashMap::new(),
             http: crate::build_http_client(),
+            session_persist: Mutex::new(None),
+            sessions_load: Mutex::new(None),
         }
     }
 
-    /// Load persisted tokens from senders/*/session.json.
-    /// Only loads files where channel == "weixin".
-    pub fn load_from_dir(&self) {
-        let home = types::config::home_dir();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+    /// Set DB-backed persistence callbacks. Called once at startup from server.rs.
+    pub fn set_persist_fns(
+        &self,
+        persist: SessionPersistFn,
+        load: SessionsLoadFn,
+    ) {
+        *self.session_persist.lock().unwrap() = Some(persist);
+        *self.sessions_load.lock().unwrap() = Some(load);
+    }
 
+    /// Load persisted tokens from the database (preferred) or JSON files.
+    pub fn load_from_dir(&self) {
+        // Try DB first
+        if let Some(ref load_fn) = *self.sessions_load.lock().unwrap() {
+            let tfs = load_fn();
+            if !tfs.is_empty() {
+                self.load_from_bot_token_files(tfs);
+                return;
+            }
+        }
+        // Fallback: scan JSON files
+        let home = types::config::home_dir();
+
+        let mut tfs = Vec::new();
         for (sender_id, json) in types::config::scan_sender_sessions(&home) {
             if json.get("channel").and_then(|v| v.as_str()) != Some("weixin") {
                 continue;
@@ -151,26 +182,30 @@ impl WeixinState {
                     continue;
                 }
             };
-            // Use sender_id as user_id/openid
+            tfs.push(tf);
+        }
+        if !tfs.is_empty() {
+            self.load_from_bot_token_files(tfs);
+        }
+    }
+
+    /// Shared logic to load BotTokenFiles into the in-memory bot cache.
+    fn load_from_bot_token_files(&self, tfs: Vec<BotTokenFile>) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let mut count = 0;
+        for tf in tfs {
             let user_id = match &tf.user_id {
                 Some(uid) if !uid.is_empty() => uid.clone(),
-                _ => sender_id.clone(),
+                _ => continue,
             };
             if now >= tf.expires_at {
-                info!(
-                    user_id = %user_id,
-                    "Skipping expired iLink token"
-                );
                 continue;
             }
-            // Load persisted context_tokens so iLink pushes work after restart.
             let persisted_ctx = tf.context_tokens.clone();
-            info!(
-                user_id = %user_id,
-                expires_in = tf.expires_at - now,
-                ctx_count = persisted_ctx.len(),
-                "Loaded iLink token"
-            );
+            count += 1;
             let state = BotSession {
                 bot_id: tf.bot_id.clone(),
                 bot_token: tf.bot_token,
@@ -186,6 +221,9 @@ impl WeixinState {
                 bind_agent: tf.bind_agent,
             };
             self.bots.insert(user_id, state);
+        }
+        if count > 0 {
+            info!(count, "Loaded iLink bot sessions");
         }
     }
 
@@ -236,28 +274,10 @@ impl WeixinState {
         info!(user_id = ?user_id, bot_id = bot_id, "Registered iLink bot from QR scan");
     }
 
-    /// Save a bot session's state to disk at senders/{user_id}/session.json.
+    /// Save a bot session's state. Uses DB if persistence callback is set,
+    /// otherwise falls back to JSON file.
     pub fn save_session(&self, state: &BotSession) {
-        let filename_key = state.user_id.as_deref().unwrap_or(&state.bot_id);
-        let dir = types::config::home_dir().join("senders").join(filename_key);
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            warn!(dir = %dir.display(), "Failed to create sender directory: {e}");
-            return;
-        }
-
-        // Merge in-memory context_tokens with what's already on disk so a
-        // poll-loop save_session never wipes tokens from another session.
-        let mut merged_ctx = state.context_tokens.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let path = dir.join("session.json");
-        if path.exists() {
-            if let Ok(existing) = std::fs::read_to_string(&path) {
-                if let Ok(existing_tf) = serde_json::from_str::<BotTokenFile>(&existing) {
-                    for (uid, tok) in &existing_tf.context_tokens {
-                        merged_ctx.entry(uid.clone()).or_insert_with(|| tok.clone());
-                    }
-                }
-            }
-        }
+        let merged_ctx = state.context_tokens.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         let tf = BotTokenFile {
             channel: "weixin".to_string(),
@@ -272,6 +292,19 @@ impl WeixinState {
             context_tokens: merged_ctx,
         };
 
+        // Try DB first
+        if let Some(ref persist) = *self.session_persist.lock().unwrap() {
+            persist(&tf);
+            return;
+        }
+
+        // Fallback: JSON file
+        let filename_key = state.user_id.as_deref().unwrap_or(&state.bot_id);
+        let dir = types::config::home_dir().join("senders").join(filename_key);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!(dir = %dir.display(), "Failed to create sender directory: {e}");
+            return;
+        }
         let path = dir.join("session.json");
         match serde_json::to_string_pretty(&tf) {
             Ok(json) => {
@@ -328,10 +361,44 @@ impl WeixinState {
             .collect()
     }
 
-    /// Load new bots from senders/*/session.json (skips already-loaded bots).
-    /// Only loads files where channel == "weixin".
+    /// Load new bots — from DB if available, otherwise scan JSON files.
     /// Used by the dynamic session watcher to pick up QR-scanned bots.
     pub fn load_new_from_dir(&self) {
+        // Try DB first: reload and insert any sessions not yet in memory
+        if let Some(ref load_fn) = *self.sessions_load.lock().unwrap() {
+            for tf in load_fn() {
+                let sender_id = tf.user_id.as_deref().unwrap_or("");
+                if sender_id.is_empty() || self.bots.contains_key(sender_id) {
+                    continue;
+                }
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                if now >= tf.expires_at {
+                    continue;
+                }
+                info!(sender_id = %sender_id, ctx_count = tf.context_tokens.len(), "Dynamic watcher loaded new iLink bot from DB");
+                let state = BotSession {
+                    bot_id: tf.bot_id.clone(),
+                    bot_token: tf.bot_token,
+                    baseurl: tf.baseurl,
+                    ilink_bot_id: tf.ilink_bot_id,
+                    user_id: Some(sender_id.to_string()),
+                    expires_at: AtomicI64::new(tf.expires_at),
+                    http: crate::build_http_client(),
+                    context_tokens: Mutex::new(tf.context_tokens),
+                    typing_tickets: Mutex::new(HashMap::new()),
+                    cursor: Mutex::new(String::new()),
+                    active: AtomicBool::new(false),
+                    bind_agent: tf.bind_agent,
+                };
+                self.bots.insert(sender_id.to_string(), state);
+            }
+            return;
+        }
+
+        // Fallback: scan JSON files
         let home = types::config::home_dir();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -346,7 +413,6 @@ impl WeixinState {
                 Ok(t) => t,
                 Err(_) => continue,
             };
-            // Refresh existing bot only if a new bot_token was written (re-scan).
             if let Some(mut existing) = self.bots.get_mut(&sender_id) {
                 if existing.bot_token != tf.bot_token {
                     info!(sender_id = %sender_id, "Refreshing iLink bot from updated session file (new bot_token)");
@@ -359,24 +425,19 @@ impl WeixinState {
                     existing.bind_agent = tf.bind_agent.clone();
                     self.save_session(&existing);
                 }
-                // Restore persisted context_tokens so iLink pushes work after a
-            // restart without a fresh inbound message.
-            {
-                let mut ctx = existing.context_tokens.lock().unwrap_or_else(|e| e.into_inner());
-                for (uid, tok) in &tf.context_tokens {
-                    ctx.entry(uid.clone()).or_insert_with(|| tok.clone());
+                {
+                    let mut ctx = existing.context_tokens.lock().unwrap_or_else(|e| e.into_inner());
+                    for (uid, tok) in &tf.context_tokens {
+                        ctx.entry(uid.clone()).or_insert_with(|| tok.clone());
+                    }
                 }
-            }
-            continue;
+                continue;
             }
             if now >= tf.expires_at {
                 continue;
             }
             info!(sender_id = %sender_id, "Dynamic watcher loaded new iLink bot");
-            // Load persisted context_tokens from the session file so iLink pushes
-            // work after a restart without a fresh inbound message.
             let persisted_ctx = tf.context_tokens.clone();
-            info!(sender_id = %sender_id, ctx_count = persisted_ctx.len(), "Loaded persisted context_tokens from session.json");
             let state = BotSession {
                 bot_id: tf.bot_id.clone(),
                 bot_token: tf.bot_token,

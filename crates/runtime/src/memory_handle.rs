@@ -109,4 +109,20 @@ pub trait MemoryHandle: Send + Sync {
         source_kind: Option<&str>,
         limit: usize,
     ) -> Result<Vec<types::memory_tree::TreeSummary>, String>;
+
+    // -----------------------------------------------------------------
+    // Analytics operations (for data_analyze tool)
+    // -----------------------------------------------------------------
+
+    /// User statistics: total users, active users, new users.
+    fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> Result<serde_json::Value, String>;
+
+    /// Per-user lookup: session count, last active, recent conversation summary.
+    fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> Result<serde_json::Value, String>;
+
+    /// Usage analytics: token consumption, daily trends, per-model breakdown.
+    fn analytics_usage(&self, agent_id: &str, days: u32) -> Result<serde_json::Value, String>;
+
+    /// Recent conversations list (metadata only, no message content).
+    fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> Result<serde_json::Value, String>;
 }

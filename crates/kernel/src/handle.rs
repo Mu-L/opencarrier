@@ -940,6 +940,34 @@ impl MemoryHandle for CarrierKernel {
         self.memory.tree_list_sources_async(owner_id, source_kind, limit).await
             .map_err(|e| e.to_string())
     }
+
+    fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> Result<serde_json::Value, String> {
+        let (agent_id, _) = self.registry.resolve(agent_id)
+            .map_err(|e| e.to_string())?;
+        self.memory.analytics_user_stats(&agent_id.to_string(), active_days)
+            .map_err(|e| e.to_string())
+    }
+
+    fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> Result<serde_json::Value, String> {
+        let (agent_id, _) = self.registry.resolve(agent_id)
+            .map_err(|e| e.to_string())?;
+        self.memory.analytics_user_lookup(&agent_id.to_string(), sender_id)
+            .map_err(|e| e.to_string())
+    }
+
+    fn analytics_usage(&self, agent_id: &str, days: u32) -> Result<serde_json::Value, String> {
+        let (agent_id, _) = self.registry.resolve(agent_id)
+            .map_err(|e| e.to_string())?;
+        self.memory.analytics_usage(&agent_id.to_string(), days)
+            .map_err(|e| e.to_string())
+    }
+
+    fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> Result<serde_json::Value, String> {
+        let (agent_id, _) = self.registry.resolve(agent_id)
+            .map_err(|e| e.to_string())?;
+        self.memory.analytics_recent_conversations(&agent_id.to_string(), limit)
+            .map_err(|e| e.to_string())
+    }
 }
 
 type ToolsetAlias = (fn(&str) -> bool, &'static str);
@@ -1211,6 +1239,26 @@ impl MemoryHandle for MemorySubstrateHandle {
         limit: usize,
     ) -> Result<Vec<types::memory_tree::TreeSummary>, String> {
         self.inner.tree_list_sources_async(owner_id, source_kind, limit).await
+            .map_err(|e| e.to_string())
+    }
+
+    fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> Result<serde_json::Value, String> {
+        self.inner.analytics_user_stats(agent_id, active_days)
+            .map_err(|e| e.to_string())
+    }
+
+    fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> Result<serde_json::Value, String> {
+        self.inner.analytics_user_lookup(agent_id, sender_id)
+            .map_err(|e| e.to_string())
+    }
+
+    fn analytics_usage(&self, agent_id: &str, days: u32) -> Result<serde_json::Value, String> {
+        self.inner.analytics_usage(agent_id, days)
+            .map_err(|e| e.to_string())
+    }
+
+    fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> Result<serde_json::Value, String> {
+        self.inner.analytics_recent_conversations(agent_id, limit)
             .map_err(|e| e.to_string())
     }
 }

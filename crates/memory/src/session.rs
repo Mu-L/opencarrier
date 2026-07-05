@@ -469,6 +469,90 @@ impl SessionStore {
         self.save_session(&session)?;
         Ok(session)
     }
+
+    /// Count users with sessions updated in the last N days.
+    pub fn count_active_users(&self, agent_id: &str, days: u32) -> CarrierResult<u32> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let sql = format!(
+            "SELECT COUNT(DISTINCT label) FROM sessions \
+             WHERE agent_id = ?1 AND label LIKE 'user:%' \
+             AND updated_at > datetime('now', '-{} days')",
+            days
+        );
+        let count: u32 = conn
+            .query_row(&sql, rusqlite::params![agent_id], |row| row.get(0))
+            .unwrap_or(0);
+        Ok(count)
+    }
+
+    /// Count users whose first session was created in the last N days.
+    pub fn count_new_users(&self, agent_id: &str, days: u32) -> CarrierResult<u32> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let sql = format!(
+            "SELECT COUNT(*) FROM (\
+               SELECT label FROM sessions \
+               WHERE agent_id = ?1 AND label LIKE 'user:%' \
+               GROUP BY label \
+               HAVING MIN(created_at) > datetime('now', '-{} days')\
+             )",
+            days
+        );
+        let count: u32 = conn
+            .query_row(&sql, rusqlite::params![agent_id], |row| row.get(0))
+            .unwrap_or(0);
+        Ok(count)
+    }
+
+    /// Return the N most recent sessions with metadata (no msgpack blob).
+    pub fn recent_sessions(
+        &self,
+        agent_id: &str,
+        limit: u32,
+    ) -> CarrierResult<Vec<serde_json::Value>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, label, created_at, updated_at, context_window_tokens \
+                 FROM sessions \
+                 WHERE agent_id = ?1 \
+                 ORDER BY updated_at DESC LIMIT ?2",
+            )
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![agent_id, limit], |row| {
+                let id: String = row.get(0)?;
+                let label: Option<String> = row.get(1)?;
+                let created_at: String = row.get(2)?;
+                let updated_at: String = row.get(3)?;
+                let tokens: i64 = row.get(4)?;
+                Ok((id, label, created_at, updated_at, tokens))
+            })
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+
+        let mut sessions = Vec::new();
+        for row in rows {
+            let (id, label, created_at, updated_at, tokens) =
+                row.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            sessions.push(serde_json::json!({
+                "session_id": id,
+                "label": label,
+                "created_at": created_at,
+                "updated_at": updated_at,
+                "tokens": tokens,
+            }));
+        }
+        Ok(sessions)
+    }
 }
 
 /// A single JSONL line in the session mirror file.

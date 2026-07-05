@@ -8,6 +8,7 @@ pub mod agent;
 pub mod agent_mgmt;
 pub mod browser;
 pub mod collaboration;
+pub mod data_analyze;
 pub mod filesystem;
 pub mod knowledge;
 pub mod kv;
@@ -108,6 +109,7 @@ pub fn builtin_modules(cli_exec_config: types::config::CliExecConfig) -> Vec<Box
         Box::new(scheduling::SchedulingTools),
         Box::new(collaboration::CollaborationTools),
         Box::new(a2a::A2aTools),
+        Box::new(data_analyze::DataAnalyzeTools),
     ];
     // Only register cli_exec if there are whitelisted commands configured.
     if !cli_exec_config.commands.is_empty() {

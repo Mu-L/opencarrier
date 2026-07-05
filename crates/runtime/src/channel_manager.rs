@@ -33,6 +33,8 @@ pub struct ChannelManager {
     sender_router: Option<Arc<SenderRouter>>,
     /// Cron delivery store (last-channel tracking + pending notifications).
     cron_delivery: Option<Arc<memory::CronDeliveryStore>>,
+    /// Notify route store (DB-backed notification routing).
+    notify_store: Option<Arc<memory::NotifyRouteStore>>,
     /// Tool dispatcher for plugin-style tools (weixin tools, etc.).
     tool_dispatcher: Arc<PluginToolDispatcher>,
 }
@@ -48,6 +50,7 @@ impl ChannelManager {
             kernel,
             sender_router: None,
             cron_delivery: None,
+            notify_store: None,
             tool_dispatcher: Arc::new(PluginToolDispatcher::new()),
         }
     }
@@ -60,6 +63,11 @@ impl ChannelManager {
     /// Set the cron delivery store (enables last-channel tracking + buffer drain).
     pub fn set_cron_delivery(&mut self, store: Arc<memory::CronDeliveryStore>) {
         self.cron_delivery = Some(store);
+    }
+
+    /// Set the notify route store (enables DB-backed notification routing).
+    pub fn set_notify_store(&mut self, store: Arc<memory::NotifyRouteStore>) {
+        self.notify_store = Some(store);
     }
 
     /// Register a channel adapter under a unique name.
@@ -142,20 +150,60 @@ impl ChannelManager {
         });
         bridge.set_routing_mode_fn(mode_fn);
 
-        // Load notify routes (~/.opencarrier/notify_routes.json) — enables
-        // [NOTIFY:type]content[/NOTIFY] markers → cross-channel push.
+        // Load notify routes — enables [NOTIFY:type]content[/NOTIFY] markers → cross-channel push.
+        // Try DB first, fall back to notify_routes.json.
         {
-            let path = types::config::home_dir().join("notify_routes.json");
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(routes) = serde_json::from_str::<
-                    std::collections::HashMap<String, crate::plugin::bridge::NotifyTarget>,
-                >(&content)
-                {
-                    if !routes.is_empty() {
-                        info!(route_count = routes.len(), "Loaded notify routes");
-                        bridge.set_notify_routes(Arc::new(routes));
+            let mut loaded_from = "none";
+            let routes: std::collections::HashMap<String, crate::plugin::bridge::NotifyTarget> =
+                if let Some(ref store) = self.notify_store {
+                    match store.load_all() {
+                        Ok(rows) if !rows.is_empty() => {
+                            loaded_from = "database";
+                            rows.into_iter()
+                                .map(|r| {
+                                    (
+                                        r.name,
+                                        crate::plugin::bridge::NotifyTarget {
+                                            channel: r.channel,
+                                            bot_id: r.bot_id,
+                                            user_id: r.user_id,
+                                            prefix: r.prefix,
+                                            recipients: r.recipients,
+                                        },
+                                    )
+                                })
+                                .collect()
+                        }
+                        _ => std::collections::HashMap::new(),
                     }
+                } else {
+                    std::collections::HashMap::new()
+                };
+
+            let routes = if !routes.is_empty() {
+                routes
+            } else {
+                let path = types::config::home_dir().join("notify_routes.json");
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(r) = serde_json::from_str::<
+                        std::collections::HashMap<String, crate::plugin::bridge::NotifyTarget>,
+                    >(&content)
+                    {
+                        if !r.is_empty() {
+                            loaded_from = "json";
+                        }
+                        r
+                    } else {
+                        std::collections::HashMap::new()
+                    }
+                } else {
+                    std::collections::HashMap::new()
                 }
+            };
+
+            if !routes.is_empty() {
+                info!(route_count = routes.len(), from = loaded_from, "Loaded notify routes");
+                bridge.set_notify_routes(Arc::new(routes));
             }
         }
 

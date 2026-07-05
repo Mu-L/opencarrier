@@ -205,6 +205,50 @@ impl UsageStore {
         Ok(results)
     }
 
+    /// Per-agent daily breakdown over the last N days.
+    pub fn query_daily_breakdown_for_agent(
+        &self,
+        agent_id: &str,
+        days: u32,
+    ) -> CarrierResult<Vec<DailyBreakdown>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
+
+        let sql = format!(
+            "SELECT date(timestamp) as day,
+                COALESCE(SUM(input_tokens) + SUM(output_tokens), 0),
+                COUNT(*)
+             FROM usage_events
+             WHERE timestamp > datetime('now', '-{days} days')
+               AND agent_id = ?1
+             GROUP BY day
+             ORDER BY day ASC"
+        );
+
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+
+        let row_data: Vec<rusqlite::Result<DailyBreakdown>> = stmt
+            .query_map(rusqlite::params![agent_id], |row| {
+                Ok(DailyBreakdown {
+                    date: row.get(0)?,
+                    tokens: row.get::<_, i64>(1)? as u64,
+                    calls: row.get::<_, i64>(2)? as u64,
+                })
+            })
+            .map_err(|e| CarrierError::Memory(e.to_string()))?
+            .collect();
+
+        let mut results = Vec::new();
+        for row in row_data {
+            results.push(row.map_err(|e| CarrierError::Memory(e.to_string()))?);
+        }
+        Ok(results)
+    }
+
     /// Query the timestamp of the earliest usage event.
     pub fn query_first_event_date(&self) -> CarrierResult<Option<String>> {
         let conn = self

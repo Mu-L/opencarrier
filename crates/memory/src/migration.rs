@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 21;
+const SCHEMA_VERSION: u32 = 23;
 
 /// Run all migrations to bring the database up to date.
 ///
@@ -37,6 +37,8 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         (19, migrate_v19),
         (20, migrate_v20),
         (21, migrate_v21),
+        (22, migrate_v22),
+        (23, migrate_v23),
     ];
 
     for (version, migrate_fn) in &migrations {
@@ -938,6 +940,127 @@ fn migrate_v21(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![21, "Cron jobs: migrate cron_jobs.json to cron_jobs table"],
+    )?;
+    Ok(())
+}
+
+/// Version 22: Add weixin_sessions table for DB-backed iLink session persistence.
+/// Migrates existing senders/*/session.json data if present.
+fn migrate_v22(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS weixin_sessions (
+            user_id       TEXT PRIMARY KEY,
+            channel       TEXT NOT NULL DEFAULT 'weixin',
+            sender_key    TEXT NOT NULL DEFAULT 'openid',
+            bot_id        TEXT NOT NULL,
+            bot_token     TEXT NOT NULL,
+            baseurl       TEXT NOT NULL,
+            ilink_bot_id  TEXT NOT NULL,
+            expires_at    INTEGER NOT NULL,
+            bind_agent    TEXT,
+            context_tokens TEXT NOT NULL DEFAULT '{}',
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        ",
+    )?;
+
+    // Migrate existing senders/*/session.json files
+    let home_dir = types::config::home_dir();
+    let senders_dir = home_dir.join("senders");
+    if senders_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&senders_dir) {
+            for entry in entries.flatten() {
+                let session_path = entry.path().join("session.json");
+                if !session_path.exists() {
+                    continue;
+                }
+                let data = match std::fs::read_to_string(&session_path) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                let json: serde_json::Value = match serde_json::from_str(&data) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                // Only migrate weixin sessions
+                if json.get("channel").and_then(|v| v.as_str()) != Some("weixin") {
+                    continue;
+                }
+                let user_id = match json.get("user_id").and_then(|v| v.as_str()) {
+                    Some(uid) if !uid.is_empty() => uid,
+                    _ => continue,
+                };
+                let bot_id = json.get("bot_id").and_then(|v| v.as_str()).unwrap_or("");
+                let bot_token = json.get("bot_token").and_then(|v| v.as_str()).unwrap_or("");
+                let baseurl = json.get("baseurl").and_then(|v| v.as_str()).unwrap_or("");
+                let ilink_bot_id = json.get("ilink_bot_id").and_then(|v| v.as_str()).unwrap_or("");
+                let expires_at = json.get("expires_at").and_then(|v| v.as_i64()).unwrap_or(0);
+                let bind_agent = json.get("bind_agent").and_then(|v| v.as_str());
+                let context_tokens = json.get("context_tokens")
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "{}".to_string());
+
+                let _ = conn.execute(
+                    "INSERT OR IGNORE INTO weixin_sessions (user_id, channel, sender_key, bot_id, bot_token, baseurl, ilink_bot_id, expires_at, bind_agent, context_tokens) \
+                     VALUES (?1, 'weixin', 'openid', ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![user_id, bot_id, bot_token, baseurl, ilink_bot_id, expires_at, bind_agent, context_tokens],
+                );
+            }
+        }
+    }
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![22, "WeChat iLink: migrate senders/*/session.json to weixin_sessions table"],
+    )?;
+    Ok(())
+}
+
+/// Version 23: Add notify_routes table for DB-backed notification routing.
+/// Migrates existing notify_routes.json data if present.
+fn migrate_v23(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS notify_routes (
+            name       TEXT PRIMARY KEY,
+            channel    TEXT NOT NULL,
+            bot_id     TEXT NOT NULL DEFAULT '',
+            user_id    TEXT NOT NULL DEFAULT '',
+            prefix     TEXT,
+            recipients TEXT
+        );
+        ",
+    )?;
+
+    // Migrate existing notify_routes.json if present
+    let home_dir = types::config::home_dir();
+    let json_path = home_dir.join("notify_routes.json");
+    if json_path.exists() {
+        if let Ok(data) = std::fs::read_to_string(&json_path) {
+            if let Ok(routes) = serde_json::from_str::<serde_json::Value>(&data) {
+                if let Some(map) = routes.as_object() {
+                    for (name, val) in map {
+                        let channel = val.get("channel").and_then(|v| v.as_str()).unwrap_or("");
+                        let bot_id = val.get("bot_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let user_id = val.get("user_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let prefix = val.get("prefix").and_then(|v| v.as_str());
+                        let recipients = val.get("recipients").and_then(|v| v.as_str());
+                        let _ = conn.execute(
+                            "INSERT OR IGNORE INTO notify_routes (name, channel, bot_id, user_id, prefix, recipients) \
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                            rusqlite::params![name, channel, bot_id, user_id, prefix, recipients],
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![23, "Notify routes: migrate notify_routes.json to notify_routes table"],
     )?;
     Ok(())
 }
