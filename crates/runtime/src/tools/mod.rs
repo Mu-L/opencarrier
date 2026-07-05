@@ -4,6 +4,7 @@
 //! (for LLM tool schemas) and execution (the actual logic).
 
 pub mod a2a;
+pub mod amap;
 pub mod agent;
 pub mod agent_mgmt;
 pub mod browser;
@@ -108,6 +109,7 @@ pub fn builtin_modules(cli_exec_config: types::config::CliExecConfig) -> Vec<Box
         Box::new(training::TrainingTools),
         Box::new(scheduling::SchedulingTools),
         Box::new(collaboration::CollaborationTools),
+        Box::new(amap::AmapTools),
         Box::new(a2a::A2aTools),
         Box::new(data_analyze::DataAnalyzeTools),
     ];
