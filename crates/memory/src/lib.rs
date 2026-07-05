@@ -5,6 +5,7 @@
 
 pub mod acp_session;
 pub mod cron_delivery;
+pub mod cron_store;
 pub mod invites;
 pub mod migration;
 pub mod session;
@@ -14,6 +15,7 @@ pub mod usage;
 
 mod substrate;
 pub use cron_delivery::CronDeliveryStore;
+pub use cron_store::CronJobStore;
 pub use invites::InviteStore;
 pub use session::SessionStore;
 pub use substrate::MemorySubstrate;

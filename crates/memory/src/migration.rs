@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 20;
+const SCHEMA_VERSION: u32 = 21;
 
 /// Run all migrations to bring the database up to date.
 ///
@@ -36,6 +36,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         (18, migrate_v18),
         (19, migrate_v19),
         (20, migrate_v20),
+        (21, migrate_v21),
     ];
 
     for (version, migrate_fn) in &migrations {
@@ -869,6 +870,74 @@ fn migrate_v20(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![20, "Sessions: add turn_summaries column for turn-level context layering"],
+    )?;
+    Ok(())
+}
+
+/// Version 21: Add cron_jobs table for DB-backed cron persistence.
+/// Migrates existing cron_jobs.json data if present.
+fn migrate_v21(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS cron_jobs (
+            id          TEXT PRIMARY KEY,
+            agent_id    TEXT NOT NULL,
+            owner_id    TEXT,
+            sender_id   TEXT,
+            name        TEXT NOT NULL,
+            enabled     INTEGER NOT NULL DEFAULT 1,
+            schedule    TEXT NOT NULL,
+            action      TEXT NOT NULL,
+            delivery    TEXT NOT NULL DEFAULT '{\"kind\":\"none\"}',
+            one_shot    INTEGER NOT NULL DEFAULT 0,
+            last_status TEXT,
+            consecutive_errors INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT NOT NULL,
+            last_run    TEXT,
+            next_run    TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_cron_agent ON cron_jobs(agent_id);
+        ",
+    )?;
+
+    // Migrate existing cron_jobs.json if present
+    let home_dir = types::config::home_dir();
+    let json_path = home_dir.join("cron_jobs.json");
+    if json_path.exists() {
+        if let Ok(data) = std::fs::read_to_string(&json_path) {
+            if let Ok(metas) = serde_json::from_str::<Vec<serde_json::Value>>(&data) {
+                for meta_val in &metas {
+                    if let Some(job_val) = meta_val.get("job") {
+                        let id = job_val.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let agent_id = job_val.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let owner_id = job_val.get("owner_id").and_then(|v| v.as_str());
+                        let sender_id = job_val.get("sender_id").and_then(|v| v.as_str());
+                        let name = job_val.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        let enabled = job_val.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                        let schedule = job_val.get("schedule").map(|v| v.to_string()).unwrap_or_default();
+                        let action = job_val.get("action").map(|v| v.to_string()).unwrap_or_default();
+                        let delivery = job_val.get("delivery").map(|v| v.to_string()).unwrap_or_else(|| "{\"kind\":\"none\"}".to_string());
+                        let one_shot = meta_val.get("one_shot").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let last_status = meta_val.get("last_status").and_then(|v| v.as_str());
+                        let consecutive_errors = meta_val.get("consecutive_errors").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let created_at = job_val.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+                        let last_run = job_val.get("last_run").and_then(|v| v.as_str());
+                        let next_run = job_val.get("next_run").and_then(|v| v.as_str());
+
+                        let _ = conn.execute(
+                            "INSERT OR IGNORE INTO cron_jobs (id, agent_id, owner_id, sender_id, name, enabled, schedule, action, delivery, one_shot, last_status, consecutive_errors, created_at, last_run, next_run) \
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                            rusqlite::params![id, agent_id, owner_id, sender_id, name, enabled as i32, schedule, action, delivery, one_shot as i32, last_status, consecutive_errors as i32, created_at, last_run, next_run],
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![21, "Cron jobs: migrate cron_jobs.json to cron_jobs table"],
     )?;
     Ok(())
 }

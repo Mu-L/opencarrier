@@ -4,6 +4,7 @@
 //! and tree memory behind a single API.
 
 use crate::cron_delivery::CronDeliveryStore;
+use crate::cron_store::CronJobStore;
 use crate::invites::InviteStore;
 use crate::migration::run_migrations;
 use crate::session::{Session, SessionStore};
@@ -33,6 +34,7 @@ pub struct MemorySubstrate {
     sessions: SessionStore,
     invites: InviteStore,
     cron_delivery: CronDeliveryStore,
+    cron_store: CronJobStore,
     content_root: PathBuf,
 }
 
@@ -59,6 +61,7 @@ impl MemorySubstrate {
             sessions: SessionStore::new(Arc::clone(&shared)),
             invites: InviteStore::new(Arc::clone(&shared)),
             cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
+            cron_store: CronJobStore::new(Arc::clone(&shared)),
             content_root,
         })
     }
@@ -75,6 +78,7 @@ impl MemorySubstrate {
             sessions: SessionStore::new(Arc::clone(&shared)),
             invites: InviteStore::new(Arc::clone(&shared)),
             cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
+            cron_store: CronJobStore::new(Arc::clone(&shared)),
             content_root: PathBuf::from("/tmp/opencarrier_tree_content"),
         })
     }
@@ -82,6 +86,11 @@ impl MemorySubstrate {
     /// Get a reference to the cron delivery store (last-channel tracking + buffer).
     pub fn cron_delivery(&self) -> &CronDeliveryStore {
         &self.cron_delivery
+    }
+
+    /// Get a reference to the cron job store (persistent cron_jobs table).
+    pub fn cron_store(&self) -> &CronJobStore {
+        &self.cron_store
     }
 
     /// Get a reference to the invite store.

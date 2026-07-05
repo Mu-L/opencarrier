@@ -12,46 +12,15 @@ use types::error::{CarrierError, CarrierResult};
 use types::scheduler::{CronJob, CronJobId, CronSchedule};
 use chrono::{Duration, Utc};
 use dashmap::DashMap;
-use serde::{Deserialize, Serialize};
+use memory::cron_store::JobMeta;
+use memory::CronJobStore;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Maximum consecutive errors before a job is auto-disabled.
 const MAX_CONSECUTIVE_ERRORS: u32 = 5;
-
-// ---------------------------------------------------------------------------
-// JobMeta — extra runtime state not stored in CronJob itself
-// ---------------------------------------------------------------------------
-
-/// Runtime metadata for a cron job that extends the base `CronJob` type.
-///
-/// The `CronJob` struct in `carrier-types` is intentionally lean (no
-/// `one_shot`, `last_status`, or error tracking). The scheduler tracks
-/// these operational details separately.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JobMeta {
-    /// The underlying job definition.
-    pub job: CronJob,
-    /// Whether this job should be removed after a single successful execution.
-    pub one_shot: bool,
-    /// Human-readable status of the last execution (e.g. `"ok"` or `"error: ..."`).
-    pub last_status: Option<String>,
-    /// Number of consecutive failed executions.
-    pub consecutive_errors: u32,
-}
-
-impl JobMeta {
-    /// Wrap a `CronJob` with default metadata.
-    pub fn new(job: CronJob, one_shot: bool) -> Self {
-        Self {
-            job,
-            one_shot,
-            last_status: None,
-            consecutive_errors: 0,
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // CronScheduler
@@ -66,24 +35,28 @@ impl JobMeta {
 pub struct CronScheduler {
     /// All tracked jobs, keyed by their unique ID.
     jobs: DashMap<CronJobId, JobMeta>,
-    /// Path to the persistence file (`<home>/cron_jobs.json`).
+    /// Path to the legacy persistence file (kept for fallback).
     persist_path: PathBuf,
+    /// SQLite-backed store for persistence (takes priority over JSON).
+    db_store: Option<Arc<CronJobStore>>,
     /// Global cap on total jobs across all agents (atomic for hot-reload).
     max_total_jobs: AtomicUsize,
 }
 
 impl CronScheduler {
     /// Create a new scheduler.
-    ///
-    /// `home_dir` is the Carrier data directory; jobs are persisted to
-    /// `<home_dir>/cron_jobs.json`. `max_total_jobs` caps the total number
-    /// of jobs across all agents.
     pub fn new(home_dir: &Path, max_total_jobs: usize) -> Self {
         Self {
             jobs: DashMap::new(),
             persist_path: home_dir.join("cron_jobs.json"),
+            db_store: None,
             max_total_jobs: AtomicUsize::new(max_total_jobs),
         }
+    }
+
+    /// Set the DB-backed store. Called after kernel boot once memory is available.
+    pub fn set_db_store(&mut self, store: Arc<CronJobStore>) {
+        self.db_store = Some(store);
     }
 
     /// Update the max total jobs limit (for hot-reload).
@@ -93,11 +66,20 @@ impl CronScheduler {
 
     // -- Persistence --------------------------------------------------------
 
-    /// Load persisted jobs from disk.
-    ///
-    /// Returns the number of jobs loaded. If the persistence file does not
-    /// exist, returns `Ok(0)` without error.
+    /// Load persisted jobs from DB (preferred) or JSON (fallback).
     pub fn load(&self) -> CarrierResult<usize> {
+        // Try DB first
+        if let Some(ref store) = self.db_store {
+            let metas = store.load_all()?;
+            let count = metas.len();
+            for meta in metas {
+                self.jobs.insert(meta.job.id, meta);
+            }
+            info!(count, "Loaded cron jobs from database");
+            return Ok(count);
+        }
+
+        // Fallback: JSON file
         if !self.persist_path.exists() {
             return Ok(0);
         }
@@ -113,9 +95,18 @@ impl CronScheduler {
         Ok(count)
     }
 
-    /// Persist all jobs to disk via atomic write (write to `.tmp`, then rename).
+    /// Persist all jobs to DB (preferred) or JSON (fallback).
     pub fn persist(&self) -> CarrierResult<()> {
         let metas: Vec<JobMeta> = self.jobs.iter().map(|r| r.value().clone()).collect();
+
+        // Try DB first
+        if let Some(ref store) = self.db_store {
+            store.save_all(&metas)?;
+            debug!(count = metas.len(), "Persisted cron jobs to database");
+            return Ok(());
+        }
+
+        // Fallback: JSON file
         let data = serde_json::to_string_pretty(&metas)
             .map_err(|e| CarrierError::Internal(format!("Failed to serialize cron jobs: {e}")))?;
         let tmp_path = self.persist_path.with_extension("json.tmp");
@@ -124,7 +115,7 @@ impl CronScheduler {
         })?;
         std::fs::rename(&tmp_path, &self.persist_path)
             .map_err(|e| CarrierError::Internal(format!("Failed to rename cron jobs file: {e}")))?;
-        debug!(count = metas.len(), "Persisted cron jobs");
+        debug!(count = metas.len(), "Persisted cron jobs to disk");
         Ok(())
     }
 

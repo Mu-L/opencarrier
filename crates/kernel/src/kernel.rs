@@ -535,13 +535,14 @@ impl CarrierKernel {
         let media_engine =
             runtime::media_understanding::MediaEngine::new(config.media.clone());
 
-        // Initialize cron scheduler
-        let cron_scheduler =
+        // Initialize cron scheduler with DB-backed persistence
+        let mut cron_scheduler =
             crate::cron::CronScheduler::new(&config.home_dir, config.max_cron_jobs);
+        cron_scheduler.set_db_store(Arc::new(memory.cron_store().clone()));
         match cron_scheduler.load() {
             Ok(count) => {
                 if count > 0 {
-                    info!("Loaded {count} cron job(s) from disk");
+                    info!("Loaded {count} cron job(s) from database");
                 }
             }
             Err(e) => {
