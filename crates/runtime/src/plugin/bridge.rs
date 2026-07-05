@@ -187,6 +187,24 @@ fn read_wechat_app_secret(
     None
 }
 
+/// Recursively search for a file by name under a directory.
+/// Returns the first match as an absolute path string.
+fn find_file_recursive(dir: &std::path::Path, filename: &str) -> Option<String> {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(found) = find_file_recursive(&path, filename) {
+                    return Some(found);
+                }
+            } else if path.file_name().and_then(|n| n.to_str()) == Some(filename) {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Resolve the article title: first non-empty line of the sibling `.md` file
 /// (with leading `#` stripped), else the html filename stem.
 fn resolve_article_title(html_path: &str) -> String {
@@ -233,7 +251,29 @@ async fn handle_publish_marker(
         html_path.to_string()
     } else {
         let base = types::config::sender_data_dir(&home, sender_id, agent_id, Some(sender_id));
-        base.join(html_path).to_string_lossy().to_string()
+        let direct = base.join(html_path);
+        if direct.exists() {
+            direct.to_string_lossy().to_string()
+        } else {
+            // Path not found — try resolving just the filename under output/.
+            // AI often writes files to output/<pipeline-dir>/filename.html but
+            // the PUBLISH marker may reference a different <pipeline-dir>.
+            // By searching by filename only, the path mismatch is eliminated.
+            let filename = std::path::Path::new(html_path).file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(html_path);
+            let output_dir = base.join("output");
+            if output_dir.exists() {
+                if let Some(found) = find_file_recursive(&output_dir, filename) {
+                    info!(original = %html_path, resolved = %found, "PUBLISH: resolved HTML by filename under output/");
+                    found
+                } else {
+                    direct.to_string_lossy().to_string()
+                }
+            } else {
+                direct.to_string_lossy().to_string()
+            }
+        }
     };
 
     let title = match explicit_title.filter(|t| !t.is_empty()) {
