@@ -107,6 +107,16 @@ fn parse_publish_markers(text: &str) -> (Vec<(String, String)>, String) {
     parse_markers(text, "[PUBLISH:", "[/PUBLISH]")
 }
 
+/// Parse PUBLISH content: "html_path|title|digest" where title and digest are optional.
+/// Returns (html_path, optional_title, optional_digest).
+fn parse_publish_content(content: &str) -> (String, Option<String>, Option<String>) {
+    let parts: Vec<&str> = content.splitn(3, '|').collect();
+    let html_path = parts.first().unwrap_or(&"").trim().to_string();
+    let title = parts.get(1).filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string());
+    let digest = parts.get(2).filter(|s| !s.trim().is_empty()).map(|s| s.trim().to_string());
+    (html_path, title, digest)
+}
+
 /// Read the app_secret for `app_id` from the sender's own profile.json
 /// (preferences.wechat_accounts array). Multi-user: each user's OA credentials
 /// live in their own directory; find the matching entry by app_id. Returns
@@ -164,6 +174,7 @@ async fn handle_publish_marker(
     sender_id: &str,
     app_id: &str,
     html_path: &str,
+    explicit_title: Option<&str>,
     digest: Option<&str>,
     agent_id: &str,
 ) {
@@ -179,7 +190,10 @@ async fn handle_publish_marker(
         base.join(html_path).to_string_lossy().to_string()
     };
 
-    let title = resolve_article_title(&abs_html);
+    let title = match explicit_title.filter(|t| !t.is_empty()) {
+        Some(t) => t.to_string(),
+        None => resolve_article_title(&abs_html),
+    };
     let cover_prompt = format!(
         "WeChat official account article cover image, theme: {title}, flat illustration style, vibrant, clean, no text"
     );
@@ -1032,20 +1046,19 @@ impl PluginBridgeManager {
                 let sender_id = original.sender_id.clone();
                 let agent_id = self.resolve_agent(original);
                 let app_id = app_id.clone();
-                // Parse "html_path|digest" — digest is optional
-                let (html_path, digest) = match content.split_once('|') {
-                    Some((path, d)) => (path.trim().to_string(), Some(d.trim().to_string())),
-                    None => (content.clone(), None),
-                };
+                // Parse "html_path|title|digest" — title and digest are optional.
+                // Examples: "article.html", "article.html|My Title", "article.html|My Title|Summary text"
+                let (html_path, explicit_title, digest) = parse_publish_content(content);
                 let digest = digest.filter(|d| !d.is_empty());
                 info!(
-                    %app_id, %html_path, digest_provided = digest.is_some(), %agent_id,
+                    %app_id, %html_path, title_provided = explicit_title.is_some(),
+                    digest_provided = digest.is_some(), %agent_id,
                     "PUBLISH marker matched, spawning publish handler"
                 );
                 tokio::spawn(async move {
                     handle_publish_marker(
                         kernel, send_fn, &channel_type, &bot_id, &sender_id,
-                        &app_id, &html_path, digest.as_deref(), &agent_id,
+                        &app_id, &html_path, explicit_title.as_deref(), digest.as_deref(), &agent_id,
                     )
                     .await;
                 });
