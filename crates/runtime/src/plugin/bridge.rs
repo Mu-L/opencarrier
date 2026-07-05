@@ -225,8 +225,32 @@ fn resolve_article_title(html_path: &str) -> String {
     let p = std::path::Path::new(html_path);
     let md = p.with_extension("md");
     if let Ok(content) = std::fs::read_to_string(&md) {
-        if let Some(line) = content.lines().find(|l| !l.trim().is_empty()) {
-            let t = line.trim().trim_start_matches('#').trim();
+        // Skip metadata-like lines (e.g. "流水线ID: ...") and find the first
+        // markdown heading (# title) or the first non-metadata content line.
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Markdown heading — use it as the title
+            if trimmed.starts_with('#') {
+                let t = trimmed.trim_start_matches('#').trim();
+                if !t.is_empty() {
+                    return t.to_string();
+                }
+            }
+            // Skip metadata-like lines (key: value patterns, e.g. "流水线ID: ...")
+            if trimmed.contains(':') && !trimmed.starts_with('-') && trimmed.chars().take(20).all(|c| c.is_alphanumeric() || c == '_' || c == ':' || c == ' ' || c >= '\u{4e00}') {
+                continue;
+            }
+            // First real content line — use it as title
+            return trimmed.to_string();
+        }
+    }
+    // Also try HTML <title> tag
+    if let Ok(html) = std::fs::read_to_string(html_path) {
+        if let Some(title) = html.split("<title>").nth(1).and_then(|s| s.split("</title>").next()) {
+            let t = title.trim();
             if !t.is_empty() {
                 return t.to_string();
             }

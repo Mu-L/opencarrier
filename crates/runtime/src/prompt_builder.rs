@@ -275,7 +275,10 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
              当前任务 ID: {tid}\n\
              文件输出目录: output/{tid}/\n\
              发布标记格式: [PUBLISH:app_id]output/{tid}/正文.html|文章标题|摘要[/PUBLISH]\n\
-             你必须将所有文件写入 output/{tid}/ 目录，PUBLISH 标记中的路径也必须使用 output/{tid}/ 开头。不要自己编造目录名。"
+             规则：\n\
+             1. 所有文件写入 output/{tid}/ 目录，PUBLISH 标记路径也用 output/{tid}/ 开头\n\
+             2. 不要把任务 ID 或流水线 ID 写入文章内容或文件开头——文章标题是文章的主题，不是任务 ID\n\
+             3. Markdown 文件第一行必须是文章的 # 标题（如 # 阿里 banning Claude 分析）"
         ));
     }
 
