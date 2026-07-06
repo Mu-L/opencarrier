@@ -3102,6 +3102,7 @@ dependencies = [
  "libloading",
  "lifecycle",
  "memory",
+ "once_cell",
  "regex-lite",
  "reqwest",
  "rusqlite",

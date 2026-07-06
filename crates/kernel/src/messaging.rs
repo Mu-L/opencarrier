@@ -136,10 +136,17 @@ impl CarrierKernel {
         // agents (registered via builtin_modules), but not in CORE_TOOL_NAMES.
         // Capabilities.tools filtering still applies downstream.
         let home_dir = types::config::home_dir();
-        let api_tool_names: std::collections::HashSet<String> = runtime::api_tools::loader::load_all_api_tools(&home_dir, entry.manifest.workspace.as_deref())
-            .into_iter()
-            .map(|t| t.name)
-            .collect();
+        let api_tool_names: std::collections::HashSet<String> = {
+            let mut names: std::collections::HashSet<String> = runtime::api_tools::loader::load_all_api_tools(&home_dir, entry.manifest.workspace.as_deref())
+                .into_iter()
+                .map(|t| t.name)
+                .collect();
+            // Include dynamically registered tools
+            for dt in runtime::api_tools::register::dynamic_tools() {
+                names.insert(dt.name);
+            }
+            names
+        };
         if !api_tool_names.is_empty() {
             let all_builtins = runtime::tool_runner::builtin_tool_definitions(self.config.cli_exec.clone());
             for t in &all_builtins {

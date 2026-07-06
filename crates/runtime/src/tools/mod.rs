@@ -110,6 +110,7 @@ pub fn builtin_modules(cli_exec_config: types::config::CliExecConfig) -> Vec<Box
         Box::new(collaboration::CollaborationTools),
         Box::new(a2a::A2aTools),
         Box::new(data_analyze::DataAnalyzeTools),
+        Box::new(crate::api_tools::ApiToolRegisterModule),
     ];
     // Only register cli_exec if there are whitelisted commands configured.
     if !cli_exec_config.commands.is_empty() {
@@ -120,7 +121,15 @@ pub fn builtin_modules(cli_exec_config: types::config::CliExecConfig) -> Vec<Box
     // Each tool becomes a ToolDefinition visible to all agents — no Rust code,
     // no CORE_TOOL_NAMES entry needed.
     let home_dir = types::config::home_dir();
-    let api_tool_configs = crate::api_tools::loader::load_all_api_tools(&home_dir, None);
+    let mut api_tool_configs = crate::api_tools::loader::load_all_api_tools(&home_dir, None);
+    // Merge in dynamically registered tools (from api_tool_register)
+    let dynamic = crate::api_tools::register::dynamic_tools();
+    let static_names: std::collections::HashSet<String> = api_tool_configs.iter().map(|t| t.name.clone()).collect();
+    for dt in dynamic {
+        if !static_names.contains(&dt.name) {
+            api_tool_configs.push(dt);
+        }
+    }
     if !api_tool_configs.is_empty() {
         modules.push(Box::new(crate::api_tools::DeclarativeApiModule::new(api_tool_configs)));
     }
