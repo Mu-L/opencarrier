@@ -115,6 +115,16 @@ pub fn builtin_modules(cli_exec_config: types::config::CliExecConfig) -> Vec<Box
     if !cli_exec_config.commands.is_empty() {
         modules.push(Box::new(shell::CliExecTools::new(cli_exec_config)));
     }
+
+    // Load declarative API tools from api_tools.toml (global + per-workspace).
+    // Each tool becomes a ToolDefinition visible to all agents — no Rust code,
+    // no CORE_TOOL_NAMES entry needed.
+    let home_dir = types::config::home_dir();
+    let api_tool_configs = crate::api_tools::loader::load_all_api_tools(&home_dir, None);
+    if !api_tool_configs.is_empty() {
+        modules.push(Box::new(crate::api_tools::DeclarativeApiModule::new(api_tool_configs)));
+    }
+
     modules
 }
 

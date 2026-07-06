@@ -331,25 +331,6 @@ pub async fn run_daemon(
 
         cm.start().await;
 
-        // Register declarative API tools from api_tools.toml
-        {
-            let dispatcher = cm.tool_dispatcher();
-            let home_dir = kernel.config.home_dir.clone();
-            let api_tool_configs = runtime::api_tools::loader::load_all_api_tools(&home_dir, None);
-            if !api_tool_configs.is_empty() {
-                let mut builtin = runtime::plugin::BuiltinPlugin::new(
-                    "api-tools".to_string(),
-                    "1.0.0".to_string(),
-                    std::path::PathBuf::new(),
-                );
-                for config in api_tool_configs {
-                    tracing::info!(tool = %config.name, "Registering declarative API tool");
-                    builtin.register_tool(Box::new(runtime::api_tools::provider::ApiToolProvider::new(config)));
-                }
-                dispatcher.register(std::sync::Arc::new(builtin));
-            }
-        }
-
         // Inject channel send / proactive-push probe into kernel for cron delivery
         {
             let send_fn = cm.make_channel_send_fn();
