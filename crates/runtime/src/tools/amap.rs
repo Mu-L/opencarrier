@@ -1,12 +1,13 @@
-//! Built-in Amap (Gaode Maps) tools — direct REST API calls.
+//! Built-in Amap (Gaode Maps) tools — direct REST API calls via reqwest.
 //!
 //! Replaces the old amap-mcp (standalone MCP server) with in-process HTTP
-//! calls via WebFetchEngine. Two tools:
+//! calls. Two tools:
 //! - amap_geocode: address → coordinates + formatted address
 //! - amap_driving: origin/destination → distance, duration, tolls, tier
 //!
-//! API key is read from the `AMAP_API_KEY` environment variable at call time
-//! (same convention as the old MCP server config).
+//! API key is read from the `AMAP_API_KEY` environment variable at call time.
+//! Uses reqwest directly (not WebFetchEngine) because Amap returns raw JSON
+//! — no SSRF risk for fixed API host, no HTML conversion needed.
 
 use super::ToolModule;
 use crate::tool_context::ToolContext;
@@ -20,6 +21,13 @@ fn api_key() -> Option<String> {
     std::env::var("AMAP_API_KEY").ok().filter(|s| !s.is_empty())
 }
 
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default()
+}
+
 /// Check if a string looks like coordinates (contains comma, no CJK chars).
 fn is_coordinates(s: &str) -> bool {
     s.contains(',') && !s.chars().any(|c| c > '\u{4e00}' && c < '\u{9fff}')
@@ -28,7 +36,6 @@ fn is_coordinates(s: &str) -> bool {
 #[async_trait]
 impl ToolModule for AmapTools {
     fn definitions(&self) -> Vec<ToolDefinition> {
-        // If no API key configured, don't register the tools at all.
         if api_key().is_none() {
             return vec![];
         }
@@ -75,7 +82,7 @@ impl ToolModule for AmapTools {
         &self,
         name: &str,
         input: &Value,
-        ctx: &ToolContext<'_>,
+        _ctx: &ToolContext<'_>,
     ) -> Option<Result<String, String>> {
         match name {
             "amap_geocode" => {
@@ -83,7 +90,7 @@ impl ToolModule for AmapTools {
                 if address.is_empty() {
                     return Some(Err("address is required".to_string()));
                 }
-                Some(do_geocode(address, ctx).await)
+                Some(do_geocode(address).await)
             }
             "amap_driving" => {
                 let origin = input["origin"].as_str().unwrap_or("");
@@ -91,7 +98,7 @@ impl ToolModule for AmapTools {
                 if origin.is_empty() || destination.is_empty() {
                     return Some(Err("origin and destination are required".to_string()));
                 }
-                Some(do_driving(origin, destination, ctx).await)
+                Some(do_driving(origin, destination).await)
             }
             _ => None,
         }
@@ -106,9 +113,9 @@ impl ToolModule for AmapTools {
 //  Geocode                                                            //
 // ------------------------------------------------------------------ //
 
-async fn do_geocode(address: &str, ctx: &ToolContext<'_>) -> Result<String, String> {
+async fn do_geocode(address: &str) -> Result<String, String> {
     let key = api_key().ok_or("AMAP_API_KEY not configured")?;
-    let engine = ctx.fetch_engine.ok_or("Fetch engine not available")?;
+    let client = http_client();
 
     let url = format!(
         "https://restapi.amap.com/v3/geocode/geo?address={}&key={}",
@@ -116,12 +123,13 @@ async fn do_geocode(address: &str, ctx: &ToolContext<'_>) -> Result<String, Stri
         key
     );
 
-    let raw = engine.fetch(&url).await.map_err(|e| format!("Geocode request failed: {e}"))?;
-
-    // Strip "HTTP 200\n\n" prefix and external content wrapper from fetch engine
-    let body = extract_body(&raw);
-
-    let resp: GeocodeResponse = serde_json::from_str(body)
+    let resp: GeocodeResponse = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Geocode request failed: {e}"))?
+        .json()
+        .await
         .map_err(|e| format!("Geocode parse error: {e}"))?;
 
     if resp.status != "1" {
@@ -147,13 +155,13 @@ async fn do_geocode(address: &str, ctx: &ToolContext<'_>) -> Result<String, Stri
 //  Driving                                                            //
 // ------------------------------------------------------------------ //
 
-async fn do_driving(origin: &str, destination: &str, ctx: &ToolContext<'_>) -> Result<String, String> {
+async fn do_driving(origin: &str, destination: &str) -> Result<String, String> {
     let key = api_key().ok_or("AMAP_API_KEY not configured")?;
-    let engine = ctx.fetch_engine.ok_or("Fetch engine not available")?;
+    let client = http_client();
 
     // Resolve origin/destination to coordinates if they are place names
-    let origin_coords = resolve_location(origin, ctx).await?;
-    let dest_coords = resolve_location(destination, ctx).await?;
+    let origin_coords = resolve_location(origin).await?;
+    let dest_coords = resolve_location(destination).await?;
 
     let url = format!(
         "https://restapi.amap.com/v3/direction/driving?origin={}&destination={}&key={}&extensions=base",
@@ -162,10 +170,13 @@ async fn do_driving(origin: &str, destination: &str, ctx: &ToolContext<'_>) -> R
         key
     );
 
-    let raw = engine.fetch(&url).await.map_err(|e| format!("Driving request failed: {e}"))?;
-    let body = extract_body(&raw);
-
-    let resp: DrivingResponse = serde_json::from_str(body)
+    let resp: DrivingResponse = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Driving request failed: {e}"))?
+        .json()
+        .await
         .map_err(|e| format!("Driving parse error: {e}"))?;
 
     if resp.status != "1" {
@@ -210,20 +221,19 @@ async fn do_driving(origin: &str, destination: &str, ctx: &ToolContext<'_>) -> R
 }
 
 /// Resolve a location string to coordinates. If already coordinates, return as-is.
-/// Otherwise geocode it.
-async fn resolve_location(location: &str, ctx: &ToolContext<'_>) -> Result<String, String> {
+async fn resolve_location(location: &str) -> Result<String, String> {
     if is_coordinates(location) {
         Ok(location.to_string())
     } else {
-        let (coords, _) = do_geocode_raw(location, ctx).await?;
+        let (coords, _) = do_geocode_raw(location).await?;
         Ok(coords)
     }
 }
 
 /// Low-level geocode returning (location, formatted_address) tuple.
-async fn do_geocode_raw(address: &str, ctx: &ToolContext<'_>) -> Result<(String, String), String> {
+async fn do_geocode_raw(address: &str) -> Result<(String, String), String> {
     let key = api_key().ok_or("AMAP_API_KEY not configured")?;
-    let engine = ctx.fetch_engine.ok_or("Fetch engine not available")?;
+    let client = http_client();
 
     let url = format!(
         "https://restapi.amap.com/v3/geocode/geo?address={}&key={}",
@@ -231,10 +241,13 @@ async fn do_geocode_raw(address: &str, ctx: &ToolContext<'_>) -> Result<(String,
         key
     );
 
-    let raw = engine.fetch(&url).await.map_err(|e| format!("Geocode request failed: {e}"))?;
-    let body = extract_body(&raw);
-
-    let resp: GeocodeResponse = serde_json::from_str(body)
+    let resp: GeocodeResponse = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Geocode request failed: {e}"))?
+        .json()
+        .await
         .map_err(|e| format!("Geocode parse error: {e}"))?;
 
     if resp.status != "1" {
@@ -249,23 +262,6 @@ async fn do_geocode_raw(address: &str, ctx: &ToolContext<'_>) -> Result<(String,
     let formatted = geo.formatted_address.unwrap_or_default();
 
     Ok((location, formatted))
-}
-
-/// Strip "HTTP 200\n\n" prefix and [external_content] wrapper from WebFetchEngine output.
-fn extract_body(raw: &str) -> &str {
-    // WebFetchEngine returns "HTTP {status}\n\n{content}"
-    let s = raw.strip_prefix("HTTP 200\n\n").unwrap_or(raw);
-    // Strip [external_content url]...[/external_content] wrapper if present
-    if let Some(start) = s.find("]\n") {
-        if s.starts_with("[external_content ") {
-            let inner = &s[start + 2..];
-            if let Some(end) = inner.rfind("\n[/external_content]") {
-                return &inner[..end];
-            }
-            return inner;
-        }
-    }
-    s
 }
 
 // ------------------------------------------------------------------ //
