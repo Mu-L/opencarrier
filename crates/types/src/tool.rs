@@ -493,7 +493,7 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "cron_create", "cron_list", "cron_cancel",
     "task_plan",
     "image_generate",
-    "amap_driving", "amap_geocode",
+
 ];
 
 #[cfg(test)]

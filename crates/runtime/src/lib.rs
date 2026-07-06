@@ -9,6 +9,7 @@ pub const USER_AGENT: &str = concat!("opencarrier/", env!("CARGO_PKG_VERSION"));
 
 pub mod a2a;
 pub mod agent_loop;
+pub mod api_tools;
 pub mod apply_patch;
 pub mod audit;
 pub mod auth_cooldown;
