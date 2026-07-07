@@ -129,6 +129,92 @@ impl DeclarativeApiModule {
     }
 
     /// Execute a single API tool call.
+    /// Resolve parameters that have a [tool.resolve] config.
+    /// For each param with a resolve rule, if the condition is met, call the
+    /// specified tool to transform the value (e.g. geocode place name → coordinates).
+    async fn resolve_params(&self, config: &ApiToolDef, args: &Value) -> Result<Value, String> {
+        if config.resolve.is_empty() {
+            return Ok(args.clone());
+        }
+
+        let mut resolved = args.clone();
+
+        for (param_name, resolve_def) in &config.resolve {
+            // Only resolve if the param exists in args
+            let current_val = match resolved.get(param_name).and_then(|v| v.as_str()) {
+                Some(v) => v.to_string(),
+                None => continue,
+            };
+
+            // Check condition
+            let condition = resolve_def.condition.as_deref().unwrap_or("");
+            let should_resolve = match condition {
+                "not_coordinates" => !is_coordinates(&current_val),
+                "not_empty" => !current_val.is_empty(),
+                "" => true, // no condition = always resolve
+                _ => true,
+            };
+
+            if !should_resolve {
+                continue;
+            }
+
+            // Find the resolve target tool config
+            let target_config = match self.find_config(&resolve_def.tool) {
+                Some(c) => c,
+                None => {
+                    tracing::warn!(
+                        param = %param_name,
+                        tool = %resolve_def.tool,
+                        "resolve: target tool not found, skipping"
+                    );
+                    continue;
+                }
+            };
+
+            // Call the target tool with the specified param
+            let mut resolve_args = serde_json::Map::new();
+            resolve_args.insert(resolve_def.param.clone(), Value::String(current_val));
+
+            tracing::info!(
+                param = %param_name,
+                tool = %resolve_def.tool,
+                "resolve: pre-resolving parameter"
+            );
+
+            match Box::pin(self.execute_api_call(target_config, &Value::Object(resolve_args))).await {
+                Ok(result_str) => {
+                    // Extract the specified field from the result
+                    let result: Value = serde_json::from_str(&result_str)
+                        .unwrap_or(Value::Null);
+                    if let Some(extracted) = result.get(&resolve_def.extract) {
+                        if let Some(s) = extracted.as_str() {
+                            resolved[param_name] = Value::String(s.to_string());
+                            tracing::info!(
+                                param = %param_name,
+                                resolved = %s,
+                                "resolve: parameter resolved"
+                            );
+                        } else {
+                            tracing::warn!(param = %param_name, "resolve: extracted value is not a string");
+                        }
+                    } else {
+                        tracing::warn!(
+                            param = %param_name,
+                            field = %resolve_def.extract,
+                            "resolve: field not found in result"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(param = %param_name, error = %e, "resolve: failed, using original value");
+                }
+            }
+        }
+
+        Ok(resolved)
+    }
+
     async fn execute_api_call(&self, config: &ApiToolDef, args: &Value) -> Result<String, String> {
         // Validate required params
         for (name, param_def) in &config.params {
@@ -137,7 +223,10 @@ impl DeclarativeApiModule {
             }
         }
 
-        let url = Self::build_url(config, args);
+        // Resolve params: if config.resolve has entries, pre-process args
+        let resolved_args = self.resolve_params(config, args).await?;
+
+        let url = Self::build_url(config, &resolved_args);
         let method = config.method.to_uppercase();
 
         let mut req = match method.as_str() {
@@ -265,4 +354,10 @@ impl ToolModule for DeclarativeApiModule {
     fn permission_level(&self, _tool_name: &str) -> PermissionLevel {
         PermissionLevel::ReadOnly
     }
+}
+
+
+/// Check if a string looks like coordinates (contains comma, no CJK chars).
+fn is_coordinates(s: &str) -> bool {
+    s.contains(',') && !s.chars().any(|c| c > '\u{4e00}' && c < '\u{9fff}')
 }
