@@ -83,7 +83,7 @@ async fn execute_cron_api_call(tool: &ApiToolDef, home_dir: &std::path::Path) ->
         }
     }
 
-    if let Some(ref save_to) = tool.cron.as_ref().and_then(|c| c.save_to.as_ref()) {
+    if let Some(save_to) = tool.cron.as_ref().and_then(|c| c.save_to.as_deref()) {
         let db_path = save_to.strip_prefix("sqlite:").unwrap_or(save_to);
         let table = tool.cron.as_ref().and_then(|c| c.table.clone())
             .unwrap_or_else(|| format!("api_cron_{}", tool.name));
@@ -153,11 +153,10 @@ fn cron_match(field: &str, value: u32) -> bool {
     if field == "*" {
         return true;
     }
-    if field.starts_with("*/") {
-        let n_str = &field[2..];
+    if let Some(n_str) = field.strip_prefix("*/") {
         if let Ok(n) = n_str.parse::<u32>() {
             if n > 0 {
-                return value % n == 0;
+                return value.is_multiple_of(n);
             }
         }
         return false;

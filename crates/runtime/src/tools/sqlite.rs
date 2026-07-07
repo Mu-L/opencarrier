@@ -83,11 +83,15 @@ const QUERY_TIMEOUT_SECS: u64 = 30;
 fn resolve_db_path(input: &Value, workspace_root: Option<&Path>) -> Result<PathBuf, String> {
     if let Some(path) = input["db_path"].as_str() {
         let resolved = super::resolve_file_path(path, workspace_root)?;
-        if !resolved.exists() {
-            return Err(format!("Database not found: {}", resolved.display()));
-        }
         if !resolved.extension().map(|e| e == "db").unwrap_or(false) {
             return Err(format!("File must have .db extension: {}", resolved.display()));
+        }
+        // Allow a non-existent file: Connection::open will create it. This lets
+        // agents CREATE TABLE / initialize a new database on first use.
+        if !resolved.exists() {
+            if let Some(parent) = resolved.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
         }
         return Ok(resolved);
     }

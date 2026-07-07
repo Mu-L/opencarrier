@@ -42,7 +42,7 @@ impl DeclarativeApiModule {
         let mut url = config.url.clone();
 
         // Replace {param_name} placeholders in URL template
-        for (name, _) in &config.params {
+        for name in config.params.keys() {
             if let Some(val) = args.get(name).and_then(|v| v.as_str()) {
                 let placeholder = format!("{{{}}}", name);
                 url = url.replace(&placeholder, &urlencoding::encode(val));
