@@ -493,6 +493,7 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "cron_create", "cron_list", "cron_cancel",
     "task_plan",
     "image_generate",
+    "api_tool_register",
 
 ];
 
