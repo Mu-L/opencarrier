@@ -67,7 +67,11 @@ async fn execute_cron_api_call(tool: &ApiToolDef, home_dir: &std::path::Path) ->
         .map_err(|e| format!("HTTP client: {e}"))?;
 
     let url = build_cron_url(tool);
-    let resp = http.get(&url).send().await.map_err(|e| format!("Request: {e}"))?;
+    let mut req = http.get(&url);
+    for (k, v) in &tool.headers {
+        req = req.header(k, v);
+    }
+    let resp = req.send().await.map_err(|e| format!("Request: {e}"))?;
     let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse: {e}"))?;
 
     if let Some(ref check) = tool.error_check {
