@@ -331,6 +331,13 @@ pub async fn run_daemon(
 
         cm.start().await;
 
+        // Start API tool cron scheduler (for tools with [tool.cron] section)
+        {
+            let home_dir = kernel.config.home_dir.clone();
+            let api_tool_configs = runtime::api_tools::loader::load_all_api_tools(&home_dir, None);
+            runtime::api_tools::register_cron_tools(api_tool_configs, home_dir).await;
+        }
+
         // Inject channel send / proactive-push probe into kernel for cron delivery
         {
             let send_fn = cm.make_channel_send_fn();
