@@ -140,7 +140,11 @@ pub fn is_admin_gated(name: &str) -> bool {
     } else {
         name
     };
-    base == "shell_exec" || base == "data_analyze" || base.ends_with("publish_draft")
+    base == "shell_exec"
+        || base == "data_analyze"
+        || base == "train_write"
+        || base == "knowledge_remove"
+        || base.ends_with("publish_draft")
 }
 
 /// Definition of a tool that an agent can use.
@@ -511,6 +515,10 @@ mod tests {
         assert!(is_admin_gated("mcp_wechat_oa_publish_draft"));
         assert!(is_admin_gated("publish_draft"));
 
+        // train_write (cross-clone training) and knowledge_remove (纠偏) are admin-gated
+        assert!(is_admin_gated("train_write"));
+        assert!(is_admin_gated("knowledge_remove"));
+
         // NOT gated: self-evolution / drafting tools stay open
         assert!(!is_admin_gated("create_draft"));
         assert!(!is_admin_gated("skill_create"));
@@ -518,6 +526,8 @@ mod tests {
         assert!(!is_admin_gated("knowledge_add"));
         assert!(!is_admin_gated("file_write"));
         assert!(!is_admin_gated("weixin_oa_send_miniprogram"));
+        assert!(!is_admin_gated("knowledge_heal"));
+        assert!(!is_admin_gated("apply_patch"));
     }
 
     #[test]

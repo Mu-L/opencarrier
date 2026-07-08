@@ -146,8 +146,9 @@ pub fn resolve_sandbox_path_for_write(
 
     let rel_str = relative.to_string_lossy();
 
-    // Block writes to protected config files (unless clone admin)
-    if (rel_str == "agent.toml" || rel_str == "SOUL.md") && !is_clone_admin {
+    // Block writes to protected config files (unless clone admin).
+    // These files define the clone's identity — only trainers should modify them.
+    if (rel_str == "agent.toml" || rel_str == "SOUL.md" || rel_str == "system_prompt.md") && !is_clone_admin {
         return Err(format!(
             "Write denied: '{}' is a protected config file (only trainer may modify)",
             rel_str
