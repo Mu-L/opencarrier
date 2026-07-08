@@ -117,11 +117,35 @@ pub fn builtin_modules(cli_exec_config: types::config::CliExecConfig) -> Vec<Box
         modules.push(Box::new(shell::CliExecTools::new(cli_exec_config)));
     }
 
-    // Load declarative API tools from api_tools.toml (global + per-workspace).
-    // Each tool becomes a ToolDefinition visible to all agents — no Rust code,
+    // Load declarative API tools from api_tools.toml: global + every workspace's.
+    // Each tool becomes a ToolDefinition visible to agents — no Rust code,
     // no CORE_TOOL_NAMES entry needed.
+    //
+    // Workspace tools MUST be loaded here (into the global module) so they have
+    // executable ToolModule instances. messaging.rs surfaces tool *names* per
+    // agent workspace, but matches them against builtin_tool_definitions() — so
+    // without loading workspaces here, per-agent declarative tools (e.g.
+    // quant-scout's quant_*) are named but never runnable, and agents fall back
+    // to raw web_fetch on API URLs. Per-agent visibility is still gated by the
+    // skill/manifest tools list downstream.
     let home_dir = types::config::home_dir();
     let mut api_tool_configs = crate::api_tools::loader::load_all_api_tools(&home_dir, None);
+    let ws_root = home_dir.join("workspaces");
+    if let Ok(entries) = std::fs::read_dir(&ws_root) {
+        for entry in entries.flatten() {
+            let ws_toml = entry.path().join("api_tools.toml");
+            if ws_toml.is_file() {
+                let ws_tools = crate::api_tools::loader::load_api_tools_file(&ws_toml);
+                let existing: std::collections::HashSet<String> =
+                    api_tool_configs.iter().map(|t| t.name.clone()).collect();
+                for tool in ws_tools {
+                    if !existing.contains(&tool.name) {
+                        api_tool_configs.push(tool);
+                    }
+                }
+            }
+        }
+    }
     // Merge in dynamically registered tools (from api_tool_register)
     let dynamic = crate::api_tools::register::dynamic_tools();
     let static_names: std::collections::HashSet<String> = api_tool_configs.iter().map(|t| t.name.clone()).collect();
