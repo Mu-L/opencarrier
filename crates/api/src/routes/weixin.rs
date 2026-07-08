@@ -287,6 +287,16 @@ pub async fn weixin_qrcode_status(
                                 let _ = atomic_write(&sender_session, &json);
                             }
 
+                            // Register in WEIXIN_STATE memory + DB so start_sender can find it
+                            channel_weixin::token::WEIXIN_STATE.register_from_qr(
+                                &existing_bot,
+                                bot_token,
+                                raw_baseurl,
+                                ilink_bot_id,
+                                Some(uid),
+                                effective_agent.as_deref(),
+                            );
+
                             // Register dynamic bridge binding + start sender
                             if let Some(ref agent_id) = effective_agent {
                                 if let Some(ref pm_arc) = state.channel_manager {
@@ -354,6 +364,17 @@ pub async fn weixin_qrcode_status(
             let _ = atomic_write(&session_path, &json);
         }
 
+        // Register in WEIXIN_STATE memory + DB so start_sender can find it.
+        // sender_id is ilink_user_id (consumed above) — always use Some(sender_id) here.
+        channel_weixin::token::WEIXIN_STATE.register_from_qr(
+            bot,
+            bot_token,
+            baseurl,
+            ilink_bot_id,
+            Some(sender_id),
+            resolved_agent.as_ref().map(|(id, _, _)| id.as_str()),
+        );
+
         // Register dynamic binding + start sender
         if let Some((ref agent_id, _, _)) = resolved_agent {
             // Resolve to agent name for routing (already resolved above, but agent_id may differ)
@@ -361,12 +382,10 @@ pub async fn weixin_qrcode_status(
                 .unwrap_or_else(|_| agent_id.clone());
             if let Some(ref pm_arc) = state.channel_manager {
                 let pm = pm_arc.lock().await;
-                if let Some(uid) = ilink_user_id {
-                    if !uid.is_empty() {
-                        pm.set_sender_route(uid, &agent_name);
-                        if let Err(e) = pm.start_sender("weixin", uid) {
-                            tracing::warn!(sender_id = %uid, error = %e, "start_sender failed for weixin new user");
-                        }
+                if !sender_id.is_empty() {
+                    pm.set_sender_route(sender_id, &agent_name);
+                    if let Err(e) = pm.start_sender("weixin", sender_id) {
+                        tracing::warn!(sender_id = %sender_id, error = %e, "start_sender failed for weixin new user");
                     }
                 }
             }
@@ -507,6 +526,16 @@ pub async fn weixin_save_token(
         }
     }
 
+    // Register in WEIXIN_STATE memory + DB so start_sender can find it
+    channel_weixin::token::WEIXIN_STATE.register_from_qr(
+        &bot_id,
+        &bot_token,
+        &baseurl,
+        &ilink_bot_id,
+        Some(sender_id),
+        if bind_agent.is_empty() { None } else { Some(&bind_agent) },
+    );
+
     // Register dynamic bridge binding + start sender
     if !bind_agent.is_empty() {
         // Resolve bind_agent to agent name (accept UUID or name)
@@ -514,12 +543,10 @@ pub async fn weixin_save_token(
             .unwrap_or_else(|_| bind_agent.clone());
         if let Some(ref pm_arc) = state.channel_manager {
             let pm = pm_arc.lock().await;
-            if let Some(ref uid) = ilink_user_id {
-                if !uid.is_empty() {
-                    pm.set_sender_route(uid, &agent_name);
-                    if let Err(e) = pm.start_sender("weixin", uid) {
-                        tracing::warn!(sender_id = %uid, error = %e, "start_sender failed for weixin save-token");
-                    }
+            if !sender_id.is_empty() {
+                pm.set_sender_route(sender_id, &agent_name);
+                if let Err(e) = pm.start_sender("weixin", sender_id) {
+                    tracing::warn!(sender_id = %sender_id, error = %e, "start_sender failed for weixin save-token");
                 }
             }
             tracing::info!(
