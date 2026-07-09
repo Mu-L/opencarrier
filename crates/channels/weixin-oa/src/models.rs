@@ -22,6 +22,12 @@ pub struct WeixinOaSessionFile {
     pub wechat_id: String,
     #[serde(default)]
     pub bind_agent: Option<String>,
+    /// Optional 86bus `bind-openid` endpoint. When set, the weixin-oa webhook
+    /// POSTs `{ "openid_sa": <from_user> }` on each inbound message so the 86bus
+    /// backend can associate the service-account openid with a business identity.
+    /// The returned `matched` role is cached and surfaced to the agent.
+    #[serde(default)]
+    pub bind_openid_url: Option<String>,
 }
 
 fn default_channel() -> String {

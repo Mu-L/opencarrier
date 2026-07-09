@@ -11,10 +11,20 @@ use crate::routes::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use channel_weixin_oa::api::check_sign;
 use channel_weixin_oa::{build_plugin_message, parse_xml_message, ProxyMessage};
+
+/// Shared HTTP client for the 86bus `bind-openid` call, bounded to 1.5s so it
+/// can never stall the webhook ack (WeChat allows ~5s).
+static BIND_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_millis(1500))
+        .build()
+        .unwrap_or_default()
+});
 
 /// Query params sent by WeChat on every callback (GET verification + POST messages).
 #[derive(serde::Deserialize, Debug)]
@@ -171,6 +181,39 @@ pub async fn weixin_oa_callback(
         "weixin-oa: received inbound message"
     );
 
+    // 86bus bind-openid: notify the backend of this openid_sa → identity mapping
+    // (so it can route its own notifications) and cache the returned role for the
+    // agent's system prompt. Only fires on the TTL boundary, so most messages add
+    // no network cost. Bounded to 1.5s; failure never blocks the webhook.
+    if let Some(ref bind_url) = session.bind_openid_url {
+        if !from_user.is_empty()
+            && runtime::wechat_identity::needs_refresh(
+                &from_user,
+                runtime::wechat_identity::DEFAULT_TTL_SECS,
+            )
+        {
+            match bind_openid_identity(bind_url, &from_user).await {
+                Ok(role) => {
+                    tracing::info!(
+                        %app_id,
+                        openid = %from_user,
+                        matched = %role,
+                        "weixin-oa: bind-openid identity resolved"
+                    );
+                    runtime::wechat_identity::set(&from_user, &role);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        %app_id,
+                        openid = %from_user,
+                        error = %e,
+                        "weixin-oa: bind-openid failed (skipping identity cache)"
+                    );
+                }
+            }
+        }
+    }
+
     // Inject into the bridge via the channel manager
     let channel_manager = match state.channel_manager.as_ref() {
         Some(cm) => cm.clone(),
@@ -232,4 +275,24 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         "/api/weixin-oa/{app_id}/callback",
         routing::get(weixin_oa_verify).post(weixin_oa_callback),
     )
+}
+
+/// POST the 86bus `bind-openid` endpoint to resolve a user's business identity.
+///
+/// Sends `{ "openid_sa": <openid> }`; the backend either resolves the unionid
+/// itself or matches the openid directly. Returns the raw `matched` string
+/// (`"admin"` / `"carrier_user"` / `""`). The client itself is bounded to 1.5s.
+async fn bind_openid_identity(url: &str, openid_sa: &str) -> Result<String, String> {
+    let resp = BIND_CLIENT
+        .post(url)
+        .json(&serde_json::json!({ "openid_sa": openid_sa }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let val: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(val
+        .get("matched")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string())
 }

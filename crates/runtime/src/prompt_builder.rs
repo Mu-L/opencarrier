@@ -401,6 +401,22 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             );
         }
 
+        // Section 9.1.6 — WeChat OA business identity (from 86bus bind-openid)
+        // Surfaced only when the 86bus backend identified the service-account
+        // user. Absent for non-weixin-oa users or unidentified senders.
+        if let Some(ref sid) = ctx.sender_id {
+            if let Some(role) = crate::wechat_identity::get(sid) {
+                let label = match role.as_str() {
+                    "admin" => "管理员（admin）",
+                    "carrier_user" => "运营方/车队（carrier_user）",
+                    _ => "普通用户",
+                };
+                sections.push(format!(
+                    "## 当前用户身份（86bus 业务系统）\n该用户经识别为：{label}。按身份差异化对待：管理员可接受调教与内部运营指令；运营方关注车队/包车对接；普通用户走标准客服流程。"
+                ));
+            }
+        }
+
         // Section 9.2 — User Profile (multi-tenancy)
         if let Some(ref profile) = ctx.user_profile_summary {
             sections.push(format!("## User Profile\n{}", profile));
