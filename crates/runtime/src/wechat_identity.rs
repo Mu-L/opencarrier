@@ -31,6 +31,11 @@ struct IdentityEntry {
 static WECHAT_IDENTITY: LazyLock<DashMap<String, IdentityEntry>> =
     LazyLock::new(DashMap::new);
 
+/// Cached unionid per openid_sa, so `cgi-bin/user/info` is queried at most once
+/// per user. An empty string means "queried, no resolvable unionid" (so we don't
+/// re-query on every message); absence means "not yet queried".
+static WECHAT_UNIONID: LazyLock<DashMap<String, String>> = LazyLock::new(DashMap::new);
+
 /// Store the identified role for a user (called by the webhook).
 /// `role` is the raw `matched` string; an empty string is a meaningful value
 /// ("regular user"), so store it as-is.
@@ -60,6 +65,18 @@ pub fn needs_refresh(sender_id: &str, ttl_secs: u64) -> bool {
         Some(e) => e.fetched_at.elapsed() > Duration::from_secs(ttl_secs),
         None => true,
     }
+}
+
+/// Cache a user's unionid (queried once per openid). Pass `""` to record that
+/// the user has no resolvable unionid, so we don't re-query on every message.
+pub fn set_unionid(sender_id: &str, unionid: &str) {
+    WECHAT_UNIONID.insert(sender_id.to_string(), unionid.to_string());
+}
+
+/// Returns `Some` if this openid's unionid has already been queried (the value
+/// may be `""` meaning "no unionid"), or `None` if not yet queried.
+pub fn get_unionid(sender_id: &str) -> Option<String> {
+    WECHAT_UNIONID.get(sender_id).map(|e| e.value().clone())
 }
 
 #[cfg(test)]

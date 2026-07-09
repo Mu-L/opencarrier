@@ -11,20 +11,55 @@ use crate::routes::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
-use channel_weixin_oa::api::check_sign;
+use channel_weixin_oa::api::{check_sign, get_access_token, get_user_unionid};
 use channel_weixin_oa::{build_plugin_message, parse_xml_message, ProxyMessage};
 
-/// Shared HTTP client for the 86bus `bind-openid` call, bounded to 1.5s so it
-/// can never stall the webhook ack (WeChat allows ~5s).
+/// Shared HTTP client for WeChat API + 86bus `bind-openid` calls.
+/// The whole bind-resolution is bounded by an outer `tokio::time::timeout`,
+/// so this client's own timeout is a generous backstop.
 static BIND_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
-        .timeout(Duration::from_millis(1500))
+        .timeout(Duration::from_secs(5))
         .build()
         .unwrap_or_default()
 });
+
+struct CachedToken {
+    token: String,
+    expires_at: Instant,
+}
+
+/// Per-app_id access_token cache. WeChat tokens are valid ~2h; refresh shortly
+/// before expiry to avoid one token fetch per inbound message.
+static OA_TOKENS: LazyLock<Mutex<HashMap<String, CachedToken>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Cached access_token for the given app_id/app_secret.
+async fn oa_access_token(app_id: &str, app_secret: &str) -> Result<String, String> {
+    {
+        let cache = OA_TOKENS.lock().unwrap();
+        if let Some(t) = cache.get(app_id) {
+            if t.expires_at > Instant::now() + Duration::from_secs(120) {
+                return Ok(t.token.clone());
+            }
+        }
+    }
+    let tok = get_access_token(&BIND_CLIENT, app_id, app_secret).await?;
+    let token = tok.access_token.ok_or("no access_token in response")?;
+    let expires_in = tok.expires_in.unwrap_or(7200);
+    OA_TOKENS.lock().unwrap().insert(
+        app_id.to_string(),
+        CachedToken {
+            token: token.clone(),
+            expires_at: Instant::now() + Duration::from_secs(expires_in),
+        },
+    );
+    Ok(token)
+}
 
 /// Query params sent by WeChat on every callback (GET verification + POST messages).
 #[derive(serde::Deserialize, Debug)]
@@ -184,7 +219,7 @@ pub async fn weixin_oa_callback(
     // 86bus bind-openid: notify the backend of this openid_sa → identity mapping
     // (so it can route its own notifications) and cache the returned role for the
     // agent's system prompt. Only fires on the TTL boundary, so most messages add
-    // no network cost. Bounded to 1.5s; failure never blocks the webhook.
+    // no network cost. Bounded to 2s; failure never blocks the webhook.
     if let Some(ref bind_url) = session.bind_openid_url {
         if !from_user.is_empty()
             && runtime::wechat_identity::needs_refresh(
@@ -192,8 +227,17 @@ pub async fn weixin_oa_callback(
                 runtime::wechat_identity::DEFAULT_TTL_SECS,
             )
         {
-            match bind_openid_identity(bind_url, &from_user).await {
-                Ok(role) => {
+            let app_id_c = app_id.clone();
+            let secret = session.app_secret.clone();
+            let url_c = bind_url.clone();
+            let openid = from_user.clone();
+            match tokio::time::timeout(
+                Duration::from_millis(2000),
+                resolve_and_bind(&url_c, &app_id_c, &secret, &openid),
+            )
+            .await
+            {
+                Ok(Ok(role)) => {
                     tracing::info!(
                         %app_id,
                         openid = %from_user,
@@ -202,12 +246,19 @@ pub async fn weixin_oa_callback(
                     );
                     runtime::wechat_identity::set(&from_user, &role);
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::warn!(
                         %app_id,
                         openid = %from_user,
                         error = %e,
-                        "weixin-oa: bind-openid failed (skipping identity cache)"
+                        "weixin-oa: bind-openid resolve failed (skipping identity cache)"
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        %app_id,
+                        openid = %from_user,
+                        "weixin-oa: bind-openid resolve timed out (2s)"
                     );
                 }
             }
@@ -277,19 +328,69 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
     )
 }
 
-/// POST the 86bus `bind-openid` endpoint to resolve a user's business identity.
+/// Resolve the user's unionid (cached per openid, queried at most once) and
+/// POST the 86bus `bind-openid` endpoint with `openid_sa` (+ optional unionid).
 ///
-/// Sends `{ "openid_sa": <openid> }`; the backend either resolves the unionid
-/// itself or matches the openid directly. Returns the raw `matched` string
-/// (`"admin"` / `"carrier_user"` / `""`). The client itself is bounded to 1.5s.
-async fn bind_openid_identity(url: &str, openid_sa: &str) -> Result<String, String> {
+/// Method 1 (openid_sa + unionid) is more accurate; unionid comes from
+/// `cgi-bin/user/info`. On a transient unionid-fetch error we fall back to
+/// method 2 (openid_sa only) without caching the miss, so the next message
+/// retries. Returns the raw `matched` string (`"admin"` / `"carrier_user"` / `""`).
+async fn resolve_and_bind(
+    url: &str,
+    app_id: &str,
+    app_secret: &str,
+    openid_sa: &str,
+) -> Result<String, String> {
+    // 1. Resolve unionid (cached per openid — query at most once).
+    let unionid: Option<String> = match runtime::wechat_identity::get_unionid(openid_sa) {
+        Some(u) if !u.is_empty() => Some(u),
+        Some(_) => None, // queried before, no unionid
+        None => {
+            match oa_access_token(app_id, app_secret).await {
+                Ok(token) => match get_user_unionid(&BIND_CLIENT, &token, openid_sa).await {
+                    Ok(Some(u)) => {
+                        runtime::wechat_identity::set_unionid(openid_sa, &u);
+                        Some(u)
+                    }
+                    Ok(None) => {
+                        // User not a follower / no unionid — cache so we don't re-query.
+                        runtime::wechat_identity::set_unionid(openid_sa, "");
+                        None
+                    }
+                    Err(e) => {
+                        // Transient error — don't cache, fall back to method 2 this time.
+                        tracing::warn!(
+                            openid = %openid_sa,
+                            error = %e,
+                            "weixin-oa: unionid fetch failed, falling back to openid-only bind"
+                        );
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        openid = %openid_sa,
+                        error = %e,
+                        "weixin-oa: access_token fetch failed, falling back to openid-only bind"
+                    );
+                    None
+                }
+            }
+        }
+    };
+
+    // 2. Call bind-openid with openid_sa (+ unionid when available).
+    let mut body = serde_json::json!({ "openid_sa": openid_sa });
+    if let Some(ref u) = unionid {
+        body["unionid"] = serde_json::Value::String(u.clone());
+    }
     let resp = BIND_CLIENT
         .post(url)
-        .json(&serde_json::json!({ "openid_sa": openid_sa }))
+        .json(&body)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
-    let val: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        .map_err(|e| format!("bind-openid request failed: {e}"))?;
+    let val: serde_json::Value = resp.json().await.map_err(|e| format!("bind-openid parse failed: {e}"))?;
     Ok(val
         .get("matched")
         .and_then(|v| v.as_str())

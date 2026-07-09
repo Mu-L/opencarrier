@@ -44,6 +44,43 @@ pub async fn get_access_token(
     Ok(body)
 }
 
+/// Fetch a follower's unionid via `cgi-bin/user/info`.
+///
+/// Returns `Ok(None)` when the user is not a follower or has no resolvable
+/// unionid (errcode 0 but no unionid field). Returns `Err` on a transport or
+/// API error so the caller can decide whether to retry or fall back.
+pub async fn get_user_unionid(
+    http: &reqwest::Client,
+    access_token: &str,
+    openid: &str,
+) -> Result<Option<String>, String> {
+    let url = format!(
+        "{}/cgi-bin/user/info?access_token={}&openid={}&lang=zh_CN",
+        WECHAT_API_BASE,
+        access_token,
+        openid
+    );
+    let resp = http
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("user/info request failed: {e}"))?;
+    let val: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("user/info parse failed: {e}"))?;
+    if let Some(code) = val.get("errcode").and_then(|v| v.as_i64()) {
+        if code != 0 {
+            return Err(format!("user/info errcode={code}"));
+        }
+    }
+    Ok(val
+        .get("unionid")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string()))
+}
+
 /// Send a customer service text message via WeChat API.
 pub async fn custom_send_text(
     http: &reqwest::Client,
