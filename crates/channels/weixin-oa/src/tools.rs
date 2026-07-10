@@ -466,3 +466,185 @@ impl ToolProvider for WeixinOaPublishArticleTool {
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// 86bus charter order creation tool
+// ---------------------------------------------------------------------------
+
+/// 86bus charter order endpoint (HMAC-signed).
+const CHARTER_ORDERS_URL: &str = "https://chuxing.86bus.com/api/ai/orders";
+
+/// Request body for `POST /api/ai/orders`. Field order is fixed so the
+/// serialized string is stable across builds (the signature covers these exact
+/// bytes — the same string is both signed AND sent, never re-serialized).
+#[derive(serde::Serialize)]
+struct CharterOrderRequest {
+    username: String,
+    phone: String,
+    person_num: i64,
+    start_point: String,
+    end_point: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start_city: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end_city: Option<String>,
+    go_time: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    back_time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remark: Option<String>,
+}
+
+/// Compute the HMAC-SHA256 signature for an 86bus request.
+/// sign_string = METHOD + "\n" + PATH + "\n" + TIMESTAMP + "\n" + BODY
+fn charter_sign(secret: &str, method: &str, path: &str, timestamp: &str, body: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let sign_str = format!("{method}\n{path}\n{timestamp}\n{body}");
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .expect("HMAC accepts any key length");
+    mac.update(sign_str.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+pub struct CharterCreateOrderTool;
+
+impl ToolProvider for CharterCreateOrderTool {
+    fn definition(&self) -> PluginToolDef {
+        PluginToolDef {
+            name: "charter_create_order".to_string(),
+            description: "Create a charter-bus (包车) order via the 86bus backend. The backend auto-resolves addresses to coordinates, computes distance, prices the trip, selects the car type by person count, creates the order, and notifies admins. Returns the quoted price, car type, distance, and a mini-program confirm card (confirm_url/mini_appid/card_title/card_thumb_id) to send the user. After calling this, report money/car_type/distance to the user and send them the confirm card via weixin_oa_send_miniprogram. go_time/back_time are Beijing time 'YYYY-MM-DD HH:MM'. Fill back_time for round-trip, omit for one-way.".to_string(),
+            parameters_json: r#"{"type":"object","properties":{"username":{"type":"string","description":"联系人姓名"},"phone":{"type":"string","description":"联系电话（手机号）"},"person_num":{"type":"integer","description":"乘车人数（后端据此自动选车型）"},"start_point":{"type":"string","description":"起点（文字地址，如 南京南站）"},"end_point":{"type":"string","description":"终点（文字地址，如 禄口国际机场）"},"start_city":{"type":"string","description":"起点城市（可选）"},"end_city":{"type":"string","description":"终点城市（可选）"},"go_time":{"type":"string","description":"出发时间，北京时间 YYYY-MM-DD HH:MM"},"back_time":{"type":"string","description":"返程时间，北京时间 YYYY-MM-DD HH:MM。填了=往返，不填=单程"},"remark":{"type":"string","description":"备注（可选）"}},"required":["username","phone","person_num","start_point","end_point","go_time"]}"#.to_string(),
+        }
+    }
+
+    fn execute(
+        &self,
+        args: &Value,
+        _context: &PluginToolContext,
+    ) -> Result<String, PluginToolError> {
+        let req = CharterOrderRequest {
+            username: args["username"].as_str().ok_or_else(|| {
+                PluginToolError::tool("missing required parameter: username")
+            })?
+            .to_string(),
+            phone: args["phone"].as_str().ok_or_else(|| {
+                PluginToolError::tool("missing required parameter: phone")
+            })?
+            .to_string(),
+            person_num: args["person_num"].as_i64().ok_or_else(|| {
+                PluginToolError::tool("missing required parameter: person_num (integer)")
+            })?,
+            start_point: args["start_point"].as_str().ok_or_else(|| {
+                PluginToolError::tool("missing required parameter: start_point")
+            })?
+            .to_string(),
+            end_point: args["end_point"].as_str().ok_or_else(|| {
+                PluginToolError::tool("missing required parameter: end_point")
+            })?
+            .to_string(),
+            start_city: args["start_city"].as_str().filter(|s| !s.is_empty()).map(String::from),
+            end_city: args["end_city"].as_str().filter(|s| !s.is_empty()).map(String::from),
+            go_time: args["go_time"].as_str().ok_or_else(|| {
+                PluginToolError::tool("missing required parameter: go_time")
+            })?
+            .to_string(),
+            back_time: args["back_time"].as_str().filter(|s| !s.is_empty()).map(String::from),
+            remark: args["remark"].as_str().filter(|s| !s.is_empty()).map(String::from),
+        };
+
+        let ak = types::env::get_env("CHARTER_AK").ok_or_else(|| {
+            PluginToolError::tool("CHARTER_AK not configured (set in ~/.opencarrier/.env)")
+        })?;
+        let sk = types::env::get_env("CHARTER_SK").ok_or_else(|| {
+            PluginToolError::tool("CHARTER_SK not configured (set in ~/.opencarrier/.env)")
+        })?;
+
+        // Serialize ONCE — this exact string is both signed and sent as the body.
+        let body_str = serde_json::to_string(&req)
+            .map_err(|e| PluginToolError::tool(format!("serialize request failed: {e}")))?;
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .to_string();
+        let signature = charter_sign(&sk, "POST", "/api/ai/orders", &timestamp, &body_str);
+
+        // Tool::execute is sync — run the async HTTP on a dedicated runtime.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PluginToolError::tool(format!("runtime error: {e}")))?;
+
+        rt.block_on(async move {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(8))
+                .build()
+                .map_err(|e| PluginToolError::tool(format!("http client build failed: {e}")))?;
+
+            // Send the EXACT body_str we signed (do NOT use .json() — it would
+            // re-serialize and break the signature).
+            let resp = client
+                .post(CHARTER_ORDERS_URL)
+                .header("X-Api-Key", &ak)
+                .header("X-Timestamp", &timestamp)
+                .header("X-Signature", &signature)
+                .header("Content-Type", "application/json")
+                .body(body_str)
+                .send()
+                .await
+                .map_err(|e| PluginToolError::tool(format!("charter order request failed: {e}")))?;
+
+            let status = resp.status();
+            let text = resp
+                .text()
+                .await
+                .map_err(|e| PluginToolError::tool(format!("read charter response failed: {e}")))?;
+
+            // Parse to extract errcode + data, regardless of HTTP status.
+            let val: Value = serde_json::from_str(&text).map_err(|_| {
+                let preview = &text[..text.len().min(300)];
+                PluginToolError::tool(format!("charter response not JSON (HTTP {status}): {preview}"))
+            })?;
+
+            let errcode = val.get("errcode").and_then(|v| v.as_i64()).unwrap_or(-1);
+            if errcode != 0 {
+                let errmsg = val
+                    .get("errmsg")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error");
+                return Err(PluginToolError::tool(format!(
+                    "charter order failed (errcode={errcode}): {errmsg}"
+                )));
+            }
+
+            // Project the fields the agent needs out of data.
+            let data = val.get("data").cloned().unwrap_or(Value::Null);
+            let order_no = data.get("order_no").and_then(|v| v.as_str()).unwrap_or("");
+            let money = data.get("money").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let distance = data.get("distance").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let car_type = data.get("car_type").and_then(|v| v.as_str()).unwrap_or("");
+            let confirm_url = data.get("confirm_url").and_then(|v| v.as_str()).unwrap_or("");
+            let mini_appid = data.get("mini_appid").and_then(|v| v.as_str()).unwrap_or("");
+            let card_title = data.get("card_title").and_then(|v| v.as_str()).unwrap_or("您的包车订单待确认");
+            let card_thumb_id = data.get("card_thumb_id").and_then(|v| v.as_str()).unwrap_or("");
+            let status_text = data.get("status_text").and_then(|v| v.as_str()).unwrap_or("");
+
+            info!(order_no = %order_no, money, car_type = %car_type, "86bus charter order created");
+
+            Ok(serde_json::json!({
+                "order_no": order_no,
+                "money": money,
+                "distance": distance,
+                "car_type": car_type,
+                "confirm_url": confirm_url,
+                "mini_appid": mini_appid,
+                "card_title": card_title,
+                "card_thumb_id": card_thumb_id,
+                "status_text": status_text,
+            })
+            .to_string())
+        })
+    }
+}

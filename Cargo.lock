@@ -587,11 +587,13 @@ version = "0.3.0"
 dependencies = [
  "dashmap",
  "hex",
+ "hmac",
  "reqwest",
  "roxmltree",
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "tokio",
  "tracing",
  "types",
