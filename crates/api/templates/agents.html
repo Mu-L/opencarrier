@@ -102,7 +102,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>用户</th><th>会话数</th><th>最近活跃</th><th>操作</th></tr>
+          <tr><th>用户</th><th>昵称</th><th>会话数</th><th>最近活跃</th><th>操作</th></tr>
         </thead>
         <tbody id="user-tbody">
         </tbody>
@@ -134,14 +134,19 @@ function renderUsers() {
   const start = (currentPage - 1) * PAGE_SIZE;
   const pageUsers = allUsers.slice(start, start + PAGE_SIZE);
 
-  tbody.innerHTML = pageUsers.map(u =>
-    `<tr>
+  tbody.innerHTML = pageUsers.map(u => {
+    const aliasText = u.alias ? esc(u.alias) : '<span style="color:var(--text-dim)">未设置</span>';
+    return `<tr>
       <td style="font-weight:500">${esc(u.sender_id)}</td>
+      <td>${aliasText}</td>
       <td>${u.session_count}</td>
       <td style="color:var(--text-dim);font-size:13px">${esc(u.last_active_ago)}</td>
-      <td><a href="/agents/{{ agent.name }}/users/${encodeURIComponent(u.sender_id)}" class="btn btn-sm btn-primary">查看对话</a></td>
-    </tr>`
-  ).join('');
+      <td>
+        <button class="btn btn-sm btn-ghost btn-rename" data-sender-id="${encodeURIComponent(u.sender_id)}" data-alias="${encodeURIComponent(u.alias || '')}">改名</button>
+        <a href="/agents/{{ agent.name }}/users/${encodeURIComponent(u.sender_id)}" class="btn btn-sm btn-primary">查看对话</a>
+      </td>
+    </tr>`;
+  }).join('');
 
   const pag = document.getElementById('user-pagination');
   if (totalPages <= 1) { pag.innerHTML = ''; return; }
@@ -183,8 +188,27 @@ document.addEventListener('click', function(e) {
   } else if (e.target.classList.contains('btn-revoke')) {
     const senderId = e.target.closest('tr').dataset.senderId;
     revokeAdmin(senderId);
+  } else if (e.target.classList.contains('btn-rename')) {
+    renameClone(e.target.dataset.senderId, e.target.dataset.alias);
   }
 });
+
+async function renameClone(senderId, currentAlias) {
+  const name = prompt('给这个用户的分身取个新名字：', currentAlias || '');
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) { alert('名字不能为空'); return; }
+  try {
+    const res = await fetch(`/api/senders/${senderId}/alias`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_id: agentName, alias: trimmed })
+    });
+    const data = await res.json();
+    if (res.ok) { location.reload(); }
+    else { alert('改名失败: ' + (data.error || '未知错误')); }
+  } catch (e) { alert('请求失败: ' + e.message); }
+}
 
 async function approveAdmin(senderId) {
   try {

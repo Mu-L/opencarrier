@@ -326,6 +326,14 @@ impl ChannelManager {
         }
     }
 
+    /// Get the user-set alias for an agent under a sender's namespace.
+    /// Returns None if the sender/agent has no clone entry.
+    pub fn get_sender_alias(&self, sender_id: &str, agent_id: &str) -> Option<String> {
+        self.sender_router
+            .as_ref()
+            .and_then(|router| router.get_alias(sender_id, agent_id))
+    }
+
     /// Get a sender's current route (no auto-assign).
     pub fn get_sender_route(&self, sender_id: &str) -> Option<String> {
         self.sender_router.as_ref()?.get_route(sender_id)
@@ -340,6 +348,14 @@ impl ChannelManager {
     pub fn list_sender_routes(&self) -> Vec<(String, String)> {
         match &self.sender_router {
             Some(router) => router.list_routes(),
+            None => Vec::new(),
+        }
+    }
+
+    /// List all sender routes with the user-set alias for each.
+    pub fn list_sender_routes_with_aliases(&self) -> Vec<(String, String, Option<String>)> {
+        match &self.sender_router {
+            Some(router) => router.list_routes_with_aliases(),
             None => Vec::new(),
         }
     }

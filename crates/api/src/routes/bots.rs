@@ -1112,13 +1112,14 @@ pub async fn list_senders(State(state): State<Arc<AppState>>) -> impl IntoRespon
         return (StatusCode::OK, Json(serde_json::json!({"senders": [], "total": 0})));
     };
     let pm = pm.lock().await;
-    let routes = pm.list_sender_routes();
+    let routes = pm.list_sender_routes_with_aliases();
     let senders: Vec<serde_json::Value> = routes
         .iter()
-        .map(|(sender_id, agent_id)| {
+        .map(|(sender_id, agent_id, alias)| {
             serde_json::json!({
                 "sender_id": sender_id,
                 "agent_id": agent_id,
+                "alias": alias,
             })
         })
         .collect();
@@ -1144,13 +1145,17 @@ pub async fn get_sender(
     };
     let pm = pm.lock().await;
     match pm.get_sender_route(&id) {
-        Some(agent_id) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "sender_id": id,
-                "agent_id": agent_id,
-            })),
-        ),
+        Some(agent_id) => {
+            let alias = pm.get_sender_alias(&id, &agent_id);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "sender_id": id,
+                    "agent_id": agent_id,
+                    "alias": alias,
+                })),
+            )
+        }
         None => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "发送者不存在"})),
@@ -1265,6 +1270,66 @@ pub async fn bind_sender(
         Json(serde_json::json!({
             "sender_id": id,
             "agent_id": agent_id,
+        })),
+    )
+}
+
+/// PUT /api/senders/{id}/alias — set the user-facing name (alias) a sender gave
+/// to its clone of an agent. Body: `{ "agent_id": "<name>", "alias": "新名字" }`.
+/// Persists to config.json + updates in-memory routing, so the new name is
+/// effective immediately for @-name switching.
+pub async fn set_sender_alias_route(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let agent_id_raw = match body.get("agent_id").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "缺少 agent_id"})),
+            )
+        }
+    };
+    let agent_id = crate::routes::common::resolve_to_name(&agent_id_raw, &state.kernel.registry)
+        .unwrap_or_else(|_| agent_id_raw.clone());
+    let alias = body
+        .get("alias")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if alias.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "名字不能为空"})),
+        );
+    }
+
+    let Some(ref pm) = state.channel_manager else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Channel manager not available"})),
+        );
+    };
+    let pm = pm.lock().await;
+    if pm.get_sender_route(&id).as_deref() != Some(agent_id.as_str())
+        && pm.get_sender_alias(&id, &agent_id).is_none()
+    {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "该发送者未绑定此分身"})),
+        );
+    }
+    pm.set_sender_alias(&id, &alias, &agent_id);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "sender_id": id,
+            "agent_id": agent_id,
+            "alias": alias,
         })),
     )
 }
@@ -1573,6 +1638,7 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
             "/api/senders/{id}/bind",
             routing::put(bind_sender).delete(unbind_sender),
         )
+        .route("/api/senders/{id}/alias", routing::put(set_sender_alias_route))
         .route("/api/senders/{id}/send", routing::post(sender_send_message))
         .route("/api/push", routing::post(push_to_user))
         // Device auth flows

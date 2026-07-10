@@ -313,11 +313,20 @@ async fn render_clone_detail(
         .collect();
 
     // Pre-serialize user list for JS pagination
-    let users_json = serde_json::to_string(&users_raw.iter().map(|u| serde_json::json!({
-        "sender_id": u["sender_id"].as_str().unwrap_or(""),
-        "session_count": u["session_count"].as_i64().unwrap_or(0),
-        "last_active_ago": format_time_ago(u["last_active"].as_str().unwrap_or("")),
-    })).collect::<Vec<_>>()).unwrap_or_default();
+    let pm_alias = state.channel_manager.clone();
+    let agent_name_for_alias = entry.name.clone();
+    let users_json = serde_json::to_string(&users_raw.iter().map(|u| {
+        let sid = u["sender_id"].as_str().unwrap_or("");
+        let alias = pm_alias.as_ref().and_then(|pm_arc| {
+            pm_arc.try_lock().ok().and_then(|pm| pm.get_sender_alias(sid, &agent_name_for_alias))
+        });
+        serde_json::json!({
+            "sender_id": sid,
+            "session_count": u["session_count"].as_i64().unwrap_or(0),
+            "last_active_ago": format_time_ago(u["last_active"].as_str().unwrap_or("")),
+            "alias": alias,
+        })
+    }).collect::<Vec<_>>()).unwrap_or_default();
 
     // Admin data
     let admins_data = if let Some(ref ws) = entry.manifest.workspace {

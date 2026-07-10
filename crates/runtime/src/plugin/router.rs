@@ -434,6 +434,21 @@ impl SenderRouter {
             .collect()
     }
 
+    /// List all routes with the user-set alias for each (sender_id, agent, alias).
+    /// alias is None when the sender has no clone entry for that agent.
+    pub fn list_routes_with_aliases(&self) -> Vec<(String, String, Option<String>)> {
+        self.routes
+            .iter()
+            .map(|r| {
+                let alias = self
+                    .clones
+                    .get(r.key())
+                    .and_then(|m| m.get(r.value()).map(|e| e.alias.clone()));
+                (r.key().clone(), r.value().clone(), alias)
+            })
+            .collect()
+    }
+
     /// Count how many senders have each agent bound (default + clones).
     /// Returns agent_id → sender_count.
     pub fn count_agents_per_sender(&self) -> HashMap<String, usize> {
