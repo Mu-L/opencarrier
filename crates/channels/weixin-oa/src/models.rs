@@ -86,6 +86,9 @@ pub struct OaMessage {
     pub recognition: String,
     /// Media ID for voice/image/video messages
     pub media_id: String,
+    /// PicUrl for image messages — a public HTTPS URL to the image (valid ~days).
+    /// Used to pass the image to the vision model.
+    pub pic_url: String,
 }
 
 /// Parse WeChat XML into OaMessage.
@@ -108,6 +111,7 @@ pub fn parse_xml_message(xml: &str) -> Option<OaMessage> {
             "EventKey" => msg.event_key = text,
             "Recognition" => msg.recognition = text,
             "MediaId" => msg.media_id = text,
+            "PicUrl" => msg.pic_url = text,
             _ => {}
         }
     }

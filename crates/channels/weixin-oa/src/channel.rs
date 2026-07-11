@@ -222,7 +222,17 @@ pub fn needs_reply(msg: &OaMessage) -> bool {
 
 /// Convert an OaMessage to a PluginMessage ready for the bridge.
 pub fn build_plugin_message(msg: &OaMessage, app_id: &str) -> PluginMessage {
-    let text = build_message_text(msg);
+    // Image messages carry a PicUrl — pass it as PluginContent::Image so the
+    // bridge downloads + vision-describes it (instead of a useless "[图片消息]").
+    let content = if msg.msg_type == "image" && !msg.pic_url.is_empty() {
+        PluginContent::Image {
+            url: msg.pic_url.clone(),
+            caption: None,
+            data: None,
+        }
+    } else {
+        PluginContent::Text(build_message_text(msg))
+    };
 
     PluginMessage {
         channel_type: "weixin-oa".to_string(),
@@ -230,7 +240,7 @@ pub fn build_plugin_message(msg: &OaMessage, app_id: &str) -> PluginMessage {
         sender_id: msg.from_user.clone(),
         sender_name: msg.from_user.clone(),
         bot_id: app_id.to_string(),
-        content: PluginContent::Text(text),
+        content,
         timestamp_ms: if msg.create_time > 0 {
             msg.create_time * 1000
         } else {
