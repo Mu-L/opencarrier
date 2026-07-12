@@ -35,6 +35,13 @@
   </div>
 </div>
 
+<div class="tabs" style="display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:0">
+  <button class="btn tab-btn active" onclick="switchTab('users')" style="border-radius:6px 6px 0 0;border-bottom:none">用户列表</button>
+  <button class="btn tab-btn" onclick="switchTab('files')" style="border-radius:6px 6px 0 0;border-bottom:none">文件管理</button>
+</div>
+
+<div id="tab-users" class="tab-panel">
+
 <div class="card">
   <h3 style="font-size:16px;margin-bottom:16px">管理权限</h3>
 
@@ -114,6 +121,27 @@
     {% endif %}
   </div>
 </div>
+
+</div><!-- end tab-users -->
+
+<div id="tab-files" class="tab-panel" style="display:none">
+
+<div class="card">
+  <h3 style="font-size:16px;margin-bottom:16px">用户文件</h3>
+  <div style="margin-bottom:12px">
+    <label style="font-size:13px;margin-right:8px;color:var(--text-dim)">选择用户：</label>
+    <select id="file-user-select" onchange="loadFileTree()" style="background:var(--surface);color:var(--text);border:1px solid var(--border);padding:6px 10px;border-radius:6px;min-width:200px">
+      <option value="">— 请选择用户 —</option>
+    </select>
+  </div>
+  <div id="file-tree">
+    <p style="color:var(--text-dim);font-size:13px">选择用户后显示文件列表</p>
+  </div>
+</div>
+
+</div><!-- end tab-files -->
+
+</div> <!-- end card-grid -->
 
 {# Safe JSON data stored in a hidden element to avoid </script> XSS #}
 <div id="users-data" style="display:none" data-users="{{ users_json | e }}"></div>
@@ -233,6 +261,127 @@ async function revokeAdmin(senderId) {
     if (data.ok) { location.reload(); }
     else { alert('撤销失败: ' + (data.error || '未知错误')); }
   } catch (e) { alert('请求失败: ' + e.message); }
+}
+
+// ── Tab switching ──
+let currentTab = 'users';
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-panel').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + tab).style.display = 'block';
+  document.querySelector(`.tab-btn[onclick*="'${tab}'"]`).classList.add('active');
+}
+
+// ── File Management ──
+let fileCurrentPath = '';
+let fileCurrentBasePath = 'output';
+const FILE_VIEW_BASE = ''; // Use '' for relative URLs (same domain); set to 'https://file.yinnho.cn' when nginx is configured
+
+// Populate user dropdown when users data is available
+document.addEventListener('DOMContentLoaded', function() {
+  const sel = document.getElementById('file-user-select');
+  if (allUsers && allUsers.length > 0) {
+    const seen = new Set();
+    allUsers.forEach(u => {
+      if (!seen.has(u.sender_id)) {
+        seen.add(u.sender_id);
+        const opt = document.createElement('option');
+        opt.value = u.sender_id;
+        opt.textContent = (u.alias || u.sender_id) + (u.alias ? ' (' + u.sender_id + ')' : '');
+        sel.appendChild(opt);
+      }
+    });
+  }
+});
+
+async function loadFileTree() {
+  const sel = document.getElementById('file-user-select');
+  const senderId = sel.value;
+  const container = document.getElementById('file-tree');
+  if (!senderId) {
+    container.innerHTML = '<p style="color:var(--text-dim);font-size:13px">选择用户后显示文件列表</p>';
+    return;
+  }
+
+  container.innerHTML = '<p style="color:var(--text-dim)">加载中...</p>';
+
+  try {
+    let url = `/api/files/tree/${encodeURIComponent(agentName)}?sender_id=${encodeURIComponent(senderId)}`;
+    if (fileCurrentBasePath) url += `&subdir=${encodeURIComponent(fileCurrentBasePath)}`;
+    if (fileCurrentPath) url += `&path=${encodeURIComponent(fileCurrentPath)}`;
+
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (!res.ok) {
+      container.innerHTML = `<p style="color:#e74c3c">加载失败: ${data.error || '未知错误'}</p>`;
+      return;
+    }
+
+    const items = data.items || [];
+    if (items.length === 0) {
+      container.innerHTML = '<p style="color:var(--text-dim)">该目录为空</p>';
+      return;
+    }
+
+    // Breadcrumb navigation
+    let breadcrumbHtml = '<div style="font-size:13px;margin-bottom:12px;color:var(--text-dim)">';
+    breadcrumbHtml += `<a href="#" onclick="event.preventDefault(); fileCurrentPath=''; loadFileTree()" style="color:var(--accent)">${esc(fileCurrentBasePath)}</a>`;
+    if (fileCurrentPath) {
+      const parts = fileCurrentPath.split('/');
+      parts.forEach((part, i) => {
+        const pathUpTo = parts.slice(0, i + 1).join('/');
+        breadcrumbHtml += ` / <a href="#" onclick="event.preventDefault(); fileCurrentPath='${esc(pathUpTo)}'; loadFileTree()" style="color:var(--accent)">${esc(part)}</a>`;
+      });
+    }
+    breadcrumbHtml += '</div>';
+
+    let html = breadcrumbHtml;
+    html += '<div class="table-wrap"><table><thead><tr><th>名称</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead><tbody>';
+
+    items.forEach(item => {
+      const name = item.name;
+      const isDir = item.type === 'dir';
+      const size = isDir ? '-' : formatSize(item.size_bytes);
+      const time = item.modified_at ? new Date(item.modified_at * 1000).toLocaleString() : '-';
+
+      if (isDir) {
+        html += `<tr style="cursor:pointer" onclick="enterDir('${esc(name)}')">
+          <td><span style="margin-right:4px">📁</span> ${esc(name)}</td>
+          <td>${size}</td>
+          <td style="color:var(--text-dim);font-size:13px">${time}</td>
+          <td><button class="btn btn-sm btn-ghost" onclick="event.stopPropagation(); enterDir('${esc(name)}')">打开</button></td>
+        </tr>`;
+      } else {
+        const isMd = name.endsWith('.md');
+        const viewUrl = `${FILE_VIEW_BASE}/api/files/view/${encodeURIComponent(agentName)}/${encodeURIComponent(fileCurrentBasePath)}/${encodeURIComponent(fileCurrentPath ? fileCurrentPath + '/' + name : name)}?sender_id=${encodeURIComponent(senderId)}${isMd ? '&render=markdown' : ''}`;
+        html += `<tr>
+          <td><span style="margin-right:4px">${isMd ? '📝' : '📄'}</span> ${esc(name)}</td>
+          <td>${size}</td>
+          <td style="color:var(--text-dim);font-size:13px">${time}</td>
+          <td><a href="${esc(viewUrl)}" target="_blank" class="btn btn-sm btn-primary">查看</a></td>
+        </tr>`;
+      }
+    });
+
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+
+  } catch (e) {
+    container.innerHTML = `<p style="color:#e74c3c">请求失败: ${e.message}</p>`;
+  }
+}
+
+function enterDir(dirName) {
+  fileCurrentPath = fileCurrentPath ? fileCurrentPath + '/' + dirName : dirName;
+  loadFileTree();
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 </script>
 {% endblock %}

@@ -706,6 +706,249 @@ pub async fn serve_output_file(
     resp
 }
 
+// ---------------------------------------------------------------------------
+// File Explorer endpoints — directory tree + browser-friendly file viewing
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+pub struct TreeQuery {
+    pub sender_id: String,
+    pub owner_id: Option<String>,
+    pub subdir: Option<String>,
+    pub path: Option<String>,
+}
+
+/// GET /api/files/tree/{agent} — List sender files and directories.
+///
+/// Supports drilling into subdirectories:
+///   /api/files/tree/agent-name?sender_id=xxx
+///   /api/files/tree/agent-name?sender_id=xxx&subdir=output&path=参考素材
+pub async fn list_files_tree(
+    State(state): State<Arc<AppState>>,
+    Path(agent): Path<String>,
+    Query(params): Query<TreeQuery>,
+) -> impl IntoResponse {
+    let err = |status: StatusCode, msg: &str| -> (StatusCode, Json<serde_json::Value>) {
+        (status, Json(serde_json::json!({"error": msg})))
+    };
+
+    let (_agent_id, entry) = match parse_and_get_agent(&agent, &state.kernel.registry) {
+        Ok(r) => r,
+        Err((status, _)) => return err(status, "Agent not found"),
+    };
+
+    let agent_name = &entry.manifest.name;
+    let subdir = params.subdir.as_deref().unwrap_or("output");
+    let base = types::config::sender_data_dir(
+        &state.kernel.config.home_dir,
+        params.owner_id.as_deref().unwrap_or(&params.sender_id),
+        agent_name,
+        Some(&params.sender_id),
+    )
+    .join(subdir);
+
+    let target = match &params.path {
+        Some(p) if !p.is_empty() => {
+            if p.contains("..") {
+                return err(StatusCode::FORBIDDEN, "Path traversal denied");
+            }
+            base.join(p)
+        }
+        _ => base.clone(),
+    };
+
+    // Canonicalize and security check
+    let base_canonical = match base.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return err(StatusCode::NOT_FOUND, "Directory not found"),
+    };
+    let target_canonical = match target.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return err(StatusCode::NOT_FOUND, "Directory not found"),
+    };
+    if !target_canonical.starts_with(&base_canonical) {
+        return err(StatusCode::FORBIDDEN, "Path traversal denied");
+    }
+
+    let mut items = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&target_canonical) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_dir = path.is_dir();
+            let meta = std::fs::metadata(&path).ok();
+            items.push(serde_json::json!({
+                "name": name,
+                "type": if is_dir { "dir" } else { "file" },
+                "size_bytes": if !is_dir { meta.as_ref().map(|m| m.len()).unwrap_or(0) } else { 0 },
+                "modified_at": meta.as_ref()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            }));
+        }
+    }
+
+    // Sort: directories first, then files, alphabetically
+    items.sort_by(|a, b| {
+        let a_dir = a["type"].as_str() == Some("dir");
+        let b_dir = b["type"].as_str() == Some("dir");
+        match (a_dir, b_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a["name"].as_str().cmp(&b["name"].as_str()),
+        }
+    });
+
+    (StatusCode::OK, Json(serde_json::json!({ "items": items, "base_path": subdir  })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ViewQuery {
+    pub sender_id: String,
+    pub owner_id: Option<String>,
+    pub render: Option<String>,
+}
+
+/// Map a file extension to a MIME type string.
+fn mime_for_path(path: &str) -> &'static str {
+    if path.ends_with(".md") {
+        return "text/markdown; charset=utf-8";
+    }
+    if path.ends_with(".html") || path.ends_with(".htm") {
+        return "text/html; charset=utf-8";
+    }
+    if path.ends_with(".json") {
+        return "application/json; charset=utf-8";
+    }
+    if path.ends_with(".txt") || path.ends_with(".log") {
+        return "text/plain; charset=utf-8";
+    }
+    if path.ends_with(".csv") {
+        return "text/csv; charset=utf-8";
+    }
+    if path.ends_with(".png") {
+        return "image/png";
+    }
+    if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        return "image/jpeg";
+    }
+    if path.ends_with(".gif") {
+        return "image/gif";
+    }
+    if path.ends_with(".svg") {
+        return "image/svg+xml";
+    }
+    if path.ends_with(".webp") {
+        return "image/webp";
+    }
+    if path.ends_with(".pdf") {
+        return "application/pdf";
+    }
+    "application/octet-stream"
+}
+
+/// GET /api/files/view/{agent}/{*path}?sender_id=xxx — Serve file for browser viewing.
+///
+/// Unlike serve_output_file, this endpoint:
+/// - Sets Content-Type based on file extension
+/// - Uses Content-Disposition: inline (not attachment)
+/// - Supports ?render=markdown to render .md files as HTML via pulldown-cmark
+///
+/// Direct file links can be shared (e.g., from WeChat) since this is a GET-only public endpoint.
+pub async fn view_file(
+    State(state): State<Arc<AppState>>,
+    Path((agent, file_path)): Path<(String, String)>,
+    Query(params): Query<ViewQuery>,
+) -> axum::response::Response {
+    let err = |status: StatusCode, msg: &str| -> axum::response::Response {
+        (
+            status,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "application/json".to_string(),
+            )],
+            format!("{{\"error\":\"{}\"}}", msg).into_bytes(),
+        )
+            .into_response()
+    };
+
+    let (_agent_id, entry) = match parse_and_get_agent(&agent, &state.kernel.registry) {
+        Ok(pair) => pair,
+        Err((status, _)) => return err(status, "Agent not found"),
+    };
+
+    let agent_name = &entry.manifest.name;
+    let safe_base = types::config::sender_data_dir(
+        &state.kernel.config.home_dir,
+        params.owner_id.as_deref().unwrap_or(&params.sender_id),
+        agent_name,
+        Some(&params.sender_id),
+    );
+
+    // Path traversal prevention
+    if file_path.contains("..") {
+        return err(StatusCode::FORBIDDEN, "Path traversal denied");
+    }
+
+    let target = safe_base.join(&file_path);
+
+    let base_canonical = match safe_base.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return err(StatusCode::NOT_FOUND, "Base directory not found"),
+    };
+    let target_canonical = match target.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return err(StatusCode::NOT_FOUND, "File not found"),
+    };
+    if !target_canonical.starts_with(&base_canonical) {
+        return err(StatusCode::FORBIDDEN, "Path traversal denied");
+    }
+
+    let data = match std::fs::read(&target_canonical) {
+        Ok(d) => d,
+        Err(_) => return err(StatusCode::NOT_FOUND, "File not found"),
+    };
+
+    let content_type = mime_for_path(&file_path);
+
+    // Handle markdown rendering
+    if params.render.as_deref() == Some("markdown") && file_path.ends_with(".md") {
+        let text = String::from_utf8_lossy(&data);
+        let mut html = String::new();
+        let parser = pulldown_cmark::Parser::new(&text);
+        pulldown_cmark::html::push_html(&mut html, parser);
+        let styled = format!(
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
+             <style>body {{ background:#1a1a2e; color:#e0e0e0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; \
+             max-width:800px; margin:0 auto; padding:20px; line-height:1.6; }} \
+             h1,h2,h3,h4 {{ color:#ffffff; }} \
+             a {{ color:#64b5f6; }} \
+             code {{ background:#2d2d44; padding:2px 6px; border-radius:3px; }} \
+             pre {{ background:#2d2d44; padding:16px; border-radius:8px; overflow-x:auto; }} \
+             img {{ max-width:100%; border-radius:4px; }} \
+             blockquote {{ border-left:3px solid #64b5f6; margin:0; padding-left:16px; color:#aaa; }}</style></head>\
+             <body>{}</body></html>",
+            html
+        );
+        return axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .body(styled.into_bytes().into())
+            .unwrap();
+    }
+
+    // Serve with inline disposition for browser viewing
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, content_type)
+        .header("content-disposition", "inline")
+        .header("x-content-type-options", "nosniff")
+        .body(data.into())
+        .unwrap()
+}
+
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
@@ -722,4 +965,7 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
             "/api/agents/{id}/output/{*path}",
             routing::get(serve_output_file),
         )
+        // File explorer endpoints
+        .route("/api/files/tree/{agent}", routing::get(list_files_tree))
+        .route("/api/files/view/{agent}/{*path}", routing::get(view_file))
 }

@@ -111,7 +111,9 @@ pub async fn auth(
         // Clone access control (share page needs these without auth)
         || path.starts_with("/api/clones/") && (path.ends_with("/access") || path.ends_with("/verify-access"))
         // Agent output files — must be public for WeChat direct download links
-        || (path.starts_with("/api/agents/") && path.contains("/output/") && is_get);
+        || (path.starts_with("/api/agents/") && path.contains("/output/") && is_get)
+        // File explorer view — public for direct file links (browser viewing via file.yinnho.cn)
+        || (path.starts_with("/api/files/view/") && is_get);
 
     if is_public {
         return next.run(request).await;
