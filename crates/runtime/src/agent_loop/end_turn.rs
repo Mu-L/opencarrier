@@ -220,7 +220,9 @@ pub(in crate::agent_loop) async fn handle_end_turn(
     }
 
     // Capture new messages BEFORE trim — session_base_len becomes invalid after trim.
-    let new_msgs: Vec<Message> = session.messages[session_base_len..].to_vec();
+    // Also clamp with .min() because prune_heartbeat_turns (line 188) may have removed
+    // messages that were counted in session_base_len.
+    let new_msgs: Vec<Message> = session.messages[session_base_len.min(session.messages.len())..].to_vec();
 
     // Trim old messages if over retention threshold
     super::helpers::trim_oldest_turns(&mut session.messages, MAX_RETAINED_MESSAGES);
