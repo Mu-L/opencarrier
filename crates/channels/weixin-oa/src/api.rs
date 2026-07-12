@@ -23,25 +23,44 @@ pub fn check_sign(token: &str, timestamp: &str, nonce: &str, signature: &str) ->
 }
 
 /// Get an access_token for the given app_id/app_secret.
+///
+/// Uses the `cgi-bin/stable_token` endpoint (not `cgi-bin/token`). The stable
+/// token is NOT invalidated when another system (e.g. the chuxing backend)
+/// fetches a token with `cgi-bin/token` for the same app_id — this is critical
+/// when multiple services share one official account. `force_refresh=false`
+/// lets WeChat return a cached stable token.
 pub async fn get_access_token(
     http: &reqwest::Client,
     app_id: &str,
     app_secret: &str,
 ) -> Result<TokenResponse, String> {
-    let url = format!(
-        "{}/cgi-bin/token?grant_type=client_credential&appid={}&secret={}",
-        WECHAT_API_BASE, app_id, app_secret
-    );
+    let url = format!("{}/cgi-bin/stable_token", WECHAT_API_BASE);
+    let body = serde_json::json!({
+        "grant_type": "client_credential",
+        "appid": app_id,
+        "secret": app_secret,
+        "force_refresh": false,
+    });
     let resp = http
-        .get(&url)
+        .post(&url)
+        .json(&body)
         .send()
         .await
         .map_err(|e| format!("get_access_token request failed: {e}"))?;
-    let body = resp
+    let tok = resp
         .json::<TokenResponse>()
         .await
         .map_err(|e| format!("get_access_token parse failed: {e}"))?;
-    Ok(body)
+    if let Some(code) = tok.errcode {
+        if code != 0 {
+            return Err(format!(
+                "get_access_token WeChat error {}: {}",
+                code,
+                tok.errmsg.as_deref().unwrap_or("?")
+            ));
+        }
+    }
+    Ok(tok)
 }
 
 /// Fetch a follower's unionid via `cgi-bin/user/info`.
