@@ -51,6 +51,17 @@ async fn oa_access_token(app_id: &str, app_secret: &str) -> Result<String, Strin
     let tok = get_access_token(&BIND_CLIENT, app_id, app_secret).await?;
     let token = tok.access_token.ok_or("no access_token in response")?;
     let expires_in = tok.expires_in.unwrap_or(7200);
+    // Re-check cache — another request may have refreshed while we were fetching.
+    // If a concurrent fetch already cached a newer token, don't overwrite it
+    // (our token may have been invalidated by theirs, or vice-versa).
+    {
+        let cache = OA_TOKENS.lock().unwrap();
+        if let Some(t) = cache.get(app_id) {
+            if t.expires_at > Instant::now() + Duration::from_secs(1800) {
+                return Ok(t.token.clone());
+            }
+        }
+    }
     OA_TOKENS.lock().unwrap().insert(
         app_id.to_string(),
         CachedToken {
@@ -231,9 +242,11 @@ pub async fn weixin_oa_callback(
             let secret = session.app_secret.clone();
             let url_c = bind_url.clone();
             let openid = from_user.clone();
+            let event_unionid: Option<String> =
+                if !msg.unionid.is_empty() { Some(msg.unionid.clone()) } else { None };
             match tokio::time::timeout(
                 Duration::from_millis(2000),
-                resolve_and_bind(&url_c, &app_id_c, &secret, &openid),
+                resolve_and_bind(&url_c, &app_id_c, &secret, &openid, event_unionid.as_deref()),
             )
             .await
             {
@@ -245,6 +258,10 @@ pub async fn weixin_oa_callback(
                         "weixin-oa: bind-openid identity resolved"
                     );
                     runtime::wechat_identity::set(&from_user, &role);
+                    // Also cache the unionid from the event so we don't re-query
+                    if let Some(ref u) = event_unionid {
+                        runtime::wechat_identity::set_unionid(&from_user, u);
+                    }
                 }
                 Ok(Err(e)) => {
                     tracing::warn!(
@@ -328,52 +345,64 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
     )
 }
 
-/// Resolve the user's unionid (cached per openid, queried at most once) and
-/// POST the 86bus `bind-openid` endpoint with `openid_sa` (+ optional unionid).
+/// Resolve the user's unionid (from event XML when available, otherwise
+/// cached per openid / fetched from cgi-bin/user/info) and POST the 86bus
+/// `bind-openid` endpoint with `openid_sa` + `unionid`.
 ///
-/// Method 1 (openid_sa + unionid) is more accurate; unionid comes from
-/// `cgi-bin/user/info`. On a transient unionid-fetch error we fall back to
-/// method 2 (openid_sa only) without caching the miss, so the next message
-/// retries. Returns the raw `matched` string (`"admin"` / `"carrier_user"` / `""`).
+/// The `event_unionid` param carries the UnionId from subscribe/SCAN event XML.
+/// When present we skip the user/info call entirely — saving a network hop and
+/// avoiding token-cache races that cause 40001 failures.
 async fn resolve_and_bind(
     url: &str,
     app_id: &str,
     app_secret: &str,
     openid_sa: &str,
+    event_unionid: Option<&str>,
 ) -> Result<String, String> {
-    // 1. Resolve unionid (cached per openid — query at most once).
-    let unionid: Option<String> = match runtime::wechat_identity::get_unionid(openid_sa) {
-        Some(u) if !u.is_empty() => Some(u),
-        Some(_) => None, // queried before, no unionid
-        None => {
-            match oa_access_token(app_id, app_secret).await {
-                Ok(token) => match get_user_unionid(&BIND_CLIENT, &token, openid_sa).await {
-                    Ok(Some(u)) => {
-                        runtime::wechat_identity::set_unionid(openid_sa, &u);
-                        Some(u)
+    // 1. Resolve unionid — prefer event XML, fall back to cached/fetched.
+    let unionid: Option<String> = match event_unionid {
+        Some(u) if !u.is_empty() => {
+            // From event — cache it so subsequent non-event messages can use it
+            runtime::wechat_identity::set_unionid(openid_sa, u);
+            Some(u.to_string())
+        }
+        _ => {
+            // No event unionid — check cache or fetch from user/info
+            match runtime::wechat_identity::get_unionid(openid_sa) {
+                Some(u) if !u.is_empty() => Some(u),
+                Some(_) => None,
+                None => {
+                    // Double-check pattern with lock to avoid token cache races
+                    match oa_access_token(app_id, app_secret).await {
+                        Ok(token) => {
+                            match get_user_unionid(&BIND_CLIENT, &token, openid_sa).await {
+                                Ok(Some(u)) => {
+                                    runtime::wechat_identity::set_unionid(openid_sa, &u);
+                                    Some(u)
+                                }
+                                Ok(None) => {
+                                    runtime::wechat_identity::set_unionid(openid_sa, "");
+                                    None
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        openid = %openid_sa,
+                                        error = %e,
+                                        "bind-openid: unionid fetch failed, using openid-only"
+                                    );
+                                    None
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                openid = %openid_sa,
+                                error = %e,
+                                "bind-openid: access_token failed, using openid-only"
+                            );
+                            None
+                        }
                     }
-                    Ok(None) => {
-                        // User not a follower / no unionid — cache so we don't re-query.
-                        runtime::wechat_identity::set_unionid(openid_sa, "");
-                        None
-                    }
-                    Err(e) => {
-                        // Transient error — don't cache, fall back to method 2 this time.
-                        tracing::warn!(
-                            openid = %openid_sa,
-                            error = %e,
-                            "weixin-oa: unionid fetch failed, falling back to openid-only bind"
-                        );
-                        None
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!(
-                        openid = %openid_sa,
-                        error = %e,
-                        "weixin-oa: access_token fetch failed, falling back to openid-only bind"
-                    );
-                    None
                 }
             }
         }

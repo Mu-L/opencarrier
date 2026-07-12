@@ -82,6 +82,8 @@ pub struct OaMessage {
     pub event: String,
     /// Event key (menu key, QR code key, etc.)
     pub event_key: String,
+    /// UnionId from subscribe/SCAN events (same Open Platform account)
+    pub unionid: String,
     /// Voice recognition result (if the OA has voice-to-text enabled)
     pub recognition: String,
     /// Media ID for voice/image/video messages
@@ -112,6 +114,7 @@ pub fn parse_xml_message(xml: &str) -> Option<OaMessage> {
             "Recognition" => msg.recognition = text,
             "MediaId" => msg.media_id = text,
             "PicUrl" => msg.pic_url = text,
+            "UnionId" => msg.unionid = text,
             _ => {}
         }
     }
