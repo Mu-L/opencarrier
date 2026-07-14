@@ -31,6 +31,9 @@ pub struct FlowRunRow {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+    /// Deadline (RFC3339) past which a `waiting` run is reaped as `timed_out`.
+    /// `None` when not waiting or no timeout set.
+    pub expires_at: Option<String>,
 }
 
 /// SQLite-backed flow run store.
@@ -51,8 +54,8 @@ impl FlowRunStore {
         conn.execute(
             "INSERT INTO flow_runs \
                (run_id, session_id, agent_id, sender_id, flow_name, input, completed_steps, \
-                waiting_at, map_context, status, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                waiting_at, map_context, status, created_at, updated_at, expires_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             rusqlite::params![
                 row.run_id,
                 row.session_id,
@@ -66,6 +69,7 @@ impl FlowRunStore {
                 row.status,
                 row.created_at,
                 row.updated_at,
+                row.expires_at,
             ],
         )
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -78,7 +82,8 @@ impl FlowRunStore {
         let mut stmt = conn
             .prepare(
                 "SELECT run_id, session_id, agent_id, sender_id, flow_name, input, \
-                        completed_steps, waiting_at, map_context, status, created_at, updated_at \
+                        completed_steps, waiting_at, map_context, status, created_at, updated_at, \
+                        expires_at \
                  FROM flow_runs WHERE run_id = ?1",
             )
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -96,6 +101,7 @@ impl FlowRunStore {
                 status: row.get(9)?,
                 created_at: row.get(10)?,
                 updated_at: row.get(11)?,
+                expires_at: row.get(12)?,
             })
         });
         match res {
@@ -112,7 +118,8 @@ impl FlowRunStore {
         let mut stmt = conn
             .prepare(
                 "SELECT run_id, session_id, agent_id, sender_id, flow_name, input, \
-                        completed_steps, waiting_at, map_context, status, created_at, updated_at \
+                        completed_steps, waiting_at, map_context, status, created_at, updated_at, \
+                        expires_at \
                  FROM flow_runs WHERE status = 'waiting' AND sender_id = ?1 AND agent_id = ?2 \
                  ORDER BY updated_at ASC",
             )
@@ -132,6 +139,7 @@ impl FlowRunStore {
                     status: row.get(9)?,
                     created_at: row.get(10)?,
                     updated_at: row.get(11)?,
+                    expires_at: row.get(12)?,
                 })
             })
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -142,7 +150,48 @@ impl FlowRunStore {
         Ok(out)
     }
 
-    /// Update status and the completed-steps snapshot.
+    /// List `waiting` runs whose `expires_at` deadline has passed (used by the
+    /// background expiry tick to mark them `timed_out`).
+    pub fn list_expired(&self, now_rfc3339: &str) -> CarrierResult<Vec<FlowRunRow>> {
+        let conn = self.conn.lock().map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT run_id, session_id, agent_id, sender_id, flow_name, input, \
+                        completed_steps, waiting_at, map_context, status, created_at, updated_at, \
+                        expires_at \
+                 FROM flow_runs \
+                 WHERE status = 'waiting' AND expires_at IS NOT NULL AND expires_at <= ?1",
+            )
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let rows = stmt
+            .query_map(rusqlite::params![now_rfc3339], |row| {
+                Ok(FlowRunRow {
+                    run_id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    agent_id: row.get(2)?,
+                    sender_id: row.get(3)?,
+                    flow_name: row.get(4)?,
+                    input: row.get(5)?,
+                    completed_steps: row.get(6)?,
+                    waiting_at: row.get(7)?,
+                    map_context: row.get(8)?,
+                    status: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                    expires_at: row.get(12)?,
+                })
+            })
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| CarrierError::Memory(e.to_string()))?);
+        }
+        Ok(out)
+    }
+
+    /// Update status and the completed-steps snapshot. Clears `expires_at` so a
+    /// run that has left the `waiting` state is not later reaped by the expiry
+    /// tick.
     pub fn update_status(
         &self,
         run_id: &str,
@@ -151,26 +200,28 @@ impl FlowRunStore {
     ) -> CarrierResult<()> {
         let conn = self.conn.lock().map_err(|e| CarrierError::Internal(e.to_string()))?;
         conn.execute(
-            "UPDATE flow_runs SET status = ?2, completed_steps = ?3, updated_at = ?4 \
-             WHERE run_id = ?1",
+            "UPDATE flow_runs SET status = ?2, completed_steps = ?3, expires_at = NULL, \
+             updated_at = ?4 WHERE run_id = ?1",
             rusqlite::params![run_id, status, completed_steps_json, now_rfc3339()],
         )
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())
     }
 
-    /// Mark a run as waiting at a `user_input` step (stage D).
+    /// Mark a run as waiting at a `user_input` step (stage D). `expires_at` is
+    /// the RFC3339 deadline after which the run is reaped as `timed_out`.
     pub fn set_waiting(
         &self,
         run_id: &str,
         step_id: &str,
         map_context: Option<&str>,
+        expires_at: Option<&str>,
     ) -> CarrierResult<()> {
         let conn = self.conn.lock().map_err(|e| CarrierError::Internal(e.to_string()))?;
         conn.execute(
             "UPDATE flow_runs SET status = 'waiting', waiting_at = ?2, map_context = ?3, \
-             updated_at = ?4 WHERE run_id = ?1",
-            rusqlite::params![run_id, step_id, map_context, now_rfc3339()],
+             expires_at = ?4, updated_at = ?5 WHERE run_id = ?1",
+            rusqlite::params![run_id, step_id, map_context, expires_at, now_rfc3339()],
         )
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())
@@ -206,6 +257,7 @@ mod tests {
             status: "running".into(),
             created_at: now.clone(),
             updated_at: now,
+            expires_at: None,
         }
     }
 
@@ -256,9 +308,54 @@ mod tests {
     fn set_waiting_marks_status() {
         let s = store();
         s.create(&sample_row("run-c")).unwrap();
-        s.set_waiting("run-c", "review", None).unwrap();
+        s.set_waiting("run-c", "review", None, None).unwrap();
         let got = s.get("run-c").unwrap().unwrap();
         assert_eq!(got.status, "waiting");
         assert_eq!(got.waiting_at.as_deref(), Some("review"));
+        assert!(got.expires_at.is_none());
+    }
+
+    #[test]
+    fn set_waiting_records_expires_at() {
+        let s = store();
+        s.create(&sample_row("run-d")).unwrap();
+        let deadline = "2099-01-01T00:00:00+00:00";
+        s.set_waiting("run-d", "review", None, Some(deadline)).unwrap();
+        let got = s.get("run-d").unwrap().unwrap();
+        assert_eq!(got.status, "waiting");
+        assert_eq!(got.expires_at.as_deref(), Some(deadline));
+    }
+
+    #[test]
+    fn list_expired_returns_past_deadline_only() {
+        let s = store();
+        let past = "2000-01-01T00:00:00+00:00";
+        let future = "2099-01-01T00:00:00+00:00";
+        let mut a = sample_row("run-past");
+        a.status = "waiting".into();
+        a.waiting_at = Some("review".into());
+        a.expires_at = Some(past.into());
+        let mut b = sample_row("run-future");
+        b.status = "waiting".into();
+        b.waiting_at = Some("review".into());
+        b.expires_at = Some(future.into());
+        s.create(&a).unwrap();
+        s.create(&b).unwrap();
+        let now = "2026-07-15T00:00:00+00:00";
+        let expired = s.list_expired(now).unwrap();
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].run_id, "run-past");
+    }
+
+    #[test]
+    fn update_status_clears_expires_at() {
+        let s = store();
+        s.create(&sample_row("run-e")).unwrap();
+        s.set_waiting("run-e", "review", None, Some("2099-01-01T00:00:00+00:00"))
+            .unwrap();
+        s.update_status("run-e", "completed", r#"{"review":"ok"}"#).unwrap();
+        let got = s.get("run-e").unwrap().unwrap();
+        assert_eq!(got.status, "completed");
+        assert!(got.expires_at.is_none());
     }
 }

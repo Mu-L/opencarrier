@@ -597,6 +597,48 @@ impl CarrierKernel {
             }
         }
 
+        // Flow run expiry tick - reaps `waiting` flow runs whose `user_input`
+        // deadline has passed, marking them `timed_out`. Mirrors the cron loop.
+        {
+            let kernel = Arc::clone(self);
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                interval.tick().await; // discard immediate first tick
+                loop {
+                    interval.tick().await;
+                    if kernel.runtime.supervisor.is_shutting_down() {
+                        break;
+                    }
+                    let now = chrono::Utc::now().to_rfc3339();
+                    match kernel.memory.flow_runs().list_expired(&now) {
+                        Ok(rows) => {
+                            for r in rows {
+                                let completed = r.completed_steps.clone();
+                                match kernel
+                                    .memory
+                                    .flow_runs()
+                                    .update_status(&r.run_id, "timed_out", &completed)
+                                {
+                                    Ok(()) => info!(
+                                        run_id = %r.run_id,
+                                        flow = %r.flow_name,
+                                        "flow_run timed out (user_input deadline passed)"
+                                    ),
+                                    Err(e) => warn!(
+                                        run_id = %r.run_id,
+                                        error = %e,
+                                        "flow_run timeout mark failed"
+                                    ),
+                                }
+                            }
+                        }
+                        Err(e) => warn!(error = %e, "list_expired flow_runs failed"),
+                    }
+                }
+            });
+        }
+
         // Discover configured external A2A agents
         if let Some(ref a2a_config) = self.config.a2a {
             if a2a_config.enabled && !a2a_config.external_agents.is_empty() {

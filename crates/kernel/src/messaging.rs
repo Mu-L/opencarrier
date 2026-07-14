@@ -55,6 +55,7 @@ impl CarrierKernel {
         owner_id: &Option<String>,
         channel_type: &Option<String>,
         task_id: Option<&str>,
+        resume_flow: Option<&memory::FlowRunRow>,
     ) -> KernelResult<PreparedContext> {
         // Load session: per-user when sender_id is present (multi-tenancy),
         // otherwise use the agent's default session.
@@ -177,7 +178,56 @@ impl CarrierKernel {
             }))
                 as Arc<dyn runtime::llm_driver::Brain>);
 
-        let (auto_matched_flow, flow_max_iterations, matched_flow) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
+        let (auto_matched_flow, flow_max_iterations, matched_flow) = if let Some(rf) = resume_flow {
+            // Resume: load the flow by name WITHOUT an LLM classify call -- the
+            // user's reply continues an already-matched flow, so re-classifying
+            // would be wrong (and might match a different flow).
+            match entry.manifest.workspace.as_ref() {
+                Some(ws) => match crate::prompt_sources::load_flow_by_name(ws, &rf.flow_name) {
+                    Some(flow) => {
+                        let flow_name = flow.name.clone();
+                        let flow_body = flow.body.clone();
+                        let flow_max_iter = flow.max_iterations;
+
+                        // Auto-discover flow-declared tools (same as classify branch)
+                        let mut flow_warnings: Vec<String> = Vec::new();
+                        if flow.tools.is_empty() {
+                            flow_warnings.push(format!(
+                                "Flow '{}' has no declared tools in its frontmatter. \
+                                 If this flow requires tools, use flow_update to add a tools: [\"tool1\", \"tool2\"] field.",
+                                flow_name
+                            ));
+                        }
+                        for t in &flow.tools {
+                            if !tools.iter().any(|d| d.name == *t) {
+                                if let Some((_, def)) = self.search_tools(t, 1, entry.manifest.max_tool_level).into_iter().next() {
+                                    tools.push(def);
+                                } else {
+                                    flow_warnings.push(format!(
+                                        "Flow '{}' declared tool '{}' but it was not found in the tool catalog. \
+                                         Use flow_update to remove or correct this tool declaration.",
+                                        flow_name, t
+                                    ));
+                                }
+                            }
+                        }
+
+                        info!(agent = %entry.name, flow = %flow_name, "Flow loaded for resume");
+
+                        let mut flow_prompt = format!("**{}**\n{}", flow_name, flow_body);
+                        if !flow_warnings.is_empty() {
+                            flow_prompt.push_str(&format!("\n\n⚠️ **Flow Tool Warnings:**\n{}", flow_warnings.iter().map(|w| format!("- {}", w)).collect::<Vec<_>>().join("\n")));
+                        }
+                        (Some(flow_prompt), flow_max_iter, Some(flow))
+                    }
+                    None => {
+                        warn!(agent = %entry.name, flow = %rf.flow_name, "resume: flow def not found, falling back to normal handling");
+                        (None, None, None)
+                    }
+                },
+                None => (None, None, None),
+            }
+        } else if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
             // Give the classifier recent conversation context so it can
             // match follow-up messages in multi-turn workflows (e.g.
             // charter-quoter after the user sends their phone in turn 2).
@@ -426,9 +476,31 @@ impl CarrierKernel {
         } else if entry.manifest.module.starts_with("python:") {
             self.execute_python_agent(&entry, agent_id, message).await
         } else {
+            // Resume detection: if this sender has a suspended (waiting) flow
+            // run for this agent, the message is the `user_input` reply --
+            // resume the flow instead of starting a new conversation.
+            let resume_row: Option<memory::FlowRunRow> = sender_id
+                .as_ref()
+                .and_then(|sid| {
+                    self.memory
+                        .flow_runs()
+                        .list_pending(sid, &agent_id.to_string())
+                        .ok()
+                        .and_then(|v| v.into_iter().next())
+                })
+                .filter(|r| {
+                    r.expires_at
+                        .as_deref()
+                        .is_none_or(|exp| exp > chrono::Utc::now().to_rfc3339().as_str())
+                });
+
             // Intent classifier: decide whether to continue the current session
-            // or open a new one. Skips for empty sessions and when disabled.
-            if entry.manifest.intent_classifier_enabled.unwrap_or(true) {
+            // or open a new one. Skips for empty sessions, when disabled, or
+            // when resuming a suspended flow (the reply continues the flow's
+            // session, so rotation would be wrong).
+            if resume_row.is_none()
+                && entry.manifest.intent_classifier_enabled.unwrap_or(true)
+            {
                 if let Err(e) = self
                     .maybe_rotate_session_by_intent(agent_id, &entry, message)
                     .await
@@ -459,6 +531,7 @@ impl CarrierKernel {
                 owner_id,
                 channel_type.clone(),
                 task_id,
+                resume_row.as_ref(),
             )
             .await
         };
@@ -597,7 +670,7 @@ impl CarrierKernel {
 
         // LLM agent: true streaming via agent loop
         let ctx = self.prepare_agent_context(
-            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type, None,
+            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type, None, None,
         ).await?;
         let PreparedContext { mut session, needs_compact, tools, manifest, driver, ctx_window, .. } = ctx;
 
@@ -967,10 +1040,11 @@ impl CarrierKernel {
         owner_id: Option<String>,
         channel_type: Option<String>,
         task_id: Option<String>,
+        resume: Option<&memory::FlowRunRow>,
     ) -> KernelResult<AgentLoopResult> {
         // Prepare shared context (session, tools, flow/subagent matching, manifest)
         let ctx = self.prepare_agent_context(
-            agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type, task_id.as_deref(),
+            agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type, task_id.as_deref(), resume,
         ).await?;
         let PreparedContext { mut session, needs_compact, tools, manifest, flow, .. } = ctx;
 
@@ -1034,38 +1108,88 @@ impl CarrierKernel {
             message.to_string()
         };
 
+        // Resume guard: if we came in to resume a flow but its definition is no
+        // longer findable (deleted/renamed between suspend and resume), mark the
+        // run failed and fall back to a normal single-step reply.
+        let resume = match (resume, &flow) {
+            (Some(rf), None) => {
+                let completed = rf.completed_steps.clone();
+                let _ = self.memory.flow_runs().update_status(&rf.run_id, "failed", &completed);
+                warn!(agent = %entry.name, run_id = %rf.run_id, flow = %rf.flow_name, "resume aborted: flow def not found, marked failed");
+                None
+            }
+            (r, _) => r,
+        };
+
         let is_multi_step = flow
             .as_ref()
             .is_some_and(|fm| !fm.flow_def.steps.is_empty());
 
         let mut result = if is_multi_step {
-            // Multi-step flow: execute as a DAG via run_flow (stage 2 incremental C).
-            // The flow body was NOT injected into the system prompt (prepare_agent_context
-            // skips injection when steps are non-empty); run_flow builds per-step prompts
-            // from `base_system_prompt` + flow body instead.
+            // Multi-step flow: execute as a DAG via run_flow.
             let fm = flow.as_ref().expect("checked above");
+            let base_prompt = manifest.model.system_prompt.clone();
+            // Build resume state when continuing a suspended flow.
+            let resume_state = resume.map(|rf| {
+                let pre_outputs: std::collections::HashMap<String, serde_json::Value> =
+                    serde_json::from_str(&rf.completed_steps).unwrap_or_default();
+                let waiting_step_id = rf.waiting_at.clone().unwrap_or_default();
+                let cancel_keywords = fm
+                    .flow_def
+                    .steps
+                    .iter()
+                    .find(|s| s.id == waiting_step_id)
+                    .map(|s| s.cancel_keywords.clone())
+                    .unwrap_or_default();
+                info!(agent = %entry.name, flow = %fm.name, run_id = %rf.run_id, step = %waiting_step_id, "Resuming suspended flow");
+                crate::flow_runner::ResumeState {
+                    run_id: rf.run_id.clone(),
+                    pre_outputs,
+                    waiting_step_id,
+                    user_reply: message_with_links.clone(),
+                    cancel_keywords,
+                }
+            });
             info!(
                 agent = %entry.name,
                 flow = %fm.name,
                 steps = fm.flow_def.steps.len(),
+                resuming = resume_state.is_some(),
                 "Executing multi-step flow via run_flow"
             );
-            let base_prompt = manifest.model.system_prompt.clone();
-            self.run_flow(
-                agent_id,
-                &fm.flow_def,
-                &base_prompt,
-                &message_with_links,
-                &mut session,
-                &manifest,
-                &tools,
-                brain_ref.as_ref(),
-                kernel_handle.clone(),
-                sender_id.as_deref(),
-                owner_id.as_deref(),
-                channel_type.as_deref(),
-            )
-            .await?
+            let outcome = self
+                .run_flow(
+                    agent_id,
+                    &fm.flow_def,
+                    &base_prompt,
+                    &message_with_links,
+                    &mut session,
+                    &manifest,
+                    &tools,
+                    brain_ref.as_ref(),
+                    kernel_handle.clone(),
+                    sender_id.as_deref(),
+                    owner_id.as_deref(),
+                    channel_type.as_deref(),
+                    resume_state.as_ref(),
+                )
+                .await?;
+            match outcome {
+                crate::flow_runner::FlowOutcome::Completed(r) => r,
+                crate::flow_runner::FlowOutcome::Suspended { question, total_usage, iterations } => {
+                    // The flow paused at a `user_input` step: the question IS the
+                    // reply to send. Skip plan/file/evolution post-processing.
+                    let r = AgentLoopResult {
+                        response: question,
+                        total_usage,
+                        iterations,
+                        silent: false,
+                        directives: Default::default(),
+                        plan: None,
+                    };
+                    return self.finalize_suspended(r, agent_id, &manifest, &session, &sender_id, &owner_id).await;
+                }
+            }
         } else {
             run_agent_loop(
                 &manifest,
@@ -1187,6 +1311,55 @@ impl CarrierKernel {
         }
 
         Ok(result)
+    }
+
+    /// Light post-processing for a suspended flow: the `user_input` question is
+    /// the reply the channel sends. Records the user-profile touch, JSONL
+    /// session mirror, and metering, but skips plan execution, output-file
+    /// detection, and evolution (those belong to a completed turn). The
+    /// question was already appended to the session inside `run_flow`.
+    async fn finalize_suspended(
+        &self,
+        r: AgentLoopResult,
+        agent_id: AgentId,
+        manifest: &AgentManifest,
+        session: &memory::session::Session,
+        sender_id: &Option<String>,
+        owner_id: &Option<String>,
+    ) -> KernelResult<AgentLoopResult> {
+        if let Some(ref sid) = sender_id {
+            touch_user_profile(&self.config.home_dir, owner_id.as_deref().unwrap_or(sid), &manifest.name, Some(sid));
+        }
+
+        if let Some(ref workspace) = manifest.workspace {
+            if let Err(e) = self.memory.write_jsonl_mirror(
+                session,
+                &workspace.join("sessions"),
+                owner_id.as_deref(),
+                sender_id.as_deref(),
+                Some(&self.config.home_dir),
+                Some(&manifest.name),
+            ) {
+                warn!("Failed to write JSONL session mirror: {e}");
+            }
+        }
+
+        let model = manifest.model.modality.clone();
+        match self
+            .metering
+            .record_and_check(&memory::usage::UsageRecord {
+                agent_id,
+                model,
+                input_tokens: r.total_usage.input_tokens,
+                output_tokens: r.total_usage.output_tokens,
+                tool_calls: r.iterations.saturating_sub(1),
+            }) {
+            Ok(Some(alert)) => self.handle_budget_alert(&alert),
+            Err(e) => warn!("Failed to record metering: {e}"),
+            _ => {}
+        }
+
+        Ok(r)
     }
 
     /// Handle a budget threshold alert — log prominently and store for API exposure.

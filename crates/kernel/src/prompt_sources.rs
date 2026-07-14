@@ -534,7 +534,7 @@ fn collect_flow_summaries(flows_dir: &Path) -> Vec<(String, String, std::path::P
 /// Resolve the markdown file inside a flow directory: prefer `flow.md` (new
 /// canonical name), fall back to `SKILL.md` (legacy, still readable). Returns
 /// `None` if neither exists.
-fn flow_dir_markdown(dir: &Path) -> Option<std::path::PathBuf> {
+pub(crate) fn flow_dir_markdown(dir: &Path) -> Option<std::path::PathBuf> {
     let flow_md = dir.join("flow.md");
     if flow_md.exists() {
         return Some(flow_md);
@@ -715,6 +715,34 @@ pub async fn classify_flow_with_llm(
         tools: flow_def.tools.clone(),
         flow_def,
     })
+}
+
+/// Load a flow definition by name **without an LLM call** (used by flow resume:
+/// the user's reply continues an already-matched flow, so re-classifying would
+/// be wrong and wasteful). Searches the agent's `workspace/flows` then the
+/// shared `~/.opencarrier/flows` (same discovery order as
+/// [`classify_flow_with_llm`]) and matches by the parsed `name:` field
+/// (case-insensitive). Returns `None` if no such flow exists (e.g. it was
+/// deleted/renamed between suspend and resume).
+pub fn load_flow_by_name(workspace: &std::path::Path, flow_name: &str) -> Option<FlowMatch> {
+    for dir in [workspace.join("flows"), types::config::home_dir().join("flows")] {
+        for (name, _description, path) in collect_flow_summaries(&dir) {
+            if !name.eq_ignore_ascii_case(flow_name) {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let flow_def = types::flow::parse_flow_def(&content);
+                return Some(FlowMatch {
+                    name: flow_def.name.clone(),
+                    body: flow_def.body.clone(),
+                    max_iterations: flow_def.max_iterations,
+                    tools: flow_def.tools.clone(),
+                    flow_def,
+                });
+            }
+        }
+    }
+    None
 }
 
 /// Result of automatic subagent trigger matching against a user message.

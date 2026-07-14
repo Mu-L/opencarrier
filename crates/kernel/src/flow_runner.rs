@@ -29,9 +29,38 @@ use types::message::{Message, TokenUsage};
 use crate::error::{KernelError, KernelResult};
 use crate::kernel::CarrierKernel;
 
+/// Outcome of a `run_flow` invocation. A flow either runs to completion
+/// (`Completed`) or suspends at a `user_input` step awaiting the human's reply
+/// (`Suspended`).
+pub(crate) enum FlowOutcome {
+    /// The flow finished; the final step's output is the agent reply.
+    Completed(AgentLoopResult),
+    /// The flow suspended at a `user_input` step. `question` is the prompt to
+    /// send to the user as the (intermediate) reply; the run is persisted as
+    /// `waiting` and resumes on the user's next message.
+    Suspended {
+        question: String,
+        total_usage: TokenUsage,
+        iterations: u32,
+    },
+}
+
+/// State carried into `run_flow` when resuming a suspended flow. `pre_outputs`
+/// are the completed steps' snapshots (deserialized from `flow_runs`), and the
+/// user's reply becomes the `waiting_step_id` step's output
+/// `{ decision, text }`.
+pub(crate) struct ResumeState {
+    pub run_id: String,
+    pub pre_outputs: HashMap<String, Value>,
+    pub waiting_step_id: String,
+    pub user_reply: String,
+    pub cancel_keywords: Vec<String>,
+}
+
 impl CarrierKernel {
     /// Execute a multi-step flow as a DAG. Returns the final step's output as an
-    /// [`AgentLoopResult`], matching the single-step path's contract.
+    /// [`AgentLoopResult`] (`Completed`), or `Suspended` when a `user_input`
+    /// step pauses execution to await the human's reply.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_flow(
         &self,
@@ -47,7 +76,8 @@ impl CarrierKernel {
         sender_id: Option<&str>,
         owner_id: Option<&str>,
         channel_type: Option<&str>,
-    ) -> KernelResult<AgentLoopResult> {
+        resume: Option<&ResumeState>,
+    ) -> KernelResult<FlowOutcome> {
         let agent_name = self
             .registry
             .get(agent_id)
@@ -59,28 +89,39 @@ impl CarrierKernel {
                 &self.memory,
             ))));
 
-        // Record the run (history/audit; suspend/resume lands in stage D).
-        let run_id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        // `input` is the template-context input (used by render/when/select);
+        // it is also serialized into the flow_runs row on a fresh run.
         let input: Value = serde_json::json!({
             "user_message": user_message,
             "user_id": sender_id.unwrap_or(""),
         });
-        let input_json = input.to_string();
-        let _ = self.memory.flow_runs().create(&FlowRunRow {
-            run_id: run_id.clone(),
-            session_id: session.id.0.to_string(),
-            agent_id: agent_id.to_string(),
-            sender_id: sender_id.unwrap_or("").to_string(),
-            flow_name: flow.name.clone(),
-            input: input_json,
-            completed_steps: "{}".into(),
-            waiting_at: None,
-            map_context: None,
-            status: "running".into(),
-            created_at: now.clone(),
-            updated_at: now,
-        });
+
+        // Record the run (history/audit; suspend/resume). On resume we reuse the
+        // existing flow_runs row instead of creating a new one.
+        let run_id = match resume {
+            Some(r) => r.run_id.clone(),
+            None => {
+                let id = uuid::Uuid::new_v4().to_string();
+                let now = chrono::Utc::now().to_rfc3339();
+                let input_json = input.to_string();
+                let _ = self.memory.flow_runs().create(&FlowRunRow {
+                    run_id: id.clone(),
+                    session_id: session.id.0.to_string(),
+                    agent_id: agent_id.to_string(),
+                    sender_id: sender_id.unwrap_or("").to_string(),
+                    flow_name: flow.name.clone(),
+                    input: input_json,
+                    completed_steps: "{}".into(),
+                    waiting_at: None,
+                    map_context: None,
+                    status: "running".into(),
+                    created_at: now.clone(),
+                    updated_at: now,
+                    expires_at: None,
+                });
+                id
+            }
+        };
 
         let layers = partition_flow_steps(&flow.steps)
             .map_err(|e| KernelError::Carrier(CarrierError::Internal(e)))?;
@@ -92,8 +133,22 @@ impl CarrierKernel {
             "Flow execution starting"
         );
 
-        let mut outputs: HashMap<String, Value> = HashMap::new();
-        let mut executed_order: Vec<String> = Vec::new();
+        // On resume, pre-populate outputs with the already-completed steps and
+        // seed `executed_order` in flow order so the final-selection fallback
+        // works. On a fresh run both start empty.
+        let mut outputs: HashMap<String, Value> = match resume {
+            Some(r) => r.pre_outputs.clone(),
+            None => HashMap::new(),
+        };
+        let mut executed_order: Vec<String> = if resume.is_some() {
+            flow.steps
+                .iter()
+                .map(|s| s.id.clone())
+                .filter(|id| outputs.contains_key(id))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut total_usage = TokenUsage::default();
         let mut total_iterations = 0u32;
 
@@ -105,6 +160,43 @@ impl CarrierKernel {
                 if let Some(when) = &step.when {
                     if !eval_when(when, &outputs, &input) {
                         info!(flow = %flow.name, step = %step.id, "flow step skipped (when=false)");
+                        continue;
+                    }
+                }
+
+                // Resume: skip steps already completed before the suspend point.
+                if outputs.contains_key(&step.id) {
+                    continue;
+                }
+
+                // Resume: the user's reply becomes the `user_input` step's
+                // output `{ decision, text }`. No LLM call; do not append to
+                // session here (the completion path or a subsequent `UserInput`
+                // branch appends the reply turn).
+                if let Some(r) = resume {
+                    if step.id == r.waiting_step_id {
+                        let decision = if decide_cancel(&r.user_reply, &r.cancel_keywords) {
+                            "cancel"
+                        } else {
+                            "proceed"
+                        };
+                        outputs.insert(
+                            step.id.clone(),
+                            serde_json::json!({ "decision": decision, "text": r.user_reply }),
+                        );
+                        executed_order.push(step.id.clone());
+                        let completed =
+                            serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into());
+                        let _ = self
+                            .memory
+                            .flow_runs()
+                            .update_status(&run_id, "running", &completed);
+                        info!(
+                            flow = %flow.name,
+                            step = %step.id,
+                            decision,
+                            "flow resumed with user reply"
+                        );
                         continue;
                     }
                 }
@@ -204,6 +296,61 @@ impl CarrierKernel {
                             .await
                             .map_err(KernelError::Carrier)?;
                         Ok((resp.text(), resp.usage, 1))
+                    }
+                    StepKind::UserInput => {
+                        // Suspend the flow: send the rendered prompt to the
+                        // user as the (intermediate) reply, persist the run as
+                        // `waiting`, and return `Suspended`.
+                        let question = if step_prompt.is_empty() {
+                            "请回复以继续。".to_string()
+                        } else {
+                            step_prompt.clone()
+                        };
+                        // Record the user turn + the question in the canonical
+                        // session (mirrors the completion path's append below).
+                        let new_messages =
+                            vec![Message::user(user_message), Message::assistant(&question)];
+                        session.messages.extend_from_slice(&new_messages);
+                        let _ = self
+                            .memory
+                            .save_session_append_async(
+                                session.id,
+                                &agent_name,
+                                &new_messages,
+                                session.context_window_tokens,
+                                session.label.as_deref(),
+                                None,
+                            )
+                            .await;
+                        // Compute the deadline and mark the run waiting.
+                        let timeout_secs = step
+                            .timeout_hours
+                            .map(|h| (h * 3600.0) as u64)
+                            .unwrap_or(self.config.user_input_timeout_secs);
+                        let expires =
+                            chrono::Utc::now() + chrono::Duration::seconds(timeout_secs as i64);
+                        let _ = self.memory.flow_runs().set_waiting(
+                            &run_id,
+                            &step.id,
+                            None,
+                            Some(&expires.to_rfc3339()),
+                        );
+                        let completed =
+                            serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into());
+                        let _ = self
+                            .memory
+                            .flow_runs()
+                            .update_status(&run_id, "waiting", &completed);
+                        info!(
+                            flow = %flow.name,
+                            step = %step.id,
+                            "flow suspended at user_input step"
+                        );
+                        return Ok(FlowOutcome::Suspended {
+                            question,
+                            total_usage,
+                            iterations: total_iterations,
+                        });
                     }
                     StepKind::Tool | StepKind::Unknown(_) => unreachable!(),
                 };
@@ -308,14 +455,14 @@ impl CarrierKernel {
             "Flow execution completed"
         );
 
-        Ok(AgentLoopResult {
+        Ok(FlowOutcome::Completed(AgentLoopResult {
             response: final_response,
             total_usage,
             iterations: total_iterations,
             silent: false,
             directives: Default::default(),
             plan: None,
-        })
+        }))
     }
 }
 
@@ -521,6 +668,16 @@ fn value_to_string(v: &Value) -> String {
     }
 }
 
+/// Decide whether a `user_input` reply cancels the flow: true if the reply
+/// case-insensitively contains any of the `cancel_keywords`. Empty keywords
+/// => never cancel.
+fn decide_cancel(reply: &str, keywords: &[String]) -> bool {
+    let reply_lower = reply.to_lowercase();
+    keywords
+        .iter()
+        .any(|kw| !kw.is_empty() && reply_lower.contains(&kw.to_lowercase()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,6 +765,32 @@ mod tests {
         // skipped step (no output) -> false (chain skip)
         assert!(!eval_when("review.decision == 'revise'", &outputs, &input));
         assert!(!eval_when("review.decision != 'cancel'", &outputs, &input));
+    }
+
+    #[test]
+    fn when_review_decision_not_cancel() {
+        let mut outputs = HashMap::new();
+        let input = serde_json::json!({});
+        // proceed -> downstream `when: review.decision != 'cancel'` runs
+        outputs.insert("review".into(), serde_json::json!({"decision": "proceed"}));
+        assert!(eval_when("review.decision != 'cancel'", &outputs, &input));
+        // cancel -> downstream gated step is skipped
+        outputs.insert("review".into(), serde_json::json!({"decision": "cancel"}));
+        assert!(!eval_when("review.decision != 'cancel'", &outputs, &input));
+    }
+
+    #[test]
+    fn decide_cancel_matches() {
+        let kw = vec!["取消".to_string(), "cancel".to_string(), "算了".to_string()];
+        assert!(decide_cancel("算了吧", &kw));
+        assert!(decide_cancel("please cancel now", &kw));
+        assert!(decide_cancel("取消", &kw));
+        assert!(!decide_cancel("继续生成", &kw));
+        assert!(!decide_cancel("ok", &kw));
+        // empty keywords -> never cancel
+        assert!(!decide_cancel("取消", &[]));
+        // case-insensitive
+        assert!(decide_cancel("CANCEL please", &kw));
     }
 
     #[test]

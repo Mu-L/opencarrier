@@ -684,6 +684,11 @@ pub struct KernelConfig {
     /// Cron scheduler max total jobs across all agents. Default: 500.
     #[serde(default = "default_max_cron_jobs")]
     pub max_cron_jobs: usize,
+    /// Default timeout (seconds) for `user_input` flow steps without an explicit
+    /// `timeout_hours`. A suspended flow past this deadline is reaped as
+    /// `timed_out`. Default: 86400 (24h).
+    #[serde(default = "default_user_input_timeout_secs")]
+    pub user_input_timeout_secs: u64,
     /// Config include files — loaded and deep-merged before the root config.
     /// Paths are relative to the root config file's directory.
     /// Security: absolute paths and `..` components are rejected.
@@ -855,6 +860,10 @@ fn default_max_cron_jobs() -> usize {
     500
 }
 
+fn default_user_input_timeout_secs() -> u64 {
+    86_400
+}
+
 fn default_llm_concurrency() -> usize {
     10
 }
@@ -958,6 +967,7 @@ impl Default for KernelConfig {
             webhook_triggers: None,
             budget: BudgetConfig::default(),
             max_cron_jobs: default_max_cron_jobs(),
+            user_input_timeout_secs: default_user_input_timeout_secs(),
             include: Vec::new(),
             exec_policy: ExecPolicy::default(),
             cli_exec: CliExecConfig::default(),
@@ -1442,6 +1452,13 @@ impl KernelConfig {
         // Auth session TTL: min 1 hour
         if self.auth.session_ttl_hours == 0 {
             self.auth.session_ttl_hours = 168;
+        }
+
+        // user_input flow timeout: min 1h (fall back to default), max 30 days
+        if self.user_input_timeout_secs == 0 {
+            self.user_input_timeout_secs = 86_400;
+        } else if self.user_input_timeout_secs > 2_592_000 {
+            self.user_input_timeout_secs = 2_592_000;
         }
     }
 }

@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 24;
+const SCHEMA_VERSION: u32 = 25;
 
 /// Run all migrations to bring the database up to date.
 ///
@@ -40,6 +40,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         (22, migrate_v22),
         (23, migrate_v23),
         (24, migrate_v24),
+        (25, migrate_v25),
     ];
 
     for (version, migrate_fn) in &migrations {
@@ -1098,6 +1099,20 @@ fn migrate_v24(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![24, "flow_runs table for multi-step flow execution state"],
+    )?;
+    Ok(())
+}
+
+/// Version 25: add `expires_at` to `flow_runs` for `user_input` timeouts.
+///
+/// When a flow suspends at a `user_input` step, `set_waiting` records the
+/// deadline here; the resume check and a background tick mark runs past it
+/// `timed_out`. Mirrors the `cron_delivery.expires_at` precedent.
+fn migrate_v25(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch("ALTER TABLE flow_runs ADD COLUMN expires_at TEXT")?;
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![25, "flow_runs.expires_at for user_input timeouts"],
     )?;
     Ok(())
 }

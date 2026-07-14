@@ -12,16 +12,20 @@
 
 use serde_json::{Map, Value};
 
-/// How a single step is executed. Only `AgentLoop`, `Chat`, `Tool` are executed
-/// by `run_flow` in stage 2; the rest are parsed here so later stages can add
+/// How a single step is executed. `AgentLoop`, `Chat`, `Tool`, and `UserInput`
+/// are executed by `run_flow`; the rest are parsed here so later stages can add
 /// execution without touching the parser.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepKind {
     AgentLoop,
     Chat,
     Tool,
-    /// A recognized-but-not-yet-executed kind (e.g. `user_input`, `map`,
-    /// `flow_exec`, `delegate`). `run_flow` rejects these until later stages.
+    /// Suspend the flow and ask the human a question; resume on their next
+    /// message (stage D). The user's reply becomes this step's output
+    /// `{ decision, text }`.
+    UserInput,
+    /// A recognized-but-not-yet-executed kind (e.g. `map`, `flow_exec`,
+    /// `delegate`). `run_flow` rejects these until later stages.
     Unknown(String),
 }
 
@@ -31,13 +35,14 @@ impl StepKind {
             "agent_loop" => Self::AgentLoop,
             "chat" => Self::Chat,
             "tool" => Self::Tool,
+            "user_input" => Self::UserInput,
             other => Self::Unknown(other.to_string()),
         }
     }
 
     /// True if `run_flow` can currently execute this kind.
     pub fn is_executable(&self) -> bool {
-        matches!(self, Self::AgentLoop | Self::Chat | Self::Tool)
+        matches!(self, Self::AgentLoop | Self::Chat | Self::Tool | Self::UserInput)
     }
 }
 
@@ -93,6 +98,12 @@ pub struct StepDef {
     pub tool_args: Value,
     /// Parameters passed to the step (template strings as values).
     pub with: Map<String, Value>,
+    /// Cancel keywords for `user_input` steps (case-insensitive substring
+    /// match against the user's reply -> `decision = "cancel"`).
+    pub cancel_keywords: Vec<String>,
+    /// Per-step timeout for `user_input` steps, in hours. `None` => the
+    /// kernel config default (`user_input_timeout_secs`).
+    pub timeout_hours: Option<f64>,
 }
 
 impl StepDef {
@@ -330,6 +341,13 @@ fn parse_steps_block(lines: &[&str], start: usize) -> (Vec<StepDef>, usize) {
                 }
                 continue;
             }
+            Some("cancel_keywords") if is_dash => {
+                let v = unquote(t.strip_prefix('-').unwrap_or(t).trim());
+                if !v.is_empty() {
+                    s.cancel_keywords.push(v);
+                }
+                continue;
+            }
             Some("with") if !is_dash && *indent > field_indent => {
                 let (k, v) = split_kv(t);
                 if !k.is_empty() {
@@ -382,6 +400,13 @@ fn apply_step_field(s: &mut StepDef, text: &str) -> Option<String> {
             }
             s.with = parse_inline_map(&v);
         }
+        "cancel_keywords" => {
+            if v.is_empty() {
+                return Some("cancel_keywords".into());
+            }
+            s.cancel_keywords = parse_inline_list(&v);
+        }
+        "timeout_hours" => s.timeout_hours = (!v.is_empty()).then(|| v.parse().ok()).flatten(),
         _ => {}
     }
     None
@@ -711,13 +736,53 @@ name: t
 description: d
 steps:
   - id: g
-    kind: user_input
+    kind: map
     prompt: "ok?"
 ---
 b"#;
         let f = parse_flow_def(content);
-        assert_eq!(f.steps[0].kind, Some(StepKind::Unknown("user_input".into())));
+        assert_eq!(f.steps[0].kind, Some(StepKind::Unknown("map".into())));
         assert!(!f.steps[0].kind.as_ref().unwrap().is_executable());
         assert_eq!(f.steps[0].prompt.as_deref(), Some("ok?"));
+    }
+
+    #[test]
+    fn user_input_step_parsed() {
+        let content = r#"---
+name: t
+description: d
+steps:
+  - id: review
+    kind: user_input
+    prompt: "继续？回复 ok/取消"
+    cancel_keywords: [取消, cancel, 算了]
+    timeout_hours: 24
+    depends_on: [draft]
+---
+b"#;
+        let f = parse_flow_def(content);
+        let s = &f.steps[0];
+        assert_eq!(s.kind, Some(StepKind::UserInput));
+        assert!(s.kind.as_ref().unwrap().is_executable());
+        assert_eq!(s.cancel_keywords, vec!["取消", "cancel", "算了"]);
+        assert_eq!(s.timeout_hours, Some(24.0));
+        assert_eq!(s.depends_on, vec!["draft"]);
+    }
+
+    #[test]
+    fn user_input_cancel_keywords_block_form() {
+        let content = r#"---
+name: t
+description: d
+steps:
+  - id: review
+    kind: user_input
+    cancel_keywords:
+      - 取消
+      - cancel
+---
+b"#;
+        let f = parse_flow_def(content);
+        assert_eq!(f.steps[0].cancel_keywords, vec!["取消", "cancel"]);
     }
 }
