@@ -123,7 +123,7 @@ fn detect_binary_kind(header: &[u8]) -> Option<&'static str> {
 
 /// Resolve output/memory (and catch-all) paths to the top-level senders directory.
 ///
-/// Returns `None` if the path is a workspace-internal path (knowledge/, skills/, etc.)
+/// Returns `None` if the path is a workspace-internal path (knowledge/, flows/, etc.)
 /// that should be handled by the sandbox instead.
 fn resolve_user_data_path(
     raw_path: &str,

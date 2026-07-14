@@ -15,7 +15,7 @@ use crate::loader::TemplateManifest;
 
 /// Build an `AgentManifest` from an extracted v3 workspace directory.
 ///
-/// Reads `template.json`, `profile.md`, and scans `skills/` and `knowledge/`
+/// Reads `template.json`, `profile.md`, and scans `flows/` and `knowledge/`
 /// to construct the manifest needed for `spawn_agent`.
 pub fn build_manifest_from_workspace(
     workspace: &Path,
@@ -28,15 +28,15 @@ pub fn build_manifest_from_workspace(
     // 2. Read profile.md for description
     let description = read_profile_description(workspace);
 
-    // 3. Scan skills/ directory — collect names and tools
-    let scan_result = scan_skills(workspace);
-    let skill_names = scan_result.names;
-    let skill_tools = scan_result.tools;
+    // 3. Scan flows/ directory — collect names and tools
+    let scan_result = scan_flows(workspace);
+    let flow_names = scan_result.names;
+    let flow_tools = scan_result.tools;
 
     // 4. Collect knowledge file names
     let knowledge_files = collect_knowledge_files(workspace);
 
-    // 5. Build tools list from skill-declared tools + evolution defaults
+    // 5. Build tools list from flow-declared tools + evolution defaults
     // Core tools (file_read, tool_search, etc.) are auto-loaded at runtime and
     // should NOT be listed in capabilities.tools. MCP tools (mcp_*) are loaded
     // separately via mcp_servers config. So we only collect non-core builtins.
@@ -66,8 +66,8 @@ pub fn build_manifest_from_workspace(
         }
     }
 
-    // Add tools declared in skills (non-core builtins only, skip MCP tools)
-    for tool in &skill_tools {
+    // Add tools declared in flows (non-core builtins only, skip MCP tools)
+    for tool in &flow_tools {
         if tool.starts_with("mcp_") { continue; }
         if core_tools.contains(&tool.as_str()) { continue; }
         if !tools.contains(tool) {
@@ -78,12 +78,12 @@ pub fn build_manifest_from_workspace(
     tools.sort();
     tools.dedup();
 
-    // 5.5 Derive mcp_servers: merge template.json + skill-declared MCP tool prefixes
+    // 5.5 Derive mcp_servers: merge template.json + flow-declared MCP tool prefixes
     let mut mcp_servers: Vec<String> = template
         .as_ref()
         .map(|t| t.mcp_servers.clone())
         .unwrap_or_default();
-    for tool in &skill_tools {
+    for tool in &flow_tools {
         if let Some(server) = extract_mcp_server(tool) {
             if !mcp_servers.contains(&server) {
                 mcp_servers.push(server);
@@ -149,7 +149,7 @@ pub fn build_manifest_from_workspace(
             memory_write: vec!["self.*".to_string()],
             ..Default::default()
         },
-        skills: skill_names,
+        flows: flow_names,
         tags: template
             .as_ref()
             .map(|t| t.tags.clone())
@@ -166,9 +166,9 @@ pub fn build_manifest_from_workspace(
     };
 
     debug!(
-        "Built manifest for '{}' from workspace: {} skills, {} knowledge files, {} tools",
+        "Built manifest for '{}' from workspace: {} flows, {} knowledge files, {} tools",
         name,
-        manifest.skills.len(),
+        manifest.flows.len(),
         manifest.knowledge_files.len(),
         manifest.capabilities.tools.len(),
     );
@@ -203,16 +203,16 @@ fn read_profile_description(workspace: &Path) -> String {
     String::new()
 }
 
-/// Scan workspace/skills/ to collect skill names and all declared tools.
-struct SkillScanResult {
+/// Scan workspace/flows/ to collect flow names and all declared tools.
+struct FlowScanResult {
     names: Vec<String>,
     tools: Vec<String>,
 }
 
-fn scan_skills(workspace: &Path) -> SkillScanResult {
-    let skills_dir = workspace.join("skills");
-    if !skills_dir.is_dir() {
-        return SkillScanResult {
+fn scan_flows(workspace: &Path) -> FlowScanResult {
+    let flows_dir = workspace.join("flows");
+    if !flows_dir.is_dir() {
+        return FlowScanResult {
             names: Vec::new(),
             tools: Vec::new(),
         };
@@ -221,8 +221,8 @@ fn scan_skills(workspace: &Path) -> SkillScanResult {
     let mut names = Vec::new();
     let mut tools: Vec<String> = Vec::new();
 
-    let Ok(entries) = std::fs::read_dir(&skills_dir) else {
-        return SkillScanResult { names, tools };
+    let Ok(entries) = std::fs::read_dir(&flows_dir) else {
+        return FlowScanResult { names, tools };
     };
 
     for entry in entries.flatten() {
@@ -231,27 +231,27 @@ fn scan_skills(workspace: &Path) -> SkillScanResult {
             continue;
         }
 
-        let skill_md = path.join("SKILL.md");
-        if !skill_md.exists() {
+        let flow_md = path.join("SKILL.md");
+        if !flow_md.exists() {
             continue;
         }
 
-        if let Ok(content) = std::fs::read_to_string(&skill_md) {
-            if let Some(name) = parse_skill_name(&content) {
+        if let Ok(content) = std::fs::read_to_string(&flow_md) {
+            if let Some(name) = parse_flow_name(&content) {
                 names.push(name);
             }
-            tools.extend(parse_skill_tools(&content));
+            tools.extend(parse_flow_tools(&content));
         }
     }
 
     tools.sort();
     tools.dedup();
 
-    SkillScanResult { names, tools }
+    FlowScanResult { names, tools }
 }
 
-/// Parse skill frontmatter to extract name.
-fn parse_skill_name(content: &str) -> Option<String> {
+/// Parse flow frontmatter to extract name.
+fn parse_flow_name(content: &str) -> Option<String> {
     let rest = content.strip_prefix("---")?;
     let end = rest.find("---")?;
     let frontmatter = &rest[..end];
@@ -267,8 +267,8 @@ fn parse_skill_name(content: &str) -> Option<String> {
     None
 }
 
-/// Parse skill frontmatter to extract tools list (builtin + MCP).
-fn parse_skill_tools(content: &str) -> Vec<String> {
+/// Parse flow frontmatter to extract tools list (builtin + MCP).
+fn parse_flow_tools(content: &str) -> Vec<String> {
     let Some(rest) = content.strip_prefix("---") else { return Vec::new() };
     let Some(end) = rest.find("---") else { return Vec::new() };
     let frontmatter = &rest[..end];
@@ -373,47 +373,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_skill_tools_inline_array() {
+    fn test_parse_flow_tools_inline_array() {
         let md = "---\nname: test\ntools: [\"sqlite_query\", \"web_fetch\"]\n---\nbody";
-        let tools = parse_skill_tools(md);
+        let tools = parse_flow_tools(md);
         assert_eq!(tools, vec!["sqlite_query", "web_fetch"]);
     }
 
     #[test]
-    fn test_parse_skill_tools_block_list() {
+    fn test_parse_flow_tools_block_list() {
         let md = "---\nname: test\ntools:\n  - \"sqlite_query\"\n  - \"sqlite_schema\"\n  - \"web_fetch\"\n---\nbody";
-        let tools = parse_skill_tools(md);
+        let tools = parse_flow_tools(md);
         assert_eq!(tools, vec!["sqlite_query", "sqlite_schema", "web_fetch"]);
     }
 
     #[test]
-    fn test_parse_skill_tools_block_list_unquoted() {
+    fn test_parse_flow_tools_block_list_unquoted() {
         let md = "---\nname: test\ntools:\n  - sqlite_query\n  - web_fetch\n---\nbody";
-        let tools = parse_skill_tools(md);
+        let tools = parse_flow_tools(md);
         assert_eq!(tools, vec!["sqlite_query", "web_fetch"]);
     }
 
     #[test]
-    fn test_parse_skill_tools_empty() {
+    fn test_parse_flow_tools_empty() {
         let md = "---\nname: test\n---\nbody";
-        let tools = parse_skill_tools(md);
+        let tools = parse_flow_tools(md);
         assert!(tools.is_empty());
     }
 
     #[test]
-    fn test_parse_skill_tools_stops_at_next_key() {
+    fn test_parse_flow_tools_stops_at_next_key() {
         let md = "---\nname: test\ntools:\n  - sqlite_query\n  - web_fetch\nother_key: value\n---\nbody";
-        let tools = parse_skill_tools(md);
+        let tools = parse_flow_tools(md);
         assert_eq!(tools, vec!["sqlite_query", "web_fetch"]);
     }
 }
 
 #[test]
-fn test_parse_gaokao_skill_tools() {
+fn test_parse_gaokao_flow_tools() {
     let content = std::fs::read_to_string(
-        "/Users/sophiehe/Documents/opencarrier/opencarrier-clones/generated/gaokao-advisor/skills/gaokao-advisor-voice/SKILL.md"
+        "/Users/sophiehe/Documents/opencarrier/opencarrier-clones/generated/gaokao-advisor/flows/gaokao-advisor-voice/SKILL.md"
     ).unwrap();
-    let tools = parse_skill_tools(&content);
+    let tools = parse_flow_tools(&content);
     println!("Parsed tools: {:?}", tools);
     assert!(tools.contains(&"sqlite_query".to_string()), "should contain sqlite_query, got: {:?}", tools);
     assert!(tools.contains(&"sqlite_schema".to_string()), "should contain sqlite_schema, got: {:?}", tools);

@@ -12,7 +12,7 @@ pub fn is_internal_path(rel: &str) -> bool {
         rel,
         "agent.toml" | "SOUL.md" | "system_prompt.md" | "profile.md" | "style.md" | "evolution.md"
     ) || rel.starts_with("knowledge/")
-        || rel.starts_with("skills/")
+        || rel.starts_with("flows/")
         || rel.starts_with("sessions/")
         || rel.starts_with("senders/")
         || rel.starts_with("workspaces/")
@@ -124,7 +124,7 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
 /// Note: output/, memory/, and catch-all (non-internal) paths are handled by the
 /// filesystem tools directly via `resolve_user_data_path()`, which writes to the
 /// top-level `~/.opencarrier/senders/` directory. This sandbox function only
-/// handles workspace-internal paths (knowledge/, skills/, etc.).
+/// handles workspace-internal paths (knowledge/, flows/, etc.).
 pub fn resolve_sandbox_path_for_write(
     user_path: &str,
     workspace_root: &Path,
@@ -285,8 +285,8 @@ mod tests {
     fn test_nonexistent_file_with_deeply_missing_parents() {
         let dir = TempDir::new().unwrap();
 
-        // Neither skills/ nor sub/ exists
-        let result = resolve_sandbox_path("skills/sub/deep/file.md", dir.path());
+        // Neither flows/ nor sub/ exists
+        let result = resolve_sandbox_path("flows/sub/deep/file.md", dir.path());
         assert!(result.is_ok(), "Expected OK, got: {:?}", result);
         let resolved = result.unwrap();
         assert!(resolved.starts_with(dir.path().canonicalize().unwrap()));

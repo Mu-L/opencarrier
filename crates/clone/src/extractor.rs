@@ -156,17 +156,17 @@ pub fn scan_workspace_security(workspace: &Path) -> Vec<String> {
         }
     }
 
-    // Check skill scripts for non-HTTPS URLs
-    let skills_dir = workspace.join("skills");
-    if skills_dir.is_dir() {
-        if let Ok(entries) = walk_dir(&skills_dir) {
+    // Check flow scripts for non-HTTPS URLs
+    let flows_dir = workspace.join("flows");
+    if flows_dir.is_dir() {
+        if let Ok(entries) = walk_dir(&flows_dir) {
             for path in &entries {
                 if path.extension().map(|e| e == "toml").unwrap_or(false) {
                     if let Ok(content) = std::fs::read_to_string(path) {
                         if content.contains("http://") && !content.contains("localhost") {
                             let rel = path.strip_prefix(workspace).unwrap_or(path);
                             warnings.push(format!(
-                                "Skill script {} uses non-HTTPS URL",
+                                "Flow script {} uses non-HTTPS URL",
                                 rel.display()
                             ));
                         }

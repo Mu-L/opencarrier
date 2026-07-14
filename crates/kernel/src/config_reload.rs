@@ -1,6 +1,6 @@
 //! Config hot-reload — diffs two `KernelConfig` instances and produces a `ReloadPlan`.
 //!
-//! **Hot-reload safe**: skills, usage footer, web config, browser,
+//! **Hot-reload safe**: flows, usage footer, web config, browser,
 //! approval policy, cron settings, webhook triggers.
 //!
 //! **No-op** (informational only): log_level, language, mode.
@@ -17,8 +17,8 @@ use tracing::{info, warn};
 /// An individual action that can be applied at runtime (hot-reload).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HotAction {
-    /// Skill configuration changed — reload skill registry.
-    ReloadSkills,
+    /// Flow configuration changed — reload flow registry.
+    ReloadFlows,
     /// Usage footer mode changed.
     UpdateUsageFooter,
     /// Web config changed — rebuild web tools context.
@@ -491,7 +491,7 @@ mod tests {
         let plan = ReloadPlan {
             restart_required: false,
             restart_reasons: vec![],
-            hot_actions: vec![HotAction::ReloadSkills],
+            hot_actions: vec![HotAction::ReloadFlows],
             noop_changes: vec![],
         };
         assert!(plan.is_hot_reloadable());
@@ -499,7 +499,7 @@ mod tests {
         let plan = ReloadPlan {
             restart_required: true,
             restart_reasons: vec!["api_listen changed".to_string()],
-            hot_actions: vec![HotAction::ReloadSkills],
+            hot_actions: vec![HotAction::ReloadFlows],
             noop_changes: vec![],
         };
         assert!(!plan.is_hot_reloadable());
@@ -539,7 +539,7 @@ mod tests {
         let plan = ReloadPlan {
             restart_required: false,
             restart_reasons: vec![],
-            hot_actions: vec![HotAction::ReloadSkills],
+            hot_actions: vec![HotAction::ReloadFlows],
             noop_changes: vec![],
         };
         assert!(!should_apply_hot(ReloadMode::Off, &plan));
@@ -550,7 +550,7 @@ mod tests {
         let plan = ReloadPlan {
             restart_required: false,
             restart_reasons: vec![],
-            hot_actions: vec![HotAction::ReloadSkills],
+            hot_actions: vec![HotAction::ReloadFlows],
             noop_changes: vec![],
         };
         assert!(!should_apply_hot(ReloadMode::Restart, &plan));
@@ -561,7 +561,7 @@ mod tests {
         let plan = ReloadPlan {
             restart_required: false,
             restart_reasons: vec![],
-            hot_actions: vec![HotAction::ReloadSkills],
+            hot_actions: vec![HotAction::ReloadFlows],
             noop_changes: vec![],
         };
         assert!(should_apply_hot(ReloadMode::Hybrid, &plan));

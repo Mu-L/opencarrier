@@ -74,7 +74,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     recent_tool_calls: &mut Vec<(String, u64)>,
     tools_owned: &mut Vec<ToolDefinition>,
     discovered_tool_names: &mut std::collections::HashSet<String>,
-    loaded_skills: &mut std::collections::HashSet<String>,
+    loaded_flows: &mut std::collections::HashSet<String>,
     error_tracker: &mut crate::agent_loop::state::ToolErrorTracker,
     // For task_plan save
     session_base_len: usize,
@@ -272,7 +272,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 .unwrap_or("")
                 .to_lowercase();
             if !skill_name.is_empty() {
-                if loaded_skills.contains(&skill_name) {
+                if loaded_flows.contains(&skill_name) {
                     warn!(
                         agent = %manifest.name,
                         skill = %skill_name,
@@ -291,7 +291,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                     });
                     continue;
                 } else {
-                    loaded_skills.insert(skill_name);
+                    loaded_flows.insert(skill_name);
                 }
             }
         }

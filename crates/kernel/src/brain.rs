@@ -301,7 +301,7 @@ impl Brain {
         }
     }
 
-    /// Resolve credentials for the brain (for skill credential injection).
+    /// Resolve credentials for the brain (for flow credential injection).
     pub fn credentials_for(
         &self,
         _provider: &str,

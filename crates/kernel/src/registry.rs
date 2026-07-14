@@ -178,13 +178,13 @@ impl AgentRegistry {
         Ok(())
     }
 
-    /// Update an agent's skill allowlist.
-    pub fn update_skills(&self, id: AgentId, skills: Vec<String>) -> CarrierResult<()> {
+    /// Update an agent's flow allowlist.
+    pub fn update_flows(&self, id: AgentId, flows: Vec<String>) -> CarrierResult<()> {
         let mut entry = self
             .agents
             .get_mut(&id)
             .ok_or_else(|| CarrierError::AgentNotFound(id.to_string()))?;
-        entry.manifest.skills = skills;
+        entry.manifest.flows = flows;
         entry.last_active = chrono::Utc::now();
         Ok(())
     }
@@ -355,7 +355,7 @@ mod tests {
                 capabilities: ManifestCapabilities::default(),
                 profile: None,
                 tools: HashMap::new(),
-                skills: vec![],
+                flows: vec![],
                 mcp_servers: vec![],
                 max_tool_level: types::tool::PermissionLevel::Write,
                 intent_classifier_enabled: None,

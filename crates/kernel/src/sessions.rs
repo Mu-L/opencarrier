@@ -1,7 +1,7 @@
 //! Session management and agent lifecycle — reset, compact, configure, kill.
 //!
 //! Handles session CRUD, session compaction, agent configuration mutations
-//! (model, skills, MCP servers, tool filters), and agent termination.
+//! (model, flows, MCP servers, tool filters), and agent termination.
 
 use types::agent::*;
 use types::error::CarrierError;
@@ -280,19 +280,19 @@ impl CarrierKernel {
         Ok(())
     }
 
-    /// Update an agent's skill allowlist. Empty = all skills (backward compat).
-    pub fn set_agent_skills(&self, agent_id: AgentId, skills: Vec<String>) -> KernelResult<()> {
+    /// Update an agent's flow allowlist. Empty = all flows (backward compat).
+    pub fn set_agent_flows(&self, agent_id: AgentId, flows: Vec<String>) -> KernelResult<()> {
         self.registry
-            .update_skills(agent_id, skills.clone())
+            .update_flows(agent_id, flows.clone())
             .map_err(KernelError::Carrier)?;
 
         if let Some(entry) = self.registry.get(agent_id) {
             if let Err(e) = self.memory.save_agent(&entry) {
-                warn!(agent_id = %agent_id, error = %e, "Failed to persist agent after skills update");
+                warn!(agent_id = %agent_id, error = %e, "Failed to persist agent after flows update");
             }
         }
 
-        info!(agent_id = %agent_id, skills = ?skills, "Agent skills updated");
+        info!(agent_id = %agent_id, flows = ?flows, "Agent flows updated");
         Ok(())
     }
 

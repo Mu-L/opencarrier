@@ -13,7 +13,7 @@ pub fn ensure_workspace(workspace: &Path) -> KernelResult<()> {
     for subdir in &[
         "knowledge",
         "sessions",
-        "skills",
+        "flows",
         "logs",
         "history",
     ] {
@@ -80,7 +80,7 @@ pub fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
          - Drawer keys follow: category.specific_name (e.g. entity.wechat_accounts, preference.theme, profile.phone_numbers)\n\
          - Categories: profile (personal info), preference (likes/settings), entity (accounts/projects/orgs), fact (rules/constraints), event (decisions/timelines)\n\
          - Values are always arrays — use kv_list() to see all stored keys, kv_list(\"entity.\") to filter by prefix\n\
-         - When you discover missing info during a task, ask the user, and after success store it + update the relevant skill.\n\n\
+         - When you discover missing info during a task, ask the user, and after success store it + update the relevant flow.\n\n\
          ## Tool Usage Protocols\n\
          - file_read BEFORE file_write \u{2014} always understand what exists.\n\
          - web_fetch for specific URLs.\n\

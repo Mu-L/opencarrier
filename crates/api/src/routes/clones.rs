@@ -26,7 +26,7 @@ pub async fn list_clones(State(state): State<Arc<AppState>>) -> impl IntoRespons
                 "template_author": cs.template_author,
                 "installed_at": cs.installed_at,
                 "knowledge_files": e.manifest.knowledge_files,
-                "skills": e.manifest.skills,
+                "skills": e.manifest.flows,
             })
         })
         .collect();

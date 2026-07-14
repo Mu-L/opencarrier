@@ -125,16 +125,16 @@ pub fn touch_user_profile(home_dir: &Path, owner_id: &str, agent_name: &str, use
     }
 }
 
-/// Read skill catalog from workspace/skills/ (private) AND ~/.opencarrier/skills/
-/// (shared system skills). Returns a short summary of all skills:
-/// "1. **{name}** — {description}". Private skills take precedence on name
-/// collisions with shared system skills.
-pub fn read_skills_catalog(workspace: &Path) -> Option<String> {
+/// Read flow catalog from workspace/flows/ (private) AND ~/.opencarrier/flows/
+/// (shared system flows). Returns a short summary of all flows:
+/// "1. **{name}** — {description}". Private flows take precedence on name
+/// collisions with shared system flows.
+pub fn read_flows_catalog(workspace: &Path) -> Option<String> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut entries: Vec<(String, String)> = Vec::new();
 
-    for dir in [workspace.join("skills"), types::config::home_dir().join("skills")] {
-        for (name, description, _) in collect_skill_summaries(&dir) {
+    for dir in [workspace.join("flows"), types::config::home_dir().join("flows")] {
+        for (name, description, _) in collect_flow_summaries(&dir) {
             if seen.insert(name.to_lowercase()) {
                 entries.push((name, description));
             }
@@ -391,15 +391,15 @@ pub fn read_agents_directory(workspace: &Path) -> Option<String> {
     }
 }
 
-/// Read full skill prompts from workspace/skills/ directory.
-/// Returns formatted skill body for each skill.
-pub fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
-    let skills_dir = workspace.join("skills");
-    if !skills_dir.is_dir() {
+/// Read full flow prompts from workspace/flows/ directory.
+/// Returns formatted flow body for each flow.
+pub fn read_workspace_flows_prompts(workspace: &Path) -> Option<String> {
+    let flows_dir = workspace.join("flows");
+    if !flows_dir.is_dir() {
         return None;
     }
 
-    let dir_iter = match std::fs::read_dir(&skills_dir) {
+    let dir_iter = match std::fs::read_dir(&flows_dir) {
         Ok(iter) => iter,
         Err(_) => return None,
     };
@@ -408,8 +408,8 @@ pub fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
     for entry in dir_iter.flatten() {
         let path = entry.path();
 
-        // Directory format: skills/<name>/SKILL.md
-        let skill_path = if path.is_dir() {
+        // Directory format: flows/<name>/SKILL.md
+        let flow_path = if path.is_dir() {
             path.join("SKILL.md")
         } else if path.extension().is_some_and(|ext| ext == "md") {
             path.clone()
@@ -417,18 +417,18 @@ pub fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
             continue;
         };
 
-        if !skill_path.exists() {
+        if !flow_path.exists() {
             continue;
         }
 
-        let content = std::fs::read_to_string(&skill_path).unwrap_or_default();
+        let content = std::fs::read_to_string(&flow_path).unwrap_or_default();
         let trimmed = content.trim();
         if trimmed.is_empty() {
             continue;
         }
 
         // Parse frontmatter
-        let (name, _, _, _, body) = parse_skill_full(trimmed);
+        let (name, _, _, _, body) = parse_flow_full(trimmed);
         let section = format!("### {}\n{}", name, body);
         parts.push(section);
     }
@@ -440,10 +440,10 @@ pub fn read_workspace_skills_prompts(workspace: &Path) -> Option<String> {
     }
 }
 
-/// Parse a skill .md file to extract name, description, max_iterations, and body.
+/// Parse a flow .md file to extract name, description, max_iterations, and body.
 /// The `tools:` field in frontmatter is no longer parsed — tool guidance is
-/// provided via the skill body's natural language instructions.
-pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, Vec<String>, &str) {
+/// provided via the flow body's natural language instructions.
+pub fn parse_flow_full(content: &str) -> (String, String, Option<u32>, Vec<String>, &str) {
     let mut name = String::new();
     let mut description = String::new();
     let mut max_iterations: Option<u32> = None;
@@ -492,87 +492,87 @@ pub fn parse_skill_full(content: &str) -> (String, String, Option<u32>, Vec<Stri
     (String::new(), String::new(), None, Vec::new(), content)
 }
 
-/// Scan a skills directory and return `(name, description, skill_file_path)` for
-/// each skill with a non-empty description. Supports both directory format
-/// (`skills/{name}/SKILL.md`) and flat format (`skills/{name}.md`).
+/// Scan a flows directory and return `(name, description, flow_file_path)` for
+/// each flow with a non-empty description. Supports both directory format
+/// (`flows/{name}/SKILL.md`) and flat format (`flows/{name}.md`).
 ///
-/// Used by both the LLM skill classifier and the skill catalog builder to scan
-/// private (`workspace/skills`) and shared system (`~/.opencarrier/skills`) dirs.
-fn collect_skill_summaries(skills_dir: &Path) -> Vec<(String, String, std::path::PathBuf)> {
+/// Used by both the LLM flow classifier and the flow catalog builder to scan
+/// private (`workspace/flows`) and shared system (`~/.opencarrier/flows`) dirs.
+fn collect_flow_summaries(flows_dir: &Path) -> Vec<(String, String, std::path::PathBuf)> {
     let mut out = Vec::new();
-    if !skills_dir.is_dir() {
+    if !flows_dir.is_dir() {
         return out;
     }
-    let entries = match std::fs::read_dir(skills_dir) {
+    let entries = match std::fs::read_dir(flows_dir) {
         Ok(e) => e,
         Err(_) => return out,
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let skill_path = if path.is_dir() {
+        let flow_path = if path.is_dir() {
             path.join("SKILL.md")
         } else if path.extension().is_some_and(|ext| ext == "md") {
             path
         } else {
             continue;
         };
-        if !skill_path.exists() {
+        if !flow_path.exists() {
             continue;
         }
-        let content = match std::fs::read_to_string(&skill_path) {
+        let content = match std::fs::read_to_string(&flow_path) {
             Ok(c) => c,
             Err(_) => continue,
         };
-        let (name, description, _, _, _) = parse_skill_full(content.trim());
+        let (name, description, _, _, _) = parse_flow_full(content.trim());
         if description.is_empty() {
             continue;
         }
-        out.push((name, description, skill_path));
+        out.push((name, description, flow_path));
     }
     out
 }
 
-/// Result of automatic skill matching against a user message.
-pub struct SkillMatch {
-    /// Skill name.
+/// Result of automatic flow matching against a user message.
+pub struct FlowMatch {
+    /// Flow name.
     pub name: String,
-    /// Full skill body (instructions after frontmatter).
+    /// Full flow body (instructions after frontmatter).
     pub body: String,
-    /// Override max_iterations for the agent loop (from skill frontmatter).
+    /// Override max_iterations for the agent loop (from flow frontmatter).
     pub max_iterations: Option<u32>,
-    /// Tools declared in the skill frontmatter (e.g., ["sqlite_query", "web_fetch"]).
+    /// Tools declared in the flow frontmatter (e.g., ["sqlite_query", "web_fetch"]).
     pub tools: Vec<String>,
 }
 
-/// Classify which skill (if any) matches the user message using an LLM.
-pub async fn classify_skill_with_llm(
+/// Classify which flow (if any) matches the user message using an LLM.
+pub async fn classify_flow_with_llm(
     message: &str,
     workspace: &std::path::Path,
     brain: &std::sync::Arc<dyn runtime::llm_driver::Brain>,
     recent_turns: &[(String, String)],
-) -> Option<SkillMatch> {
-    // Collect skill summaries from two sources, private first so it wins
-    // on name collisions with shared system skills:
-    //   1. workspace/skills/  — agent's private skills
-    //   2. ~/.opencarrier/skills/ — system-level shared skills (see docs/SKILL-STANDARD.md)
+) -> Option<FlowMatch> {
+    // Collect flow summaries from two sources, private first so it wins
+    // on name collisions with shared system flows:
+    //   1. workspace/flows/  — agent's private flows
+    //   2. ~/.opencarrier/flows/ — system-level shared flows (see docs/SKILL-STANDARD.md)
     let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut skill_summaries: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+    let mut flow_summaries: Vec<(String, String, std::path::PathBuf)> = Vec::new();
 
-    for dir in [workspace.join("skills"), types::config::home_dir().join("skills")] {
-        for (name, description, path) in collect_skill_summaries(&dir) {
+    for dir in [workspace.join("flows"), types::config::home_dir().join("flows")] {
+        for (name, description, path) in collect_flow_summaries(&dir) {
             if seen_names.insert(name.to_lowercase()) {
-                skill_summaries.push((name, description, path));
+                flow_summaries.push((name, description, path));
             }
         }
     }
 
-    if skill_summaries.is_empty() {
+    if flow_summaries.is_empty() {
         return None;
     }
 
     // Build classification prompt
-    let mut prompt = String::from("Available skills:\n");
-    for (name, description, _) in &skill_summaries {
+    let mut prompt = String::from("Available flows:\n");
+    for (name, description, _) in &flow_summaries {
         prompt.push_str(&format!("- {}: {}\n", name, description));
     }
 
@@ -590,9 +590,9 @@ pub async fn classify_skill_with_llm(
         }
     }
 
-    prompt.push_str(&format!("\nUser message: {}\n\nSkill:", message));
+    prompt.push_str(&format!("\nUser message: {}\n\nFlow:", message));
 
-    let system = "You are a skill classifier. Your task: return EXACTLY ONE skill name from the list, or \"none\". Reply with ONLY the skill name (e.g. \"sop-builder\") or \"none\" — nothing else. No explanation, no markdown, no quotes.";
+    let system = "You are a flow classifier. Your task: return EXACTLY ONE flow name from the list, or \"none\". Reply with ONLY the flow name (e.g. \"sop-builder\") or \"none\" — nothing else. No explanation, no markdown, no quotes.";
     let max_tokens: u32 = 20;
 
     // Call LLM for classification
@@ -610,7 +610,7 @@ pub async fn classify_skill_with_llm(
         extra: Default::default(),
     };
 
-    // Skill classification is a lightweight LLM call (max_tokens=50).
+    // Flow classification is a lightweight LLM call (max_tokens=50).
     // Apply a 30s timeout to prevent it from blocking the entire request
     // if the LLM API is unresponsive.
     let response = match tokio::time::timeout(
@@ -621,11 +621,11 @@ pub async fn classify_skill_with_llm(
     {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => {
-            tracing::warn!("Skill classification LLM call failed: {}", e);
+            tracing::warn!("Flow classification LLM call failed: {}", e);
             return None;
         }
         Err(_) => {
-            tracing::warn!("Skill classification LLM call timed out after 30s — skipping skill matching");
+            tracing::warn!("Flow classification LLM call timed out after 30s — skipping flow matching");
             return None;
         }
     };
@@ -636,7 +636,7 @@ pub async fn classify_skill_with_llm(
     }
 
     // Clean up common LLM artifacts (quotes, markdown, newlines)
-    let skill_name = raw
+    let flow_name = raw
         .trim_matches('"')
         .trim_matches('\'')
         .trim_matches('`')
@@ -646,51 +646,51 @@ pub async fn classify_skill_with_llm(
         .trim()
         .to_string();
 
-    if skill_name.is_empty() {
+    if flow_name.is_empty() {
         return None;
     }
 
-    // Find matching skill (exact or case-insensitive)
-    let matched = skill_summaries
+    // Find matching flow (exact or case-insensitive)
+    let matched = flow_summaries
         .iter()
-        .find(|(name, _, _)| name.to_lowercase() == skill_name)
+        .find(|(name, _, _)| name.to_lowercase() == flow_name)
         .or_else(|| {
-            skill_summaries.iter().find(|(name, _, _)| {
-                name.to_lowercase().contains(&skill_name)
-                    || skill_name.contains(&name.to_lowercase())
+            flow_summaries.iter().find(|(name, _, _)| {
+                name.to_lowercase().contains(&flow_name)
+                    || flow_name.contains(&name.to_lowercase())
             })
         })
         // Fallback: some LLMs (e.g. DeepSeek) output a reasoning chain instead of
-        // just the skill name. Scan the full response for any known skill name.
+        // just the flow name. Scan the full response for any known flow name.
         .or_else(|| {
-            skill_summaries.iter().find(|(name, _, _)| {
+            flow_summaries.iter().find(|(name, _, _)| {
                 raw.contains(&name.to_lowercase())
             })
         });
 
-    let matched_skill = match matched {
+    let matched_flow = match matched {
         Some(entry) => entry,
         None => {
             tracing::warn!(
-                skill_name = %skill_name,
-                available = ?skill_summaries.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>(),
-                "LLM returned unknown skill name"
+                flow_name = %flow_name,
+                available = ?flow_summaries.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>(),
+                "LLM returned unknown flow name"
             );
             return None;
         }
     };
 
-    // Load full skill content from the recorded path (private or shared system dir)
-    let content = std::fs::read_to_string(&matched_skill.2).ok()?;
-    let (name, _description, max_iterations, tools, body) = parse_skill_full(&content);
+    // Load full flow content from the recorded path (private or shared system dir)
+    let content = std::fs::read_to_string(&matched_flow.2).ok()?;
+    let (name, _description, max_iterations, tools, body) = parse_flow_full(&content);
 
     tracing::info!(
-        skill = %name,
+        flow = %name,
         tools = ?tools,
-        "Skill classified by LLM"
+        "Flow classified by LLM"
     );
 
-    Some(SkillMatch {
+    Some(FlowMatch {
         name,
         body: body.to_string(),
         max_iterations,
@@ -710,7 +710,7 @@ pub struct SubagentMatch {
 
 /// Match a user message against subagent trigger keywords.
 ///
-/// Uses the same keyword extraction as skill matching. Returns the best
+/// Uses the same keyword extraction as flow matching. Returns the best
 /// match (most keyword hits), or `None` if nothing matches.
 pub fn match_subagent_for_message(message: &str, subagents: &[types::agent::SubagentConfig]) -> Option<SubagentMatch> {
     if subagents.is_empty() {
@@ -790,8 +790,8 @@ fn extract_keywords(text: &str) -> Vec<String> {
     keywords
 }
 
-/// Parse YAML frontmatter from a skill .md file to extract name and description.
-pub fn parse_skill_frontmatter(path: &Path) -> Option<(String, String)> {
+/// Parse YAML frontmatter from a flow .md file to extract name and description.
+pub fn parse_flow_frontmatter(path: &Path) -> Option<(String, String)> {
     let content = std::fs::read_to_string(path).ok()?;
     let content = content.trim();
 
@@ -830,10 +830,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_skill_full_inline_tools() {
-        let content = "---\nname: test-skill\ndescription: test\ntools: [\"foo\", \"bar\"]\n---\nBody text";
-        let (name, desc, max_iter, tools, body) = parse_skill_full(content);
-        assert_eq!(name, "test-skill");
+    fn test_parse_flow_full_inline_tools() {
+        let content = "---\nname: test-flow\ndescription: test\ntools: [\"foo\", \"bar\"]\n---\nBody text";
+        let (name, desc, max_iter, tools, body) = parse_flow_full(content);
+        assert_eq!(name, "test-flow");
         assert_eq!(desc, "test");
         assert_eq!(max_iter, None);
         assert_eq!(tools, vec!["foo", "bar"]);
@@ -841,28 +841,28 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_skill_full_multiline_tools() {
-        let content = "---\nname: test-skill\ndescription: test\ntools:\n  - web_search\n  - knowledge_add\n---\nBody text";
-        let (name, desc, _max_iter, tools, body) = parse_skill_full(content);
-        assert_eq!(name, "test-skill");
+    fn test_parse_flow_full_multiline_tools() {
+        let content = "---\nname: test-flow\ndescription: test\ntools:\n  - web_search\n  - knowledge_add\n---\nBody text";
+        let (name, desc, _max_iter, tools, body) = parse_flow_full(content);
+        assert_eq!(name, "test-flow");
         assert_eq!(desc, "test");
         assert_eq!(tools, vec!["web_search", "knowledge_add"]);
         assert_eq!(body, "Body text");
     }
 
     #[test]
-    fn test_parse_skill_full_no_tools() {
-        let content = "---\nname: test-skill\ndescription: test\n---\nBody text";
-        let (name, _, _, tools, _) = parse_skill_full(content);
-        assert_eq!(name, "test-skill");
+    fn test_parse_flow_full_no_tools() {
+        let content = "---\nname: test-flow\ndescription: test\n---\nBody text";
+        let (name, _, _, tools, _) = parse_flow_full(content);
+        assert_eq!(name, "test-flow");
         assert!(tools.is_empty());
     }
 
     #[test]
-    fn test_parse_skill_full_tools_stops_at_next_key() {
-        let content = "---\nname: test-skill\ntools:\n  - foo\n  - bar\nversion: 2\n---\nBody";
-        let (name, _, _, tools, _) = parse_skill_full(content);
-        assert_eq!(name, "test-skill");
+    fn test_parse_flow_full_tools_stops_at_next_key() {
+        let content = "---\nname: test-flow\ntools:\n  - foo\n  - bar\nversion: 2\n---\nBody";
+        let (name, _, _, tools, _) = parse_flow_full(content);
+        assert_eq!(name, "test-flow");
         assert_eq!(tools, vec!["foo", "bar"]);
     }
 }

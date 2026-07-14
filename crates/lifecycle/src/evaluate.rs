@@ -19,8 +19,8 @@ pub struct QualityMetrics {
     pub knowledge_files: usize,
     /// Total bytes of knowledge content.
     pub knowledge_total_bytes: usize,
-    /// Number of skills.
-    pub skill_count: usize,
+    /// Number of flows.
+    pub flow_count: usize,
     /// Whether SOUL.md exists.
     pub has_soul: bool,
     /// Whether system_prompt.md exists.
@@ -70,7 +70,7 @@ pub struct EvalReport {
 /// Compute deterministic quality metrics for a clone workspace.
 pub fn compute_deterministic_metrics(workspace: &Path) -> QualityMetrics {
     let knowledge_dir = workspace.join("knowledge");
-    let skills_dir = workspace.join("skills");
+    let flows_dir = workspace.join("flows");
 
     // Knowledge files
     let mut knowledge_files = 0usize;
@@ -114,8 +114,8 @@ pub fn compute_deterministic_metrics(workspace: &Path) -> QualityMetrics {
     }
 
     // Skills
-    let skill_count = if skills_dir.exists() {
-        fs::read_dir(&skills_dir)
+    let flow_count = if flows_dir.exists() {
+        fs::read_dir(&flows_dir)
             .map(|d| {
                 d.filter_map(|e| e.ok())
                     .filter(|e| {
@@ -163,13 +163,13 @@ pub fn compute_deterministic_metrics(workspace: &Path) -> QualityMetrics {
     }
 
     // Skills (max 15 points)
-    if skill_count > 0 {
+    if flow_count > 0 {
         score += 5;
     }
-    if skill_count >= 3 {
+    if flow_count >= 3 {
         score += 5;
     }
-    if skill_count >= 5 {
+    if flow_count >= 5 {
         score += 5;
     }
 
@@ -203,7 +203,7 @@ pub fn compute_deterministic_metrics(workspace: &Path) -> QualityMetrics {
     QualityMetrics {
         knowledge_files,
         knowledge_total_bytes,
-        skill_count,
+        flow_count,
         has_soul,
         has_system_prompt,
         has_memory,
@@ -361,7 +361,7 @@ mod tests {
     fn setup_workspace(tmp: &TempDir) -> &Path {
         let ws = tmp.path();
         fs::create_dir_all(ws.join("knowledge")).unwrap();
-        fs::create_dir_all(ws.join("skills")).unwrap();
+        fs::create_dir_all(ws.join("flows")).unwrap();
         ws
     }
 
@@ -396,14 +396,14 @@ mod tests {
             "---\nname: faq\ndescription: common questions\n---\n\nFAQ content here.",
         )
         .unwrap();
-        fs::write(ws.join("skills/greet.md"), "---\n---\nGreet the user").unwrap();
+        fs::write(ws.join("flows/greet.md"), "---\n---\nGreet the user").unwrap();
 
         let metrics = compute_deterministic_metrics(ws);
         assert!(metrics.has_soul);
         assert!(metrics.has_system_prompt);
         assert!(metrics.has_memory);
         assert_eq!(metrics.knowledge_files, 2);
-        assert_eq!(metrics.skill_count, 1);
+        assert_eq!(metrics.flow_count, 1);
         assert_eq!(metrics.files_missing_frontmatter, 0);
         assert!(metrics.score >= 60);
     }

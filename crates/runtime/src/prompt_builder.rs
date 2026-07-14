@@ -37,10 +37,10 @@ pub struct PromptContext {
     pub recalled_memories: Vec<(String, String)>,
     /// Tree memory hits from hierarchical memory (source + global trees).
     pub tree_memories: Vec<TreeMemoryHit>,
-    /// Skill summary text (from kernel.build_skill_summary()).
-    pub skill_summary: String,
-    /// Prompt context from prompt-only skills.
-    pub skill_prompt_context: String,
+    /// Flow summary text (from kernel.build_flow_summary()).
+    pub flow_summary: String,
+    /// Prompt context from prompt-only flows.
+    pub flow_prompt_context: String,
     /// MCP server/tool summary text.
     pub mcp_summary: String,
     /// Agent workspace path.
@@ -88,15 +88,15 @@ pub struct PromptContext {
     /// Clone's system_prompt.md — behavioral instructions ("你怎么做事").
     /// Only present for agents loaded from .agx with a workspace system_prompt.md.
     pub clone_system_prompt_md: Option<String>,
-    /// Clone's skill catalog — all skills' name + description (short summary).
-    /// Scanned from workspace/skills/ at prompt build time.
-    pub clone_skills_catalog: Option<String>,
+    /// Clone's flow catalog — all flows' name + description (short summary).
+    /// Scanned from workspace/flows/ at prompt build time.
+    pub clone_flows_catalog: Option<String>,
     /// Clone's style samples — extracted speaking patterns from chat history.
     /// Scanned from workspace/style/ at prompt build time.
     pub clone_style_md: Option<String>,
-    /// Clone's full skill prompts — workspace skill body.
-    /// Injected alongside the catalog so the LLM knows HOW to execute each skill.
-    pub clone_skills_prompts: Option<String>,
+    /// Clone's full flow prompts — workspace flow body.
+    /// Injected alongside the catalog so the LLM knows HOW to execute each flow.
+    pub clone_flows_prompts: Option<String>,
     /// Clone's knowledge content — compiled truth from knowledge/*.md files.
     /// Unlike memory_md (which is just the index), this contains actual knowledge.
     pub knowledge_content: Option<String>,
@@ -113,9 +113,9 @@ pub struct PromptContext {
     pub expression_dna_md: Option<String>,
     /// TIMELINE.md — biographical timeline + intellectual lineage.
     pub timeline_md: Option<String>,
-    /// Auto-matched skill content — injected at high priority when the system
-    /// detects a skill matching the user's message before the LLM call.
-    pub auto_matched_skill: Option<String>,
+    /// Auto-matched flow content — injected at high priority when the system
+    /// detects a flow matching the user's message before the LLM call.
+    pub auto_matched_flow: Option<String>,
     /// L0 turn summaries — recent conversation turns in condensed form.
     pub turn_summaries: Vec<TurnSummary>,
     /// Drawer entries from kv memory — user profile, preferences, entities, events.
@@ -139,16 +139,16 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
 
     // Detect clone mode: base_system_prompt is empty + clone files present
     let is_clone = ctx.base_system_prompt.is_empty()
-        && (ctx.clone_system_prompt_md.is_some() || ctx.clone_skills_catalog.is_some());
+        && (ctx.clone_system_prompt_md.is_some() || ctx.clone_flows_catalog.is_some());
 
-    // Section 1.05 — Auto-Matched Skill (highest priority, system-detected)
-    if let Some(ref skill) = ctx.auto_matched_skill {
-        if !skill.trim().is_empty() {
+    // Section 1.05 — Auto-Matched Flow (highest priority, system-detected)
+    if let Some(ref flow) = ctx.auto_matched_flow {
+        if !flow.trim().is_empty() {
             sections.push(format!(
-                "## Active Skill (auto-matched)\n\
-                 The skill instructions below are already loaded and active. \
-                 Follow these instructions directly — do not call skill_load again for this skill.\n\n{}",
-                cap_str(skill, 4000)
+                "## Active Flow (auto-matched)\n\
+                 The flow instructions below are already loaded and active. \
+                 Follow these instructions directly — do not call skill_load again for this flow.\n\n{}",
+                cap_str(flow, 4000)
             ));
         }
     }
@@ -204,12 +204,12 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             }
         }
 
-        // skills/ → 技能目录（name + description，始终注入，很短）
-        if let Some(ref catalog) = ctx.clone_skills_catalog {
+        // flows/ → 技能目录（name + description，始终注入，很短）
+        if let Some(ref catalog) = ctx.clone_flows_catalog {
             if !catalog.trim().is_empty() {
-                let section = if ctx.auto_matched_skill.is_some() {
+                let section = if ctx.auto_matched_flow.is_some() {
                     format!(
-                        "## 技能目录\n当用户的请求匹配某个技能时，使用 skill_load 加载该技能的详细指令。\n如果某个技能已被自动加载（见上方 Active Skill 部分），直接执行，无需再次调用 skill_load。\n\n{}",
+                        "## 技能目录\n当用户的请求匹配某个技能时，使用 skill_load 加载该技能的详细指令。\n如果某个技能已被自动加载（见上方 Active Flow 部分），直接执行，无需再次调用 skill_load。\n\n{}",
                         catalog
                     )
                 } else {
@@ -316,11 +316,11 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
         sections.push(build_turn_summaries_section(&ctx.turn_summaries));
     }
 
-    // Section 5 — Skills (only if skills available)
-    if !ctx.skill_summary.is_empty() || !ctx.skill_prompt_context.is_empty() {
-        sections.push(build_skills_section(
-            &ctx.skill_summary,
-            &ctx.skill_prompt_context,
+    // Section 5 — Flows (only if flows available)
+    if !ctx.flow_summary.is_empty() || !ctx.flow_prompt_context.is_empty() {
+        sections.push(build_flows_section(
+            &ctx.flow_summary,
+            &ctx.flow_prompt_context,
         ));
     }
 
@@ -471,11 +471,11 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
 fn build_identity_section(ctx: &PromptContext) -> String {
     // Clone mode: base_system_prompt is empty, identity built from workspace files
     let is_clone = ctx.base_system_prompt.is_empty()
-        && (ctx.clone_system_prompt_md.is_some() || ctx.clone_skills_catalog.is_some());
+        && (ctx.clone_system_prompt_md.is_some() || ctx.clone_flows_catalog.is_some());
 
     if is_clone {
         // For clones, just set the name. The four-part identity
-        // (SOUL → system_prompt → skills → MEMORY) is built in separate sections.
+        // (SOUL → system_prompt → flows → MEMORY) is built in separate sections.
         format!("You are {}.\n{}", ctx.agent_name, ctx.agent_description)
     } else if ctx.base_system_prompt.is_empty() {
         format!(
@@ -691,13 +691,13 @@ fn build_turn_summaries_section(summaries: &[TurnSummary]) -> String {
     out
 }
 
-fn build_skills_section(skill_summary: &str, prompt_context: &str) -> String {
-    let mut out = String::from("## Skills\n");
-    if !skill_summary.is_empty() {
+fn build_flows_section(flow_summary: &str, prompt_context: &str) -> String {
+    let mut out = String::from("## Flows\n");
+    if !flow_summary.is_empty() {
         out.push_str(
-            "You have installed skills. If a request matches a skill, use its tools directly.\n",
+            "You have installed flows. If a request matches a flow, use its tools directly.\n",
         );
-        out.push_str(skill_summary.trim());
+        out.push_str(flow_summary.trim());
     }
     if !prompt_context.is_empty() {
         out.push('\n');
@@ -854,7 +854,7 @@ const EVOLUTION_PROMPT: &str = "\
 - **kv_get**: 在提问前先检查抽屉，避免重复询问用户已提供的信息
 - **knowledge_extract**: 从对话中提取新知识（事实、规则、偏好）并保存到知识库
 - **skill_create**: 创建新技能来扩展你的能力
-- **skill_update**: 改进现有技能的流程和内容（如：发现缺少信息时，更新 skill 写入经验）
+- **skill_update**: 改进现有技能的流程和内容（如：发现缺少信息时，更新 flow 写入经验）
 - **session_summarize**: 总结长对话的关键信息以备后续回忆
 
 重要学习模式：当你发现执行某个任务缺少关键信息（如公众号名称、API密钥等），
@@ -968,9 +968,9 @@ pub fn tool_hint(name: &str) -> &'static str {
         // Evolution (self-improvement)
         "knowledge_extract" => "extract and save new knowledge from conversation",
         "knowledge_index" => "rebuild knowledge index (MEMORY.md)",
-        "skill_create" => "create a new skill",
-        "skill_update" => "update an existing skill",
-        "skill_load" => "load full skill content",
+        "skill_create" => "create a new flow",
+        "skill_update" => "update an existing flow",
+        "skill_load" => "load full flow content",
         "session_summarize" => "save a conversation summary",
 
         _ => "",
@@ -1178,18 +1178,18 @@ mod tests {
     }
 
     #[test]
-    fn test_skills_section_omitted_when_empty() {
+    fn test_flows_section_omitted_when_empty() {
         let ctx = basic_ctx();
         let prompt = build_system_prompt(&ctx);
-        assert!(!prompt.contains("## Skills"));
+        assert!(!prompt.contains("## Flows"));
     }
 
     #[test]
-    fn test_skills_section_present() {
+    fn test_flows_section_present() {
         let mut ctx = basic_ctx();
-        ctx.skill_summary = "- web-search: Search the web\n- git-expert: Git commands".to_string();
+        ctx.flow_summary = "- web-search: Search the web\n- git-expert: Git commands".to_string();
         let prompt = build_system_prompt(&ctx);
-        assert!(prompt.contains("## Skills"));
+        assert!(prompt.contains("## Flows"));
         assert!(prompt.contains("web-search"));
     }
 
@@ -1349,7 +1349,7 @@ mod tests {
             base_system_prompt: String::new(), // empty = clone mode
             soul_md: Some("你是专业客服，语气亲切。".to_string()),
             clone_system_prompt_md: Some("处理客户问题，按步骤操作。".to_string()),
-            clone_skills_catalog: Some("1. **handle-refund** — 用户要求退货时激活\n2. **handle-complaint** — 用户投诉时激活".to_string()),
+            clone_flows_catalog: Some("1. **handle-refund** — 用户要求退货时激活\n2. **handle-complaint** — 用户投诉时激活".to_string()),
             memory_md: Some("## 退货政策\n- [refund-policy](knowledge/refund.md)".to_string()),
             granted_tools: vec!["web_fetch".to_string()],
             ..Default::default()
@@ -1401,7 +1401,7 @@ mod tests {
             agent_description: "Research agent".to_string(),
             base_system_prompt: "You are a researcher.".to_string(),
             clone_system_prompt_md: Some("This should be ignored".to_string()),
-            clone_skills_catalog: Some("This too".to_string()),
+            clone_flows_catalog: Some("This too".to_string()),
             granted_tools: vec!["web_fetch".to_string()],
             ..Default::default()
         };

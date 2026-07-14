@@ -48,7 +48,7 @@ pub(super) struct LoopContext<'a> {
     // ---- Tools ----
     pub tools_owned: Vec<ToolDefinition>,
     pub discovered_tool_names: std::collections::HashSet<String>,
-    pub loaded_skills: std::collections::HashSet<String>,
+    pub loaded_flows: std::collections::HashSet<String>,
 
     // ---- Kernel & external ----
     pub kernel: Option<Arc<dyn KernelHandle>>,

@@ -24,7 +24,7 @@ use crate::workspace::append_daily_memory_log;
 /// Shared preparation context for LLM agent execution.
 ///
 /// Both `send_message_streaming` and `execute_llm_agent` perform the same
-/// session loading, compaction check, tool assembly, skill/subagent matching,
+/// session loading, compaction check, tool assembly, flow/subagent matching,
 /// and manifest mutation steps before diverging at the actual LLM call.
 /// This struct holds the results of that shared preparation.
 struct PreparedContext {
@@ -38,7 +38,7 @@ struct PreparedContext {
 
 impl CarrierKernel {
     /// Shared preparation for LLM agent execution: session loading, compaction
-    /// check, core tool set assembly, skill/subagent classification, and manifest
+    /// check, core tool set assembly, flow/subagent classification, and manifest
     /// mutation. Returns a `PreparedContext` that both streaming and non-streaming
     /// paths consume before diverging at the actual LLM invocation.
     #[allow(clippy::too_many_arguments)]
@@ -166,7 +166,7 @@ impl CarrierKernel {
             "Agent core tool set assembled"
         );
 
-        // Auto-match skill for prompt injection
+        // Auto-match flow for prompt injection
         let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> =
             Some(Arc::clone(&*self.brain.brain.read().unwrap_or_else(|e| {
                 warn!("Brain RwLock poisoned, recovering");
@@ -174,7 +174,7 @@ impl CarrierKernel {
             }))
                 as Arc<dyn runtime::llm_driver::Brain>);
 
-        let (auto_matched_skill, skill_max_iterations) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
+        let (auto_matched_flow, flow_max_iterations) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
             // Give the classifier recent conversation context so it can
             // match follow-up messages in multi-turn workflows (e.g.
             // charter-quoter after the user sends their phone in turn 2).
@@ -190,30 +190,30 @@ impl CarrierKernel {
                     (intent, outcome)
                 })
                 .collect();
-            match crate::prompt_sources::classify_skill_with_llm(message, ws, brain, &recent_turns).await {
-                Some(skill) => {
-                    let skill_name = skill.name.clone();
-                    let skill_body = skill.body.clone();
-                    let skill_max_iter = skill.max_iterations;
+            match crate::prompt_sources::classify_flow_with_llm(message, ws, brain, &recent_turns).await {
+                Some(flow) => {
+                    let flow_name = flow.name.clone();
+                    let flow_body = flow.body.clone();
+                    let flow_max_iter = flow.max_iterations;
 
-                    // Auto-discover skill-declared tools and collect diagnostics
-                    let mut skill_warnings: Vec<String> = Vec::new();
-                    if skill.tools.is_empty() {
-                        skill_warnings.push(format!(
-                            "Skill '{}' has no declared tools in its frontmatter. \
-                             If this skill requires tools, use skill_update to add a tools: [\"tool1\", \"tool2\"] field.",
-                            skill_name
+                    // Auto-discover flow-declared tools and collect diagnostics
+                    let mut flow_warnings: Vec<String> = Vec::new();
+                    if flow.tools.is_empty() {
+                        flow_warnings.push(format!(
+                            "Flow '{}' has no declared tools in its frontmatter. \
+                             If this flow requires tools, use flow_update to add a tools: [\"tool1\", \"tool2\"] field.",
+                            flow_name
                         ));
                     }
-                    for t in &skill.tools {
+                    for t in &flow.tools {
                         if !tools.iter().any(|d| d.name == *t) {
                             if let Some((_, def)) = self.search_tools(t, 1, entry.manifest.max_tool_level).into_iter().next() {
                                 tools.push(def);
                             } else {
-                                skill_warnings.push(format!(
-                                    "Skill '{}' declared tool '{}' but it was not found in the tool catalog. \
-                                     Use skill_update to remove or correct this tool declaration.",
-                                    skill_name, t
+                                flow_warnings.push(format!(
+                                    "Flow '{}' declared tool '{}' but it was not found in the tool catalog. \
+                                     Use flow_update to remove or correct this tool declaration.",
+                                    flow_name, t
                                 ));
                             }
                         }
@@ -221,18 +221,18 @@ impl CarrierKernel {
 
                     info!(
                         agent = %entry.name,
-                        skill = %skill_name,
-                        "Skill classified by LLM"
+                        flow = %flow_name,
+                        "Flow classified by LLM"
                     );
 
-                    let mut skill_prompt = format!("**{}**\n{}", skill_name, skill_body);
-                    if !skill_warnings.is_empty() {
-                        skill_prompt.push_str(&format!("\n\n⚠️ **Skill Tool Warnings:**\n{}", skill_warnings.iter().map(|w| format!("- {}", w)).collect::<Vec<_>>().join("\n")));
+                    let mut flow_prompt = format!("**{}**\n{}", flow_name, flow_body);
+                    if !flow_warnings.is_empty() {
+                        flow_prompt.push_str(&format!("\n\n⚠️ **Flow Tool Warnings:**\n{}", flow_warnings.iter().map(|w| format!("- {}", w)).collect::<Vec<_>>().join("\n")));
                     }
 
                     (
-                        Some(skill_prompt),
-                        skill_max_iter,
+                        Some(flow_prompt),
+                        flow_max_iter,
                     )
                 }
                 None => (None, None)
@@ -241,8 +241,8 @@ impl CarrierKernel {
             (None, None)
         };
 
-        // Auto-match subagent trigger (only when no skill matched)
-        let auto_matched_subagent = if auto_matched_skill.is_none() && !entry.manifest.subagents.is_empty() {
+        // Auto-match subagent trigger (only when no flow matched)
+        let auto_matched_subagent = if auto_matched_flow.is_none() && !entry.manifest.subagents.is_empty() {
             if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, &entry.manifest.subagents) {
                 info!(
                     agent = %entry.name,
@@ -273,13 +273,13 @@ impl CarrierKernel {
 
         let mut manifest = entry.manifest.clone();
 
-        // Apply skill's max_iterations override
-        if let Some(max_iter) = skill_max_iterations {
+        // Apply flow's max_iterations override
+        if let Some(max_iter) = flow_max_iterations {
             manifest.autonomous.get_or_insert_with(Default::default).max_iterations = max_iter;
             info!(
                 agent = %entry.name,
                 max_iterations = max_iter,
-                "Skill overrides max_iterations"
+                "Flow overrides max_iterations"
             );
         }
 
@@ -295,8 +295,8 @@ impl CarrierKernel {
             );
         }
 
-        // Combine skill and subagent auto-match for prompt injection
-        let prompt_auto_match = auto_matched_skill.or_else(|| {
+        // Combine flow and subagent auto-match for prompt injection
+        let prompt_auto_match = auto_matched_flow.or_else(|| {
             auto_matched_subagent.map(|name| format!("**Auto-delegation: {}**\nThe user message matches the '{}' subagent. Call delegate_{} to handle this task.", name, name, name))
         });
 
@@ -958,7 +958,7 @@ impl CarrierKernel {
         channel_type: Option<String>,
         task_id: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
-        // Prepare shared context (session, tools, skill/subagent matching, manifest)
+        // Prepare shared context (session, tools, flow/subagent matching, manifest)
         let ctx = self.prepare_agent_context(
             agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type, task_id.as_deref(),
         ).await?;

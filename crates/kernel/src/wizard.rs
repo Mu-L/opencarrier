@@ -19,8 +19,8 @@ pub struct AgentIntent {
     pub description: String,
     /// What the agent should do (summarized task).
     pub task: String,
-    /// What skills/tools it needs.
-    pub skills: Vec<String>,
+    /// What flows/tools it needs.
+    pub flows: Vec<String>,
     /// Suggested model tier (simple, medium, complex).
     pub model_tier: String,
     /// Whether it runs on a schedule.
@@ -38,8 +38,8 @@ pub struct SetupPlan {
     pub intent: AgentIntent,
     /// Generated agent manifest (ready to write as TOML).
     pub manifest: AgentManifest,
-    /// Skills to install (if not already installed).
-    pub skills_to_install: Vec<String>,
+    /// Flows to install (if not already installed).
+    pub flows_to_install: Vec<String>,
     /// Human-readable summary of what will be created.
     pub summary: String,
 }
@@ -159,7 +159,7 @@ impl SetupWizard {
             priority: Priority::default(),
             capabilities: caps,
             tools: HashMap::new(),
-            skills: intent.skills.clone(),
+            flows: intent.flows.clone(),
             mcp_servers: vec![],
             max_tool_level: types::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
@@ -179,22 +179,22 @@ impl SetupWizard {
             subagents: vec![],
         };
 
-        let skills_to_install: Vec<String> = intent
-            .skills
+        let flows_to_install: Vec<String> = intent
+            .flows
             .iter()
             .filter(|s| !s.is_empty())
             .cloned()
             .collect();
 
         let summary = format!(
-            "Agent '{}': {}\n  Modality: {}\n  Skills: {}\n  Schedule: {}",
+            "Agent '{}': {}\n  Modality: {}\n  Flows: {}\n  Schedule: {}",
             intent.name,
             intent.description,
             modality,
-            if skills_to_install.is_empty() {
+            if flows_to_install.is_empty() {
                 "none".to_string()
             } else {
-                skills_to_install.join(", ")
+                flows_to_install.join(", ")
             },
             if intent.scheduled {
                 intent.schedule.as_deref().unwrap_or("on-demand")
@@ -206,7 +206,7 @@ impl SetupWizard {
         SetupPlan {
             intent,
             manifest,
-            skills_to_install,
+            flows_to_install,
             summary,
         }
     }
@@ -263,7 +263,7 @@ mod tests {
             name: "research-bot".to_string(),
             description: "Researches topics and provides summaries".to_string(),
             task: "Search the web for information and provide concise summaries".to_string(),
-            skills: vec!["web-summarizer".to_string()],
+            flows: vec!["web-summarizer".to_string()],
             model_tier: "medium".to_string(),
             scheduled: false,
             schedule: None,
@@ -316,7 +316,7 @@ mod tests {
             "name": "code-reviewer",
             "description": "Reviews code and suggests improvements",
             "task": "Analyze pull requests and provide feedback",
-            "skills": [],
+            "flows": [],
             "model_tier": "complex",
             "scheduled": false,
             "schedule": null,
@@ -344,7 +344,7 @@ mod tests {
             name: "test".to_string(),
             description: "test".to_string(),
             task: "test".to_string(),
-            skills: vec![],
+            flows: vec![],
             model_tier: "simple".to_string(),
             scheduled: false,
             schedule: None,
@@ -369,7 +369,7 @@ mod tests {
             name: "test".to_string(),
             description: "test".to_string(),
             task: "test".to_string(),
-            skills: vec![],
+            flows: vec![],
             model_tier: "simple".to_string(),
             scheduled: false,
             schedule: None,
@@ -394,7 +394,7 @@ mod tests {
             name: "test".to_string(),
             description: "test".to_string(),
             task: "test".to_string(),
-            skills: vec![],
+            flows: vec![],
             model_tier: "simple".to_string(),
             scheduled: false,
             schedule: None,

@@ -371,9 +371,9 @@ pub struct AgentManifest {
     /// Tool-specific configurations.
     #[serde(default, deserialize_with = "crate::serde_compat::map_lenient")]
     pub tools: HashMap<String, ToolConfig>,
-    /// Installed skill references (empty = all skills available).
-    #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
-    pub skills: Vec<String>,
+    /// Installed flow references (empty = all flows available). Alias `skills` for backward compat.
+    #[serde(default, alias = "skills", deserialize_with = "crate::serde_compat::vec_lenient")]
+    pub flows: Vec<String>,
     /// MCP server allowlist (empty = all connected MCP servers available).
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub mcp_servers: Vec<String>,
@@ -523,7 +523,7 @@ impl Default for AgentManifest {
             capabilities: ManifestCapabilities::default(),
             profile: None,
             tools: HashMap::new(),
-            skills: Vec::new(),
+            flows: Vec::new(),
             mcp_servers: Vec::new(),
             max_tool_level: crate::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
@@ -737,7 +737,7 @@ mod tests {
             capabilities: ManifestCapabilities::default(),
             profile: None,
             tools: HashMap::new(),
-            skills: vec![],
+            flows: vec![],
             mcp_servers: vec![],
             max_tool_level: crate::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,

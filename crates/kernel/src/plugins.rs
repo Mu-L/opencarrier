@@ -89,7 +89,7 @@ impl CarrierKernel {
     /// preserving user data (memory/, sessions/, logs/, users/, data/).
     ///
     /// Files replaced: SOUL.md, system_prompt.md, profile.md, EVOLUTION.md,
-    ///                 template.json, skills/, agents/, knowledge/, style/, MEMORY.md
+    ///                 template.json, flows/, agents/, knowledge/, style/, MEMORY.md
     /// Files preserved: memory/, sessions/, history/, logs/, users/, data/
     pub async fn clone_upgrade(&self, name: &str) -> Result<String, String> {
         use clone::{build_manifest_from_workspace, extract_agx};
@@ -180,7 +180,7 @@ impl CarrierKernel {
         }
 
         // Replace template directories (remove old, copy new)
-        let template_dirs = ["skills", "agents", "knowledge", "style"];
+        let template_dirs = ["flows", "agents", "knowledge", "style"];
         for dir_name in &template_dirs {
             let workspace_subdir = workspace.join(dir_name);
             let staging_subdir = staging_dir.join(dir_name);

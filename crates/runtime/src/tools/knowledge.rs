@@ -121,7 +121,7 @@ impl ToolModule for KnowledgeTools {
             },
             ToolDefinition {
                 name: "skill_create".to_string(),
-                description: "Create a new skill file in the workspace skills/ directory. Skills define reusable workflows with steps and tool requirements.".to_string(),
+                description: "Create a new skill file in the workspace flows/ directory. Skills define reusable workflows with steps and tool requirements.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -517,13 +517,13 @@ async fn tool_skill_create(
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
 
-    let skills_dir = root.join("skills");
-    tokio::fs::create_dir_all(&skills_dir)
+    let flows_dir = root.join("flows");
+    tokio::fs::create_dir_all(&flows_dir)
         .await
         .map_err(|e| format!("Failed to create skills dir: {e}"))?;
 
     let filename = lifecycle::evolution::sanitize_filename(name);
-    let path = skills_dir.join(format!("{filename}.md"));
+    let path = flows_dir.join(format!("{filename}.md"));
 
     if path.exists() {
         return Err(format!(
@@ -557,10 +557,10 @@ async fn tool_skill_update(
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
     let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
 
-    let skills_dir = root.join("skills");
+    let flows_dir = root.join("flows");
     let filename = lifecycle::evolution::sanitize_filename(name);
-    let flat_path = skills_dir.join(format!("{filename}.md"));
-    let dir_path = skills_dir.join(&filename).join("SKILL.md");
+    let flat_path = flows_dir.join(format!("{filename}.md"));
+    let dir_path = flows_dir.join(&filename).join("SKILL.md");
 
     let target = if flat_path.exists() {
         flat_path
@@ -599,14 +599,14 @@ async fn tool_skill_load(
     let root = workspace_root.ok_or("skill_load requires a workspace root")?;
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
 
-    // Search private skills first (workspace/skills), then fall back to
-    // shared system skills (~/.opencarrier/skills). Private wins on collision.
+    // Search private flows first (workspace/flows), then fall back to
+    // shared system flows (~/.opencarrier/flows). Private wins on collision.
     let dirs = [
-        root.join("skills"),
-        types::config::home_dir().join("skills"),
+        root.join("flows"),
+        types::config::home_dir().join("flows"),
     ];
-    for skills_dir in dirs {
-        if let Some(path) = find_skill_path(&skills_dir, name).await {
+    for flows_dir in dirs {
+        if let Some(path) = find_skill_path(&flows_dir, name).await {
             return tokio::fs::read_to_string(&path)
                 .await
                 .map_err(|e| format!("Failed to read skill: {e}"));
@@ -620,22 +620,22 @@ async fn tool_skill_load(
 ///
 /// Tries exact flat (`{name}.md`), exact directory (`{name}/SKILL.md`), then a
 /// case-insensitive fuzzy match on entry names. Returns the path if found.
-async fn find_skill_path(skills_dir: &Path, name: &str) -> Option<PathBuf> {
-    if !skills_dir.is_dir() {
+async fn find_skill_path(flows_dir: &Path, name: &str) -> Option<PathBuf> {
+    if !flows_dir.is_dir() {
         return None;
     }
     let filename = lifecycle::evolution::sanitize_filename(name);
-    let flat_path = skills_dir.join(format!("{filename}.md"));
+    let flat_path = flows_dir.join(format!("{filename}.md"));
     if flat_path.exists() {
         return Some(flat_path);
     }
-    let dir_path = skills_dir.join(&filename).join("SKILL.md");
+    let dir_path = flows_dir.join(&filename).join("SKILL.md");
     if dir_path.exists() {
         return Some(dir_path);
     }
 
     // Fuzzy match on entry names
-    let mut entries = tokio::fs::read_dir(skills_dir).await.ok()?;
+    let mut entries = tokio::fs::read_dir(flows_dir).await.ok()?;
     while let Some(entry) = entries.next_entry().await.ok()? {
         let entry_name = entry.file_name().to_string_lossy().to_string();
         if !entry_name.to_lowercase().contains(&name.to_lowercase()) {
@@ -737,7 +737,7 @@ pub(crate) async fn tool_clone_evaluate(workspace_root: Option<&Path>) -> Result
         metrics.grade,
         metrics.knowledge_files,
         metrics.knowledge_total_bytes,
-        metrics.skill_count,
+        metrics.flow_count,
         metrics.has_soul,
         metrics.has_system_prompt,
         metrics.has_memory,
@@ -803,10 +803,10 @@ fn find_knowledge_file(knowledge_dir: &Path, query: &str) -> Result<PathBuf, Str
 /// (duplicates removed). Otherwise, a new line is inserted after `name:`.
 /// Uses atomic write (tmp + rename) for safety.
 pub fn write_skill_tools(workspace: &Path, skill_name: &str, tools: &[String]) -> Result<(), String> {
-    let skills_dir = workspace.join("skills");
+    let flows_dir = workspace.join("flows");
     let filename = lifecycle::evolution::sanitize_filename(skill_name);
-    let flat_path = skills_dir.join(format!("{filename}.md"));
-    let dir_path = skills_dir.join(&filename).join("SKILL.md");
+    let flat_path = flows_dir.join(format!("{filename}.md"));
+    let dir_path = flows_dir.join(&filename).join("SKILL.md");
 
     let target = if flat_path.exists() {
         flat_path
@@ -902,10 +902,10 @@ pub fn write_skill_tools(workspace: &Path, skill_name: &str, tools: &[String]) -
 /// Read the tools field from a skill .md file's frontmatter.
 /// Returns an empty Vec if the skill doesn't exist or has no tools.
 pub fn read_skill_tools(workspace: &Path, skill_name: &str) -> Vec<String> {
-    let skills_dir = workspace.join("skills");
+    let flows_dir = workspace.join("flows");
     let filename = lifecycle::evolution::sanitize_filename(skill_name);
-    let flat_path = skills_dir.join(format!("{filename}.md"));
-    let dir_path = skills_dir.join(&filename).join("SKILL.md");
+    let flat_path = flows_dir.join(format!("{filename}.md"));
+    let dir_path = flows_dir.join(&filename).join("SKILL.md");
 
     let target = if flat_path.exists() {
         flat_path

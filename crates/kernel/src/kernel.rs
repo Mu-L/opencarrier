@@ -886,7 +886,7 @@ impl CarrierKernel {
         match name {
             "session_summarize"
             | "tool_search"
-            | "skill_load"
+            | "flow_load"
             | "knowledge_read" | "knowledge_list"
             | "file_read" | "file_list"
             | "cron_create" | "cron_list" | "cron_cancel"
@@ -1060,7 +1060,7 @@ impl CarrierKernel {
         sender_id: &Option<String>,
         sender_name: Option<String>,
         owner_id: &Option<String>,
-        auto_matched_skill: Option<String>,
+        auto_matched_flow: Option<String>,
         turn_summaries: Vec<types::message::TurnSummary>,
         drawer_entries: Vec<runtime::prompt_builder::DrawerEntry>,
         task_id: Option<String>,
@@ -1095,8 +1095,8 @@ impl CarrierKernel {
             granted_tools: tools.iter().map(|t| t.name.clone()).collect(),
             recalled_memories: vec![],
             tree_memories: self.prefetch_tree_memories(oid),
-            skill_summary: String::new(),
-            skill_prompt_context: String::new(),
+            flow_summary: String::new(),
+            flow_prompt_context: String::new(),
             mcp_summary: self.build_toolset_summary(),
             workspace_path: manifest.workspace.as_ref().map(|p| p.display().to_string()),
             soul_md: manifest
@@ -1165,18 +1165,18 @@ impl CarrierKernel {
                 .workspace
                 .as_ref()
                 .and_then(|w| crate::prompt_sources::read_identity_file(w, "system_prompt.md")),
-            clone_skills_catalog: manifest
+            clone_flows_catalog: manifest
                 .workspace
                 .as_ref()
-                .and_then(|w| crate::prompt_sources::read_skills_catalog(w)),
+                .and_then(|w| crate::prompt_sources::read_flows_catalog(w)),
             clone_style_md: manifest
                 .workspace
                 .as_ref()
                 .and_then(|w| crate::prompt_sources::read_style_samples(w)),
-            clone_skills_prompts: manifest
+            clone_flows_prompts: manifest
                 .workspace
                 .as_ref()
-                .and_then(|w| crate::prompt_sources::read_workspace_skills_prompts(w)),
+                .and_then(|w| crate::prompt_sources::read_workspace_flows_prompts(w)),
             knowledge_content: manifest
                 .workspace
                 .as_ref()
@@ -1205,7 +1205,7 @@ impl CarrierKernel {
                 .workspace
                 .as_ref()
                 .and_then(|w| crate::prompt_sources::read_identity_file(w, "TIMELINE.md")),
-            auto_matched_skill,
+            auto_matched_flow,
             turn_summaries,
             drawer_entries,
             task_id,
@@ -1239,7 +1239,7 @@ mod tests {
             capabilities: ManifestCapabilities::default(),
             profile: None,
             tools: HashMap::new(),
-            skills: vec![],
+            flows: vec![],
             mcp_servers: vec![],
             max_tool_level: types::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
@@ -1278,7 +1278,7 @@ mod tests {
             capabilities: ManifestCapabilities::default(),
             profile: None,
             tools: HashMap::new(),
-            skills: vec![],
+            flows: vec![],
             mcp_servers: vec![],
             max_tool_level: types::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
