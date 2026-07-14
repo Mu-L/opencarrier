@@ -378,7 +378,7 @@ pub struct AgentManifest {
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
     pub mcp_servers: Vec<String>,
     /// Maximum tool permission level. Tools above this level are hidden from
-    /// tool_search and skill discovery mode. Dangerous-level tools are never
+    /// tool_search and flow discovery mode. Dangerous-level tools are never
     /// discoverable via search regardless. Default: Write.
     #[serde(default = "crate::tool::PermissionLevel::default_max_tool_level")]
     pub max_tool_level: crate::tool::PermissionLevel,
@@ -466,7 +466,7 @@ pub struct SubagentConfig {
     pub name: String,
     /// Description shown to the LLM in the delegate tool definition.
     pub description: String,
-    /// Trigger keywords for auto-delegation (same format as skill's description).
+    /// Trigger keywords for auto-delegation (same format as flow's description).
     /// Comma/顿号-separated keywords.
     pub trigger: String,
     /// Maximum iterations for the subagent's agent loop.

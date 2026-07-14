@@ -126,7 +126,7 @@ impl ToolModule for TrainingTools {
             },
             ToolDefinition {
                 name: "train_write".to_string(),
-                description: "Write a file to a target clone's workspace. Can modify any file including SOUL.md, system_prompt.md, agent.toml, and skills. Used by trainer agents to train other clones.".to_string(),
+                description: "Write a file to a target clone's workspace. Can modify any file including SOUL.md, system_prompt.md, agent.toml, and flows. Used by trainer agents to train other clones.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -151,7 +151,7 @@ impl ToolModule for TrainingTools {
             },
             ToolDefinition {
                 name: "train_evaluate".to_string(),
-                description: "Evaluate a target clone's quality with deterministic metrics. Returns score (0-100), knowledge stats, skill count, and identity completeness.".to_string(),
+                description: "Evaluate a target clone's quality with deterministic metrics. Returns score (0-100), knowledge stats, flow count, and identity completeness.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {

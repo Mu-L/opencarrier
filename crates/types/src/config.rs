@@ -139,7 +139,7 @@ pub enum ReloadMode {
     Off,
     /// Full restart on config change.
     Restart,
-    /// Hot-reload safe sections only (channels, skills, heartbeat).
+    /// Hot-reload safe sections only (channels, flows, heartbeat).
     Hot,
     /// Hot-reload where possible, flag restart-required otherwise.
     #[default]
