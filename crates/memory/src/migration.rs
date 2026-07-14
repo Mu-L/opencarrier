@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 23;
+const SCHEMA_VERSION: u32 = 24;
 
 /// Run all migrations to bring the database up to date.
 ///
@@ -39,6 +39,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         (21, migrate_v21),
         (22, migrate_v22),
         (23, migrate_v23),
+        (24, migrate_v24),
     ];
 
     for (version, migrate_fn) in &migrations {
@@ -1061,6 +1062,42 @@ fn migrate_v23(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![23, "Notify routes: migrate notify_routes.json to notify_routes table"],
+    )?;
+    Ok(())
+}
+
+/// Version 24: flow_runs table for multi-step flow execution state.
+///
+/// Stores `run_flow` execution state (completed step outputs, the waiting
+/// `user_input` step, status). In stage 2 incremental B it serves as run
+/// history/audit; the `waiting_at`/`map_context` columns are populated once
+/// `user_input` suspend/resume lands (stage D). Schema is defined in full now
+/// so a later stage doesn't need another migration.
+fn migrate_v24(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS flow_runs (
+            run_id          TEXT PRIMARY KEY,
+            session_id      TEXT NOT NULL,
+            agent_id        TEXT NOT NULL,
+            sender_id       TEXT NOT NULL DEFAULT '',
+            flow_name       TEXT NOT NULL,
+            input           TEXT NOT NULL DEFAULT '{}',
+            completed_steps TEXT NOT NULL DEFAULT '{}',
+            waiting_at      TEXT,
+            map_context     TEXT,
+            status          TEXT NOT NULL DEFAULT 'waiting',
+            created_at      TEXT NOT NULL,
+            updated_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_flow_runs_pending
+            ON flow_runs(sender_id, agent_id) WHERE status = 'waiting';
+        ",
+    )?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![24, "flow_runs table for multi-step flow execution state"],
     )?;
     Ok(())
 }

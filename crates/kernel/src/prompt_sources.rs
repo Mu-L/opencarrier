@@ -408,18 +408,17 @@ pub fn read_workspace_flows_prompts(workspace: &Path) -> Option<String> {
     for entry in dir_iter.flatten() {
         let path = entry.path();
 
-        // Directory format: flows/<name>/SKILL.md
+        // Directory format: flows/<name>/flow.md (or legacy SKILL.md)
         let flow_path = if path.is_dir() {
-            path.join("SKILL.md")
+            match flow_dir_markdown(&path) {
+                Some(p) => p,
+                None => continue,
+            }
         } else if path.extension().is_some_and(|ext| ext == "md") {
             path.clone()
         } else {
             continue;
         };
-
-        if !flow_path.exists() {
-            continue;
-        }
 
         let content = std::fs::read_to_string(&flow_path).unwrap_or_default();
         let trimmed = content.trim();
@@ -510,15 +509,15 @@ fn collect_flow_summaries(flows_dir: &Path) -> Vec<(String, String, std::path::P
     for entry in entries.flatten() {
         let path = entry.path();
         let flow_path = if path.is_dir() {
-            path.join("SKILL.md")
+            match flow_dir_markdown(&path) {
+                Some(p) => p,
+                None => continue,
+            }
         } else if path.extension().is_some_and(|ext| ext == "md") {
             path
         } else {
             continue;
         };
-        if !flow_path.exists() {
-            continue;
-        }
         let content = match std::fs::read_to_string(&flow_path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -532,6 +531,21 @@ fn collect_flow_summaries(flows_dir: &Path) -> Vec<(String, String, std::path::P
     out
 }
 
+/// Resolve the markdown file inside a flow directory: prefer `flow.md` (new
+/// canonical name), fall back to `SKILL.md` (legacy, still readable). Returns
+/// `None` if neither exists.
+fn flow_dir_markdown(dir: &Path) -> Option<std::path::PathBuf> {
+    let flow_md = dir.join("flow.md");
+    if flow_md.exists() {
+        return Some(flow_md);
+    }
+    let skill_md = dir.join("SKILL.md");
+    if skill_md.exists() {
+        return Some(skill_md);
+    }
+    None
+}
+
 /// Result of automatic flow matching against a user message.
 pub struct FlowMatch {
     /// Flow name.
@@ -542,6 +556,9 @@ pub struct FlowMatch {
     pub max_iterations: Option<u32>,
     /// Tools declared in the flow frontmatter (e.g., ["sqlite_query", "web_fetch"]).
     pub tools: Vec<String>,
+    /// Full parsed flow definition (includes `steps` for multi-step DAG flows).
+    /// `flow_def.steps` non-empty => multi-step flow to be executed by `run_flow`.
+    pub flow_def: types::flow::FlowDef,
 }
 
 /// Classify which flow (if any) matches the user message using an LLM.
@@ -682,19 +699,21 @@ pub async fn classify_flow_with_llm(
 
     // Load full flow content from the recorded path (private or shared system dir)
     let content = std::fs::read_to_string(&matched_flow.2).ok()?;
-    let (name, _description, max_iterations, tools, body) = parse_flow_full(&content);
+    let flow_def = types::flow::parse_flow_def(&content);
 
     tracing::info!(
-        flow = %name,
-        tools = ?tools,
+        flow = %flow_def.name,
+        tools = ?flow_def.tools,
+        multi_step = !flow_def.steps.is_empty(),
         "Flow classified by LLM"
     );
 
     Some(FlowMatch {
-        name,
-        body: body.to_string(),
-        max_iterations,
-        tools,
+        name: flow_def.name.clone(),
+        body: flow_def.body.clone(),
+        max_iterations: flow_def.max_iterations,
+        tools: flow_def.tools.clone(),
+        flow_def,
     })
 }
 

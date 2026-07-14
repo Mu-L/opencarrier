@@ -14,6 +14,7 @@ pub mod config;
 pub mod conversation;
 pub mod error;
 pub mod event;
+pub mod flow;
 pub mod manifest_signing;
 pub mod mcp_manifest;
 pub mod media;

@@ -34,6 +34,9 @@ struct PreparedContext {
     manifest: AgentManifest,
     driver: Arc<dyn LlmDriver>,
     ctx_window: Option<usize>,
+    /// The auto-matched flow (if any), carrying the full parsed `FlowDef`.
+    /// `flow_def.steps` non-empty => multi-step flow for `run_flow`.
+    flow: Option<crate::prompt_sources::FlowMatch>,
 }
 
 impl CarrierKernel {
@@ -174,7 +177,7 @@ impl CarrierKernel {
             }))
                 as Arc<dyn runtime::llm_driver::Brain>);
 
-        let (auto_matched_flow, flow_max_iterations) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
+        let (auto_matched_flow, flow_max_iterations, matched_flow) = if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
             // Give the classifier recent conversation context so it can
             // match follow-up messages in multi-turn workflows (e.g.
             // charter-quoter after the user sends their phone in turn 2).
@@ -230,15 +233,21 @@ impl CarrierKernel {
                         flow_prompt.push_str(&format!("\n\n⚠️ **Flow Tool Warnings:**\n{}", flow_warnings.iter().map(|w| format!("- {}", w)).collect::<Vec<_>>().join("\n")));
                     }
 
+                    // The flow body is injected into the base system prompt for
+                    // BOTH single- and multi-step flows. Multi-step execution
+                    // (run_flow) receives this base prompt and adds per-step
+                    // directives on top; the streaming path falls back to
+                    // guided single-step execution if run_flow isn't wired there.
                     (
                         Some(flow_prompt),
                         flow_max_iter,
+                        Some(flow),
                     )
                 }
-                None => (None, None)
+                None => (None, None, None)
             }
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         // Auto-match subagent trigger (only when no flow matched)
@@ -315,6 +324,7 @@ impl CarrierKernel {
             manifest,
             driver,
             ctx_window,
+            flow: matched_flow,
         })
     }
 
@@ -962,7 +972,7 @@ impl CarrierKernel {
         let ctx = self.prepare_agent_context(
             agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type, task_id.as_deref(),
         ).await?;
-        let PreparedContext { mut session, needs_compact, tools, manifest, .. } = ctx;
+        let PreparedContext { mut session, needs_compact, tools, manifest, flow, .. } = ctx;
 
         // Execute compaction if needed
         if needs_compact {
@@ -1024,35 +1034,68 @@ impl CarrierKernel {
             message.to_string()
         };
 
-        let result = run_agent_loop(
-            &manifest,
-            &message_with_links,
-            &mut session,
-            &self.memory,
-            driver,
-            &tools,
-            kernel_handle.clone(),
-            None, // stream_tx: non-streaming path
-            Some(&self.plugins.mcp_connections),
-            Some(&self.services.fetch_engine),
-            manifest.workspace.as_deref(),
-            None, // on_phase callback
-            Some(&self.coordination.hooks),
-            ctx_window,
-            Some(&self.coordination.process_manager),
-            content_blocks,
-            brain_ref.clone(), // Brain for modality-based routing
-            memory_handle.clone(), // Memory handle for kv/tree operations
-            sender_id.as_deref(),
-            owner_id.as_deref(),
-            channel_type.as_deref(),
-            Some(self.runtime.llm_concurrency_limit.clone()),
-        )
-        .await
-        .map_err(KernelError::Carrier)?;
+        let is_multi_step = flow
+            .as_ref()
+            .is_some_and(|fm| !fm.flow_def.steps.is_empty());
+
+        let mut result = if is_multi_step {
+            // Multi-step flow: execute as a DAG via run_flow (stage 2 incremental C).
+            // The flow body was NOT injected into the system prompt (prepare_agent_context
+            // skips injection when steps are non-empty); run_flow builds per-step prompts
+            // from `base_system_prompt` + flow body instead.
+            let fm = flow.as_ref().expect("checked above");
+            info!(
+                agent = %entry.name,
+                flow = %fm.name,
+                steps = fm.flow_def.steps.len(),
+                "Executing multi-step flow via run_flow"
+            );
+            let base_prompt = manifest.model.system_prompt.clone();
+            self.run_flow(
+                agent_id,
+                &fm.flow_def,
+                &base_prompt,
+                &message_with_links,
+                &mut session,
+                &manifest,
+                &tools,
+                brain_ref.as_ref(),
+                kernel_handle.clone(),
+                sender_id.as_deref(),
+                owner_id.as_deref(),
+                channel_type.as_deref(),
+            )
+            .await?
+        } else {
+            run_agent_loop(
+                &manifest,
+                &message_with_links,
+                &mut session,
+                &self.memory,
+                driver,
+                &tools,
+                kernel_handle.clone(),
+                None, // stream_tx: non-streaming path
+                Some(&self.plugins.mcp_connections),
+                Some(&self.services.fetch_engine),
+                manifest.workspace.as_deref(),
+                None, // on_phase callback
+                Some(&self.coordination.hooks),
+                ctx_window,
+                Some(&self.coordination.process_manager),
+                content_blocks,
+                brain_ref.clone(), // Brain for modality-based routing
+                memory_handle.clone(), // Memory handle for kv/tree operations
+                sender_id.as_deref(),
+                owner_id.as_deref(),
+                channel_type.as_deref(),
+                Some(self.runtime.llm_concurrency_limit.clone()),
+            )
+            .await
+            .map_err(KernelError::Carrier)?
+        };
 
         // Detect new output files and append download URLs to the response
-        let mut result = result;
 
         // If agent produced a task_plan, execute it
         if let Some(plan) = result.plan.take() {

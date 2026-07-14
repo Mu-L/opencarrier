@@ -5,6 +5,7 @@
 
 use crate::cron_delivery::CronDeliveryStore;
 use crate::cron_store::CronJobStore;
+use crate::flow_run::FlowRunStore;
 use crate::invites::InviteStore;
 use crate::weixin_store::WeixinSessionStore;
 use crate::notify_store::NotifyRouteStore;
@@ -39,6 +40,7 @@ pub struct MemorySubstrate {
     cron_store: CronJobStore,
     weixin_store: WeixinSessionStore,
     notify_store: NotifyRouteStore,
+    flow_runs: FlowRunStore,
     content_root: PathBuf,
 }
 
@@ -68,6 +70,7 @@ impl MemorySubstrate {
             cron_store: CronJobStore::new(Arc::clone(&shared)),
             weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
             notify_store: NotifyRouteStore::new(Arc::clone(&shared)),
+            flow_runs: FlowRunStore::new(Arc::clone(&shared)),
             content_root,
         })
     }
@@ -87,6 +90,7 @@ impl MemorySubstrate {
             cron_store: CronJobStore::new(Arc::clone(&shared)),
             weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
             notify_store: NotifyRouteStore::new(Arc::clone(&shared)),
+            flow_runs: FlowRunStore::new(Arc::clone(&shared)),
             content_root: PathBuf::from("/tmp/opencarrier_tree_content"),
         })
     }
@@ -109,6 +113,11 @@ impl MemorySubstrate {
     /// Get a reference to the notify route store.
     pub fn notify_store(&self) -> &NotifyRouteStore {
         &self.notify_store
+    }
+
+    /// Get a reference to the flow run store (multi-step flow execution state).
+    pub fn flow_runs(&self) -> &FlowRunStore {
+        &self.flow_runs
     }
 
     // -----------------------------------------------------------------

@@ -6,6 +6,7 @@
 pub mod acp_session;
 pub mod cron_delivery;
 pub mod cron_store;
+pub mod flow_run;
 pub mod invites;
 pub mod migration;
 pub mod notify_store;
@@ -18,6 +19,7 @@ pub mod weixin_store;
 mod substrate;
 pub use cron_delivery::CronDeliveryStore;
 pub use cron_store::CronJobStore;
+pub use flow_run::{FlowRunRow, FlowRunStore};
 pub use invites::InviteStore;
 pub use notify_store::NotifyRouteStore;
 pub use session::SessionStore;
