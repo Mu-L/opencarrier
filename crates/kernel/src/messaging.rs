@@ -1172,6 +1172,7 @@ impl CarrierKernel {
                     owner_id.as_deref(),
                     channel_type.as_deref(),
                     resume_state.as_ref(),
+                    None,
                 )
                 .await?;
             match outcome {

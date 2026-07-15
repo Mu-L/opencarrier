@@ -92,6 +92,7 @@ impl CarrierKernel {
         owner_id: Option<&str>,
         channel_type: Option<&str>,
         resume: Option<&ResumeState>,
+        input_overrides: Option<&serde_json::Map<String, Value>>,
     ) -> KernelResult<FlowOutcome> {
         let agent_name = self
             .registry
@@ -105,11 +106,18 @@ impl CarrierKernel {
             ))));
 
         // `input` is the template-context input (used by render/when/select);
-        // it is also serialized into the flow_runs row on a fresh run.
-        let input: Value = serde_json::json!({
-            "user_message": user_message,
-            "user_id": sender_id.unwrap_or(""),
-        });
+        // it is also serialized into the flow_runs row on a fresh run. For a
+        // sub-flow invoked via `flow_exec`/`map`, `input_overrides` carries the
+        // rendered `with` params (e.g. `topic`) so `{{ input.topic }}` resolves.
+        let mut input_map = serde_json::Map::new();
+        input_map.insert("user_message".into(), Value::String(user_message.to_string()));
+        input_map.insert("user_id".into(), Value::String(sender_id.unwrap_or("").to_string()));
+        if let Some(overrides) = input_overrides {
+            for (k, v) in overrides {
+                input_map.insert(k.clone(), v.clone());
+            }
+        }
+        let input: Value = Value::Object(input_map);
 
         // Record the run (history/audit; suspend/resume). On resume we reuse the
         // existing flow_runs row instead of creating a new one.
@@ -677,22 +685,18 @@ impl CarrierKernel {
             ))));
         }
 
-        // Build the sub-flow input: passthrough root user_message/user_id, then
-        // each `with` value rendered as a template against the current outputs.
-        let mut sub_input = serde_json::Map::new();
-        if let Some(um) = input.get("user_message") {
-            sub_input.insert("user_message".into(), um.clone());
-        }
-        if let Some(uid) = input.get("user_id") {
-            sub_input.insert("user_id".into(), uid.clone());
-        }
+        // Render each `with` value as a template against the current outputs
+        // (for `map`, the element is already injected under `as_name`). These
+        // become the sub-flow's `input.<key>` via `input_overrides`.
+        let mut rendered_with: serde_json::Map<String, Value> = serde_json::Map::new();
         for (k, v) in &step.with {
             let tpl = v.as_str().unwrap_or("");
             let rendered = render_template(tpl, outputs, input);
-            sub_input.insert(k.clone(), Value::String(rendered));
+            rendered_with.insert(k.clone(), Value::String(rendered));
         }
-        let sub_input_val = Value::Object(sub_input);
-        let sub_user_msg = sub_input_val
+        // The root user_message is passed through (single-step sub-flows use it
+        // as the topic via `{{ input.user_message }}`).
+        let sub_user_msg = input
             .get("user_message")
             .and_then(|v| v.as_str())
             .unwrap_or("")
@@ -729,6 +733,7 @@ impl CarrierKernel {
                     owner_id,
                     channel_type,
                     None,
+                    Some(&rendered_with),
                 ))
                 .await
             })
