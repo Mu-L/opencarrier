@@ -1249,14 +1249,14 @@ impl CarrierKernel {
                     user_message,
                     body_resume.as_ref(),
                 )
-                .await?
+                .await
             {
-                BodyOutcome::Done {
+                Ok(BodyOutcome::Done {
                     outputs: bo,
                     final_value,
                     usage,
                     iterations,
-                } => {
+                }) => {
                     acc_usage.input_tokens += usage.input_tokens;
                     acc_usage.output_tokens += usage.output_tokens;
                     acc_iters += iterations;
@@ -1284,14 +1284,14 @@ impl CarrierKernel {
                     current_index += 1;
                     resuming_element = false;
                 }
-                BodyOutcome::Suspended {
+                Ok(BodyOutcome::Suspended {
                     question,
                     step_id,
                     outputs: bo,
                     expires_at,
                     usage,
                     iterations,
-                } => {
+                }) => {
                     acc_usage.input_tokens += usage.input_tokens;
                     acc_usage.output_tokens += usage.output_tokens;
                     acc_iters += iterations;
@@ -1318,6 +1318,51 @@ impl CarrierKernel {
                         body_step_id: step_id,
                         map_context_json,
                         expires_at,
+                        usage: acc_usage,
+                        iterations: acc_iters,
+                    });
+                }
+                Err(e) => {
+                    // A body step failed at runtime. Pause at the MAP step
+                    // (body_step_id = step.id) carrying map_context with
+                    // current_index frozen at this element, so run_flow's
+                    // resume treats it as a top-level failure-pause (retry via
+                    // FAILURE_CANCEL_KEYWORDS / cancel). Retry re-enters this
+                    // element's body (prior elements are preserved in
+                    // `collected`); cancel terminates the flow.
+                    warn!(
+                        flow = "map",
+                        step = %step.id,
+                        current_index,
+                        total = over.len(),
+                        error = %e,
+                        "interactive map paused at failed body step"
+                    );
+                    let mc = MapContext {
+                        map_step_id: step.id.clone(),
+                        over: over.clone(),
+                        current_index,
+                        collected: collected.clone(),
+                        body_completed: HashMap::new(),
+                        as_name: as_name.clone(),
+                    };
+                    let map_context_json = serde_json::to_string(&mc)
+                        .map_err(|e| KernelError::Carrier(CarrierError::Internal(e.to_string())))?;
+                    let timeout_secs = self.config.user_input_timeout_secs;
+                    let expires =
+                        chrono::Utc::now() + chrono::Duration::seconds(timeout_secs as i64);
+                    let report = format!(
+                        "流程的 map 步「{}」在第 {}/{} 个元素执行失败：{}\n\n回复「重试」重跑该元素（已完成元素会保留），或「取消」终止流程。",
+                        step.id,
+                        current_index + 1,
+                        over.len(),
+                        e
+                    );
+                    return Ok(MapOutcome::Suspended {
+                        question: report,
+                        body_step_id: step.id.clone(),
+                        map_context_json,
+                        expires_at: Some(expires.to_rfc3339()),
                         usage: acc_usage,
                         iterations: acc_iters,
                     });
