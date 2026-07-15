@@ -15,7 +15,7 @@ tools:
 ### 1. 排版：正文.md → 正文.html
 
 ```
-skill_load("article-formatter")
+flow_load("article-formatter")
 ```
 
 按 article-formatter 的规则，把 `output/<pipeline_id>/正文.md` 转成公众号内联样式 HTML，写到同目录 `正文.html`。
