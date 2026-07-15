@@ -1950,10 +1950,12 @@ fn parse_default_filter(expr: &str) -> (&str, Option<String>) {
     };
     let left = expr[..pos].trim();
     let right = expr[pos + 1..].trim();
-    let right_lower = right.to_lowercase();
-    let Some(rest) = right_lower.strip_prefix("default(") else {
+    // Match `default(` case-insensitively, but preserve the fallback value's
+    // original case (to_lowercase would corrupt e.g. 'DEFAULTED' -> 'defaulted').
+    if !right.to_lowercase().starts_with("default(") {
         return (expr, None);
-    };
+    }
+    let rest = &right["default(".len()..];
     let inner = rest.strip_suffix(')').unwrap_or(rest).trim();
     let val = if inner.len() >= 2
         && ((inner.starts_with('\'') && inner.ends_with('\''))
@@ -2191,6 +2193,22 @@ mod tests {
         assert_eq!(
             render_template("{{ draft | default('fallback') }}", &outputs, &input),
             "hello"
+        );
+    }
+
+    #[test]
+    fn render_default_filter_preserves_case() {
+        // The fallback value keeps its original case (not lowercased).
+        let outputs = HashMap::new();
+        let input = serde_json::json!({});
+        assert_eq!(
+            render_template("{{ x | default('DEFAULTED') }}", &outputs, &input),
+            "DEFAULTED"
+        );
+        // Case-insensitive filter name: DEFAULT(...) works.
+        assert_eq!(
+            render_template("{{ x | DEFAULT('Up') }}", &outputs, &input),
+            "Up"
         );
     }
 
