@@ -489,17 +489,17 @@ impl CarrierKernel {
                                 user_message,
                                 resume,
                             )
-                            .await?
+                            .await
                         {
-                            MapOutcome::Done(v, u, i) => Ok((v, u, i)),
-                            MapOutcome::Suspended {
+                            Ok(MapOutcome::Done(v, u, i)) => Ok((v, u, i)),
+                            Ok(MapOutcome::Suspended {
                                 question,
                                 body_step_id,
                                 map_context_json,
                                 expires_at,
                                 usage,
                                 iterations,
-                            } => {
+                            }) => {
                                 total_usage.input_tokens += usage.input_tokens;
                                 total_usage.output_tokens += usage.output_tokens;
                                 total_iterations += iterations;
@@ -546,6 +546,11 @@ impl CarrierKernel {
                                     iterations: total_iterations,
                                 });
                             }
+                            // A map-step error (malformed `over`, a failing
+                            // sub-flow in the batch, an interactive-map body
+                            // error) routes through the dispatch Err branch ->
+                            // failure-pause, consistent with other step kinds.
+                            Err(e) => Err(e),
                         }
                     }
                     StepKind::Tool => {
