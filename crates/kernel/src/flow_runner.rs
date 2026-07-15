@@ -1338,8 +1338,10 @@ impl CarrierKernel {
     /// interactive map). Mirrors `run_flow`'s DAG loop (layers, `when` gates,
     /// skip-completed, resume-inject) but does NOT persist to `flow_runs` or
     /// append to the canonical session -- the parent map arm owns those.
-    /// Returns `Suspended` when a body `user_input` pauses. Body supports only
-    /// `agent_loop`/`chat`/`user_input`/`tool` (other kinds error).
+    /// Returns `Suspended` when a body `user_input` pauses. Body supports
+    /// `agent_loop`/`chat`/`user_input`/`tool`/`flow_exec`/batch-`map` (a nested
+    /// interactive map -- `map` with its own `body` -- is rejected; it would
+    /// need nested suspend/map_context).
     #[allow(clippy::too_many_arguments)]
     async fn exec_body_steps(
         &self,
@@ -1426,6 +1428,7 @@ impl CarrierKernel {
                 if !matches!(
                     kind,
                     StepKind::AgentLoop | StepKind::Chat | StepKind::UserInput | StepKind::Tool
+                        | StepKind::FlowExec | StepKind::Map
                 ) {
                     return Err(KernelError::Carrier(CarrierError::Internal(format!(
                         "body step '{}' kind '{:?}' not yet supported in map body",
@@ -1489,6 +1492,50 @@ impl CarrierKernel {
                         step,
                         agent_id,
                         manifest,
+                        brain,
+                        kernel_handle.clone(),
+                        sender_id,
+                        owner_id,
+                        channel_type,
+                        &outputs,
+                        input,
+                        agent_name,
+                    )
+                    .await?
+                } else if *kind == StepKind::FlowExec {
+                    // Sub-flow invoked from a body step. invoke_subflow
+                    // pre-rejects sub-flows containing user_input, so this
+                    // cannot suspend -- safe inside the body loop.
+                    self.exec_flow_step(
+                        step,
+                        agent_id,
+                        manifest,
+                        tools,
+                        brain,
+                        kernel_handle.clone(),
+                        sender_id,
+                        owner_id,
+                        channel_type,
+                        &outputs,
+                        input,
+                        agent_name,
+                    )
+                    .await?
+                } else if *kind == StepKind::Map {
+                    // Batch map (flow+with) is allowed in a body. A nested
+                    // interactive map (body-inside-body) would need nested
+                    // suspend/map_context -- not yet supported.
+                    if step.body.is_some() {
+                        return Err(KernelError::Carrier(CarrierError::Internal(format!(
+                            "body step '{}' is an interactive map (has body) -- nested interactive map not supported in map body",
+                            step.id
+                        ))));
+                    }
+                    self.exec_map_batch(
+                        step,
+                        agent_id,
+                        manifest,
+                        tools,
                         brain,
                         kernel_handle.clone(),
                         sender_id,
