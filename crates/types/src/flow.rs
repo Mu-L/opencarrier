@@ -49,13 +49,15 @@ impl StepKind {
         }
     }
 
-    /// True if `run_flow` can currently execute this kind. `Tool` is excluded
-    /// (not yet implemented) so it routes to the "not yet supported" error
-    /// instead of panicking.
+    /// True if `run_flow` can currently execute this kind. All of
+    /// `AgentLoop`/`Chat`/`UserInput`/`FlowExec`/`Map`/`Tool` are executed;
+    /// other kinds are preserved as `Unknown` so later stages can add
+    /// execution without touching the parser.
     pub fn is_executable(&self) -> bool {
         matches!(
             self,
             Self::AgentLoop | Self::Chat | Self::UserInput | Self::FlowExec | Self::Map
+                | Self::Tool
         )
     }
 }
@@ -909,13 +911,14 @@ b"#;
     }
 
     #[test]
-    fn tool_not_executable_safety() {
-        // Tool is parsed but not yet executed -> routes to "not yet supported"
-        // error instead of panicking at runtime.
+    fn tool_step_is_executable() {
+        // Tool is now executed by run_flow (stage 2 step-kind set complete).
         assert_eq!(StepKind::parse("tool"), StepKind::Tool);
-        assert!(!StepKind::Tool.is_executable());
+        assert!(StepKind::Tool.is_executable());
         assert!(StepKind::FlowExec.is_executable());
         assert!(StepKind::Map.is_executable());
+        // Unknown kinds remain non-executable.
+        assert!(!StepKind::Unknown("delegate".into()).is_executable());
     }
 
     #[test]

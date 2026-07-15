@@ -13,19 +13,28 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::Value;
 use tracing::{info, warn};
 
 use memory::FlowRunRow;
-use runtime::agent_loop::{run_agent_loop, AgentLoopResult};
+use runtime::agent_loop::{
+    run_agent_loop, AgentLoopResult, TOOL_LONG_TIMEOUT_NAMES, TOOL_TIMEOUT_LONG_SECS,
+    TOOL_TIMEOUT_SECS,
+};
 use runtime::kernel_handle::KernelHandle;
 use runtime::llm_driver::{Brain, CompletionRequest};
+use runtime::plugin::admin_store::is_admin;
+use runtime::tool_context::ToolContext;
+use runtime::tool_runner::execute_tool;
 use types::agent::{AgentId, AgentManifest};
 use types::error::CarrierError;
 use types::flow::{FlowDef, StepDef, StepKind, StepOutputMode};
 use types::message::{Message, TokenUsage};
+use types::tool::ToolResult;
 
 use crate::error::{KernelError, KernelResult};
 use crate::kernel::CarrierKernel;
@@ -489,7 +498,23 @@ impl CarrierKernel {
                             }
                         }
                     }
-                    StepKind::Tool | StepKind::Unknown(_) => unreachable!(),
+                    StepKind::Tool => {
+                        self.run_step_tool(
+                            step,
+                            agent_id,
+                            manifest,
+                            brain,
+                            kernel_handle.clone(),
+                            sender_id,
+                            owner_id,
+                            channel_type,
+                            &outputs,
+                            &input,
+                            &agent_name,
+                        )
+                        .await
+                    }
+                    StepKind::Unknown(_) => unreachable!(),
                 };
 
                 match dispatch {
@@ -717,6 +742,112 @@ impl CarrierKernel {
         Ok((out_val, resp.usage, 1))
     }
 
+    /// Run a single `tool` step: resolve the tool by name, render `tool_args`
+    /// templates, execute it via the shared `execute_tool` (with permission +
+    /// admin-gate + timeout), and return its output. A tool error becomes an
+    /// `Err` so `run_flow`'s `on_failure` can degrade. Shared by `run_flow`
+    /// (top-level) and `exec_body_steps` (map body).
+    #[allow(clippy::too_many_arguments)]
+    async fn run_step_tool(
+        &self,
+        step: &StepDef,
+        agent_id: AgentId,
+        manifest: &AgentManifest,
+        brain: Option<&Arc<dyn Brain>>,
+        kernel_handle: Option<Arc<dyn KernelHandle>>,
+        sender_id: Option<&str>,
+        owner_id: Option<&str>,
+        channel_type: Option<&str>,
+        outputs: &HashMap<String, Value>,
+        input: &Value,
+        agent_name: &str,
+    ) -> KernelResult<(Value, TokenUsage, u32)> {
+        let tool_name = step.tool_name.as_deref().ok_or_else(|| {
+            KernelError::Carrier(CarrierError::Internal(format!(
+                "tool step '{}' missing `tool`/`tool_name`",
+                step.id
+            )))
+        })?;
+        let rendered_args = render_value(&step.tool_args, outputs, input);
+
+        // Assemble the ToolContext (mirrors runtime/agent_loop/tool_use.rs).
+        let memory_handle: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
+            Some(Arc::new(crate::handle::MemorySubstrateHandle::new(Arc::clone(
+                &self.memory,
+            ))));
+        let caller_id = agent_id.to_string();
+        let workspace_root: Option<&Path> = manifest.workspace.as_deref();
+        let is_clone_admin =
+            matches!((sender_id, workspace_root), (Some(sid), Some(root)) if is_admin(root, sid));
+        let tool_ctx = ToolContext {
+            kernel: kernel_handle.as_ref(),
+            memory: memory_handle.as_ref(),
+            caller_agent_id: Some(&caller_id),
+            mcp_connections: Some(&self.plugins.mcp_connections),
+            fetch_engine: Some(&self.services.fetch_engine),
+            allowed_env_vars: None,
+            workspace_root,
+            brain,
+            exec_policy: manifest.exec_policy.as_ref(),
+            cli_exec_config: manifest.cli_exec.as_ref(),
+            process_manager: Some(&self.coordination.process_manager),
+            sender_id,
+            owner_id,
+            home_dir: Some(self.config.home_dir.as_path()),
+            agent_name: Some(agent_name),
+            subagent_configs: if manifest.subagents.is_empty() {
+                None
+            } else {
+                Some(&manifest.subagents)
+            },
+            channel_type,
+            max_tool_level: manifest.max_tool_level,
+            is_clone_admin,
+        };
+
+        let tool_use_id = format!("flow:{}:{}", step.id, tool_name);
+        let timeout_secs = if TOOL_LONG_TIMEOUT_NAMES.contains(&tool_name) {
+            TOOL_TIMEOUT_LONG_SECS
+        } else {
+            TOOL_TIMEOUT_SECS
+        };
+        let result = match tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            execute_tool(&tool_use_id, tool_name, &rendered_args, &tool_ctx),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => {
+                warn!(
+                    flow = "tool_step",
+                    step = %step.id,
+                    tool = tool_name,
+                    "tool step timed out after {}s",
+                    timeout_secs
+                );
+                ToolResult {
+                    tool_use_id,
+                    content: format!("Tool '{}' timed out after {}s.", tool_name, timeout_secs),
+                    is_error: true,
+                }
+            }
+        };
+
+        if result.is_error {
+            return Err(KernelError::Carrier(CarrierError::Internal(format!(
+                "tool step '{}' ('{}') failed: {}",
+                step.id, tool_name, result.content
+            ))));
+        }
+        // Tool content is often JSON; parse to a structured value when possible,
+        // else keep the raw string.
+        let out_val = serde_json::from_str::<Value>(&result.content)
+            .unwrap_or_else(|_| Value::String(result.content.clone()));
+        // Tool execution uses no LLM tokens; count as one iteration.
+        Ok((out_val, TokenUsage::default(), 1))
+    }
+
     /// Execute a `flow_exec` step: invoke the named sub-flow once and return
     /// its final value as this step's output.
     #[allow(clippy::too_many_arguments)]
@@ -770,6 +901,7 @@ impl CarrierKernel {
         if step.body.is_some() {
             self.exec_interactive_map(
                 step,
+                agent_id,
                 manifest,
                 tools,
                 brain,
@@ -867,6 +999,7 @@ impl CarrierKernel {
     async fn exec_interactive_map(
         &self,
         step: &StepDef,
+        agent_id: AgentId,
         manifest: &AgentManifest,
         tools: &[types::tool::ToolDefinition],
         brain: Option<&Arc<dyn Brain>>,
@@ -960,6 +1093,7 @@ impl CarrierKernel {
                     body_steps,
                     &as_name,
                     &element,
+                    agent_id,
                     manifest,
                     tools,
                     brain,
@@ -1064,13 +1198,14 @@ impl CarrierKernel {
     /// skip-completed, resume-inject) but does NOT persist to `flow_runs` or
     /// append to the canonical session -- the parent map arm owns those.
     /// Returns `Suspended` when a body `user_input` pauses. Body supports only
-    /// `agent_loop`/`chat`/`user_input` (other kinds error).
+    /// `agent_loop`/`chat`/`user_input`/`tool` (other kinds error).
     #[allow(clippy::too_many_arguments)]
     async fn exec_body_steps(
         &self,
         body_steps: &[StepDef],
         as_name: &str,
         element: &Value,
+        agent_id: AgentId,
         manifest: &AgentManifest,
         tools: &[types::tool::ToolDefinition],
         brain: Option<&Arc<dyn Brain>>,
@@ -1149,7 +1284,7 @@ impl CarrierKernel {
                 })?;
                 if !matches!(
                     kind,
-                    StepKind::AgentLoop | StepKind::Chat | StepKind::UserInput
+                    StepKind::AgentLoop | StepKind::Chat | StepKind::UserInput | StepKind::Tool
                 ) {
                     return Err(KernelError::Carrier(CarrierError::Internal(format!(
                         "body step '{}' kind '{:?}' not yet supported in map body",
@@ -1206,6 +1341,21 @@ impl CarrierKernel {
                         channel_type,
                         &outputs,
                         input,
+                    )
+                    .await?
+                } else if *kind == StepKind::Tool {
+                    self.run_step_tool(
+                        step,
+                        agent_id,
+                        manifest,
+                        brain,
+                        kernel_handle.clone(),
+                        sender_id,
+                        owner_id,
+                        channel_type,
+                        &outputs,
+                        input,
+                        agent_name,
                     )
                     .await?
                 } else {
@@ -1549,6 +1699,24 @@ fn render_template(tpl: &str, outputs: &HashMap<String, Value>, input: &Value) -
     }
     out.push_str(rest);
     out
+}
+
+/// Recursively render `{{ }}` templates inside a JSON value tree: each string
+/// leaf is rendered via [`render_template`], object/array structure and
+/// non-string leaves are preserved. Used to render a `tool` step's `tool_args`.
+fn render_value(v: &Value, outputs: &HashMap<String, Value>, input: &Value) -> Value {
+    match v {
+        Value::String(s) => Value::String(render_template(s, outputs, input)),
+        Value::Object(m) => {
+            let rendered: serde_json::Map<String, Value> = m
+                .iter()
+                .map(|(k, vv)| (k.clone(), render_value(vv, outputs, input)))
+                .collect();
+            Value::Object(rendered)
+        }
+        Value::Array(a) => Value::Array(a.iter().map(|vv| render_value(vv, outputs, input)).collect()),
+        other => other.clone(),
+    }
 }
 
 /// Resolve a dotted path (`outputs.id.field`, `input.key`, or bare `id`) to a
@@ -1935,5 +2103,30 @@ mod tests {
             back.body_completed.get("write").and_then(|v| v.as_str()),
             Some("ep1 text")
         );
+    }
+
+    #[test]
+    fn render_value_renders_string_leaves() {
+        // String leaves are templates; object/array structure and non-string
+        // leaves (numbers, bools) are preserved.
+        let mut outputs = HashMap::new();
+        outputs.insert("name".into(), Value::String("晨曦".into()));
+        outputs.insert("count".into(), serde_json::json!(3));
+        let input = serde_json::json!({"user_message": "hi"});
+        let args = serde_json::json!({
+            "title": "{{ name }}",
+            "raw": "literal text",
+            "n": 5,
+            "flag": true,
+            "nested": ["{{ name }}", 7, {"deep": "{{ name }}"}]
+        });
+        let rendered = render_value(&args, &outputs, &input);
+        assert_eq!(rendered["title"].as_str(), Some("晨曦"));
+        assert_eq!(rendered["raw"].as_str(), Some("literal text"));
+        assert_eq!(rendered["n"].as_i64(), Some(5));
+        assert_eq!(rendered["flag"].as_bool(), Some(true));
+        assert_eq!(rendered["nested"][0].as_str(), Some("晨曦"));
+        assert_eq!(rendered["nested"][1].as_i64(), Some(7));
+        assert_eq!(rendered["nested"][2]["deep"].as_str(), Some("晨曦"));
     }
 }
