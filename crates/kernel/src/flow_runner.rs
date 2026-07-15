@@ -1905,7 +1905,9 @@ fn select_output(
 
 /// Render `{{ ... }}` templates. Supports `{{ outputs.id }}`, `{{ outputs.id.field }}`,
 /// `{{ input.key }}`, and bare `{{ id }}` (treated as `outputs.id`). Unresolved
-/// expressions are left intact.
+/// expressions are left intact. Supports an optional `| default('fallback')`
+/// filter: when the path does not resolve, the fallback is used instead of
+/// leaving the expression literal (useful for `when:false`-skipped steps).
 fn render_template(tpl: &str, outputs: &HashMap<String, Value>, input: &Value) -> String {
     let mut out = String::new();
     let mut rest = tpl;
@@ -1916,9 +1918,13 @@ fn render_template(tpl: &str, outputs: &HashMap<String, Value>, input: &Value) -
             Some(end) => {
                 let expr = after[..end].trim();
                 let original = &rest[start..start + 2 + end + 2]; // full "{{ ... }}"
-                match resolve_path(expr, outputs, input) {
+                let (path_expr, default_val) = parse_default_filter(expr);
+                match resolve_path(path_expr, outputs, input) {
                     Some(v) => out.push_str(&value_to_string(&v)),
-                    None => out.push_str(original),
+                    None => match default_val {
+                        Some(d) => out.push_str(&d),
+                        None => out.push_str(original),
+                    },
                 }
                 rest = &after[end + 2..];
             }
@@ -1932,6 +1938,32 @@ fn render_template(tpl: &str, outputs: &HashMap<String, Value>, input: &Value) -
     }
     out.push_str(rest);
     out
+}
+
+/// Parse an optional `| default('x')` filter from a template expression.
+/// Returns `(path_expr, Some(fallback))` when present, else `(expr, None)`.
+/// Accepts single/double-quoted or bare fallback tokens:
+/// `x | default('none')`, `x | default("none")`, `x | default(none)`.
+fn parse_default_filter(expr: &str) -> (&str, Option<String>) {
+    let Some(pos) = expr.find('|') else {
+        return (expr, None);
+    };
+    let left = expr[..pos].trim();
+    let right = expr[pos + 1..].trim();
+    let right_lower = right.to_lowercase();
+    let Some(rest) = right_lower.strip_prefix("default(") else {
+        return (expr, None);
+    };
+    let inner = rest.strip_suffix(')').unwrap_or(rest).trim();
+    let val = if inner.len() >= 2
+        && ((inner.starts_with('\'') && inner.ends_with('\''))
+            || (inner.starts_with('"') && inner.ends_with('"')))
+    {
+        inner[1..inner.len() - 1].to_string()
+    } else {
+        inner.to_string()
+    };
+    (left, Some(val))
 }
 
 /// Recursively render `{{ }}` templates inside a JSON value tree: each string
@@ -2129,6 +2161,55 @@ mod tests {
         let outputs = HashMap::new();
         let input = serde_json::json!({});
         assert_eq!(render_template("{{ outputs.missing }}", &outputs, &input), "{{ outputs.missing }}");
+    }
+
+    #[test]
+    fn render_default_filter_unresolved() {
+        // Unresolved path + default -> fallback (single/double/bare quotes).
+        let outputs = HashMap::new();
+        let input = serde_json::json!({});
+        assert_eq!(
+            render_template("{{ skipped | default('无') }}", &outputs, &input),
+            "无"
+        );
+        assert_eq!(
+            render_template("{{ skipped | default(\"none\") }}", &outputs, &input),
+            "none"
+        );
+        assert_eq!(
+            render_template("a-{{ x | default(0) }}-b", &outputs, &input),
+            "a-0-b"
+        );
+    }
+
+    #[test]
+    fn render_default_filter_resolved_wins() {
+        // When the path resolves, default is ignored.
+        let mut outputs = HashMap::new();
+        outputs.insert("draft".into(), Value::String("hello".into()));
+        let input = serde_json::json!({});
+        assert_eq!(
+            render_template("{{ draft | default('fallback') }}", &outputs, &input),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn render_default_filter_nested_path() {
+        // Nested path + default (e.g. a skipped step's subfield).
+        let mut outputs = HashMap::new();
+        outputs.insert("review".into(), serde_json::json!({"decision": "proceed"}));
+        let input = serde_json::json!({});
+        // Present subfield resolves.
+        assert_eq!(
+            render_template("{{ review.decision | default('cancel') }}", &outputs, &input),
+            "proceed"
+        );
+        // Missing subfield -> default.
+        assert_eq!(
+            render_template("{{ review.note | default('n/a') }}", &outputs, &input),
+            "n/a"
+        );
     }
 
     #[test]
