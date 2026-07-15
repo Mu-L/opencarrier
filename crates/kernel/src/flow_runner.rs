@@ -48,6 +48,14 @@ tokio::task_local! {
 /// Maximum `flow_exec`/`map` nesting depth.
 const MAX_FLOW_DEPTH: u32 = 5;
 
+/// Keywords that cancel a flow when the user replies to a **failure** progress
+/// report (as opposed to a `user_input` step, which carries its own
+/// `cancel_keywords`). Failure often correlates with the LLM/network being down
+/// (e.g. 402 Insufficient Balance), so keyword matching -- not an LLM parse --
+/// is the most robust trigger. Case-insensitive substring match (see
+/// [`decide_cancel`]).
+const FAILURE_CANCEL_KEYWORDS: &[&str] = &["取消", "cancel", "放弃", "abort", "算了", "不要了"];
+
 /// Outcome of a `run_flow` invocation. A flow either runs to completion
 /// (`Completed`) or suspends at a `user_input` step awaiting the human's reply
 /// (`Suspended`).
@@ -263,32 +271,73 @@ impl CarrierKernel {
                 // Resume: the user's reply becomes the `user_input` step's
                 // output `{ decision, text }`. No LLM call; do not append to
                 // session here (the completion path or a subsequent `UserInput`
-                // branch appends the reply turn).
+                // branch appends the reply turn). For a failure-pause resume
+                // (waiting step is NOT a `user_input`), the reply instead
+                // resolves to cancel (-> done) or retry (-> re-run this step).
                 if let Some(r) = resume {
                     if step.id == r.waiting_step_id {
-                        let decision = if decide_cancel(&r.user_reply, &r.cancel_keywords) {
-                            "cancel"
+                        let is_user_input = step.kind.as_ref() == Some(&StepKind::UserInput);
+                        if is_user_input {
+                            let decision = if decide_cancel(&r.user_reply, &r.cancel_keywords) {
+                                "cancel"
+                            } else {
+                                "proceed"
+                            };
+                            outputs.insert(
+                                step.id.clone(),
+                                serde_json::json!({ "decision": decision, "text": r.user_reply }),
+                            );
+                            executed_order.push(step.id.clone());
+                            let completed =
+                                serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into());
+                            let _ = self
+                                .memory
+                                .flow_runs()
+                                .update_status(&run_id, "running", &completed);
+                            info!(
+                                flow = %flow.name,
+                                step = %step.id,
+                                decision,
+                                "flow resumed with user reply"
+                            );
+                            continue;
                         } else {
-                            "proceed"
-                        };
-                        outputs.insert(
-                            step.id.clone(),
-                            serde_json::json!({ "decision": decision, "text": r.user_reply }),
-                        );
-                        executed_order.push(step.id.clone());
-                        let completed =
-                            serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into());
-                        let _ = self
-                            .memory
-                            .flow_runs()
-                            .update_status(&run_id, "running", &completed);
-                        info!(
-                            flow = %flow.name,
-                            step = %step.id,
-                            decision,
-                            "flow resumed with user reply"
-                        );
-                        continue;
+                            // Failure-pause resume: interpret the reply with the
+                            // fixed failure-cancel keywords (a failed step has
+                            // no per-step `cancel_keywords`).
+                            let keywords: Vec<String> =
+                                FAILURE_CANCEL_KEYWORDS.iter().map(|s| s.to_string()).collect();
+                            if decide_cancel(&r.user_reply, &keywords) {
+                                let completed = serde_json::to_string(&outputs)
+                                    .unwrap_or_else(|_| "{}".into());
+                                let _ = self
+                                    .memory
+                                    .flow_runs()
+                                    .update_status(&run_id, "cancelled", &completed);
+                                info!(
+                                    flow = %flow.name,
+                                    step = %step.id,
+                                    "flow cancelled by user at failed step"
+                                );
+                                return Ok(FlowOutcome::Completed {
+                                    result: AgentLoopResult {
+                                        response: format!("已取消流程「{}」。", flow.name),
+                                        total_usage,
+                                        iterations: total_iterations,
+                                        silent: false,
+                                        directives: Default::default(),
+                                        plan: None,
+                                    },
+                                    final_value: None,
+                                });
+                            }
+                            // Retry: fall through to dispatch to re-run this step.
+                            info!(
+                                flow = %flow.name,
+                                step = %step.id,
+                                "retrying failed step"
+                            );
+                        }
                     }
                 }
 
@@ -538,23 +587,55 @@ impl CarrierKernel {
                             .update_status(&run_id, "running", &completed);
                     }
                     Err(e) => {
-                        if let Some(_fb) = &step.on_failure {
-                            warn!(
-                                flow = %flow.name,
-                                step = %step.id,
-                                on_failure = ?step.on_failure,
-                                error = %e,
-                                "flow step failed, degrading (on_failure set)"
-                            );
-                            outputs.insert(
-                                step.id.clone(),
-                                Value::String(format!("[step {} failed: {:?}]", step.id, e)),
-                            );
-                            executed_order.push(step.id.clone());
-                        } else {
-                            failed = Some(e);
-                            break 'outer;
-                        }
+                        // Runtime error -> failure-pause: build a progress
+                        // report, persist the run as `waiting` at this (failed)
+                        // step, and suspend so the user can retry or cancel.
+                        // Definition errors (no kind / not executable) are
+                        // caught above and hard-fail via `failed`; this arm is
+                        // only reached for dispatch errors.
+                        let report = build_failure_report(flow, step, &e, &outputs);
+                        warn!(
+                            flow = %flow.name,
+                            step = %step.id,
+                            error = %e,
+                            "flow paused at failed step"
+                        );
+                        let new_messages =
+                            vec![Message::user(user_message), Message::assistant(&report)];
+                        session.messages.extend_from_slice(&new_messages);
+                        let _ = self
+                            .memory
+                            .save_session_append_async(
+                                session.id,
+                                &agent_name,
+                                &new_messages,
+                                session.context_window_tokens,
+                                session.label.as_deref(),
+                                None,
+                            )
+                            .await;
+                        // Reuse the user_input timeout window; no per-step
+                        // timeout_hours applies to failure-pause.
+                        let timeout_secs = self.config.user_input_timeout_secs;
+                        let expires =
+                            chrono::Utc::now() + chrono::Duration::seconds(timeout_secs as i64);
+                        let _ = self.memory.flow_runs().set_waiting(
+                            &run_id,
+                            &step.id,
+                            None,
+                            Some(&expires.to_rfc3339()),
+                        );
+                        let completed =
+                            serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into());
+                        let _ = self
+                            .memory
+                            .flow_runs()
+                            .update_status(&run_id, "waiting", &completed);
+                        return Ok(FlowOutcome::Suspended {
+                            question: report,
+                            total_usage,
+                            iterations: total_iterations,
+                        });
                     }
                 }
             }
@@ -1788,6 +1869,48 @@ fn decide_cancel(reply: &str, keywords: &[String]) -> bool {
         .any(|kw| !kw.is_empty() && reply_lower.contains(&kw.to_lowercase()))
 }
 
+/// Build a human-readable progress report when a step fails at runtime (tool
+/// error, LLM error, sub-flow error, ...). Lists completed steps (with a short
+/// summary of their output), the failed step (with the error), and pending
+/// steps, then prompts the user to retry or cancel. The report doubles as the
+/// `Suspended { question }` payload so it flows through the same messaging path
+/// as a `user_input` suspend.
+fn build_failure_report(
+    flow: &FlowDef,
+    failed_step: &StepDef,
+    err: &KernelError,
+    outputs: &HashMap<String, Value>,
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("流程「{}」执行中断：\n", flow.name));
+    for s in &flow.steps {
+        if s.id == failed_step.id {
+            lines.push(format!("❌ {}  失败：{}", s.id, err));
+        } else if let Some(v) = outputs.get(&s.id) {
+            let summary = truncate_summary(&value_to_string(v), 50);
+            lines.push(format!("✅ {}  {}", s.id, summary));
+        } else {
+            lines.push(format!("⏳ {}  （未执行）", s.id));
+        }
+    }
+    lines.push(format!(
+        "\n回复「重试」重新执行「{}」，或「取消」终止流程。",
+        failed_step.id
+    ));
+    lines.join("\n")
+}
+
+/// Truncate a string to at most `max` characters (by Unicode scalar), appending
+/// `…` when truncated. Keeps multi-byte (CJK) output readable.
+fn truncate_summary(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max).collect();
+        format!("{truncated}…")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2128,5 +2251,105 @@ mod tests {
         assert_eq!(rendered["nested"][0].as_str(), Some("晨曦"));
         assert_eq!(rendered["nested"][1].as_i64(), Some(7));
         assert_eq!(rendered["nested"][2]["deep"].as_str(), Some("晨曦"));
+    }
+
+    #[test]
+    fn build_failure_report_lists_all_steps() {
+        use types::flow::FlowDef;
+        let flow = FlowDef {
+            name: "draft-review".into(),
+            steps: vec![
+                StepDef {
+                    id: "draft".into(),
+                    kind: Some(StepKind::Chat),
+                    ..Default::default()
+                },
+                StepDef {
+                    id: "read".into(),
+                    kind: Some(StepKind::Tool),
+                    ..Default::default()
+                },
+                StepDef {
+                    id: "publish".into(),
+                    kind: Some(StepKind::Chat),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        // `draft` completed, `read` failed, `publish` pending.
+        let mut outputs = HashMap::new();
+        outputs.insert("draft".into(), Value::String("a draft about cats".into()));
+        let failed = &flow.steps[1];
+        let err = KernelError::Carrier(CarrierError::Internal(
+            "file '/tmp/x' not found".into(),
+        ));
+        let report = build_failure_report(&flow, failed, &err, &outputs);
+
+        // Completed step shows id + truncated summary.
+        assert!(report.contains("✅ draft"));
+        assert!(report.contains("a draft about cats"));
+        // Failed step shows id + error.
+        assert!(report.contains("❌ read"));
+        assert!(report.contains("file '/tmp/x' not found"));
+        // Pending step shows id + (未执行).
+        assert!(report.contains("⏳ publish"));
+        assert!(report.contains("（未执行）"));
+        // Retry/cancel hint mentions the failed step id.
+        assert!(report.contains("重试"));
+        assert!(report.contains("取消"));
+        assert!(report.contains("「read」"));
+        // Header names the flow.
+        assert!(report.contains("draft-review"));
+    }
+
+    #[test]
+    fn build_failure_report_truncates_long_summary() {
+        use types::flow::FlowDef;
+        let flow = FlowDef {
+            name: "f".into(),
+            steps: vec![
+                StepDef {
+                    id: "big".into(),
+                    kind: Some(StepKind::Chat),
+                    ..Default::default()
+                },
+                StepDef {
+                    id: "boom".into(),
+                    kind: Some(StepKind::Tool),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let long = "x".repeat(200);
+        let mut outputs = HashMap::new();
+        outputs.insert("big".into(), Value::String(long));
+        let failed = &flow.steps[1];
+        let err = KernelError::Carrier(CarrierError::Internal("boom".into()));
+        let report = build_failure_report(&flow, failed, &err, &outputs);
+        // Summary capped at 50 chars + ellipsis.
+        let big_line = report
+            .lines()
+            .find(|l| l.starts_with("✅ big"))
+            .unwrap();
+        let summary = big_line.strip_prefix("✅ big  ").unwrap();
+        assert_eq!(summary.chars().count(), 51); // 50 + …
+        assert!(summary.ends_with('…'));
+    }
+
+    #[test]
+    fn failure_cancel_keywords_match() {
+        // decide_cancel against FAILURE_CANCEL_KEYWORDS.
+        let kw: Vec<String> = FAILURE_CANCEL_KEYWORDS.iter().map(|s| s.to_string()).collect();
+        assert!(decide_cancel("取消", &kw));
+        assert!(decide_cancel("please cancel now", &kw));
+        assert!(decide_cancel("算了吧", &kw));
+        assert!(decide_cancel("ABORT mission", &kw));
+        // Non-cancel replies do not match (retry intent).
+        assert!(!decide_cancel("重试", &kw));
+        assert!(!decide_cancel("继续", &kw));
+        assert!(!decide_cancel("再试一次", &kw));
+        assert!(!decide_cancel("ok retry", &kw));
     }
 }
