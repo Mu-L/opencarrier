@@ -41,7 +41,7 @@ pub fn build_manifest_from_workspace(
     // should NOT be listed in capabilities.tools. MCP tools (mcp_*) are loaded
     // separately via mcp_servers config. So we only collect non-core builtins.
     let core_tools: &[&str] = &[
-        "session_summarize", "tool_search", "skill_load",
+        "session_summarize", "tool_search", "flow_load",
         "knowledge_read", "knowledge_list",
         "file_read", "file_list",
         "cron_create", "cron_list", "cron_cancel",
@@ -51,7 +51,7 @@ pub fn build_manifest_from_workspace(
     let evolution_tools: &[&str] = &[
         "knowledge_add", "knowledge_list", "knowledge_read",
         "knowledge_lint", "knowledge_extract", "knowledge_index",
-        "skill_create", "skill_update", "skill_load",
+        "flow_create", "flow_update", "flow_load",
         "session_summarize", "file_read", "file_write",
         "file_list", "user_profile",
     ];
@@ -231,7 +231,13 @@ fn scan_flows(workspace: &Path) -> FlowScanResult {
             continue;
         }
 
-        let flow_md = path.join("SKILL.md");
+        // Prefer canonical flow.md, fall back to legacy SKILL.md.
+        let flow_md = path.join("flow.md");
+        let flow_md = if flow_md.exists() {
+            flow_md
+        } else {
+            path.join("SKILL.md")
+        };
         if !flow_md.exists() {
             continue;
         }

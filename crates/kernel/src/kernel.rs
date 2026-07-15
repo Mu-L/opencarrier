@@ -886,7 +886,7 @@ impl CarrierKernel {
         match name {
             "session_summarize"
             | "tool_search"
-            | "flow_load"
+            | "flow_load" | "flow_create" | "flow_update"
             | "knowledge_read" | "knowledge_list"
             | "file_read" | "file_list"
             | "cron_create" | "cron_list" | "cron_cancel"
@@ -894,7 +894,7 @@ impl CarrierKernel {
             | "task_plan" => None,
             n if n.starts_with("file_") => Some("filesystem"),
             "shell_exec" => Some("shell"),
-            n if n.starts_with("knowledge_") || n.starts_with("skill_") || n == "clone_evaluate" => Some("knowledge"),
+            n if n.starts_with("knowledge_") || n.starts_with("flow_") || n == "clone_evaluate" => Some("knowledge"),
             n if n.starts_with("memory_") => Some("memory"),
             n if n.starts_with("media_") || n.starts_with("image_") || n == "text_to_speech" || n == "speech_to_text" => Some("media"),
             n if n.starts_with("web_") => Some("web"),

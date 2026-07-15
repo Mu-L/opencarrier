@@ -120,42 +120,42 @@ impl ToolModule for KnowledgeTools {
                 input_schema: serde_json::json!({"type": "object", "properties": {}}),
             },
             ToolDefinition {
-                name: "skill_create".to_string(),
-                description: "Create a new skill file in the workspace flows/ directory. Skills define reusable workflows with steps and tool requirements.".to_string(),
+                name: "flow_create".to_string(),
+                description: "Create a new flow file in the workspace flows/ directory. Flows define reusable workflows with steps and tool requirements.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "name": {"type": "string", "description": "Skill name (used as filename)"},
-                        "description": {"type": "string", "description": "Brief description of when to activate this skill"},
+                        "name": {"type": "string", "description": "Flow name (used as filename)"},
+                        "description": {"type": "string", "description": "Brief description of when to activate this flow"},
                         "toolsets": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Toolset names this skill needs (e.g. [\"web\", \"filesystem\"]). Tools from these toolsets will be auto-activated when the skill matches."
+                            "description": "Toolset names this flow needs (e.g. [\"web\", \"filesystem\"]). Tools from these toolsets will be auto-activated when the flow matches."
                         },
-                        "body": {"type": "string", "description": "The skill content: workflow steps, instructions, and examples (markdown)"},
+                        "body": {"type": "string", "description": "The flow content: workflow steps, instructions, and examples (markdown)"},
                     },
                     "required": ["name", "body"],
                 }),
             },
             ToolDefinition {
-                name: "skill_update".to_string(),
-                description: "Update the body of an existing skill. Preserves the skill's frontmatter (name, description).".to_string(),
+                name: "flow_update".to_string(),
+                description: "Update the body of an existing flow. Preserves the flow's frontmatter (name, description).".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "name": {"type": "string", "description": "Skill name to update"},
-                        "body": {"type": "string", "description": "New skill body content (replaces existing)"},
+                        "name": {"type": "string", "description": "Flow name to update"},
+                        "body": {"type": "string", "description": "New flow body content (replaces existing)"},
                     },
                     "required": ["name", "body"],
                 }),
             },
             ToolDefinition {
-                name: "skill_load".to_string(),
-                description: "Load the full content of a skill by name. Returns the complete skill file including frontmatter and body.".to_string(),
+                name: "flow_load".to_string(),
+                description: "Load the full content of a flow by name. Returns the complete flow file including frontmatter and body.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "name": {"type": "string", "description": "Skill name to load"},
+                        "name": {"type": "string", "description": "Flow name to load"},
                     },
                     "required": ["name"],
                 }),
@@ -192,9 +192,9 @@ impl ToolModule for KnowledgeTools {
             "clone_evaluate" => Some(tool_clone_evaluate(ctx.workspace_root).await),
             "knowledge_extract" => Some(tool_knowledge_extract(input, ctx.workspace_root).await),
             "knowledge_index" => Some(tool_knowledge_index(ctx.workspace_root).await),
-            "skill_create" => Some(tool_skill_create(input, ctx.workspace_root).await),
-            "skill_update" => Some(tool_skill_update(input, ctx.workspace_root).await),
-            "skill_load" => Some(tool_skill_load(input, ctx.workspace_root).await),
+            "flow_create" => Some(tool_flow_create(input, ctx.workspace_root).await),
+            "flow_update" => Some(tool_flow_update(input, ctx.workspace_root).await),
+            "flow_load" => Some(tool_flow_load(input, ctx.workspace_root).await),
             "session_summarize" => Some(
                 tool_session_summarize(input, ctx.memory, ctx.caller_agent_id, ctx.sender_id).await,
             ),
@@ -205,12 +205,12 @@ impl ToolModule for KnowledgeTools {
     fn permission_level(&self, tool_name: &str) -> types::tool::PermissionLevel {
         match tool_name {
             "knowledge_list" | "knowledge_read" | "session_summarize"
-            | "skill_load" | "clone_evaluate" => types::tool::PermissionLevel::None,
+            | "flow_load" | "clone_evaluate" => types::tool::PermissionLevel::None,
             "knowledge_lint" | "knowledge_index" | "knowledge_extract"
             | "train_read" | "train_list"
             | "train_evaluate" | "user_profile" => types::tool::PermissionLevel::ReadOnly,
             "knowledge_add" | "knowledge_remove" | "knowledge_import"
-            | "knowledge_heal" | "skill_create" | "skill_update"
+            | "knowledge_heal" | "flow_create" | "flow_update"
             | "apply_patch" | "train_write" => types::tool::PermissionLevel::Write,
             _ => types::tool::PermissionLevel::Dangerous,
         }
@@ -504,11 +504,11 @@ async fn tool_knowledge_index(workspace_root: Option<&Path>) -> Result<String, S
     Ok("Knowledge index (MEMORY.md) rebuilt successfully.".to_string())
 }
 
-async fn tool_skill_create(
+async fn tool_flow_create(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
 ) -> Result<String, String> {
-    let root = workspace_root.ok_or("skill_create requires a workspace root")?;
+    let root = workspace_root.ok_or("flow_create requires a workspace root")?;
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
     let description = input["description"].as_str().unwrap_or("");
     let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
@@ -520,14 +520,14 @@ async fn tool_skill_create(
     let flows_dir = root.join("flows");
     tokio::fs::create_dir_all(&flows_dir)
         .await
-        .map_err(|e| format!("Failed to create skills dir: {e}"))?;
+        .map_err(|e| format!("Failed to create flows dir: {e}"))?;
 
     let filename = lifecycle::evolution::sanitize_filename(name);
     let path = flows_dir.join(format!("{filename}.md"));
 
     if path.exists() {
         return Err(format!(
-            "Skill '{name}' already exists. Use skill_update to modify it."
+            "Flow '{name}' already exists. Use flow_update to modify it."
         ));
     }
 
@@ -544,35 +544,41 @@ async fn tool_skill_create(
     let full = format!("{frontmatter}\n{body}");
     tokio::fs::write(&path, &full)
         .await
-        .map_err(|e| format!("Failed to write skill: {e}"))?;
+        .map_err(|e| format!("Failed to write flow: {e}"))?;
 
-    Ok(format!("Skill '{name}' created successfully."))
+    Ok(format!("Flow '{name}' created successfully."))
 }
 
-async fn tool_skill_update(
+async fn tool_flow_update(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
 ) -> Result<String, String> {
-    let root = workspace_root.ok_or("skill_update requires a workspace root")?;
+    let root = workspace_root.ok_or("flow_update requires a workspace root")?;
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
     let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
 
     let flows_dir = root.join("flows");
     let filename = lifecycle::evolution::sanitize_filename(name);
     let flat_path = flows_dir.join(format!("{filename}.md"));
-    let dir_path = flows_dir.join(&filename).join("SKILL.md");
+    // Directory format: prefer the canonical flow.md, fall back to legacy
+    // SKILL.md (still readable, see flow_dir_markdown in prompt_sources.rs).
+    let dir = flows_dir.join(&filename);
+    let dir_flow = dir.join("flow.md");
+    let dir_skill = dir.join("SKILL.md");
 
     let target = if flat_path.exists() {
         flat_path
-    } else if dir_path.exists() {
-        dir_path
+    } else if dir_flow.exists() {
+        dir_flow
+    } else if dir_skill.exists() {
+        dir_skill
     } else {
-        return Err(format!("Skill '{name}' not found."));
+        return Err(format!("Flow '{name}' not found."));
     };
 
     let existing = tokio::fs::read_to_string(&target)
         .await
-        .map_err(|e| format!("Failed to read skill: {e}"))?;
+        .map_err(|e| format!("Failed to read flow: {e}"))?;
 
     let updated = if let Some(rest) = existing.strip_prefix("---") {
         if let Some(end) = rest.find("---") {
@@ -587,16 +593,16 @@ async fn tool_skill_update(
 
     tokio::fs::write(&target, &updated)
         .await
-        .map_err(|e| format!("Failed to write skill: {e}"))?;
+        .map_err(|e| format!("Failed to write flow: {e}"))?;
 
-    Ok(format!("Skill '{name}' updated successfully."))
+    Ok(format!("Flow '{name}' updated successfully."))
 }
 
-async fn tool_skill_load(
+async fn tool_flow_load(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
 ) -> Result<String, String> {
-    let root = workspace_root.ok_or("skill_load requires a workspace root")?;
+    let root = workspace_root.ok_or("flow_load requires a workspace root")?;
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
 
     // Search private flows first (workspace/flows), then fall back to
@@ -606,21 +612,22 @@ async fn tool_skill_load(
         types::config::home_dir().join("flows"),
     ];
     for flows_dir in dirs {
-        if let Some(path) = find_skill_path(&flows_dir, name).await {
+        if let Some(path) = find_flow_path(&flows_dir, name).await {
             return tokio::fs::read_to_string(&path)
                 .await
-                .map_err(|e| format!("Failed to read skill: {e}"));
+                .map_err(|e| format!("Failed to read flow: {e}"));
         }
     }
 
-    Err(format!("Skill '{name}' not found."))
+    Err(format!("Flow '{name}' not found."))
 }
 
-/// Locate a skill file by name within a skills directory.
+/// Locate a flow file by name within a flows directory.
 ///
-/// Tries exact flat (`{name}.md`), exact directory (`{name}/SKILL.md`), then a
-/// case-insensitive fuzzy match on entry names. Returns the path if found.
-async fn find_skill_path(flows_dir: &Path, name: &str) -> Option<PathBuf> {
+/// Tries exact flat (`{name}.md`), exact directory (`{name}/flow.md`, falling
+/// back to legacy `{name}/SKILL.md`), then a case-insensitive fuzzy match on
+/// entry names. Returns the path if found.
+async fn find_flow_path(flows_dir: &Path, name: &str) -> Option<PathBuf> {
     if !flows_dir.is_dir() {
         return None;
     }
@@ -629,9 +636,14 @@ async fn find_skill_path(flows_dir: &Path, name: &str) -> Option<PathBuf> {
     if flat_path.exists() {
         return Some(flat_path);
     }
-    let dir_path = flows_dir.join(&filename).join("SKILL.md");
-    if dir_path.exists() {
-        return Some(dir_path);
+    let dir = flows_dir.join(&filename);
+    let dir_flow = dir.join("flow.md");
+    if dir_flow.exists() {
+        return Some(dir_flow);
+    }
+    let dir_skill = dir.join("SKILL.md");
+    if dir_skill.exists() {
+        return Some(dir_skill);
     }
 
     // Fuzzy match on entry names
@@ -645,6 +657,10 @@ async fn find_skill_path(flows_dir: &Path, name: &str) -> Option<PathBuf> {
             return Some(entry.path());
         }
         if entry.path().is_dir() {
+            let flow_md = entry.path().join("flow.md");
+            if flow_md.exists() {
+                return Some(flow_md);
+            }
             let skill_md = entry.path().join("SKILL.md");
             if skill_md.exists() {
                 return Some(skill_md);
@@ -806,18 +822,23 @@ pub fn write_skill_tools(workspace: &Path, skill_name: &str, tools: &[String]) -
     let flows_dir = workspace.join("flows");
     let filename = lifecycle::evolution::sanitize_filename(skill_name);
     let flat_path = flows_dir.join(format!("{filename}.md"));
-    let dir_path = flows_dir.join(&filename).join("SKILL.md");
+    // Directory format: prefer canonical flow.md, fall back to legacy SKILL.md.
+    let dir = flows_dir.join(&filename);
+    let dir_flow = dir.join("flow.md");
+    let dir_skill = dir.join("SKILL.md");
 
     let target = if flat_path.exists() {
         flat_path
-    } else if dir_path.exists() {
-        dir_path
+    } else if dir_flow.exists() {
+        dir_flow
+    } else if dir_skill.exists() {
+        dir_skill
     } else {
-        return Err(format!("Skill '{skill_name}' not found"));
+        return Err(format!("Flow '{skill_name}' not found"));
     };
 
     let content = std::fs::read_to_string(&target)
-        .map_err(|e| format!("Failed to read skill: {e}"))?;
+        .map_err(|e| format!("Failed to read flow: {e}"))?;
 
     if tools.is_empty() {
         return Ok(());
@@ -899,18 +920,23 @@ pub fn write_skill_tools(workspace: &Path, skill_name: &str, tools: &[String]) -
     Ok(())
 }
 
-/// Read the tools field from a skill .md file's frontmatter.
-/// Returns an empty Vec if the skill doesn't exist or has no tools.
+/// Read the tools field from a flow .md file's frontmatter.
+/// Returns an empty Vec if the flow doesn't exist or has no tools.
 pub fn read_skill_tools(workspace: &Path, skill_name: &str) -> Vec<String> {
     let flows_dir = workspace.join("flows");
     let filename = lifecycle::evolution::sanitize_filename(skill_name);
     let flat_path = flows_dir.join(format!("{filename}.md"));
-    let dir_path = flows_dir.join(&filename).join("SKILL.md");
+    // Directory format: prefer canonical flow.md, fall back to legacy SKILL.md.
+    let dir = flows_dir.join(&filename);
+    let dir_flow = dir.join("flow.md");
+    let dir_skill = dir.join("SKILL.md");
 
     let target = if flat_path.exists() {
         flat_path
-    } else if dir_path.exists() {
-        dir_path
+    } else if dir_flow.exists() {
+        dir_flow
+    } else if dir_skill.exists() {
+        dir_skill
     } else {
         return Vec::new();
     };

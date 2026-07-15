@@ -60,7 +60,7 @@ impl PermissionLevel {
         match base_name {
             // None — pure queries, no side effects
             "session_summarize"
-            | "knowledge_list" | "knowledge_read" | "skill_load"
+            | "knowledge_list" | "knowledge_read" | "flow_load"
             | "tool_search" | "agent_find" | "agent_list"
             | "train_read" | "train_list" | "train_knowledge_list"
             | "train_knowledge_read" | "train_evaluate" | "user_profile"
@@ -84,7 +84,7 @@ impl PermissionLevel {
             // Write — writes within sandbox
             "file_write"
             | "knowledge_add" | "knowledge_remove" | "knowledge_import"
-            | "knowledge_heal" | "skill_create" | "skill_update"
+            | "knowledge_heal" | "flow_create" | "flow_update"
             | "apply_patch" | "train_write"
             | "image_generate" | "text_to_speech" | "canvas_present"
             | "task_post" | "task_claim" | "task_complete"
@@ -131,7 +131,7 @@ impl PermissionLevel {
 /// - `*_publish_draft` — publishing content to a public account (e.g.
 ///   `mcp_wechat_oa_publish_draft`); drafting (`create_draft`) stays open
 ///
-/// Self-evolution tools (`skill_create`, `skill_update`, `knowledge_add`) are
+/// Self-evolution tools (`flow_create`, `flow_update`, `knowledge_add`) are
 /// intentionally **not** gated — the clone uses them in its autonomous
 /// judgment/evolution loop. See `docs/ADMIN-MECHANISM.md`.
 pub fn is_admin_gated(name: &str) -> bool {
@@ -491,7 +491,7 @@ impl From<&str> for PluginToolError {
 /// These are the bootstrap tools every agent gets. Other tools are discovered
 /// at runtime via `tool_search` when the LLM needs them.
 pub const CORE_TOOL_NAMES: &[&str] = &[
-    "tool_search", "skill_load", "skill_create", "skill_update",
+    "tool_search", "flow_load", "flow_create", "flow_update",
     "session_summarize",
     "knowledge_add", "knowledge_read", "knowledge_list",
     "file_read", "file_list",
@@ -523,8 +523,8 @@ mod tests {
 
         // NOT gated: self-evolution / drafting tools stay open
         assert!(!is_admin_gated("create_draft"));
-        assert!(!is_admin_gated("skill_create"));
-        assert!(!is_admin_gated("skill_update"));
+        assert!(!is_admin_gated("flow_create"));
+        assert!(!is_admin_gated("flow_update"));
         assert!(!is_admin_gated("knowledge_add"));
         assert!(!is_admin_gated("file_write"));
         assert!(!is_admin_gated("weixin_oa_send_miniprogram"));

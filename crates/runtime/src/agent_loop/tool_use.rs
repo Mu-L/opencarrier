@@ -3,9 +3,9 @@
 //! When the LLM requests tool execution, this handler:
 //! - Tracks tool calls for loop detection
 //! - Executes each tool with timeout and truncation
-//! - Handles skill_load deduplication
+//! - Handles flow_load deduplication
 //! - Tracks consecutive tool errors
-//! - Refreshes the tool list after tool_search / skill_load
+//! - Refreshes the tool list after tool_search / flow_load
 //! - Detects task_plan and signals a loop break
 
 use super::*;
@@ -124,7 +124,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         error_tracker.remove(&looping_name);
         // Inject a system message telling the LLM to stop using this tool
         let warning = format!(
-            "工具 `{looping_name}` 连续多次返回相同结果，已被临时移除。请用其他方式完成任务，不要再用这个工具。如果是因为 skill 声明的工具未加载，请用 skill_update 修复 skill 的 tools 字段。"
+            "工具 `{looping_name}` 连续多次返回相同结果，已被临时移除。请用其他方式完成任务，不要再用这个工具。如果是因为 flow 声明的工具未加载，请用 flow_update 修复 flow 的 tools 字段。"
         );
         messages.push(Message::system(&warning));
     }
@@ -265,8 +265,8 @@ pub(in crate::agent_loop) async fn handle_tool_use(
 
         // Skill load deduplication: if the same skill was already loaded
         // in this agent loop, replace the full content with a short hint.
-        // This prevents the LLM from looping on skill_load without executing.
-        if tool_call.name == "skill_load" {
+        // This prevents the LLM from looping on flow_load without executing.
+        if tool_call.name == "flow_load" {
             let skill_name = tool_call.input["name"]
                 .as_str()
                 .unwrap_or("")
@@ -277,10 +277,10 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                         agent = %manifest.name,
                         skill = %skill_name,
                         iteration,
-                        "skill_load called for already-loaded skill — returning dedup hint"
+                        "flow_load called for already-loaded flow — returning dedup hint"
                     );
                     let dedup_msg = format!(
-                        "Skill '{}' 已经加载过了，请直接按步骤执行，不要再调用 skill_load。",
+                        "Flow '{}' 已经加载过了，请直接按步骤执行，不要再调用 flow_load。",
                         skill_name
                     );
                     tool_result_blocks.push(ContentBlock::ToolResult {
@@ -424,21 +424,21 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     let tools_may_have_changed = response.tool_calls.iter().any(|tc| {
         matches!(
             tc.name.as_str(),
-            "train_write" | "file_write" | "tool_search" | "skill_load"
+            "train_write" | "file_write" | "tool_search" | "flow_load"
         )
     });
     if tools_may_have_changed {
         if let Some(kernel) = kernel {
             let _agent_id_str = session.agent_name.to_string();
 
-            // Log skill_load calls
-            let skill_load_count = response
+            // Log flow_load calls
+            let flow_load_count = response
                 .tool_calls
                 .iter()
-                .filter(|tc| tc.name == "skill_load")
+                .filter(|tc| tc.name == "flow_load")
                 .count();
-            if skill_load_count > 0 {
-                info!(count = skill_load_count, "Skill(s) loaded");
+            if flow_load_count > 0 {
+                info!(count = flow_load_count, "Skill(s) loaded");
             }
 
             // tool_search: add found tools to the tools list so the LLM API

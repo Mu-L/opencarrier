@@ -147,7 +147,7 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             sections.push(format!(
                 "## Active Flow (auto-matched)\n\
                  The flow instructions below are already loaded and active. \
-                 Follow these instructions directly — do not call skill_load again for this flow.\n\n{}",
+                 Follow these instructions directly — do not call flow_load again for this flow.\n\n{}",
                 cap_str(flow, 4000)
             ));
         }
@@ -209,12 +209,12 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             if !catalog.trim().is_empty() {
                 let section = if ctx.auto_matched_flow.is_some() {
                     format!(
-                        "## 技能目录\n当用户的请求匹配某个技能时，使用 skill_load 加载该技能的详细指令。\n如果某个技能已被自动加载（见上方 Active Flow 部分），直接执行，无需再次调用 skill_load。\n\n{}",
+                        "## 流程目录\n当用户的请求匹配某个流程时，使用 flow_load 加载该流程的详细指令。\n如果某个流程已被自动加载（见上方 Active Flow 部分），直接执行，无需再次调用 flow_load。\n\n{}",
                         catalog
                     )
                 } else {
                     format!(
-                        "## 技能目录\n当用户的请求匹配某个技能时，使用 skill_load 加载该技能的详细指令，然后严格按指令执行。\n\n{}",
+                        "## 流程目录\n当用户的请求匹配某个流程时，使用 flow_load 加载该流程的详细指令，然后严格按指令执行。\n\n{}",
                         catalog
                     )
                 };
@@ -853,14 +853,14 @@ const EVOLUTION_PROMPT: &str = "\
 - **kv_set**: 存储用户的重要信息到抽屉（账号、偏好、决策等）
 - **kv_get**: 在提问前先检查抽屉，避免重复询问用户已提供的信息
 - **knowledge_extract**: 从对话中提取新知识（事实、规则、偏好）并保存到知识库
-- **skill_create**: 创建新技能来扩展你的能力
-- **skill_update**: 改进现有技能的流程和内容（如：发现缺少信息时，更新 flow 写入经验）
+- **flow_create**: 创建新流程来扩展你的能力
+- **flow_update**: 改进现有流程的内容（如：发现缺少信息时，更新 flow 写入经验）
 - **session_summarize**: 总结长对话的关键信息以备后续回忆
 
 重要学习模式：当你发现执行某个任务缺少关键信息（如公众号名称、API密钥等），
 向用户获取后成功完成任务，你应该：
 1. kv_set 存储这个信息（下次不用再问）
-2. skill_update 在对应的技能中写入经验（如：发公众号前先 kv_get(entity.wechat_accounts)）
+2. flow_update 在对应的流程中写入经验（如：发公众号前先 kv_get(entity.wechat_accounts)）
 
 不需要每次对话都调用，只在有实质性新知识或改进机会时使用。越用越好。";
 
@@ -904,7 +904,7 @@ pub fn tool_category(name: &str) -> &'static str {
         }
 
         _ if name.starts_with("mcp_") => "MCP",
-        _ if name.starts_with("skill_") => "Skills",
+        _ if name.starts_with("flow_") => "Flows",
         _ => "Other",
     }
 }
@@ -968,9 +968,9 @@ pub fn tool_hint(name: &str) -> &'static str {
         // Evolution (self-improvement)
         "knowledge_extract" => "extract and save new knowledge from conversation",
         "knowledge_index" => "rebuild knowledge index (MEMORY.md)",
-        "skill_create" => "create a new flow",
-        "skill_update" => "update an existing flow",
-        "skill_load" => "load full flow content",
+        "flow_create" => "create a new flow",
+        "flow_update" => "update an existing flow",
+        "flow_load" => "load full flow content",
         "session_summarize" => "save a conversation summary",
 
         _ => "",
@@ -1361,7 +1361,7 @@ mod tests {
         assert!(prompt.contains("专业客服"));
         assert!(prompt.contains("## 行为指令"));
         assert!(prompt.contains("处理客户问题"));
-        assert!(prompt.contains("## 技能目录"));
+        assert!(prompt.contains("## 流程目录"));
         assert!(prompt.contains("handle-refund"));
         assert!(prompt.contains("## 知识索引"));
         assert!(prompt.contains("退货政策"));

@@ -120,7 +120,9 @@ pub fn compute_deterministic_metrics(workspace: &Path) -> QualityMetrics {
                 d.filter_map(|e| e.ok())
                     .filter(|e| {
                         e.path().extension().map(|ext| ext == "md").unwrap_or(false)
-                            || e.path().is_dir() && e.path().join("SKILL.md").exists()
+                            || e.path().is_dir()
+                                && (e.path().join("flow.md").exists()
+                                    || e.path().join("SKILL.md").exists())
                     })
                     .count()
             })

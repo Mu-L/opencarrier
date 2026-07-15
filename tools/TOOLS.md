@@ -7,7 +7,7 @@
 | `file_read` | 读取文件内容，路径相对于 agent workspace |
 | `file_list` | 列出目录文件，路径相对于 agent workspace |
 | `tool_search` | 搜索工具目录，按自然语言 query 匹配内置工具 |
-| `skill_load` | 按 name 加载 skill 完整内容 |
+| `flow_load` | 按 name 加载 flow 完整内容 |
 | `knowledge_read` | 读取 knowledge 文件 |
 | `knowledge_list` | 列出可用 knowledge 文件 |
 | `session_summarize` | 保存当前对话摘要 |
@@ -42,8 +42,8 @@
 | `knowledge_index` | 重建 MEMORY.md 索引 |
 | `knowledge_import` | 导入外部数据（FAQ、聊天记录等） |
 | `knowledge_extract` | 从对话中提取新 knowledge |
-| `skill_create` | 创建新 skill 文件 |
-| `skill_update` | 更新 skill body（保留 frontmatter） |
+| `flow_create` | 创建新 flow 文件 |
+| `flow_update` | 更新 flow body（保留 frontmatter） |
 | `clone_evaluate` | 评估 clone 质量（0-100 分） |
 
 ## media

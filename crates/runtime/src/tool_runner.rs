@@ -63,7 +63,7 @@ pub async fn execute_tool(
     // Admin gate — orthogonal to max_tool_level. A small set of irreversible /
     // brand-affecting tools (shell execution, publishing to a public account)
     // require the caller to be a clone admin (creator or approved admin, per
-    // admins.json). Self-evolution tools (skill_create/knowledge_add/create_draft)
+    // admins.json). Self-evolution tools (flow_create/knowledge_add/create_draft)
     // are intentionally NOT gated — the clone uses them in its judgment loop.
     // See docs/ADMIN-MECHANISM.md.
     if !is_clone_admin && types::tool::is_admin_gated(tool_name) {
