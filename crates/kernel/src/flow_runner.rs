@@ -17,6 +17,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::stream::StreamExt;
 use serde_json::Value;
 use tracing::{info, warn};
 
@@ -1021,7 +1022,8 @@ impl CarrierKernel {
 
     /// Batch `map` (stage E.1): iterate `over`, running the named sub-flow once
     /// per element with the element bound to `as`, and collect final values.
-    /// Serial (no parallelism).
+    /// `step.parallel` (>1) runs sub-flows concurrently (order preserved);
+    /// `None`/`1` is serial and short-circuits on the first error.
     #[allow(clippy::too_many_arguments)]
     async fn exec_map_batch(
         &self,
@@ -1046,26 +1048,69 @@ impl CarrierKernel {
         })?;
         let arr = render_over_array(step, over_tpl, outputs, input)?;
         let as_name = step.as_name.as_deref().unwrap_or("item").to_string();
+        let parallel = step.parallel.unwrap_or(1).max(1) as usize;
         let mut collected: Vec<Value> = Vec::new();
         let mut total_usage = TokenUsage::default();
         let mut total_iters = 0u32;
 
-        info!(flow = "map", step = %step.id, elements = arr.len(), "map step iterating");
-        for element in arr {
-            // Inject the element under `as_name` into a cloned outputs map so
-            // bare `{{ as_name.field }}` templates resolve via resolve_path.
-            let mut sub_outputs = outputs.clone();
-            sub_outputs.insert(as_name.clone(), element);
-            let (val, usage, iters) = self
-                .invoke_subflow(
-                    step, agent_id, manifest, tools, brain, kernel_handle.clone(), sender_id,
-                    owner_id, channel_type, &sub_outputs, input, agent_name,
-                )
-                .await?;
-            collected.push(val);
-            total_usage.input_tokens += usage.input_tokens;
-            total_usage.output_tokens += usage.output_tokens;
-            total_iters += iters;
+        info!(
+            flow = "map",
+            step = %step.id,
+            elements = arr.len(),
+            parallel,
+            "map step iterating"
+        );
+        if parallel <= 1 {
+            // Serial: short-circuit on first error (preserves stage E.1 behavior).
+            for element in arr {
+                // Inject the element under `as_name` into a cloned outputs map so
+                // bare `{{ as_name.field }}` templates resolve via resolve_path.
+                let mut sub_outputs = outputs.clone();
+                sub_outputs.insert(as_name.clone(), element);
+                let (val, usage, iters) = self
+                    .invoke_subflow(
+                        step, agent_id, manifest, tools, brain, kernel_handle.clone(), sender_id,
+                        owner_id, channel_type, &sub_outputs, input, agent_name,
+                    )
+                    .await?;
+                collected.push(val);
+                total_usage.input_tokens += usage.input_tokens;
+                total_usage.output_tokens += usage.output_tokens;
+                total_iters += iters;
+            }
+        } else {
+            // Parallel: run up to `parallel` sub-flows concurrently while
+            // yielding results in input order (`buffered` preserves order).
+            // NOTE: concurrent siblings share the FLOW_DEPTH task_local Cell, so
+            // the depth guard may over-count for deeply nested parallel maps --
+            // acceptable (safe-fail at the limit, never data loss); each loop's
+            // LLM calls are still bounded by the global llm_concurrency_limit.
+            let futs = arr.into_iter().map(|element| {
+                let mut sub_outputs = outputs.clone();
+                sub_outputs.insert(as_name.clone(), element);
+                // `Option<Arc<_>>` isn't Copy: clone once per element in the
+                // sync closure, then move the owned clone into the async block.
+                let kernel_handle = kernel_handle.clone();
+                // `async move` owns `sub_outputs`/`kernel_handle` so the borrows
+                // inside outlive the future; the `&self`/`&step`/... refs are Copy.
+                async move {
+                    self.invoke_subflow(
+                        step, agent_id, manifest, tools, brain, kernel_handle, sender_id,
+                        owner_id, channel_type, &sub_outputs, input, agent_name,
+                    )
+                    .await
+                }
+            });
+            let results: Vec<KernelResult<(Value, TokenUsage, u32)>> =
+                futures::stream::iter(futs).buffered(parallel).collect().await;
+            // First error (in order) aborts; later results are discarded.
+            for r in results {
+                let (val, usage, iters) = r?;
+                collected.push(val);
+                total_usage.input_tokens += usage.input_tokens;
+                total_usage.output_tokens += usage.output_tokens;
+                total_iters += iters;
+            }
         }
         info!(flow = "map", step = %step.id, collected = collected.len(), "map step completed");
         Ok((Value::Array(collected), total_usage, total_iters))
@@ -1101,6 +1146,16 @@ impl CarrierKernel {
                 step.id
             )))
         })?;
+        // An interactive map can suspend per element (body `user_input`), so it
+        // MUST run serially -- parallelism would break resume (which element is
+        // waiting?). Reject `parallel > 1` up front.
+        if step.parallel.unwrap_or(1) > 1 {
+            return Err(KernelError::Carrier(CarrierError::Internal(format!(
+                "interactive map step '{}' has body (can suspend) and must be serial (parallel<=1), got parallel={}",
+                step.id,
+                step.parallel.unwrap_or(1)
+            ))));
+        }
         let as_name = step.as_name.as_deref().unwrap_or("item").to_string();
 
         // Resume: reconstruct iteration state from map_context. Otherwise fresh.

@@ -131,6 +131,10 @@ pub struct StepDef {
     /// `user_input`, suspending via `map_context`); when `None`, the map uses
     /// `flow`/`with` (batch form, stage E.1).
     pub body: Option<Vec<StepDef>>,
+    /// Concurrency for batch `map` steps (stage E.1): up to this many sub-flows
+    /// run at once. `None`/`1` => serial (default). Ignored (must be 1) for
+    /// interactive maps (`body` set), which can suspend per element.
+    pub parallel: Option<u32>,
 }
 
 impl StepDef {
@@ -478,6 +482,7 @@ fn apply_step_field(s: &mut StepDef, text: &str) -> Option<String> {
         "flow" => s.flow = (!v.is_empty()).then_some(v),
         "over" => s.over = (!v.is_empty()).then_some(v),
         "as" => s.as_name = (!v.is_empty()).then_some(v),
+        "parallel" => s.parallel = (!v.is_empty()).then(|| v.parse().ok()).flatten(),
         "body" => {
             // Block form (`body:` on its own line) opens a nested step list
             // collected by `parse_step_list`; inline form is unsupported.
@@ -776,6 +781,39 @@ b"#;
         assert_eq!(s.tool_name.as_deref(), Some("file_write"));
         assert_eq!(s.tool_args["path"].as_str(), Some("out.txt"));
         assert_eq!(s.tool_args["content"].as_str(), Some("hi"));
+    }
+
+    #[test]
+    fn map_parallel_field_parses() {
+        let content = r#"---
+name: batch
+description: d
+steps:
+  - id: fan
+    kind: map
+    over: "{{ items }}"
+    as: item
+    flow: sub
+    parallel: 4
+---
+b"#;
+        let f = parse_flow_def(content);
+        let s = &f.steps[0];
+        assert_eq!(s.kind, Some(StepKind::Map));
+        assert_eq!(s.parallel, Some(4));
+        // Omitted => None (serial default).
+        let content2 = r#"---
+name: batch2
+description: d
+steps:
+  - id: fan
+    kind: map
+    over: "{{ items }}"
+    flow: sub
+---
+b"#;
+        let f2 = parse_flow_def(content2);
+        assert_eq!(f2.steps[0].parallel, None);
     }
 
     #[test]
