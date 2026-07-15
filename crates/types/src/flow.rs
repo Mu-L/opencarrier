@@ -12,9 +12,10 @@
 
 use serde_json::{Map, Value};
 
-/// How a single step is executed. `AgentLoop`, `Chat`, `Tool`, and `UserInput`
-/// are executed by `run_flow`; the rest are parsed here so later stages can add
-/// execution without touching the parser.
+/// How a single step is executed. `AgentLoop`, `Chat`, `UserInput`,
+/// `FlowExec`, and `Map` are executed by `run_flow`; `Tool` is parsed but not
+/// yet executed (rejected as unsupported); other kinds are preserved as
+/// `Unknown` so later stages can add execution without touching the parser.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepKind {
     AgentLoop,
@@ -24,8 +25,14 @@ pub enum StepKind {
     /// message (stage D). The user's reply becomes this step's output
     /// `{ decision, text }`.
     UserInput,
-    /// A recognized-but-not-yet-executed kind (e.g. `map`, `flow_exec`,
-    /// `delegate`). `run_flow` rejects these until later stages.
+    /// Invoke another flow by name (stage E.1). `with` becomes the sub-flow's
+    /// `input`; output is the sub-flow's final value.
+    FlowExec,
+    /// Iterate a dynamic array (`over`), running a sub-flow per element (stage
+    /// E.1, serial batch). Output is the collected results array.
+    Map,
+    /// A recognized-but-not-yet-executed kind (e.g. `delegate`). `run_flow`
+    /// rejects these until later stages.
     Unknown(String),
 }
 
@@ -36,13 +43,20 @@ impl StepKind {
             "chat" => Self::Chat,
             "tool" => Self::Tool,
             "user_input" => Self::UserInput,
+            "flow_exec" => Self::FlowExec,
+            "map" => Self::Map,
             other => Self::Unknown(other.to_string()),
         }
     }
 
-    /// True if `run_flow` can currently execute this kind.
+    /// True if `run_flow` can currently execute this kind. `Tool` is excluded
+    /// (not yet implemented) so it routes to the "not yet supported" error
+    /// instead of panicking.
     pub fn is_executable(&self) -> bool {
-        matches!(self, Self::AgentLoop | Self::Chat | Self::Tool | Self::UserInput)
+        matches!(
+            self,
+            Self::AgentLoop | Self::Chat | Self::UserInput | Self::FlowExec | Self::Map
+        )
     }
 }
 
@@ -104,6 +118,12 @@ pub struct StepDef {
     /// Per-step timeout for `user_input` steps, in hours. `None` => the
     /// kernel config default (`user_input_timeout_secs`).
     pub timeout_hours: Option<f64>,
+    /// Sub-flow name for `flow_exec` steps and `map` step bodies (stage E.1).
+    pub flow: Option<String>,
+    /// Template resolving to a JSON array, iterated by `map` steps.
+    pub over: Option<String>,
+    /// Element binding name in `map` step templates (defaults to `"item"`).
+    pub as_name: Option<String>,
 }
 
 impl StepDef {
@@ -407,6 +427,9 @@ fn apply_step_field(s: &mut StepDef, text: &str) -> Option<String> {
             s.cancel_keywords = parse_inline_list(&v);
         }
         "timeout_hours" => s.timeout_hours = (!v.is_empty()).then(|| v.parse().ok()).flatten(),
+        "flow" => s.flow = (!v.is_empty()).then_some(v),
+        "over" => s.over = (!v.is_empty()).then_some(v),
+        "as" => s.as_name = (!v.is_empty()).then_some(v),
         _ => {}
     }
     None
@@ -640,7 +663,7 @@ steps:
 b"#;
         let f = parse_flow_def(content);
         let s = &f.steps[0];
-        assert_eq!(s.kind, Some(StepKind::Unknown("flow_exec".into())));
+        assert_eq!(s.kind, Some(StepKind::FlowExec));
         assert_eq!(s.with.get("topic").and_then(|v| v.as_str()), Some("{{ input.topic }}"));
     }
 
@@ -736,12 +759,12 @@ name: t
 description: d
 steps:
   - id: g
-    kind: map
+    kind: delegate
     prompt: "ok?"
 ---
 b"#;
         let f = parse_flow_def(content);
-        assert_eq!(f.steps[0].kind, Some(StepKind::Unknown("map".into())));
+        assert_eq!(f.steps[0].kind, Some(StepKind::Unknown("delegate".into())));
         assert!(!f.steps[0].kind.as_ref().unwrap().is_executable());
         assert_eq!(f.steps[0].prompt.as_deref(), Some("ok?"));
     }
@@ -784,5 +807,61 @@ steps:
 b"#;
         let f = parse_flow_def(content);
         assert_eq!(f.steps[0].cancel_keywords, vec!["取消", "cancel"]);
+    }
+
+    #[test]
+    fn flow_exec_step_parsed() {
+        let content = r#"---
+name: t
+description: d
+steps:
+  - id: draft
+    kind: flow_exec
+    flow: script-writing
+    with: {topic: "{{ input.user_message }}", count: "3"}
+---
+b"#;
+        let f = parse_flow_def(content);
+        let s = &f.steps[0];
+        assert_eq!(s.kind, Some(StepKind::FlowExec));
+        assert!(s.kind.as_ref().unwrap().is_executable());
+        assert_eq!(s.flow.as_deref(), Some("script-writing"));
+        assert_eq!(s.with.get("topic").and_then(|v| v.as_str()), Some("{{ input.user_message }}"));
+        assert_eq!(s.with.get("count").and_then(|v| v.as_str()), Some("3"));
+    }
+
+    #[test]
+    fn map_step_parsed() {
+        let content = r#"---
+name: t
+description: d
+steps:
+  - id: shots
+    kind: map
+    over: "{{ parse_shots }}"
+    as: shot
+    flow: shot-image
+    with: {prompt: "{{ shot.prompt }}"}
+    depends_on: [parse_shots]
+---
+b"#;
+        let f = parse_flow_def(content);
+        let s = &f.steps[0];
+        assert_eq!(s.kind, Some(StepKind::Map));
+        assert!(s.kind.as_ref().unwrap().is_executable());
+        assert_eq!(s.over.as_deref(), Some("{{ parse_shots }}"));
+        assert_eq!(s.as_name.as_deref(), Some("shot"));
+        assert_eq!(s.flow.as_deref(), Some("shot-image"));
+        assert_eq!(s.with.get("prompt").and_then(|v| v.as_str()), Some("{{ shot.prompt }}"));
+    }
+
+    #[test]
+    fn tool_not_executable_safety() {
+        // Tool is parsed but not yet executed -> routes to "not yet supported"
+        // error instead of panicking at runtime.
+        assert_eq!(StepKind::parse("tool"), StepKind::Tool);
+        assert!(!StepKind::Tool.is_executable());
+        assert!(StepKind::FlowExec.is_executable());
+        assert!(StepKind::Map.is_executable());
     }
 }

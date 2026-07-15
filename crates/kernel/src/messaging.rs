@@ -1175,7 +1175,7 @@ impl CarrierKernel {
                 )
                 .await?;
             match outcome {
-                crate::flow_runner::FlowOutcome::Completed(r) => r,
+                crate::flow_runner::FlowOutcome::Completed { result, .. } => result,
                 crate::flow_runner::FlowOutcome::Suspended { question, total_usage, iterations } => {
                     // The flow paused at a `user_input` step: the question IS the
                     // reply to send. Skip plan/file/evolution post-processing.
