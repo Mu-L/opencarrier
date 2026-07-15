@@ -60,16 +60,80 @@ pub(crate) enum FlowOutcome {
     },
 }
 
+/// Outcome of executing a `map` step. `Done` carries the collected results
+/// array; `Suspended` means the map's inline body paused at a `user_input`
+/// step, persisting `map_context` so the iteration can resume.
+pub(crate) enum MapOutcome {
+    Done(Value, TokenUsage, u32),
+    Suspended {
+        question: String,
+        /// The body `user_input` step id that is now waiting.
+        body_step_id: String,
+        /// Serialized [`MapContext`] to persist in `flow_runs.map_context`.
+        map_context_json: String,
+        expires_at: Option<String>,
+        usage: TokenUsage,
+        iterations: u32,
+    },
+}
+
+/// Outcome of executing one element's inline body. `Done` carries the body's
+/// outputs (for cancel detection) + final value (collected); `Suspended` means
+/// a body `user_input` paused, carrying the body's outputs so far
+/// (`body_completed`) up to the map loop.
+enum BodyOutcome {
+    Done {
+        outputs: HashMap<String, Value>,
+        final_value: Option<Value>,
+        usage: TokenUsage,
+        iterations: u32,
+    },
+    Suspended {
+        question: String,
+        step_id: String,
+        outputs: HashMap<String, Value>,
+        expires_at: Option<String>,
+        usage: TokenUsage,
+        iterations: u32,
+    },
+}
+
+/// Resume state for an inline body (one element's body paused at a
+/// `user_input` step). `body_completed` are the body steps done before the
+/// suspend; the reply becomes the `waiting_step_id` step's `{ decision, text }`.
+struct BodyResume {
+    body_completed: HashMap<String, Value>,
+    waiting_step_id: String,
+    user_reply: String,
+    cancel_keywords: Vec<String>,
+}
+
+/// Map iteration progress persisted when an interactive map's body suspends.
+/// Stored as JSON in `flow_runs.map_context`; `waiting_at` holds the body
+/// `user_input` step id.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct MapContext {
+    pub map_step_id: String,
+    pub over: Vec<Value>,
+    pub current_index: usize,
+    pub collected: Vec<Value>,
+    pub body_completed: HashMap<String, Value>,
+    #[serde(rename = "as")]
+    pub as_name: String,
+}
+
 /// State carried into `run_flow` when resuming a suspended flow. `pre_outputs`
 /// are the completed steps' snapshots (deserialized from `flow_runs`), and the
 /// user's reply becomes the `waiting_step_id` step's output
-/// `{ decision, text }`.
+/// `{ decision, text }`. `map_context` is set when the waiting step is inside
+/// an interactive map's body (stage E.2).
 pub(crate) struct ResumeState {
     pub run_id: String,
     pub pre_outputs: HashMap<String, Value>,
     pub waiting_step_id: String,
     pub user_reply: String,
     pub cancel_keywords: Vec<String>,
+    pub map_context: Option<MapContext>,
 }
 
 impl CarrierKernel {
@@ -99,11 +163,6 @@ impl CarrierKernel {
             .get(agent_id)
             .map(|e| e.name.clone())
             .unwrap_or_else(|| agent_id.to_string());
-        let driver = self.resolve_driver(manifest)?;
-        let memory_handle: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
-            Some(Arc::new(crate::handle::MemorySubstrateHandle::new(Arc::clone(
-                &self.memory,
-            ))));
 
         // `input` is the template-context input (used by render/when/select);
         // it is also serialized into the flow_runs row on a fresh run. For a
@@ -251,77 +310,34 @@ impl CarrierKernel {
 
                 let dispatch: KernelResult<(Value, TokenUsage, u32)> = match kind {
                     StepKind::AgentLoop => {
-                        // base_system_prompt already carries the flow body (injected
-                        // by prepare_agent_context); add only the step directive.
-                        let step_system = format!(
-                            "{base_system_prompt}\n\n## 当前步骤: {}\n{step_prompt}",
-                            step.id,
-                        );
-                        let mut step_manifest = manifest.clone();
-                        step_manifest.model.system_prompt = step_system;
-                        let mut step_session = self
-                            .memory
-                            .create_session_async(agent_name.clone())
-                            .await
-                            .map_err(KernelError::Carrier)?;
-                        let r = run_agent_loop(
-                            &step_manifest,
+                        self.run_step_agent_loop(
+                            step,
+                            &step_prompt,
                             &step_user_msg,
-                            &mut step_session,
-                            &self.memory,
-                            driver.clone(),
+                            base_system_prompt,
+                            &agent_name,
+                            manifest,
                             tools,
+                            brain,
                             kernel_handle.clone(),
-                            None,
-                            Some(&self.plugins.mcp_connections),
-                            Some(&self.services.fetch_engine),
-                            manifest.workspace.as_deref(),
-                            None,
-                            Some(&self.coordination.hooks),
-                            None,
-                            Some(&self.coordination.process_manager),
-                            None,
-                            brain.cloned(),
-                            memory_handle.clone(),
                             sender_id,
                             owner_id,
                             channel_type,
-                            Some(self.runtime.llm_concurrency_limit.clone()),
+                            &outputs,
+                            &input,
                         )
                         .await
-                        .map_err(KernelError::Carrier)?;
-                        let out_val = select_output(step, &r.response, &outputs, &input)?;
-                        Ok((out_val, r.total_usage, r.iterations))
                     }
                     StepKind::Chat => {
-                        let brain_ref = brain.ok_or_else(|| {
-                            KernelError::Carrier(CarrierError::Internal(
-                                "chat step requires a brain".into(),
-                            ))
-                        })?;
-                        let task_text = step
-                            .task
-                            .as_deref()
-                            .map(|t| render_template(t, &outputs, &input))
-                            .unwrap_or_else(|| step_user_msg.clone());
-                        let system = format!("{base_system_prompt}\n\n## 当前步骤: {}\n{task_text}", step.id);
-                        let req = CompletionRequest {
-                            model: String::new(),
-                            messages: vec![Message::user(step_user_msg.clone())],
-                            tools: Vec::new(),
-                            max_tokens: 4096,
-                            temperature: 0.7,
-                            system: Some(system),
-                            thinking: None,
-                            extra: Default::default(),
-                        };
-                        let resp = brain_ref
-                            .complete("fast", req)
-                            .await
-                            .map_err(KernelError::Carrier)?;
-                        let final_msg = resp.text();
-                        let out_val = select_output(step, &final_msg, &outputs, &input)?;
-                        Ok((out_val, resp.usage, 1))
+                        self.run_step_chat(
+                            step,
+                            &step_user_msg,
+                            base_system_prompt,
+                            brain,
+                            &outputs,
+                            &input,
+                        )
+                        .await
                     }
                     StepKind::UserInput => {
                         // Suspend the flow: send the rendered prompt to the
@@ -396,21 +412,82 @@ impl CarrierKernel {
                         .await
                     }
                     StepKind::Map => {
-                        self.exec_map_step(
-                            step,
-                            agent_id,
-                            manifest,
-                            tools,
-                            brain,
-                            kernel_handle.clone(),
-                            sender_id,
-                            owner_id,
-                            channel_type,
-                            &outputs,
-                            &input,
-                            &agent_name,
-                        )
-                        .await
+                        match self
+                            .exec_map_step(
+                                step,
+                                agent_id,
+                                manifest,
+                                tools,
+                                brain,
+                                kernel_handle.clone(),
+                                sender_id,
+                                owner_id,
+                                channel_type,
+                                &outputs,
+                                &input,
+                                &agent_name,
+                                base_system_prompt,
+                                user_message,
+                                resume,
+                            )
+                            .await?
+                        {
+                            MapOutcome::Done(v, u, i) => Ok((v, u, i)),
+                            MapOutcome::Suspended {
+                                question,
+                                body_step_id,
+                                map_context_json,
+                                expires_at,
+                                usage,
+                                iterations,
+                            } => {
+                                total_usage.input_tokens += usage.input_tokens;
+                                total_usage.output_tokens += usage.output_tokens;
+                                total_iterations += iterations;
+                                // Mirror the UserInput suspend path, but the
+                                // waiting step is the body user_input and we
+                                // persist map iteration progress.
+                                let new_messages = vec![
+                                    Message::user(user_message),
+                                    Message::assistant(&question),
+                                ];
+                                session.messages.extend_from_slice(&new_messages);
+                                let _ = self
+                                    .memory
+                                    .save_session_append_async(
+                                        session.id,
+                                        &agent_name,
+                                        &new_messages,
+                                        session.context_window_tokens,
+                                        session.label.as_deref(),
+                                        None,
+                                    )
+                                    .await;
+                                let _ = self.memory.flow_runs().set_waiting(
+                                    &run_id,
+                                    &body_step_id,
+                                    Some(&map_context_json),
+                                    expires_at.as_deref(),
+                                );
+                                let completed = serde_json::to_string(&outputs)
+                                    .unwrap_or_else(|_| "{}".into());
+                                let _ = self
+                                    .memory
+                                    .flow_runs()
+                                    .update_status(&run_id, "waiting", &completed);
+                                info!(
+                                    flow = %flow.name,
+                                    step = %step.id,
+                                    body_step = %body_step_id,
+                                    "flow suspended inside map body"
+                                );
+                                return Ok(FlowOutcome::Suspended {
+                                    question,
+                                    total_usage,
+                                    iterations: total_iterations,
+                                });
+                            }
+                        }
                     }
                     StepKind::Tool | StepKind::Unknown(_) => unreachable!(),
                 };
@@ -531,6 +608,115 @@ impl CarrierKernel {
         })
     }
 
+    /// Run a single `agent_loop` step in its own fresh session and return its
+    /// output value + usage. Shared by `run_flow` (top-level) and
+    /// `exec_body_steps` (map body). Resolves the driver + memory handle here
+    /// so callers need not thread them.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_step_agent_loop(
+        &self,
+        step: &StepDef,
+        step_prompt: &str,
+        step_user_msg: &str,
+        base_system_prompt: &str,
+        agent_name: &str,
+        manifest: &AgentManifest,
+        tools: &[types::tool::ToolDefinition],
+        brain: Option<&Arc<dyn Brain>>,
+        kernel_handle: Option<Arc<dyn KernelHandle>>,
+        sender_id: Option<&str>,
+        owner_id: Option<&str>,
+        channel_type: Option<&str>,
+        outputs: &HashMap<String, Value>,
+        input: &Value,
+    ) -> KernelResult<(Value, TokenUsage, u32)> {
+        let driver = self.resolve_driver(manifest)?;
+        let memory_handle: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
+            Some(Arc::new(crate::handle::MemorySubstrateHandle::new(Arc::clone(
+                &self.memory,
+            ))));
+        // base_system_prompt already carries the flow body (injected by
+        // prepare_agent_context); add only the step directive.
+        let step_system = format!(
+            "{base_system_prompt}\n\n## 当前步骤: {}\n{step_prompt}",
+            step.id,
+        );
+        let mut step_manifest = manifest.clone();
+        step_manifest.model.system_prompt = step_system;
+        let mut step_session = self
+            .memory
+            .create_session_async(agent_name.to_string())
+            .await
+            .map_err(KernelError::Carrier)?;
+        let r = run_agent_loop(
+            &step_manifest,
+            step_user_msg,
+            &mut step_session,
+            &self.memory,
+            driver,
+            tools,
+            kernel_handle,
+            None,
+            Some(&self.plugins.mcp_connections),
+            Some(&self.services.fetch_engine),
+            manifest.workspace.as_deref(),
+            None,
+            Some(&self.coordination.hooks),
+            None,
+            Some(&self.coordination.process_manager),
+            None,
+            brain.cloned(),
+            memory_handle,
+            sender_id,
+            owner_id,
+            channel_type,
+            Some(self.runtime.llm_concurrency_limit.clone()),
+        )
+        .await
+        .map_err(KernelError::Carrier)?;
+        let out_val = select_output(step, &r.response, outputs, input)?;
+        Ok((out_val, r.total_usage, r.iterations))
+    }
+
+    /// Run a single `chat` step (one-shot LLM completion, no tools) and return
+    /// its output value + usage. Shared by `run_flow` and `exec_body_steps`.
+    async fn run_step_chat(
+        &self,
+        step: &StepDef,
+        step_user_msg: &str,
+        base_system_prompt: &str,
+        brain: Option<&Arc<dyn Brain>>,
+        outputs: &HashMap<String, Value>,
+        input: &Value,
+    ) -> KernelResult<(Value, TokenUsage, u32)> {
+        let brain_ref = brain.ok_or_else(|| {
+            KernelError::Carrier(CarrierError::Internal("chat step requires a brain".into()))
+        })?;
+        let task_text = step
+            .task
+            .as_deref()
+            .map(|t| render_template(t, outputs, input))
+            .unwrap_or_else(|| step_user_msg.to_string());
+        let system = format!("{base_system_prompt}\n\n## 当前步骤: {}\n{task_text}", step.id);
+        let req = CompletionRequest {
+            model: String::new(),
+            messages: vec![Message::user(step_user_msg.to_string())],
+            tools: Vec::new(),
+            max_tokens: 4096,
+            temperature: 0.7,
+            system: Some(system),
+            thinking: None,
+            extra: Default::default(),
+        };
+        let resp = brain_ref
+            .complete("fast", req)
+            .await
+            .map_err(KernelError::Carrier)?;
+        let final_msg = resp.text();
+        let out_val = select_output(step, &final_msg, outputs, input)?;
+        Ok((out_val, resp.usage, 1))
+    }
+
     /// Execute a `flow_exec` step: invoke the named sub-flow once and return
     /// its final value as this step's output.
     #[allow(clippy::too_many_arguments)]
@@ -556,11 +742,75 @@ impl CarrierKernel {
         .await
     }
 
-    /// Execute a `map` step: iterate `over` (a JSON array), running the sub-flow
-    /// once per element with the element bound to `as`, and collect results.
-    /// Serial (no parallelism) in stage E.1.
+    /// Execute a `map` step. Dispatches on the body form:
+    /// - `body: [steps]` set -> interactive map (stage E.2): iterate `over`,
+    ///   running the inline body per element; a body `user_input` suspends with
+    ///   `map_context`.
+    /// - else (`flow`+`with`) -> batch map (stage E.1): invoke the named
+    ///   sub-flow per element, collect results.
     #[allow(clippy::too_many_arguments)]
     async fn exec_map_step(
+        &self,
+        step: &StepDef,
+        agent_id: AgentId,
+        manifest: &AgentManifest,
+        tools: &[types::tool::ToolDefinition],
+        brain: Option<&Arc<dyn Brain>>,
+        kernel_handle: Option<Arc<dyn KernelHandle>>,
+        sender_id: Option<&str>,
+        owner_id: Option<&str>,
+        channel_type: Option<&str>,
+        outputs: &HashMap<String, Value>,
+        input: &Value,
+        agent_name: &str,
+        base_system_prompt: &str,
+        user_message: &str,
+        resume: Option<&ResumeState>,
+    ) -> KernelResult<MapOutcome> {
+        if step.body.is_some() {
+            self.exec_interactive_map(
+                step,
+                manifest,
+                tools,
+                brain,
+                kernel_handle,
+                sender_id,
+                owner_id,
+                channel_type,
+                outputs,
+                input,
+                agent_name,
+                base_system_prompt,
+                user_message,
+                resume,
+            )
+            .await
+        } else {
+            let (v, u, i) = self
+                .exec_map_batch(
+                    step,
+                    agent_id,
+                    manifest,
+                    tools,
+                    brain,
+                    kernel_handle,
+                    sender_id,
+                    owner_id,
+                    channel_type,
+                    outputs,
+                    input,
+                    agent_name,
+                )
+                .await?;
+            Ok(MapOutcome::Done(v, u, i))
+        }
+    }
+
+    /// Batch `map` (stage E.1): iterate `over`, running the named sub-flow once
+    /// per element with the element bound to `as`, and collect final values.
+    /// Serial (no parallelism).
+    #[allow(clippy::too_many_arguments)]
+    async fn exec_map_batch(
         &self,
         step: &StepDef,
         agent_id: AgentId,
@@ -581,23 +831,7 @@ impl CarrierKernel {
                 step.id
             )))
         })?;
-        let over_str = render_template(over_tpl, outputs, input);
-        let arr: Vec<Value> = serde_json::from_str::<Value>(&over_str)
-            .map_err(|e| {
-                KernelError::Carrier(CarrierError::Internal(format!(
-                    "map step '{}' `over` did not resolve to a JSON array: {} (got: {})",
-                    step.id, e, over_str
-                )))
-            })?
-            .as_array()
-            .ok_or_else(|| {
-                KernelError::Carrier(CarrierError::Internal(format!(
-                    "map step '{}' `over` resolved to a non-array",
-                    step.id
-                )))
-            })?
-            .clone();
-
+        let arr = render_over_array(step, over_tpl, outputs, input)?;
         let as_name = step.as_name.as_deref().unwrap_or("item").to_string();
         let mut collected: Vec<Value> = Vec::new();
         let mut total_usage = TokenUsage::default();
@@ -622,6 +856,388 @@ impl CarrierKernel {
         }
         info!(flow = "map", step = %step.id, collected = collected.len(), "map step completed");
         Ok((Value::Array(collected), total_usage, total_iters))
+    }
+
+    /// Interactive `map` (stage E.2): iterate `over` serially, running the
+    /// inline `body` steps per element. A body `user_input` suspends the whole
+    /// flow, persisting `map_context` (iteration progress) so the next user
+    /// message resumes from the same element. A body cancel terminates the map
+    /// (collected so far is preserved).
+    #[allow(clippy::too_many_arguments)]
+    async fn exec_interactive_map(
+        &self,
+        step: &StepDef,
+        manifest: &AgentManifest,
+        tools: &[types::tool::ToolDefinition],
+        brain: Option<&Arc<dyn Brain>>,
+        kernel_handle: Option<Arc<dyn KernelHandle>>,
+        sender_id: Option<&str>,
+        owner_id: Option<&str>,
+        channel_type: Option<&str>,
+        outputs: &HashMap<String, Value>,
+        input: &Value,
+        agent_name: &str,
+        base_system_prompt: &str,
+        user_message: &str,
+        resume: Option<&ResumeState>,
+    ) -> KernelResult<MapOutcome> {
+        let body_steps = step.body.as_ref().ok_or_else(|| {
+            KernelError::Carrier(CarrierError::Internal(format!(
+                "interactive map step '{}' missing `body`",
+                step.id
+            )))
+        })?;
+        let as_name = step.as_name.as_deref().unwrap_or("item").to_string();
+
+        // Resume: reconstruct iteration state from map_context. Otherwise fresh.
+        let (over, mut current_index, mut collected, mut body_completed, mut resuming_element) =
+            if let Some(mc) = resume.and_then(|r| r.map_context.as_ref()) {
+                if mc.map_step_id == step.id {
+                    (
+                        mc.over.clone(),
+                        mc.current_index,
+                        mc.collected.clone(),
+                        mc.body_completed.clone(),
+                        true,
+                    )
+                } else {
+                    // map_context is for a different map step (defensive): fresh.
+                    let over = render_over_array(step, step.over.as_deref().unwrap_or(""), outputs, input)?;
+                    (over, 0usize, Vec::new(), HashMap::new(), false)
+                }
+            } else {
+                let over_tpl = step.over.as_deref().ok_or_else(|| {
+                    KernelError::Carrier(CarrierError::Internal(format!(
+                        "map step '{}' missing `over`",
+                        step.id
+                    )))
+                })?;
+                let over = render_over_array(step, over_tpl, outputs, input)?;
+                (over, 0usize, Vec::new(), HashMap::new(), false)
+            };
+
+        // When resuming, the body's waiting user_input step + the user's reply.
+        let (body_step_id, user_reply, body_cancel_keywords) = if resuming_element {
+            let bid = resume.unwrap().waiting_step_id.clone();
+            let reply = resume.unwrap().user_reply.clone();
+            let kws = body_steps
+                .iter()
+                .find(|s| s.id == bid)
+                .map(|s| s.cancel_keywords.clone())
+                .unwrap_or_default();
+            (Some(bid), reply, kws)
+        } else {
+            (None, String::new(), Vec::new())
+        };
+
+        let mut acc_usage = TokenUsage::default();
+        let mut acc_iters = 0u32;
+
+        info!(
+            flow = "map",
+            step = %step.id,
+            elements = over.len(),
+            current_index,
+            resuming = resuming_element,
+            "interactive map step iterating"
+        );
+
+        while current_index < over.len() {
+            let element = over[current_index].clone();
+            let body_resume = if resuming_element {
+                Some(BodyResume {
+                    body_completed: body_completed.clone(),
+                    waiting_step_id: body_step_id.clone().unwrap_or_default(),
+                    user_reply: user_reply.clone(),
+                    cancel_keywords: body_cancel_keywords.clone(),
+                })
+            } else {
+                None
+            };
+
+            match self
+                .exec_body_steps(
+                    body_steps,
+                    &as_name,
+                    &element,
+                    manifest,
+                    tools,
+                    brain,
+                    kernel_handle.clone(),
+                    sender_id,
+                    owner_id,
+                    channel_type,
+                    outputs,
+                    input,
+                    agent_name,
+                    base_system_prompt,
+                    user_message,
+                    body_resume.as_ref(),
+                )
+                .await?
+            {
+                BodyOutcome::Done {
+                    outputs: bo,
+                    final_value,
+                    usage,
+                    iterations,
+                } => {
+                    acc_usage.input_tokens += usage.input_tokens;
+                    acc_usage.output_tokens += usage.output_tokens;
+                    acc_iters += iterations;
+                    // A resumed element means the user just replied: a cancel
+                    // decision terminates the whole map (this element is NOT
+                    // collected; prior elements are preserved).
+                    if resuming_element
+                        && body_step_id
+                            .as_deref()
+                            .and_then(|bid| bo.get(bid))
+                            .and_then(|v| v.get("decision"))
+                            .and_then(|v| v.as_str())
+                            == Some("cancel")
+                    {
+                        info!(
+                            flow = "map",
+                            step = %step.id,
+                            current_index,
+                            "interactive map terminated by body cancel"
+                        );
+                        break;
+                    }
+                    collected.push(final_value.unwrap_or(Value::Null));
+                    body_completed.clear();
+                    current_index += 1;
+                    resuming_element = false;
+                }
+                BodyOutcome::Suspended {
+                    question,
+                    step_id,
+                    outputs: bo,
+                    expires_at,
+                    usage,
+                    iterations,
+                } => {
+                    acc_usage.input_tokens += usage.input_tokens;
+                    acc_usage.output_tokens += usage.output_tokens;
+                    acc_iters += iterations;
+                    body_completed = bo;
+                    let mc = MapContext {
+                        map_step_id: step.id.clone(),
+                        over: over.clone(),
+                        current_index,
+                        collected: collected.clone(),
+                        body_completed: body_completed.clone(),
+                        as_name: as_name.clone(),
+                    };
+                    let map_context_json = serde_json::to_string(&mc)
+                        .map_err(|e| KernelError::Carrier(CarrierError::Internal(e.to_string())))?;
+                    info!(
+                        flow = "map",
+                        step = %step.id,
+                        body_step = %step_id,
+                        current_index,
+                        "interactive map suspended at body user_input"
+                    );
+                    return Ok(MapOutcome::Suspended {
+                        question,
+                        body_step_id: step_id,
+                        map_context_json,
+                        expires_at,
+                        usage: acc_usage,
+                        iterations: acc_iters,
+                    });
+                }
+            }
+        }
+
+        info!(
+            flow = "map",
+            step = %step.id,
+            collected = collected.len(),
+            "interactive map step completed"
+        );
+        Ok(MapOutcome::Done(Value::Array(collected), acc_usage, acc_iters))
+    }
+
+    /// Execute one element's inline body steps (the `body: [steps]` of an
+    /// interactive map). Mirrors `run_flow`'s DAG loop (layers, `when` gates,
+    /// skip-completed, resume-inject) but does NOT persist to `flow_runs` or
+    /// append to the canonical session -- the parent map arm owns those.
+    /// Returns `Suspended` when a body `user_input` pauses. Body supports only
+    /// `agent_loop`/`chat`/`user_input` (other kinds error).
+    #[allow(clippy::too_many_arguments)]
+    async fn exec_body_steps(
+        &self,
+        body_steps: &[StepDef],
+        as_name: &str,
+        element: &Value,
+        manifest: &AgentManifest,
+        tools: &[types::tool::ToolDefinition],
+        brain: Option<&Arc<dyn Brain>>,
+        kernel_handle: Option<Arc<dyn KernelHandle>>,
+        sender_id: Option<&str>,
+        owner_id: Option<&str>,
+        channel_type: Option<&str>,
+        parent_outputs: &HashMap<String, Value>,
+        input: &Value,
+        agent_name: &str,
+        base_system_prompt: &str,
+        user_message: &str,
+        resume: Option<&BodyResume>,
+    ) -> KernelResult<BodyOutcome> {
+        // Body render context = parent outputs (for {{ parse_shots }} etc.)
+        // overlaid with body-completed steps, then the current element under
+        // `as_name` (so bare {{ ep.field }} resolves).
+        let mut outputs = parent_outputs.clone();
+        if let Some(r) = resume {
+            for (k, v) in &r.body_completed {
+                outputs.insert(k.clone(), v.clone());
+            }
+        }
+        outputs.insert(as_name.to_string(), element.clone());
+
+        let layers = partition_flow_steps(body_steps)
+            .map_err(|e| KernelError::Carrier(CarrierError::Internal(e)))?;
+        let mut executed_order: Vec<String> = if resume.is_some() {
+            body_steps
+                .iter()
+                .map(|s| s.id.clone())
+                .filter(|id| outputs.contains_key(id))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut total_usage = TokenUsage::default();
+        let mut total_iterations = 0u32;
+
+        for layer in &layers {
+            for step in layer {
+                // `when` gate.
+                if let Some(when) = &step.when {
+                    if !eval_when(when, &outputs, input) {
+                        continue;
+                    }
+                }
+                // Skip already-completed body steps (resume).
+                if outputs.contains_key(&step.id) {
+                    continue;
+                }
+                // Resume-inject: the user's reply becomes the waiting
+                // user_input step's output { decision, text }. No persistence
+                // here (the parent map arm owns flow_runs).
+                if let Some(r) = resume {
+                    if step.id == r.waiting_step_id {
+                        let decision = if decide_cancel(&r.user_reply, &r.cancel_keywords) {
+                            "cancel"
+                        } else {
+                            "proceed"
+                        };
+                        outputs.insert(
+                            step.id.clone(),
+                            serde_json::json!({ "decision": decision, "text": r.user_reply }),
+                        );
+                        executed_order.push(step.id.clone());
+                        continue;
+                    }
+                }
+
+                let kind = step.kind.as_ref().ok_or_else(|| {
+                    KernelError::Carrier(CarrierError::Internal(format!(
+                        "body step '{}' has no kind",
+                        step.id
+                    )))
+                })?;
+                if !matches!(
+                    kind,
+                    StepKind::AgentLoop | StepKind::Chat | StepKind::UserInput
+                ) {
+                    return Err(KernelError::Carrier(CarrierError::Internal(format!(
+                        "body step '{}' kind '{:?}' not yet supported in map body",
+                        step.id, kind
+                    ))));
+                }
+
+                let step_prompt = step
+                    .prompt
+                    .as_deref()
+                    .map(|p| render_template(p, &outputs, input))
+                    .unwrap_or_default();
+                let step_user_msg = if step_prompt.is_empty() {
+                    user_message.to_string()
+                } else {
+                    step_prompt.clone()
+                };
+
+                if *kind == StepKind::UserInput {
+                    let question = if step_prompt.is_empty() {
+                        "请回复以继续。".to_string()
+                    } else {
+                        step_prompt.clone()
+                    };
+                    let timeout_secs = step
+                        .timeout_hours
+                        .map(|h| (h * 3600.0) as u64)
+                        .unwrap_or(self.config.user_input_timeout_secs);
+                    let expires =
+                        chrono::Utc::now() + chrono::Duration::seconds(timeout_secs as i64);
+                    return Ok(BodyOutcome::Suspended {
+                        question,
+                        step_id: step.id.clone(),
+                        outputs,
+                        expires_at: Some(expires.to_rfc3339()),
+                        usage: total_usage,
+                        iterations: total_iterations,
+                    });
+                }
+
+                let (v, u, i) = if *kind == StepKind::AgentLoop {
+                    self.run_step_agent_loop(
+                        step,
+                        &step_prompt,
+                        &step_user_msg,
+                        base_system_prompt,
+                        agent_name,
+                        manifest,
+                        tools,
+                        brain,
+                        kernel_handle.clone(),
+                        sender_id,
+                        owner_id,
+                        channel_type,
+                        &outputs,
+                        input,
+                    )
+                    .await?
+                } else {
+                    // Chat
+                    self.run_step_chat(
+                        step,
+                        &step_user_msg,
+                        base_system_prompt,
+                        brain,
+                        &outputs,
+                        input,
+                    )
+                    .await?
+                };
+                total_usage.input_tokens += u.input_tokens;
+                total_usage.output_tokens += u.output_tokens;
+                total_iterations += i;
+                outputs.insert(step.id.clone(), v);
+                executed_order.push(step.id.clone());
+            }
+        }
+
+        let final_value = executed_order
+            .last()
+            .and_then(|id| outputs.get(id))
+            .cloned();
+        Ok(BodyOutcome::Done {
+            outputs,
+            final_value,
+            usage: total_usage,
+            iterations: total_iterations,
+        })
     }
 
     /// Shared sub-flow invocation for `flow_exec` and `map`. Loads the sub-flow
@@ -674,11 +1290,8 @@ impl CarrierKernel {
         let sub_flow = &sub_match.flow_def;
 
         // Sub-flows invoked via flow_exec cannot suspend (no resume stack).
-        if sub_flow
-            .steps
-            .iter()
-            .any(|s| s.kind.as_ref() == Some(&StepKind::UserInput))
-        {
+        // This includes interactive map bodies (which contain user_input).
+        if flow_contains_user_input(sub_flow) {
             return Err(KernelError::Carrier(CarrierError::Internal(format!(
                 "flow_exec sub-flow '{}' contains a user_input step (not allowed)",
                 flow_name
@@ -837,6 +1450,47 @@ fn has_cycle(
     on_stack.remove(id);
     let _ = HashSet::<String>::new();
     false
+}
+
+/// Render a map step's `over` template and parse it as a JSON array. Errors
+/// clearly if the template does not resolve to an array.
+fn render_over_array(
+    step: &StepDef,
+    over_tpl: &str,
+    outputs: &HashMap<String, Value>,
+    input: &Value,
+) -> KernelResult<Vec<Value>> {
+    let over_str = render_template(over_tpl, outputs, input);
+    serde_json::from_str::<Value>(&over_str)
+        .map_err(|e| {
+            KernelError::Carrier(CarrierError::Internal(format!(
+                "map step '{}' `over` did not resolve to a JSON array: {} (got: {})",
+                step.id, e, over_str
+            )))
+        })?
+        .as_array()
+        .cloned()
+        .ok_or_else(|| {
+            KernelError::Carrier(CarrierError::Internal(format!(
+                "map step '{}' `over` resolved to a non-array",
+                step.id
+            )))
+        })
+}
+
+/// True if a flow contains any `user_input` step, including inside interactive
+/// map `body` blocks (recursive). Used to reject flow_exec sub-flows that would
+/// suspend (no resume stack for sub-flows).
+fn flow_contains_user_input(flow: &FlowDef) -> bool {
+    flow.steps.iter().any(step_or_body_has_user_input)
+}
+
+fn step_or_body_has_user_input(step: &StepDef) -> bool {
+    step.kind.as_ref() == Some(&StepKind::UserInput)
+        || step
+            .body
+            .as_ref()
+            .is_some_and(|body| body.iter().any(step_or_body_has_user_input))
 }
 
 /// Resolve a step's output to a JSON value based on its `output` mode.
@@ -1158,5 +1812,128 @@ mod tests {
         assert_eq!(layers[0][0].id, "gen");
         assert_eq!(layers[1][0].id, "batch");
         assert_eq!(layers[2][0].id, "merge");
+    }
+
+    #[test]
+    fn flow_contains_user_input_detects_body() {
+        use types::flow::FlowDef;
+        // Batch map (no body) -> no user_input.
+        let batch = FlowDef {
+            steps: vec![StepDef {
+                id: "batch".into(),
+                kind: Some(StepKind::Map),
+                over: Some("{{ x }}".into()),
+                flow: Some("sub".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(!flow_contains_user_input(&batch));
+
+        // Interactive map body with user_input -> detected (recursive).
+        let interactive = FlowDef {
+            steps: vec![StepDef {
+                id: "per_ep".into(),
+                kind: Some(StepKind::Map),
+                over: Some("{{ eps }}".into()),
+                body: Some(vec![
+                    StepDef {
+                        id: "write".into(),
+                        kind: Some(StepKind::Chat),
+                        ..Default::default()
+                    },
+                    StepDef {
+                        id: "review".into(),
+                        kind: Some(StepKind::UserInput),
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(flow_contains_user_input(&interactive));
+
+        // Top-level user_input (no body) -> detected.
+        let top = FlowDef {
+            steps: vec![StepDef {
+                id: "review".into(),
+                kind: Some(StepKind::UserInput),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(flow_contains_user_input(&top));
+    }
+
+    #[test]
+    fn partition_handles_map_with_body() {
+        // A map step carrying an inline body still participates in topological
+        // layering; the body steps are NOT part of the top-level DAG.
+        let steps = vec![
+            StepDef {
+                id: "eps".into(),
+                kind: Some(StepKind::Chat),
+                output: Some("json".into()),
+                ..Default::default()
+            },
+            StepDef {
+                id: "per_ep".into(),
+                kind: Some(StepKind::Map),
+                over: Some("{{ eps }}".into()),
+                as_name: Some("ep".into()),
+                depends_on: vec!["eps".into()],
+                body: Some(vec![
+                    StepDef {
+                        id: "write".into(),
+                        kind: Some(StepKind::Chat),
+                        ..Default::default()
+                    },
+                    StepDef {
+                        id: "review".into(),
+                        kind: Some(StepKind::UserInput),
+                        depends_on: vec!["write".into()],
+                        ..Default::default()
+                    },
+                ]),
+                ..Default::default()
+            },
+        ];
+        let layers = partition_flow_steps(&steps).unwrap();
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[0][0].id, "eps");
+        assert_eq!(layers[1][0].id, "per_ep");
+        // Body does not leak into the top-level partition.
+        assert_eq!(layers[1].len(), 1);
+    }
+
+    #[test]
+    fn map_context_roundtrip() {
+        let mc = MapContext {
+            map_step_id: "per_ep".into(),
+            over: vec![serde_json::json!({"index": 1}), serde_json::json!({"index": 2})],
+            current_index: 1,
+            collected: vec![serde_json::json!({"decision": "proceed"})],
+            body_completed: {
+                let mut m = HashMap::new();
+                m.insert("write".into(), Value::String("ep1 text".into()));
+                m
+            },
+            as_name: "ep".into(),
+        };
+        let json = serde_json::to_string(&mc).unwrap();
+        // `as` is the serialized key for as_name.
+        assert!(json.contains("\"as\":\"ep\""));
+        assert!(json.contains("\"current_index\":1"));
+        let back: MapContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.map_step_id, "per_ep");
+        assert_eq!(back.current_index, 1);
+        assert_eq!(back.over.len(), 2);
+        assert_eq!(back.collected.len(), 1);
+        assert_eq!(back.as_name, "ep");
+        assert_eq!(
+            back.body_completed.get("write").and_then(|v| v.as_str()),
+            Some("ep1 text")
+        );
     }
 }

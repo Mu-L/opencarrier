@@ -124,6 +124,11 @@ pub struct StepDef {
     pub over: Option<String>,
     /// Element binding name in `map` step templates (defaults to `"item"`).
     pub as_name: Option<String>,
+    /// Inline steps body for interactive `map` steps (stage E.2). When set, the
+    /// map iterates `over` running this step list per element (may contain
+    /// `user_input`, suspending via `map_context`); when `None`, the map uses
+    /// `flow`/`with` (batch form, stage E.1).
+    pub body: Option<Vec<StepDef>>,
 }
 
 impl StepDef {
@@ -321,6 +326,17 @@ fn parse_steps_block(lines: &[&str], start: usize) -> (Vec<StepDef>, usize) {
         return (Vec::new(), consumed);
     }
 
+    (parse_step_list(&block), consumed)
+}
+
+/// Parse a list of step definitions from a block of `(indent, text)` lines.
+/// Self-contained: computes its own `item_indent`/`field_indent` from the
+/// block, so it can be called recursively for a nested `body:` step list.
+fn parse_step_list(block: &[(usize, String)]) -> Vec<StepDef> {
+    if block.is_empty() {
+        return Vec::new();
+    }
+
     // Items begin with `- ` at the minimum indent among dash-lines.
     let item_indent = block
         .iter()
@@ -331,12 +347,37 @@ fn parse_steps_block(lines: &[&str], start: usize) -> (Vec<StepDef>, usize) {
     let field_indent = item_indent + 2; // fields align after "- "
 
     let mut steps: Vec<StepDef> = Vec::new();
-    // When collecting a block field (depends_on list / with map), holds its name.
+    // When collecting a block field (depends_on list / with map / body step
+    // list), holds its name.
     let mut pending: Option<String> = None;
+    // Buffered lines for a nested `body:` step list (indent > field_indent).
+    let mut body_buf: Vec<(usize, String)> = Vec::new();
 
-    for (indent, text) in &block {
+    /// Flush a completed `body:` sub-block onto the current step.
+    fn flush_body(steps: &mut [StepDef], body_buf: &mut Vec<(usize, String)>) {
+        if let Some(s) = steps.last_mut() {
+            if !body_buf.is_empty() {
+                s.body = Some(parse_step_list(body_buf));
+            }
+        }
+        body_buf.clear();
+    }
+
+    for (indent, text) in block {
         let t = text.as_str();
         let is_dash = t.starts_with('-');
+
+        // While collecting a `body:` step list, absorb deeper-indented lines
+        // until we drop back to field_indent or shallower.
+        if pending.as_deref() == Some("body") {
+            if *indent > field_indent {
+                body_buf.push((*indent, t.to_string()));
+                continue;
+            }
+            // Left the body block: flush it, then process this line normally.
+            flush_body(&mut steps, &mut body_buf);
+            pending = None;
+        }
 
         // New step item: `  - id: draft`
         if *indent == item_indent && is_dash {
@@ -385,7 +426,12 @@ fn parse_steps_block(lines: &[&str], start: usize) -> (Vec<StepDef>, usize) {
         // Anything else (deeper non-matching content) is ignored.
     }
 
-    (steps, consumed)
+    // Flush a `body:` block left open at end of input.
+    if pending.as_deref() == Some("body") {
+        flush_body(&mut steps, &mut body_buf);
+    }
+
+    steps
 }
 
 /// Apply a single `key: value` field to a step. Returns `Some(field_name)` when
@@ -430,6 +476,13 @@ fn apply_step_field(s: &mut StepDef, text: &str) -> Option<String> {
         "flow" => s.flow = (!v.is_empty()).then_some(v),
         "over" => s.over = (!v.is_empty()).then_some(v),
         "as" => s.as_name = (!v.is_empty()).then_some(v),
+        "body" => {
+            // Block form (`body:` on its own line) opens a nested step list
+            // collected by `parse_step_list`; inline form is unsupported.
+            if v.is_empty() {
+                return Some("body".into());
+            }
+        }
         _ => {}
     }
     None
@@ -863,5 +916,77 @@ b"#;
         assert!(!StepKind::Tool.is_executable());
         assert!(StepKind::FlowExec.is_executable());
         assert!(StepKind::Map.is_executable());
+    }
+
+    #[test]
+    fn map_step_with_inline_body_parsed() {
+        let content = r#"---
+name: t
+description: d
+steps:
+  - id: per_ep
+    kind: map
+    over: "{{ eps }}"
+    as: ep
+    body:
+      - id: write
+        kind: agent_loop
+        output: file:out.md
+      - id: review_episode
+        kind: user_input
+        depends_on: [write]
+        prompt: "第{{ep.index}}集写完。继续/停止？"
+        cancel_keywords:
+          - 停止
+          - stop
+---
+b"#;
+        let f = parse_flow_def(content);
+        let s = &f.steps[0];
+        assert_eq!(s.kind, Some(StepKind::Map));
+        assert_eq!(s.over.as_deref(), Some("{{ eps }}"));
+        assert_eq!(s.as_name.as_deref(), Some("ep"));
+        let body = s.body.as_ref().expect("body parsed");
+        assert_eq!(body.len(), 2);
+        assert_eq!(body[0].id, "write");
+        assert_eq!(body[0].kind, Some(StepKind::AgentLoop));
+        assert_eq!(body[0].output.as_deref(), Some("file:out.md"));
+        assert_eq!(body[1].id, "review_episode");
+        assert_eq!(body[1].kind, Some(StepKind::UserInput));
+        assert_eq!(body[1].depends_on, vec!["write"]);
+        assert_eq!(body[1].cancel_keywords, vec!["停止", "stop"]);
+        assert_eq!(body[1].prompt.as_deref(), Some("第{{ep.index}}集写完。继续/停止？"));
+    }
+
+    #[test]
+    fn map_step_with_block_field_after_body() {
+        // A top-level field (`depends_on`) after the `body:` block must close
+        // the body correctly and still be parsed.
+        let content = r#"---
+name: t
+description: d
+steps:
+  - id: eps
+    kind: chat
+    output: json
+  - id: per_ep
+    kind: map
+    over: "{{ eps }}"
+    as: ep
+    body:
+      - id: write
+        kind: chat
+      - id: review
+        kind: user_input
+    depends_on: [eps]
+final: per_ep
+---
+b"#;
+        let f = parse_flow_def(content);
+        assert_eq!(f.steps.len(), 2);
+        let per_ep = f.steps.iter().find(|s| s.id == "per_ep").unwrap();
+        assert_eq!(per_ep.body.as_ref().unwrap().len(), 2);
+        assert_eq!(per_ep.depends_on, vec!["eps"]);
+        assert_eq!(f.final_step.as_deref(), Some("per_ep"));
     }
 }

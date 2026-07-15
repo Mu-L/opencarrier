@@ -1141,6 +1141,14 @@ impl CarrierKernel {
                     .find(|s| s.id == waiting_step_id)
                     .map(|s| s.cancel_keywords.clone())
                     .unwrap_or_default();
+                // map_context is set when the waiting step is inside an
+                // interactive map body (stage E.2); None for a top-level
+                // user_input. exec_interactive_map recomputes body cancel
+                // keywords itself, so cancel_keywords stays empty here.
+                let map_context = rf
+                    .map_context
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str::<crate::flow_runner::MapContext>(s).ok());
                 info!(agent = %entry.name, flow = %fm.name, run_id = %rf.run_id, step = %waiting_step_id, "Resuming suspended flow");
                 crate::flow_runner::ResumeState {
                     run_id: rf.run_id.clone(),
@@ -1148,6 +1156,7 @@ impl CarrierKernel {
                     waiting_step_id,
                     user_reply: message_with_links.clone(),
                     cancel_keywords,
+                    map_context,
                 }
             });
             info!(
