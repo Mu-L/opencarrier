@@ -158,7 +158,11 @@ fn parse_notify_markers(text: &str) -> (Vec<(String, String)>, String) {
 /// it here also stops the literal marker from ever reaching a user on any
 /// channel. Whole-text match only (after trimming brackets), so a real reply
 /// that merely contains the phrase is untouched.
-fn is_no_reply_sentinel(text: &str) -> bool {
+///
+/// Called from BOTH delivery sinks: the interactive `send_response` path and
+/// the cron `cron_deliver_response` path (kernel/daemon.rs), so a scheduled
+/// turn that resolves to "no reply" is suppressed everywhere — not just inline.
+pub fn is_no_reply_sentinel(text: &str) -> bool {
     let t = text.trim();
     let inner = t
         .trim_start_matches(['[', '【'])

@@ -15,6 +15,53 @@ use crate::kernel::CarrierKernel;
 
 // ── Cron delivery helper ───────────────────────────────────
 
+/// Turn a free-form cron job name into a path/key-safe slug.
+///
+/// `job.name` may contain CJK, punctuation, spaces, etc. (validate only rejects
+/// control chars) so agents can name jobs naturally — e.g. "发布第二篇：OpenAI
+/// 硬件". But the name is interpolated into `task_id` (used as a message
+/// identity/dedup key AND as the agent's output-path template `output/{tid}/`
+/// in prompt_builder.rs) and into the event `type` string `cron.{name}`. Path
+/// separators (`/`, `\`), `..`, ASCII `:`, spaces, and other path/identifier-
+/// hostile chars would corrupt those, so replace them with `-`. CJK, letters,
+/// digits, and emoji are kept (the filesystem sandbox is UTF-8 clean). The
+/// original name is still used verbatim for logs/display.
+fn slugify(name: &str) -> String {
+    let mut s = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_control() {
+            continue;
+        }
+        if matches!(c, '/' | '\\' | ':' | ' ' | '.' | '<' | '>' | '"' | '|' | '?' | '*') {
+            s.push('-');
+        } else {
+            s.push(c);
+        }
+    }
+    // Collapse runs of '-' and trim leading/trailing '-'.
+    let mut out = String::with_capacity(s.len());
+    let mut prev_dash = false;
+    for c in s.chars() {
+        if c == '-' {
+            if !prev_dash && !out.is_empty() {
+                out.push('-');
+            }
+            prev_dash = true;
+        } else {
+            out.push(c);
+            prev_dash = false;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "job".to_string()
+    } else {
+        out
+    }
+}
+
 /// Fire a single cron job (system event or agent turn), recording success/failure.
 pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
     let job_id = job.id;
@@ -25,7 +72,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
         types::scheduler::CronAction::SystemEvent { text } => {
             tracing::debug!(job = %job_name, "Cron: firing system event");
             let payload_bytes = serde_json::to_vec(&serde_json::json!({
-                "type": format!("cron.{}", job_name),
+                "type": format!("cron.{}", slugify(&job_name)),
                 "text": text,
                 "job_id": job_id.to_string(),
             }))
@@ -48,10 +95,13 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
             let timeout = std::time::Duration::from_secs(timeout_s);
             let delivery = job.delivery.clone();
             let owner_id = job.owner_id.clone();
-            // Generate task_id: {job_name}-{YYYYMMDD}
+            // Generate task_id: {job_name slug}-{YYYYMMDD}. The name is slugified
+            // because task_id is used as an identity/dedup key and interpolated
+            // into the agent's output-path template (`output/{tid}/`); raw name
+            // chars like `/` or `:` would corrupt paths and keys.
             let task_id = format!(
                 "{}-{}",
-                job_name,
+                slugify(&job_name),
                 chrono::Local::now().format("%Y%m%d")
             );
             tracing::info!(job = %job_name, task_id = %task_id, "Cron: generated task_id");
@@ -182,6 +232,20 @@ pub(super) async fn cron_deliver_response(
         return Ok(());
     }
     let response = cleaned.as_str();
+
+    // Suppress no-reply sentinels on the cron path too — same convention as the
+    // interactive send_response path (bridge.rs). A scheduled turn that resolves
+    // to "no reply" (e.g. a flow's final step emitting `[no reply needed]`, or a
+    // non-LLM agent printing it) would otherwise ship the literal marker to
+    // 客服消息 (45015) or the webhook. PUBLISH markers above already fired, so
+    // only the final text send is skipped.
+    if runtime::plugin::bridge::is_no_reply_sentinel(response) {
+        tracing::info!(
+            agent = %agent_id,
+            "Cron suppressing no-reply sentinel — not sending to channel"
+        );
+        return Ok(());
+    }
 
     match delivery {
         CronDelivery::None => Ok(()),
@@ -861,5 +925,46 @@ impl CarrierKernel {
                     }
                 })
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slugify;
+
+    #[test]
+    fn slugify_keeps_cjk_and_strips_path_chars() {
+        // The motivating case: a naturally-named Chinese job must become a safe
+        // task_id / event-type segment. ASCII path-hostile chars (here the
+        // space) collapse to `-`; CJK and full-width punctuation (`：`, `（）`)
+        // are kept — they're UTF-8-safe in paths and harmless in event types.
+        assert_eq!(
+            slugify("发布第二篇：OpenAI 硬件（2026）"),
+            "发布第二篇：OpenAI-硬件（2026）"
+        );
+    }
+
+    #[test]
+    fn slugify_neutralizes_traversal_and_separators() {
+        // `/`, `\`, `..`, ASCII `:` — none may survive into a path template or
+        // an event-type string.
+        assert_eq!(slugify("a/../../etc"), "a-etc");
+        assert_eq!(slugify("x\\y"), "x-y");
+        assert_eq!(slugify("a:b"), "a-b");
+        assert_eq!(slugify("v1.2"), "v1-2");
+    }
+
+    #[test]
+    fn slugify_ascii_passthrough() {
+        // An already-safe ASCII name (the historical whitelist form) is a no-op.
+        assert_eq!(slugify("daily-report"), "daily-report");
+        assert_eq!(slugify("job_42"), "job_42");
+    }
+
+    #[test]
+    fn slugify_collapses_and_trims_dashes() {
+        assert_eq!(slugify("a   b"), "a-b"); // spaces collapse
+        assert_eq!(slugify("--weird--"), "weird"); // leading/trailing trimmed
+        assert_eq!(slugify("   "), "job"); // all-hostile -> fallback
     }
 }
