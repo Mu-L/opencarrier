@@ -917,7 +917,28 @@ impl CarrierKernel {
             .start_agent(agent_id, name, schedule, move |aid, msg| {
                 let k = Arc::clone(&kernel);
                 tokio::spawn(async move {
-                    match k.send_message(aid, &msg).await {
+                    // Background ticks are agent-autonomous (no user/sender); give
+                    // them an explicit `task:autonomous` label so the session is
+                    // traceable instead of falling back to an unlabeled orphan.
+                    let handle: Option<std::sync::Arc<dyn runtime::kernel_handle::KernelHandle>> = k
+                        .coordination
+                        .self_handle
+                        .get()
+                        .and_then(|w| w.upgrade())
+                        .map(|a| a as std::sync::Arc<dyn runtime::kernel_handle::KernelHandle>);
+                    match k
+                        .send_message_with_handle(
+                            aid,
+                            &msg,
+                            handle,
+                            None,
+                            None,
+                            None,
+                            None,
+                            Some("autonomous".to_string()),
+                        )
+                        .await
+                    {
                         Ok(_) => {}
                         Err(e) => {
                             warn!(agent_id = %aid, error = %e, "Background tick failed");

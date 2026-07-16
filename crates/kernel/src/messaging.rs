@@ -57,36 +57,50 @@ impl CarrierKernel {
         task_id: Option<&str>,
         resume_flow: Option<&memory::FlowRunRow>,
     ) -> KernelResult<PreparedContext> {
-        // Load session: per-user when sender_id is present (multi-tenancy),
-        // otherwise use the agent's default session.
-        let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
-        let session = if let Some(ref sid) = sender_id {
-            let user_label = format!("user:{}", sid);
+        let agent_name = self
+            .registry
+            .get(agent_id)
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| agent_id.to_string());
+        // Session isolation: every session MUST carry a traceable label.
+        // Priority: sender_id (user:<openid>) > task_id > owner_id > channel_type.
+        // There is NO silent fallback to an unlabeled "default" session — that
+        // fallback was the source of orphan sessions: calls with no sender (cron
+        // jobs without sender_id, background ticks, webhooks) all landed on the
+        // agent's label=None default session, piling up invisible, untraceable
+        // rows (wechat-writer had 48 of them). If none of the identifiers is
+        // present, hard-error so the call site is forced to pass an explicit
+        // label rather than silently corrupting session isolation.
+        let session = {
+            let label = if let Some(ref sid) = sender_id {
+                format!("user:{}", sid)
+            } else if let Some(t) = task_id {
+                format!("task:{}", t)
+            } else if let Some(ref o) = owner_id {
+                format!("owner:{}", o)
+            } else if let Some(ref c) = channel_type {
+                format!("channel:{}", c)
+            } else {
+                warn!(
+                    agent_id = %agent_id,
+                    "Session isolation: sender_id/task_id/owner_id/channel_type all None — refusing to create unlabeled (orphan) session"
+                );
+                return Err(KernelError::Carrier(CarrierError::InvalidInput(
+                    "cannot determine session label: sender_id/task_id/owner_id/channel_type all missing — pass an explicit label at the call site".into(),
+                )));
+            };
             match self
                 .memory
-                .find_session_by_label_async(&agent_name, &user_label)
+                .find_session_by_label_async(&agent_name, &label)
                 .await
                 .map_err(KernelError::Carrier)?
             {
                 Some(s) => s,
                 None => self
                     .memory
-                    .create_session_with_label(agent_name.clone(), Some(&user_label))
+                    .create_session_with_label(agent_name.clone(), Some(&label))
                     .map_err(KernelError::Carrier)?,
             }
-        } else {
-            self.memory
-                .get_session_async(entry.session_id)
-                .await
-                .map_err(KernelError::Carrier)?
-                .unwrap_or_else(|| memory::session::Session {
-                    id: entry.session_id,
-                    agent_name: agent_name.clone(),
-                    messages: Vec::new(),
-                    context_window_tokens: 0,
-                    turn_summaries: Vec::new(),
-                    label: None,
-                })
         };
 
         // Check if auto-compaction is needed

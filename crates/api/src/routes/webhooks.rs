@@ -149,8 +149,24 @@ pub async fn webhook_agent(
         }
     };
 
-    // Actually send the message to the agent and get the response
-    match state.kernel.send_message(agent_id, &body.message).await {
+    // Actually send the message to the agent and get the response.
+    // Webhook triggers carry no human sender — label the session
+    // `channel:webhook` so it stays traceable (no unlabeled orphan).
+    let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
+    match state
+        .kernel
+        .send_message_with_handle(
+            agent_id,
+            &body.message,
+            Some(kernel_handle),
+            None,
+            None,
+            None,
+            Some("webhook".to_string()),
+            None,
+        )
+        .await
+    {
         Ok(result) => (
             StatusCode::OK,
             Json(serde_json::json!({

@@ -8,6 +8,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use std::collections::HashMap;
 use std::sync::Arc;
+use runtime::kernel_handle::KernelHandle;
 // ---------------------------------------------------------------------------
 // Agent Communication (Comms) endpoints
 // ---------------------------------------------------------------------------
@@ -339,7 +340,23 @@ pub async fn comms_send(
         );
     }
 
-    match state.kernel.send_message(to_id, &req.message).await {
+    // Agent-to-agent comms carry no human sender — label the session
+    // `channel:comms` so it stays traceable (no unlabeled orphan).
+    let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
+    match state
+        .kernel
+        .send_message_with_handle(
+            to_id,
+            &req.message,
+            Some(kernel_handle),
+            None,
+            None,
+            None,
+            Some("comms".to_string()),
+            None,
+        )
+        .await
+    {
         Ok(result) => (
             StatusCode::OK,
             Json(serde_json::json!({
