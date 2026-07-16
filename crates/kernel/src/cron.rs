@@ -147,8 +147,8 @@ impl CronScheduler {
         job.validate(agent_count)
             .map_err(CarrierError::InvalidInput)?;
 
-        // Compute initial next_run
-        job.next_run = Some(compute_next_run(&job.schedule));
+        // Compute initial next_run (a past-due `At` job fires immediately once)
+        job.next_run = Some(initial_next_run(&job.schedule));
 
         let id = job.id;
         self.jobs.insert(id, JobMeta::new(job, one_shot));
@@ -171,7 +171,7 @@ impl CronScheduler {
                 meta.job.enabled = enabled;
                 if enabled {
                     meta.consecutive_errors = 0;
-                    meta.job.next_run = Some(compute_next_run(&meta.job.schedule));
+                    meta.job.next_run = Some(initial_next_run(&meta.job.schedule));
                 }
                 Ok(())
             }
@@ -372,6 +372,25 @@ impl CronScheduler {
 ///   7-field format required by the `cron` crate.
 pub fn compute_next_run(schedule: &CronSchedule) -> chrono::DateTime<Utc> {
     compute_next_run_after(schedule, Utc::now())
+}
+
+/// Initial `next_run` for a newly-created or re-enabled job.
+///
+/// A one-shot `At` job whose time has already passed fires **immediately**
+/// (once) instead of being silently dead-on-arrival. Without this, any latency
+/// between the agent scheduling "fire at T" and the job being registered makes
+/// `at <= now`, and `compute_next_run_after` would sentinel it to +100y (never
+/// fire) — so pipeline-style schedules (e.g. "publish article 2 at 10:05")
+/// silently never run. Recurring schedules use the normal computation.
+///
+/// Re-fire safety is unaffected: `due_jobs` pre-advances via
+/// `compute_next_run_after` (At-past → +100y sentinel) and `record_success`
+/// removes one-shot jobs, so a past-`At` job still fires exactly once.
+fn initial_next_run(schedule: &CronSchedule) -> chrono::DateTime<Utc> {
+    match schedule {
+        CronSchedule::At { at } if *at <= Utc::now() => Utc::now(),
+        _ => compute_next_run(schedule),
+    }
 }
 
 /// Compute the next fire time for a schedule, strictly after `after`.
@@ -876,6 +895,28 @@ mod tests {
             "Expected next_run at least 1 min away, got {} seconds",
             diff.num_seconds()
         );
+    }
+
+    #[test]
+    fn test_initial_next_run_past_at_fires_immediately() {
+        // A one-shot `At` job whose time already passed must fire immediately
+        // (next_run ~= now), not be sentineled to +100y (never fire) — that was
+        // the dead-on-arrival bug for pipeline schedules like "publish at 10:05".
+        let now = Utc::now();
+        let past = CronSchedule::At {
+            at: now - Duration::seconds(60),
+        };
+        let next = initial_next_run(&past);
+        assert!(
+            next <= Utc::now(),
+            "past At job should fire immediately (now-ish), got {next}"
+        );
+
+        // A future `At` job keeps its scheduled time.
+        let future = CronSchedule::At {
+            at: now + Duration::hours(1),
+        };
+        assert_eq!(initial_next_run(&future), now + Duration::hours(1));
     }
 
     #[test]

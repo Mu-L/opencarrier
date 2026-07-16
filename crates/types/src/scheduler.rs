@@ -202,15 +202,13 @@ impl CronJob {
                 self.name.len()
             ));
         }
-        if !self
-            .name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == ' ' || c == '-' || c == '_')
-        {
-            return Err(
-                "name may only contain alphanumeric characters, spaces, hyphens, and underscores"
-                    .into(),
-            );
+        // Names are free-form labels (stored parameterized in SQLite, never used
+        // as a filename/path/shell arg). Reject only control characters (which
+        // would corrupt logs/listings); allow all letters, digits, punctuation,
+        // and emoji — including CJK and Chinese punctuation — so agents can name
+        // jobs naturally (e.g. "发布第二篇：OpenAI 硬件").
+        if self.name.chars().any(|c| c.is_control()) {
+            return Err("name may not contain control characters".into());
         }
 
         // -- schedule --
@@ -437,11 +435,27 @@ mod tests {
     }
 
     #[test]
-    fn name_special_chars_rejected() {
+    fn name_special_chars_ok() {
+        // Punctuation, CJK, and Chinese punctuation are all valid now — names are
+        // free-form labels, not identifiers.
         let mut job = valid_job();
         job.name = "my job!".into();
+        assert!(job.validate(0).is_ok());
+        job.name = "发布第二篇：OpenAI 硬件（2026）".into();
+        assert!(job.validate(0).is_ok());
+        job.name = "article-2 / WAIC".into();
+        assert!(job.validate(0).is_ok());
+    }
+
+    #[test]
+    fn name_control_chars_rejected() {
+        let mut job = valid_job();
+        job.name = "job\nwith newline".into();
         let err = job.validate(0).unwrap_err();
-        assert!(err.contains("alphanumeric"), "{err}");
+        assert!(err.contains("control characters"), "{err}");
+        job.name = "bad\0null".into();
+        let err = job.validate(0).unwrap_err();
+        assert!(err.contains("control characters"), "{err}");
     }
 
     #[test]
