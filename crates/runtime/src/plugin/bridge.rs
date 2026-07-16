@@ -147,6 +147,37 @@ fn parse_notify_markers(text: &str) -> (Vec<(String, String)>, String) {
     parse_markers(text, "[NOTIFY:", "[/NOTIFY]")
 }
 
+/// Does this agent reply text mean "no reply should be sent to the user"?
+///
+/// Agents/flows signal an intentional no-reply by emitting a sentinel token as
+/// the *entire* reply (`[no reply needed]`, `[no_reply_needed]`, `[无需回复]`,
+/// `NO_REPLY`, …). When the WeChat OA 客服消息 48h window is closed — which is
+/// the common case for event-triggered turns (card clicks, page views) that
+/// don't carry a real user message — shipping that sentinel via the customer-
+/// send API yields error 45015 and spams the logs (~dozens/day). Suppressing
+/// it here also stops the literal marker from ever reaching a user on any
+/// channel. Whole-text match only (after trimming brackets), so a real reply
+/// that merely contains the phrase is untouched.
+fn is_no_reply_sentinel(text: &str) -> bool {
+    let t = text.trim();
+    let inner = t
+        .trim_start_matches(['[', '【'])
+        .trim_end_matches([']', '】'])
+        .trim()
+        .to_lowercase();
+    // Normalize underscores to spaces so `[no_reply_needed]` == `[no reply needed]`.
+    let inner = inner.replace('_', " ");
+    matches!(
+        inner.as_str(),
+        "no reply needed"
+            | "no reply"
+            | "noreply"
+            | "no reply required"
+            | "无需回复"
+            | "无需答复"
+    )
+}
+
 /// Parse `[PUBLISH:app_id]html_path[/PUBLISH]` markers from agent reply text.
 /// Triggers the reliable publish handler (cover → draft → publish) for each.
 fn parse_publish_markers(text: &str) -> (Vec<(String, String)>, String) {
@@ -1190,6 +1221,22 @@ impl PluginBridgeManager {
         }
 
         let response = final_cleaned.as_str();
+
+        // Suppress no-reply sentinels: the agent/flow intentionally chose not to
+        // reply. Sending the literal marker would either 45015 on WeChat 客服消息
+        // (48h window closed, common for event-triggered turns) or deliver the
+        // marker text itself to the user. NOTIFY/PUBLISH directives above still
+        // fire — only the final text send is skipped.
+        if is_no_reply_sentinel(response) {
+            info!(
+                channel = %original.channel_type,
+                bot = %original.bot_id,
+                sender = %original.sender_id,
+                "Bridge suppressing no-reply sentinel — not sending to channel"
+            );
+            return;
+        }
+
         info!(
             channel = %original.channel_type,
             bot = %original.bot_id,
@@ -1228,5 +1275,41 @@ impl PluginBridgeManager {
                 "No channel send function set, cannot send response"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_no_reply_sentinel;
+
+    #[test]
+    fn detects_no_reply_sentinels() {
+        // Space form — injected by end_turn.rs (`[no reply needed]`).
+        assert!(is_no_reply_sentinel("[no reply needed]"));
+        assert!(is_no_reply_sentinel("  [no reply needed]  "));
+        // Underscore form — emitted by flows/agents.
+        assert!(is_no_reply_sentinel("[no_reply_needed]"));
+        assert!(is_no_reply_needed_bare());
+        // Chinese form.
+        assert!(is_no_reply_sentinel("[无需回复]"));
+        // Bare token (no brackets).
+        assert!(is_no_reply_sentinel("NO_REPLY"));
+        assert!(is_no_reply_sentinel("noreply"));
+        // Full-width brackets.
+        assert!(is_no_reply_sentinel("【无需回复】"));
+    }
+
+    // Separate helper only to keep the assertion list readable.
+    fn is_no_reply_needed_bare() -> bool {
+        is_no_reply_sentinel("no_reply_needed")
+    }
+
+    #[test]
+    fn leaves_real_replies_untouched() {
+        // A real reply that merely mentions the phrase must NOT be suppressed.
+        assert!(!is_no_reply_sentinel("这是咱们的月票，点开小程序就能看详情"));
+        assert!(!is_no_reply_sentinel("Sure, no reply needed from me, but here's the answer: 42"));
+        assert!(!is_no_reply_sentinel(""));
+        assert!(!is_no_reply_sentinel("ok"));
     }
 }
