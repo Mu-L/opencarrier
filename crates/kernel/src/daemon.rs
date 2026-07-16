@@ -147,7 +147,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
 ///   proactive push or if the send attempt fails.
 /// - `Webhook`: HTTP POST to the configured URL.
 pub(super) async fn cron_deliver_response(
-    kernel: &CarrierKernel,
+    kernel: &Arc<CarrierKernel>,
     agent_id: AgentId,
     owner_id: Option<&str>,
     response: &str,
@@ -158,6 +158,30 @@ pub(super) async fn cron_deliver_response(
     if response.is_empty() {
         return Ok(());
     }
+
+    // Process [PUBLISH] markers the same way interactive replies do, so
+    // cron-triggered publishes actually create drafts (previously this path
+    // shipped the raw marker text to the channel and never published). The
+    // follow-up uses the sender's last known channel if any; the draft itself
+    // is created via the kernel regardless of delivery target.
+    let sender_id = owner_id.unwrap_or("");
+    let (pchannel, pbot, psend_fn) = cron_publish_followup_target(kernel, sender_id);
+    let kh: std::sync::Arc<dyn runtime::kernel_handle::KernelHandle> = kernel.clone();
+    let cleaned = runtime::plugin::bridge::process_publish_markers(
+        kh,
+        psend_fn,
+        &pchannel,
+        &pbot,
+        sender_id,
+        &agent_id.to_string(),
+        response,
+    );
+    // If the response was only publish markers, the draft was created and
+    // there's nothing left to deliver to the user.
+    if cleaned.trim().is_empty() {
+        return Ok(());
+    }
+    let response = cleaned.as_str();
 
     match delivery {
         CronDelivery::None => Ok(()),
@@ -189,11 +213,39 @@ pub(super) async fn cron_deliver_response(
     }
 }
 
+/// Best-effort channel target for a cron publish *follow-up* notification.
+///
+/// The publish draft itself is created via the kernel/WeChat API and needs no
+/// channel; this only routes the post-publish success/failure message. Returns
+/// the sender's last known `(channel_type, bot_id)` if we have one, plus the
+/// channel send fn. When there's no known channel the follow-up is skipped
+/// (empty strings) but publishing still proceeds.
+fn cron_publish_followup_target(
+    kernel: &Arc<CarrierKernel>,
+    sender_id: &str,
+) -> (String, String, Option<runtime::plugin::bridge::ChannelSendFn>) {
+    let last = kernel
+        .memory
+        .cron_delivery()
+        .get_last_channel(sender_id)
+        .ok()
+        .flatten();
+    let send_fn = kernel
+        .channel_send_fn
+        .read()
+        .ok()
+        .and_then(|g| g.clone());
+    match last {
+        Some(c) => (c.channel_type, c.bot_id, send_fn),
+        None => (String::new(), String::new(), send_fn),
+    }
+}
+
 /// Deliver a notification to the sender's most recent channel. Attempts a
 /// proactive push first; on failure (or for channels that don't support push)
 /// the notification is buffered for delivery on the next inbound message.
 async fn deliver_via_last_channel(
-    kernel: &CarrierKernel,
+    kernel: &Arc<CarrierKernel>,
     agent_id: AgentId,
     sender_id: &str,
     response: &str,

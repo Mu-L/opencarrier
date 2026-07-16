@@ -194,6 +194,58 @@ fn parse_publish_content(content: &str) -> (String, Option<String>, Option<Strin
     (html_path, title, digest)
 }
 
+/// Process `[PUBLISH:app_id]html_path[/PUBLISH]` markers in an agent reply.
+///
+/// For each marker, spawns the reliable publish handler (cover → draft →
+/// publish) in the background; the marker is stripped from the text. Returns
+/// the cleaned text with all PUBLISH markers removed.
+///
+/// `send_fn` + channel routing are only used for the post-publish follow-up
+/// notification — the draft itself is created via the kernel/WeChat API, so
+/// passing `send_fn = None` still publishes (just without a follow-up message).
+///
+/// Shared by both the interactive reply path (`send_response`) and the cron
+/// delivery path (`cron_deliver_response`), so scheduled publishes create
+/// drafts exactly like inline ones (previously cron bypassed this and the
+/// marker was shipped as raw text, never publishing).
+pub fn process_publish_markers(
+    kernel: std::sync::Arc<dyn KernelHandle>,
+    send_fn: Option<ChannelSendFn>,
+    channel_type: &str,
+    bot_id: &str,
+    sender_id: &str,
+    agent_id: &str,
+    response: &str,
+) -> String {
+    let (publishes, cleaned) = parse_publish_markers(response);
+    for (app_id, content) in &publishes {
+        // Parse "html_path|title|digest" — title and digest are optional.
+        let (html_path, explicit_title, digest) = parse_publish_content(content);
+        let digest = digest.filter(|d| !d.is_empty());
+        info!(
+            %app_id, %html_path, title_provided = explicit_title.is_some(),
+            digest_provided = digest.is_some(), %agent_id,
+            "PUBLISH marker matched, spawning publish handler"
+        );
+        let kernel = kernel.clone();
+        let send_fn = send_fn.clone();
+        let channel_type = channel_type.to_string();
+        let bot_id = bot_id.to_string();
+        let sender_id = sender_id.to_string();
+        let agent_id = agent_id.to_string();
+        let app_id = app_id.clone();
+        let html_path = html_path.clone();
+        tokio::spawn(async move {
+            handle_publish_marker(
+                kernel, send_fn, &channel_type, &bot_id, &sender_id,
+                &app_id, &html_path, explicit_title.as_deref(), digest.as_deref(), &agent_id,
+            )
+            .await;
+        });
+    }
+    cleaned
+}
+
 /// Read the app_secret for `app_id` from the sender's own profile.json
 /// (preferences.wechat_accounts array). Multi-user: each user's OA credentials
 /// live in their own directory; find the matching entry by app_id. Returns
@@ -1191,34 +1243,15 @@ impl PluginBridgeManager {
         // reliable publish handler (cover → draft → publish) in the background;
         // the marker is stripped from the user-facing reply and the result is
         // pushed as a follow-up message when the publish completes.
-        let (publishes, final_cleaned) = parse_publish_markers(&cleaned);
-        if !publishes.is_empty() {
-            for (app_id, content) in &publishes {
-                let kernel = self.kernel.clone();
-                let send_fn = self.channel_send_fn.clone();
-                let channel_type = original.channel_type.clone();
-                let bot_id = original.bot_id.clone();
-                let sender_id = original.sender_id.clone();
-                let agent_id = self.resolve_agent(original);
-                let app_id = app_id.clone();
-                // Parse "html_path|title|digest" — title and digest are optional.
-                // Examples: "article.html", "article.html|My Title", "article.html|My Title|Summary text"
-                let (html_path, explicit_title, digest) = parse_publish_content(content);
-                let digest = digest.filter(|d| !d.is_empty());
-                info!(
-                    %app_id, %html_path, title_provided = explicit_title.is_some(),
-                    digest_provided = digest.is_some(), %agent_id,
-                    "PUBLISH marker matched, spawning publish handler"
-                );
-                tokio::spawn(async move {
-                    handle_publish_marker(
-                        kernel, send_fn, &channel_type, &bot_id, &sender_id,
-                        &app_id, &html_path, explicit_title.as_deref(), digest.as_deref(), &agent_id,
-                    )
-                    .await;
-                });
-            }
-        }
+        let final_cleaned = process_publish_markers(
+            self.kernel.clone(),
+            self.channel_send_fn.clone(),
+            &original.channel_type,
+            &original.bot_id,
+            &original.sender_id,
+            &self.resolve_agent(original),
+            &cleaned,
+        );
 
         let response = final_cleaned.as_str();
 
@@ -1280,7 +1313,7 @@ impl PluginBridgeManager {
 
 #[cfg(test)]
 mod tests {
-    use super::is_no_reply_sentinel;
+    use super::{is_no_reply_sentinel, parse_publish_markers};
 
     #[test]
     fn detects_no_reply_sentinels() {
@@ -1311,5 +1344,25 @@ mod tests {
         assert!(!is_no_reply_sentinel("Sure, no reply needed from me, but here's the answer: 42"));
         assert!(!is_no_reply_sentinel(""));
         assert!(!is_no_reply_sentinel("ok"));
+    }
+
+    #[test]
+    fn publish_markers_are_stripped_from_text() {
+        // process_publish_markers must strip [PUBLISH] markers so the cron path
+        // delivers clean text (and the interactive path doesn't leak markers).
+        // We test the underlying parse, since the spawn needs a live kernel.
+        let (publishes, cleaned) = parse_publish_markers(
+            "文章已写好\n[PUBLISH:wxc8fbad41f075853c]output/x/正文.html[/PUBLISH]\n结尾",
+        );
+        assert_eq!(publishes.len(), 1);
+        assert_eq!(publishes[0].0, "wxc8fbad41f075853c");
+        assert_eq!(publishes[0].1, "output/x/正文.html");
+        assert!(!cleaned.contains("PUBLISH"), "marker must be stripped: {cleaned}");
+        assert!(cleaned.contains("文章已写好") && cleaned.contains("结尾"));
+
+        // No markers → text unchanged.
+        let (none, same) = parse_publish_markers("plain reply");
+        assert!(none.is_empty());
+        assert_eq!(same, "plain reply");
     }
 }
