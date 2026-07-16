@@ -409,7 +409,13 @@ pub fn compute_next_run_after(
             if *at > after {
                 *at
             } else {
-                tracing::warn!(?at, "At schedule time is in the past, job will never fire");
+                // `at` has passed. With `initial_next_run`, a past-`At` job
+                // fires immediately at create/enable time, so reaching here
+                // almost always means the job ALREADY fired and `due_jobs` is
+                // advancing it past its time — sentinel it to +100y so a
+                // one-shot never re-fires. Debug, not warn: this is the normal
+                // post-fire advance path now, not a dead-on-arrival job.
+                tracing::debug!(?at, "At time passed, sentineled to never re-fire");
                 after + Duration::days(36500)
             }
         }
