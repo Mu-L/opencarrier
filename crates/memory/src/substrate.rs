@@ -447,6 +447,23 @@ impl MemorySubstrate {
             .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
 
+    /// Async wrapper for find_active_session_by_label (staleness-windowed).
+    pub async fn find_active_session_by_label_async(
+        &self,
+        agent_id: &str,
+        label: &str,
+        stale_secs: i64,
+    ) -> CarrierResult<Option<Session>> {
+        let sessions = self.sessions.clone();
+        let agent_id = agent_id.to_string();
+        let label = label.to_string();
+        tokio::task::spawn_blocking(move || {
+            sessions.find_active_session_by_label(&agent_id, &label, stale_secs)
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
     /// List all sessions for a specific agent.
     pub fn list_agent_sessions(&self, agent_id: &str) -> CarrierResult<Vec<serde_json::Value>> {
         self.sessions.list_agent_sessions(agent_id)

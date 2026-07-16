@@ -21,6 +21,13 @@ use crate::kernel::CarrierKernel;
 use crate::prompt_sources::touch_user_profile;
 use crate::workspace::append_daily_memory_log;
 
+/// A session whose last activity is older than this is treated as stale: the
+/// next inbound message starts a fresh session instead of appending to the old
+/// one. Stops a single sender's unrelated tasks from piling up across days
+/// into one bloated, cross-contaminated session (the o9cq80yV failure mode:
+/// one openid, two months, a dozen unrelated tasks in one 45-message session).
+const SESSION_STALE_SECS: i64 = 12 * 60 * 60; // 12 hours
+
 /// Shared preparation context for LLM agent execution.
 ///
 /// Both `send_message_streaming` and `execute_llm_agent` perform the same
@@ -89,9 +96,13 @@ impl CarrierKernel {
                     "cannot determine session label: sender_id/task_id/owner_id/channel_type all missing — pass an explicit label at the call site".into(),
                 )));
             };
+            // Windowed lookup: only resume a session updated within the
+            // staleness window. A sender returning after the window starts a
+            // fresh session (the old one stays archived-in-place, out of the
+            // active window) — see SESSION_STALE_SECS.
             match self
                 .memory
-                .find_session_by_label_async(&agent_name, &label)
+                .find_active_session_by_label_async(&agent_name, &label, SESSION_STALE_SECS)
                 .await
                 .map_err(KernelError::Carrier)?
             {

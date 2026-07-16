@@ -329,6 +329,66 @@ impl SessionStore {
     }
 
     /// Find a session by label for a given agent.
+    /// Find the most recent session with this label that is still within the
+    /// staleness window (updated_at newer than `stale_secs` ago). Returns None
+    /// if the labeled session is older than the window — the caller starts a
+    /// fresh session; the stale one stays archived-in-place (same label, but
+    /// its old updated_at keeps it out of the active window). This is how
+    /// sessions auto-split by inactivity: a sender returning after the window
+    /// gets a clean session instead of dragging in stale cross-task context.
+    pub fn find_active_session_by_label(
+        &self,
+        agent_id: &str,
+        label: &str,
+        stale_secs: i64,
+    ) -> CarrierResult<Option<Session>> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                // julianday() (not a string compare) because updated_at is
+                // stored as rfc3339 ('2026-07-17T15:29:32+00:00') while
+                // datetime('now') uses a space separator — a naive string
+                // compare would mis-judge same-day rows (T > space).
+                "SELECT id, messages, context_window_tokens, label FROM sessions \
+                 WHERE agent_id = ?1 AND label = ?2 \
+                 AND julianday(updated_at) > julianday('now') - (?3 / 86400.0) \
+                 ORDER BY updated_at DESC LIMIT 1",
+            )
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let result = stmt.query_row(
+            rusqlite::params![agent_id, label, stale_secs],
+            |row| {
+                let id_str: String = row.get(0)?;
+                let messages_blob: Vec<u8> = row.get(1)?;
+                let tokens: i64 = row.get(2)?;
+                let lbl: Option<String> = row.get(3).unwrap_or(None);
+                Ok((id_str, messages_blob, tokens, lbl))
+            },
+        );
+        match result {
+            Ok((id_str, messages_blob, tokens, lbl)) => {
+                let session_id = uuid::Uuid::parse_str(&id_str)
+                    .map(SessionId)
+                    .map_err(|e| CarrierError::Memory(e.to_string()))?;
+                let messages: Vec<Message> = rmp_serde::from_slice(&messages_blob)
+                    .map_err(|e| CarrierError::Serialization(e.to_string()))?;
+                Ok(Some(Session {
+                    id: session_id,
+                    agent_name: agent_id.to_string(),
+                    messages,
+                    turn_summaries: Vec::new(),
+                    context_window_tokens: tokens as u64,
+                    label: lbl,
+                }))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(CarrierError::Memory(e.to_string())),
+        }
+    }
+
     pub fn find_session_by_label(
         &self,
         agent_id: &str,
@@ -789,6 +849,53 @@ mod tests {
         let loaded = store.get_session(session.id).unwrap().unwrap();
         assert_eq!(loaded.agent_name, agent_id);
         assert!(loaded.messages.is_empty());
+    }
+
+    #[test]
+    fn test_find_active_session_respects_staleness_window() {
+        let store = setup();
+        let agent = "test-agent";
+        let label = "user:alice";
+        let session = store
+            .create_session_with_label(agent.to_string(), Some(label))
+            .unwrap();
+        let sid = session.id.0.to_string();
+
+        // Fresh session (updated_at = now) is within a 1h window -> found.
+        assert!(store
+            .find_active_session_by_label(agent, label, 3600)
+            .unwrap()
+            .is_some());
+
+        // Push updated_at far into the past (rfc3339 with timezone — must be
+        // parsed correctly by julianday, not a naive string compare).
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
+                rusqlite::params!["2020-01-01T00:00:00+00:00", sid],
+            )
+            .unwrap();
+        }
+        // Stale -> None (caller should start a fresh session).
+        assert!(store
+            .find_active_session_by_label(agent, label, 3600)
+            .unwrap()
+            .is_none());
+
+        // 30 min ago (space-separated datetime) is within the 1h window -> found.
+        {
+            let conn = store.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE sessions SET updated_at = datetime('now', '-1800 seconds') WHERE id = ?1",
+                rusqlite::params![sid],
+            )
+            .unwrap();
+        }
+        assert!(store
+            .find_active_session_by_label(agent, label, 3600)
+            .unwrap()
+            .is_some());
     }
 
     #[test]
