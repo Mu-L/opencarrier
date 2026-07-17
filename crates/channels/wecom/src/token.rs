@@ -285,11 +285,11 @@ pub async fn wedoc_post(
     token: &str,
     body: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    // SECURITY: Pass access_token in header instead of query string to avoid credential logging
-    let url = format!("{}/{}", WECOM_API_BASE, path);
+    // 企业微信 API 要求 access_token 作为 query 参数（不支持 X-Access-Token
+    // header，否则返回 41001 access_token missing）。
+    let url = format!("{}/{}?access_token={}", WECOM_API_BASE, path, token);
     let resp: serde_json::Value = http
         .post(&url)
-        .header("X-Access-Token", token)
         .json(body)
         .send()
         .await
