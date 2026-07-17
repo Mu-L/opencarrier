@@ -150,8 +150,10 @@ pub async fn execute_tool(
         }
     }
 
-    // Phase 1.5: Plugin tool dispatcher — channel tools (weixin_oa_send_image,
-    // weixin_oa_send_miniprogram) registered as ToolProvider instances.
+    // Phase 1.5: Plugin tool dispatcher — remaining channel tools (e.g.
+    // charter_create_order, weixin_oa_publish_article) registered as ToolProvider
+    // instances. Rich content delivery uses the unified Channel::deliver path
+    // and [DELIVER:key] markers instead of channel-specific send tools.
     // Run on a blocking thread: plugin tools internally block_on a fresh
     // runtime, which would panic inside this async tokio context.
     if let Some(kernel) = kernel {

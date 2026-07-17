@@ -341,7 +341,9 @@ pub async fn run_daemon(
             dispatcher.register(std::sync::Arc::new(builtin));
         }
 
-        // Register weixin-oa image send tool
+        // Register weixin-oa publish article and charter order tools.
+        // Rich content delivery (mini-program cards, images, files) now goes
+        // through the unified `Channel::deliver` path and `[DELIVER:key]` markers.
         {
             let dispatcher = cm.tool_dispatcher();
             let mut builtin = runtime::plugin::BuiltinPlugin::new(
@@ -349,7 +351,6 @@ pub async fn run_daemon(
                 "1.0.0".to_string(),
                 std::path::PathBuf::new(),
             );
-            builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaSendMiniprogramTool));
             builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaPublishArticleTool));
             builtin.register_tool(Box::new(channel_weixin_oa::CharterCreateOrderTool));
             dispatcher.register(std::sync::Arc::new(builtin));

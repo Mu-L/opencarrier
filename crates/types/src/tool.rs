@@ -90,10 +90,7 @@ impl PermissionLevel {
             | "task_post" | "task_claim" | "task_complete"
             | "event_publish" | "schedule_create" | "schedule_delete"
             | "cron_create" | "cron_cancel"
-            // Channel reply tools — send messages/media to platform users (Write-level)
-            // weixin_oa_send_miniprogram — kept for legacy charter-quoter flow
             // charter_create_order — creates a real order + notifies admins (external side effect)
-            | "weixin_oa_send_miniprogram"
             | "charter_create_order" => Self::Write,
 
             // Execute — cross-boundary writes

@@ -699,11 +699,13 @@ impl KernelHandle for CarrierKernel {
             }
         }
 
-        // Search plugin tool dispatcher — channel tools (e.g. weixin_oa_send_image,
-        // weixin_oa_send_miniprogram) registered as ToolProvider instances. These
-        // are exact-match candidates: flow-declared tool names must resolve here.
-        // Flow tool resolution passes the exact tool name as the query, so prefer
-        // a high exact-match score.
+        // Search plugin tool dispatcher — remaining channel tools (e.g.
+        // charter_create_order, weixin_oa_publish_article) registered as
+        // ToolProvider instances. Rich content delivery now uses the unified
+        // Channel::deliver path and [DELIVER:key] markers instead of channel-
+        // specific send tools. These are exact-match candidates: flow-declared
+        // tool names must resolve here. Flow tool resolution passes the exact
+        // tool name as the query, so prefer a high exact-match score.
         if let Some(dispatcher) = self
             .plugins
             .plugin_tool_dispatcher

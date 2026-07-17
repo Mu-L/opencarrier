@@ -208,21 +208,50 @@ fn parse_publish_content(content: &str) -> (String, Option<String>, Option<Strin
     (html_path, title, digest)
 }
 
-/// Parse `[DELIVER:key]` markers (self-closing - the content descriptor is
-/// resolved by `key` from the agent's `content.toml`, not carried in the marker
-/// body). Returns (content keys, text with markers stripped).
-fn parse_deliver_markers(text: &str) -> (Vec<String>, String) {
+/// A parsed `[DELIVER:key|field=value|...]` marker. The key resolves a base
+/// [`ContentDescriptor`] from the agent's `content.toml`; `overrides` let the
+/// agent supply dynamic fields (e.g. a per-order miniprogram pagepath) without
+/// falling back to channel-specific tools.
+#[derive(Debug, Clone)]
+struct DeliverMarker {
+    key: String,
+    overrides: Vec<(String, String)>,
+}
+
+/// Parse `[DELIVER:key]` and `[DELIVER:key|field=value|...]` markers.
+///
+/// The marker body is split on `|`: the first part is the content key; each
+/// remaining part is `field=value`, where `field` may be a dotted path such as
+/// `miniprogram.appid`. Values are taken literally after the first `=`, so
+/// query strings (`pagepath=pages/x?token=abc`) are preserved.
+fn parse_deliver_markers(text: &str) -> (Vec<DeliverMarker>, String) {
     let marker = "[DELIVER:";
-    let mut keys = Vec::new();
+    let mut markers = Vec::new();
     let mut cleaned = String::new();
     let mut rest = text;
     while let Some(start) = rest.find(marker) {
         cleaned.push_str(&rest[..start]);
         let after = &rest[start + marker.len()..];
         if let Some(end) = after.find(']') {
-            let key = after[..end].trim().to_string();
+            let body = after[..end].trim();
+            let mut parts = body.split('|');
+            let key = parts.next().unwrap_or("").trim().to_string();
+            let mut overrides = Vec::new();
+            for part in parts {
+                let part = part.trim();
+                if part.is_empty() {
+                    continue;
+                }
+                if let Some(eq) = part.find('=') {
+                    let field = part[..eq].trim().to_string();
+                    let value = part[eq + 1..].trim().to_string();
+                    if !field.is_empty() {
+                        overrides.push((field, value));
+                    }
+                }
+            }
             if !key.is_empty() {
-                keys.push(key);
+                markers.push(DeliverMarker { key, overrides });
             }
             rest = &after[end + 1..];
         } else {
@@ -233,7 +262,97 @@ fn parse_deliver_markers(text: &str) -> (Vec<String>, String) {
         }
     }
     cleaned.push_str(rest);
-    (keys, cleaned)
+    (markers, cleaned)
+}
+
+/// Apply one `field=value` override to a [`ContentDescriptor`].
+/// `field` supports dotted paths such as `miniprogram.appid`.
+fn apply_deliver_override(desc: &mut types::content::ContentDescriptor, field: &str, value: &str) {
+    use types::content::{LinkContent, MediaRef, MiniprogramContent};
+    match field {
+        "text" => desc.text = Some(value.to_string()),
+        "link.title" => {
+            desc.link.get_or_insert_with(LinkContent::default).title = value.to_string();
+        }
+        "link.desc" => {
+            desc.link.get_or_insert_with(LinkContent::default).desc = value.to_string();
+        }
+        "link.url" => {
+            desc.link.get_or_insert_with(LinkContent::default).url = value.to_string();
+        }
+        "link.pic_url" => {
+            desc.link.get_or_insert_with(LinkContent::default).pic_url = Some(value.to_string());
+        }
+        "image.url" => {
+            desc.image.get_or_insert_with(MediaRef::default).url = Some(value.to_string());
+        }
+        "image.file_path" => {
+            desc.image.get_or_insert_with(MediaRef::default).file_path = Some(value.to_string());
+        }
+        "image.media_id" => {
+            desc.image.get_or_insert_with(MediaRef::default).media_id = Some(value.to_string());
+        }
+        "video.url" => {
+            desc.video.get_or_insert_with(MediaRef::default).url = Some(value.to_string());
+        }
+        "video.file_path" => {
+            desc.video.get_or_insert_with(MediaRef::default).file_path = Some(value.to_string());
+        }
+        "video.media_id" => {
+            desc.video.get_or_insert_with(MediaRef::default).media_id = Some(value.to_string());
+        }
+        "file.url" => {
+            desc.file.get_or_insert_with(MediaRef::default).url = Some(value.to_string());
+        }
+        "file.file_path" => {
+            desc.file.get_or_insert_with(MediaRef::default).file_path = Some(value.to_string());
+        }
+        "file.media_id" => {
+            desc.file.get_or_insert_with(MediaRef::default).media_id = Some(value.to_string());
+        }
+        "voice.url" => {
+            desc.voice.get_or_insert_with(MediaRef::default).url = Some(value.to_string());
+        }
+        "voice.file_path" => {
+            desc.voice.get_or_insert_with(MediaRef::default).file_path = Some(value.to_string());
+        }
+        "voice.media_id" => {
+            desc.voice.get_or_insert_with(MediaRef::default).media_id = Some(value.to_string());
+        }
+        "miniprogram.appid" => {
+            desc.miniprogram
+                .get_or_insert_with(MiniprogramContent::default)
+                .appid = value.to_string();
+        }
+        "miniprogram.pagepath" => {
+            desc.miniprogram
+                .get_or_insert_with(MiniprogramContent::default)
+                .pagepath = value.to_string();
+        }
+        "miniprogram.title" => {
+            desc.miniprogram
+                .get_or_insert_with(MiniprogramContent::default)
+                .title = value.to_string();
+        }
+        "miniprogram.thumb_media_id" => {
+            desc.miniprogram
+                .get_or_insert_with(MiniprogramContent::default)
+                .thumb_media_id = Some(value.to_string());
+        }
+        "miniprogram.thumb_url" => {
+            desc.miniprogram
+                .get_or_insert_with(MiniprogramContent::default)
+                .thumb_url = Some(value.to_string());
+        }
+        "miniprogram.thumb_file" => {
+            desc.miniprogram
+                .get_or_insert_with(MiniprogramContent::default)
+                .thumb_file = Some(value.to_string());
+        }
+        _ => {
+            warn!(field = %field, "DELIVER marker: unknown override field");
+        }
+    }
 }
 
 
@@ -661,39 +780,46 @@ impl PluginBridgeManager {
         Some(config)
     }
 
-    /// Process `[DELIVER:key]` markers in an agent reply: deliver each content
-    /// key's descriptor via the channel's best-supported form (`channel_deliver_fn`),
-    /// strip markers from the user-facing text. If a deliver fails and the
-    /// remaining text is empty, fall back to the content's text representation so
-    /// the user still gets something (e.g. a link when a card can't be sent).
+    /// Process `[DELIVER:key]` and `[DELIVER:key|field=value|...]` markers in an
+    /// agent reply: resolve the base content descriptor from `content.toml`,
+    /// apply any inline overrides, deliver via the channel's best-supported
+    /// form (`channel_deliver_fn`), and strip markers from the user-facing text.
+    /// If a deliver fails and the remaining text is empty, fall back to the
+    /// content's text representation so the user still gets something (e.g. a
+    /// link when a card can't be sent).
     async fn process_deliver_markers(
         &self,
         original: &PluginMessage,
         agent_id: &str,
         response: &str,
     ) -> String {
-        let (keys, cleaned) = parse_deliver_markers(response);
-        if keys.is_empty() {
+        let (markers, cleaned) = parse_deliver_markers(response);
+        if markers.is_empty() {
             return response.to_string();
         }
         let Some(deliver_fn) = self.channel_deliver_fn.clone() else {
-            warn!(?keys, "DELIVER markers present but no channel_deliver_fn configured");
+            warn!(?markers, "DELIVER markers present but no channel_deliver_fn configured");
             return cleaned;
         };
         let config = self.load_content_config(agent_id);
         let mut fallback_text: Option<String> = None;
-        for key in &keys {
-            let Some(desc) = config.as_ref().and_then(|c| c.get(key)) else {
-                warn!(%key, %agent_id, "DELIVER marker: content key not found in content.toml");
-                continue;
+        for marker in &markers {
+            let mut desc = match config.as_ref().and_then(|c| c.get(&marker.key)) {
+                Some(d) => d.clone(),
+                None => {
+                    warn!(key = %marker.key, %agent_id, "DELIVER marker: content key not found in content.toml");
+                    continue;
+                }
             };
-            let desc = desc.clone();
+            for (field, value) in &marker.overrides {
+                apply_deliver_override(&mut desc, field, value);
+            }
             let desc_text = desc.as_text();
             let channel_type = original.channel_type.clone();
             let bot_id = original.bot_id.clone();
             let sender_id = original.sender_id.clone();
             let deliver_fn = deliver_fn.clone();
-            let key_owned = key.clone();
+            let key_owned = marker.key.clone();
             let result = tokio::task::spawn_blocking(move || {
                 deliver_fn(&channel_type, &bot_id, &sender_id, &desc)
             })
@@ -1469,7 +1595,7 @@ impl PluginBridgeManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_no_reply_sentinel, parse_deliver_markers, parse_publish_markers};
+    use super::{apply_deliver_override, is_no_reply_sentinel, parse_deliver_markers, parse_publish_markers};
 
     #[test]
     fn detects_no_reply_sentinels() {
@@ -1524,19 +1650,57 @@ mod tests {
 
     #[test]
     fn deliver_markers_are_stripped_and_keys_extracted() {
-        let (keys, cleaned) = parse_deliver_markers("月票来啦～ [DELIVER:月票] 收到吧");
-        assert_eq!(keys, vec!["月票".to_string()]);
+        let (markers, cleaned) = parse_deliver_markers("月票来啦～ [DELIVER:月票] 收到吧");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].key, "月票");
+        assert!(markers[0].overrides.is_empty());
         assert!(!cleaned.contains("DELIVER"), "marker stripped: {cleaned}");
         assert!(cleaned.contains("月票来啦～") && cleaned.contains("收到吧"));
 
         // Bare marker only -> empty cleaned text, key extracted.
-        let (keys, cleaned) = parse_deliver_markers("[DELIVER:月卡]");
-        assert_eq!(keys, vec!["月卡".to_string()]);
+        let (markers, cleaned) = parse_deliver_markers("[DELIVER:月卡]");
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].key, "月卡");
         assert!(cleaned.trim().is_empty());
 
         // No markers -> unchanged.
         let (none, same) = parse_deliver_markers("just text");
         assert!(none.is_empty());
         assert_eq!(same, "just text");
+    }
+
+    #[test]
+    fn deliver_marker_overrides_are_parsed() {
+        let (markers, cleaned) = parse_deliver_markers(
+            "[DELIVER:charter-card|miniprogram.appid=wxabc|miniprogram.pagepath=pages/x?token=a=b|miniprogram.title=包车]"
+        );
+        assert_eq!(markers.len(), 1);
+        let m = &markers[0];
+        assert_eq!(m.key, "charter-card");
+        assert_eq!(m.overrides.len(), 3);
+        assert_eq!(m.overrides[0], ("miniprogram.appid".to_string(), "wxabc".to_string()));
+        assert_eq!(
+            m.overrides[1],
+            ("miniprogram.pagepath".to_string(), "pages/x?token=a=b".to_string())
+        );
+        assert_eq!(m.overrides[2], ("miniprogram.title".to_string(), "包车".to_string()));
+        assert!(cleaned.trim().is_empty());
+    }
+
+    #[test]
+    fn deliver_overrides_apply_to_descriptor() {
+        use types::content::ContentDescriptor;
+        let mut desc = ContentDescriptor::default();
+        apply_deliver_override(&mut desc, "text", "fallback");
+        apply_deliver_override(&mut desc, "miniprogram.appid", "wxapp");
+        apply_deliver_override(&mut desc, "miniprogram.pagepath", "pages/x");
+        apply_deliver_override(&mut desc, "miniprogram.title", "title");
+        apply_deliver_override(&mut desc, "miniprogram.thumb_media_id", "thumb");
+        assert_eq!(desc.text.as_deref(), Some("fallback"));
+        let mp = desc.miniprogram.as_ref().unwrap();
+        assert_eq!(mp.appid, "wxapp");
+        assert_eq!(mp.pagepath, "pages/x");
+        assert_eq!(mp.title, "title");
+        assert_eq!(mp.thumb_media_id.as_deref(), Some("thumb"));
     }
 }

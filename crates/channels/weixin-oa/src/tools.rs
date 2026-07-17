@@ -6,7 +6,6 @@ use types::plugin::PluginToolContext;
 use types::tool::{PluginToolDef, PluginToolError, ToolProvider};
 
 use crate::api;
-use crate::channel::WEIXIN_OA_STATE;
 
 /// Resolve a path that may be absolute or relative to `~/.opencarrier`.
 fn resolve_path(p: &str) -> std::path::PathBuf {
@@ -27,138 +26,6 @@ pub(crate) fn is_token_expired(err: &str) -> bool {
 pub(crate) async fn refresh_token(account: &crate::channel::OaAccountState) -> Result<String, String> {
     account.invalidate_token().await;
     account.get_token().await
-}
-
-// ---------------------------------------------------------------------------
-// Send mini-program card tool (legacy — kept for charter-quoter flow)
-// ---------------------------------------------------------------------------
-
-pub struct WeixinOaSendMiniprogramTool;
-
-impl ToolProvider for WeixinOaSendMiniprogramTool {
-    fn definition(&self) -> PluginToolDef {
-        PluginToolDef {
-            name: "weixin_oa_send_miniprogram".to_string(),
-            description: "Send a mini-program card to the current WeChat Official Account user (the person you are replying to) via the customer service message API. The mini-program must be linked to the same WeChat Open Platform account. user_id/app_id are resolved automatically from context.".to_string(),
-            parameters_json: r#"{"type":"object","properties":{"title":{"type":"string","description":"Card title text displayed in the mini-program card"},"pagepath":{"type":"string","description":"Mini-program page path with params, e.g. pages/index/type/type?id=883"},"mini_appid":{"type":"string","description":"The mini-program appid (e.g. wx7c62aa603ab603f4)"},"thumb_media_id":{"type":"string","description":"A pre-uploaded permanent material media_id for the card cover image. Use this OR thumb_url, not both."},"thumb_url":{"type":"string","description":"URL of the cover image to download and upload. Use this OR thumb_media_id, not both."}},"required":["title","pagepath","mini_appid"]}"#.to_string(),
-        }
-    }
-
-    fn execute(
-        &self,
-        args: &Value,
-        context: &PluginToolContext,
-    ) -> Result<String, PluginToolError> {
-        let openid = if context.sender_id.is_empty() {
-            return Err(PluginToolError::tool(
-                "no sender_id (openid) in context — cannot determine recipient",
-            ));
-        } else {
-            &context.sender_id
-        };
-
-        let title = args["title"].as_str().ok_or_else(|| {
-            PluginToolError::tool("missing required parameter: title")
-        })?;
-        let pagepath = args["pagepath"].as_str().ok_or_else(|| {
-            PluginToolError::tool("missing required parameter: pagepath")
-        })?;
-        let mini_appid = args["mini_appid"].as_str().ok_or_else(|| {
-            PluginToolError::tool("missing required parameter: mini_appid")
-        })?;
-        let thumb_media_id = args["thumb_media_id"].as_str();
-        let thumb_url = args["thumb_url"].as_str();
-        if thumb_media_id.is_none() && thumb_url.is_none() {
-            return Err(PluginToolError::tool(
-                "must provide either thumb_media_id or thumb_url",
-            ));
-        }
-
-        // Resolve the OA account: use context bot_id (app_id), or fall back to
-        // the only registered account when invoked without an inbound message
-        // context (single-OA deployments).
-        let account = if !context.bot_id.is_empty() {
-            WEIXIN_OA_STATE
-                .accounts
-                .get(&context.bot_id)
-                .map(|a| a.clone())
-                .ok_or_else(|| {
-                    PluginToolError::tool(format!(
-                        "no weixin-oa account registered for app_id {}",
-                        context.bot_id
-                    ))
-                })?
-        } else {
-            WEIXIN_OA_STATE
-                .accounts
-                .iter()
-                .next()
-                .map(|e| e.value().clone())
-                .ok_or_else(|| {
-                    PluginToolError::tool(
-                        "no bot_id (app_id) in context and no weixin-oa account registered",
-                    )
-                })?
-        };
-
-        let openid = openid.to_string();
-        let title = title.to_string();
-        let pagepath = pagepath.to_string();
-        let mini_appid = mini_appid.to_string();
-        let thumb_media_id = thumb_media_id.map(|s| s.to_string());
-        let thumb_url = thumb_url.map(|s| s.to_string());
-
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| PluginToolError::tool(format!("runtime error: {e}")))?;
-
-        rt.block_on(async move {
-            let mut token = account.get_token().await.map_err(PluginToolError::tool)?;
-
-            let final_thumb_media_id = if let Some(mid) = thumb_media_id {
-                mid
-            } else {
-                // Download image from thumb_url and upload as permanent material
-                let url = thumb_url.unwrap();
-                let resp = account.http.get(&url).send().await.map_err(|e| {
-                    PluginToolError::tool(format!("failed to download thumb_url: {e}"))
-                })?;
-                let bytes = resp.bytes().await.map_err(|e| {
-                    PluginToolError::tool(format!("failed to read thumb_url body: {e}"))
-                })?;
-                let filename = url
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or("image.png")
-                    .to_string();
-                let (mid, _url) = api::upload_media_permanent(
-                    &account.http, &token, bytes.to_vec(), &filename,
-                )
-                .await
-                .map_err(PluginToolError::tool)?;
-                mid
-            };
-
-            let result = api::custom_send_miniprogrampage(
-                &account.http, &token, &openid, &title, &pagepath, &final_thumb_media_id, &mini_appid,
-            ).await;
-            if let Err(e) = result {
-                if is_token_expired(&e) {
-                    token = refresh_token(&account).await.map_err(PluginToolError::tool)?;
-                    api::custom_send_miniprogrampage(
-                        &account.http, &token, &openid, &title, &pagepath, &final_thumb_media_id, &mini_appid,
-                    ).await.map_err(PluginToolError::tool)?;
-                } else {
-                    return Err(PluginToolError::tool(e));
-                }
-            }
-
-            Ok(format!(
-                "Mini-program card sent to user {openid} (pagepath={pagepath})"
-            ))
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -396,7 +263,7 @@ impl ToolProvider for CharterCreateOrderTool {
     fn definition(&self) -> PluginToolDef {
         PluginToolDef {
             name: "charter_create_order".to_string(),
-            description: "Create a charter-bus (包车) order via the 86bus backend. The backend auto-resolves addresses to coordinates, computes distance, prices the trip, selects the car type by person count, creates the order, and notifies admins. Returns the quoted price, car type, distance, and a mini-program confirm card (confirm_url/mini_appid/card_title/card_thumb_id) to send the user. After calling this, report money/car_type/distance to the user and send them the confirm card via weixin_oa_send_miniprogram. go_time/back_time are Beijing time 'YYYY-MM-DD HH:MM'. Fill back_time for round-trip, omit for one-way.".to_string(),
+            description: "Create a charter-bus (包车) order via the 86bus backend. The backend auto-resolves addresses to coordinates, computes distance, prices the trip, selects the car type by person count, creates the order, and notifies admins. Returns the quoted price, car type, distance, and a mini-program confirm card (confirm_url/mini_appid/card_title/card_thumb_id) to send the user. After calling this, report money/car_type/distance to the user and emit a [DELIVER:charter-card|miniprogram.appid=<mini_appid>|miniprogram.pagepath=<confirm_url>|miniprogram.title=<card_title>|miniprogram.thumb_media_id=<card_thumb_id>] marker so the unified delivery layer sends the confirm card. go_time/back_time are Beijing time 'YYYY-MM-DD HH:MM'. Fill back_time for round-trip, omit for one-way.".to_string(),
             parameters_json: r#"{"type":"object","properties":{"username":{"type":"string","description":"联系人姓名"},"phone":{"type":"string","description":"联系电话（手机号）"},"person_num":{"type":"integer","description":"乘车人数（后端据此自动选车型）"},"start_point":{"type":"string","description":"起点（文字地址，如 南京南站）"},"end_point":{"type":"string","description":"终点（文字地址，如 禄口国际机场）"},"start_city":{"type":"string","description":"起点城市（可选）"},"end_city":{"type":"string","description":"终点城市（可选）"},"go_time":{"type":"string","description":"出发时间，北京时间 YYYY-MM-DD HH:MM"},"back_time":{"type":"string","description":"返程时间，北京时间 YYYY-MM-DD HH:MM。填了=往返，不填=单程"},"remark":{"type":"string","description":"备注（可选）"}},"required":["username","phone","person_num","start_point","end_point","go_time"]}"#.to_string(),
         }
     }

@@ -1,10 +1,9 @@
 ---
 name: charter-quoter
 description: 包车下单。当用户询问包车、租车、团建用车、机场接送等需求时触发。收集信息后调 charter_create_order 下单，把报价告诉用户并发小程序确认卡片。报价/选车型/算距离/通知管理员全由后端处理。
-version: 3
+version: 4
 tools:
   - charter_create_order
-  - weixin_oa_send_miniprogram
 max_iterations: 12
 ---
 
@@ -70,18 +69,15 @@ charter_create_order(
 已为您报价 ¥659.7，5座车，全程约33公里。点下面卡片就能确认下单～
 ```
 
-**紧接着发小程序确认卡片**，用返回的字段，参数从下单结果里取：
+**紧接着在回复里写 DELIVER 标记发小程序确认卡片**，用下单返回的字段替换占位符：
 
 ```
-weixin_oa_send_miniprogram(
-  title=<返回的 card_title>,          // 如 "您的包车订单待确认"
-  pagepath=<返回的 confirm_url>,      // 订单确认页路径
-  mini_appid=<返回的 mini_appid>,     // wxb62763898da76483
-  thumb_media_id=<返回的 card_thumb_id>
-)
+[DELIVER:charter-card|miniprogram.appid=<mini_appid>|miniprogram.pagepath=<confirm_url>|miniprogram.title=<card_title>|miniprogram.thumb_media_id=<card_thumb_id>]
 ```
 
-`openid` 和 `app_id` 由系统自动从对话上下文带，**不要手动传**。
+- `<mini_appid>`、`<confirm_url>`、`<card_title>`、`<card_thumb_id>` 必须**从 `charter_create_order` 的返回里取**。
+- 不要把 `<>` 写到回复里，替换为实际值。
+- `openid` / `app_id` 由系统从对话上下文自动带，**不要手动传**。
 
 发完卡片就结束，**不要重复发**。用户点卡片进小程序确认/支付。
 
@@ -116,7 +112,7 @@ weixin_oa_send_miniprogram(
 
 你（先报价）："已为您报价 ¥659.7，5座车，全程约33公里。点下面卡片确认下单～"
 
-你（再发卡片）→ 调 `weixin_oa_send_miniprogram(title=card_title, pagepath=confirm_url, mini_appid=mini_appid, thumb_media_id=card_thumb_id)`
+你（再发卡片）：`[DELIVER:charter-card|miniprogram.appid=wxb62763898da76483|miniprogram.pagepath=/pages/order-confirm/index?token=...|miniprogram.title=您的包车订单待确认|miniprogram.thumb_media_id=GkDJAuzs...]`
 
 完成。
 
