@@ -29,6 +29,18 @@ async fn refresh_token(account: &crate::channel::OaAccountState) -> Result<Strin
     account.get_token().await
 }
 
+/// Reject if the recipient is a WeCom kf customer (external_userid starts with
+/// "wm") — weixin_oa_* tools only work for OA followers (openid starts "o").
+/// Tells the agent to switch to the corresponding wecom_send_* tool.
+fn reject_if_wecom_kf(context: &PluginToolContext) -> Result<(), PluginToolError> {
+    if context.sender_id.starts_with("wm") {
+        return Err(PluginToolError::tool(
+            "这是企业微信客服用户(external_userid 以 wm 开头)，weixin_oa_* 只适用于公众号粉丝(openid 以 o 开头)，会 40003 invalid openid。请改用对应的 wecom_send_* 工具（wecom_send_image / wecom_send_miniprogram 等）",
+        ));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Send image tool
 // ---------------------------------------------------------------------------
@@ -49,6 +61,7 @@ impl ToolProvider for WeixinOaSendImageTool {
         args: &Value,
         context: &PluginToolContext,
     ) -> Result<String, PluginToolError> {
+        reject_if_wecom_kf(context)?;
         // bot_id = app_id, sender_id = user's openid — both come from context
         let app_id = if context.bot_id.is_empty() {
             return Err(PluginToolError::tool(
@@ -166,6 +179,7 @@ impl ToolProvider for WeixinOaSendMiniprogramTool {
         args: &Value,
         context: &PluginToolContext,
     ) -> Result<String, PluginToolError> {
+        reject_if_wecom_kf(context)?;
         let openid = if context.sender_id.is_empty() {
             return Err(PluginToolError::tool(
                 "no sender_id (openid) in context — cannot determine recipient",

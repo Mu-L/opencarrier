@@ -28,6 +28,10 @@ where
 /// Resolve `(http, access_token, open_kfid, external_userid)` from the tool
 /// context. `session` (DashMap Ref) is dropped here — only owned data leaves,
 /// so the returned tuple is `Send`-safe across the awaited HTTP calls.
+///
+/// NOTE: tool_runner currently sets `context.bot_id` to empty (legacy
+/// "single-OA fallback"). When bot_id is empty we fall back to the single
+/// registered Kf session — correct for single-kf deployments (the common case).
 fn resolve_bot(
     context: &PluginToolContext,
 ) -> Result<(reqwest::Client, String, String, String), PluginToolError> {
@@ -38,26 +42,37 @@ fn resolve_bot(
     } else {
         context.sender_id.clone()
     };
-    let bot_id = if context.bot_id.is_empty() {
-        return Err(PluginToolError::tool(
-            "no bot_id (wecom session name) in context",
-        ));
+    let (http, access_token, open_kfid) = if !context.bot_id.is_empty() {
+        let session = WECOM_STATE
+            .get_session_for_send(&context.bot_id)
+            .ok_or_else(|| PluginToolError::tool(format!("no wecom session for bot_id {}", context.bot_id)))?;
+        let okid = session
+            .entry
+            .open_kfid()
+            .map(|s| s.to_string())
+            .ok_or_else(|| PluginToolError::tool("this wecom session is not Kf mode (no open_kfid)"))?;
+        let tok = session.entry.get_access_token().map_err(PluginToolError::tool)?;
+        (session.entry.http.clone(), tok, okid)
     } else {
-        context.bot_id.clone()
+        // Fallback: tool_runner writes bot_id="" (legacy). Pick the single
+        // registered Kf session (correct for single-kf deployments).
+        let mut found = None;
+        for entry in WECOM_STATE.bots.iter() {
+            if matches!(entry.entry.mode, token::WecomMode::Kf { .. }) {
+                let okid = entry
+                    .entry
+                    .open_kfid()
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| PluginToolError::tool("kf session missing open_kfid"))?;
+                let tok = entry.entry.get_access_token().map_err(PluginToolError::tool)?;
+                found = Some((entry.entry.http.clone(), tok, okid));
+                break;
+            }
+        }
+        found.ok_or_else(|| {
+            PluginToolError::tool("no wecom kf session registered (bot_id empty in context)")
+        })?
     };
-    let session = WECOM_STATE
-        .get_session_for_send(&bot_id)
-        .ok_or_else(|| PluginToolError::tool(format!("no wecom session for bot_id {bot_id}")))?;
-    let open_kfid = session
-        .entry
-        .open_kfid()
-        .map(|s| s.to_string())
-        .ok_or_else(|| PluginToolError::tool("this wecom session is not Kf mode (no open_kfid)"))?;
-    let access_token = session
-        .entry
-        .get_access_token()
-        .map_err(PluginToolError::tool)?;
-    let http = session.entry.http.clone();
     Ok((http, access_token, open_kfid, external_userid))
 }
 
