@@ -349,30 +349,9 @@ pub async fn run_daemon(
                 "1.0.0".to_string(),
                 std::path::PathBuf::new(),
             );
-            builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaSendImageTool));
             builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaSendMiniprogramTool));
             builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaPublishArticleTool));
             builtin.register_tool(Box::new(channel_weixin_oa::CharterCreateOrderTool));
-            dispatcher.register(std::sync::Arc::new(builtin));
-        }
-
-        // wecom (企业微信客服 kf) send tools — image/voice/video/file/link/
-        // miniprogram/menu. Resolve recipient (external_userid) + open_kfid from
-        // context; only usable inside a wecom kf conversation.
-        {
-            let dispatcher = cm.tool_dispatcher();
-            let mut builtin = runtime::plugin::BuiltinPlugin::new(
-                "wecom".to_string(),
-                "1.0.0".to_string(),
-                std::path::PathBuf::new(),
-            );
-            builtin.register_tool(Box::new(channel_wecom::WecomSendImageTool));
-            builtin.register_tool(Box::new(channel_wecom::WecomSendVoiceTool));
-            builtin.register_tool(Box::new(channel_wecom::WecomSendVideoTool));
-            builtin.register_tool(Box::new(channel_wecom::WecomSendFileTool));
-            builtin.register_tool(Box::new(channel_wecom::WecomSendLinkTool));
-            builtin.register_tool(Box::new(channel_wecom::WecomSendMiniprogramTool));
-            builtin.register_tool(Box::new(channel_wecom::WecomSendMenuTool));
             dispatcher.register(std::sync::Arc::new(builtin));
         }
 

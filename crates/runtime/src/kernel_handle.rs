@@ -200,6 +200,21 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
+    /// Deliver rich content by key for an agent, without running an agent loop.
+    /// Scripts/cron call this to send `[DELIVER:key]`-equivalent content directly
+    /// to a user on a given channel/bot. Default implementation returns an error
+    /// - real kernels override it with the wired-up `channel_deliver_fn`.
+    fn deliver_content(
+        &self,
+        _agent: &str,
+        _content_key: &str,
+        _channel_type: &str,
+        _bot_id: &str,
+        _user_id: &str,
+    ) -> Result<(), String> {
+        Err("deliver_content not implemented by this kernel".into())
+    }
+
     /// Spawn an agent with capability inheritance enforcement.
     /// `parent_caps` are the parent's granted capabilities. The kernel MUST verify
     /// that every capability in the child manifest is covered by `parent_caps`.

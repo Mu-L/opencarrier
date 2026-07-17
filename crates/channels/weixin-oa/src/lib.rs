@@ -11,4 +11,4 @@ pub mod tools;
 
 pub use channel::{build_plugin_message, needs_reply, SessionWatcher, WeixinOaState, WEIXIN_OA_STATE};
 pub use models::{parse_xml_message, OaMessage, ProxyMessage, WeixinOaSessionFile};
-pub use tools::{CharterCreateOrderTool, WeixinOaPublishArticleTool, WeixinOaSendImageTool, WeixinOaSendMiniprogramTool};
+pub use tools::{CharterCreateOrderTool, WeixinOaPublishArticleTool, WeixinOaSendMiniprogramTool};

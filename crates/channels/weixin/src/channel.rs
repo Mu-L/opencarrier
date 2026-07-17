@@ -446,6 +446,91 @@ impl Channel for SessionWatcher {
             .map_err(|e| ChannelError::Other(format!("Send thread disconnected: {e}")))?
     }
 
+    fn deliver(
+        &self,
+        content: &types::content::ContentDescriptor,
+        bot_id: &str,
+        user_id: &str,
+    ) -> Result<(), ChannelError> {
+        let state = WEIXIN_STATE
+            .get_session_for_send(bot_id, user_id)
+            .ok_or_else(|| ChannelError::UnknownBot(format!("No session for bot {bot_id}, user {user_id}")))?;
+
+        if state.is_expired() {
+            return Err(ChannelError::TokenFailed(format!("Token expired for bot {bot_id}")));
+        }
+
+        let context_token = state.get_context_token(user_id).ok_or_else(|| {
+            ChannelError::NotSupported(format!("No context_token for user {user_id} - can only reply to received messages"))
+        })?;
+
+        // iLink supports video_url, image_url and text only. Pick the best
+        // representation that has a public URL (link is not a native iLink card).
+        let (send_kind, payload) = if let Some(v) = content.video.as_ref() {
+            if let Some(url) = v.url.as_deref().filter(|u| !u.is_empty()) {
+                ("video", url.to_string())
+            } else {
+                return Err(ChannelError::NotSupported(
+                    "iLink video requires a public URL".into(),
+                ));
+            }
+        } else if let Some(img) = content.image.as_ref() {
+            if let Some(url) = img.url.as_deref().filter(|u| !u.is_empty()) {
+                ("image", url.to_string())
+            } else {
+                return Err(ChannelError::NotSupported(
+                    "iLink image requires a public URL".into(),
+                ));
+            }
+        } else if let Some(text) = content.as_text() {
+            return self.send(bot_id, user_id, &text);
+        } else {
+            return Err(ChannelError::NotSupported(
+                "iLink: content has no video URL, image URL, or text representation".into(),
+            ));
+        };
+
+        let client_id = format!("openclaw-weixin-{}", Uuid::new_v4().as_simple());
+        let bot_token = state.bot_token.clone();
+        let baseurl = state.baseurl.clone();
+        let http = state.http.clone();
+        let user_id = user_id.to_string();
+        let context_token = context_token.to_string();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = tx.send(Err(ChannelError::Other(format!("Failed to create deliver runtime: {e}"))));
+                    return;
+                }
+            };
+            let result = rt.block_on(async {
+                match send_kind {
+                    "video" => api::send_video(
+                        &http, &bot_token, &baseurl, &user_id, &context_token, &client_id, &payload,
+                    )
+                    .await
+                    .map_err(ChannelError::SendFailed),
+                    "image" => api::send_image(
+                        &http, &bot_token, &baseurl, &user_id, &context_token, &client_id, &payload,
+                    )
+                    .await
+                    .map_err(ChannelError::SendFailed),
+                    _ => unreachable!(),
+                }
+            });
+            let _ = tx.send(result);
+        });
+
+        rx.recv()
+            .map_err(|e| ChannelError::Other(format!("Deliver thread disconnected: {e}")))?
+    }
+
     fn stop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
         if let Some(handle) = self.thread_handle.take() {

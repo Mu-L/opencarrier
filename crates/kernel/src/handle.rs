@@ -579,6 +579,35 @@ impl KernelHandle for CarrierKernel {
             .map(|p| p.to_string_lossy().to_string())
     }
 
+    fn deliver_content(
+        &self,
+        agent: &str,
+        content_key: &str,
+        channel_type: &str,
+        bot_id: &str,
+        user_id: &str,
+    ) -> Result<(), String> {
+        let ws = self.resolve_agent_workspace(agent).ok_or_else(|| {
+            format!("deliver_content: agent {agent} not found or has no workspace")
+        })?;
+        let path = std::path::Path::new(&ws).join("content.toml");
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("deliver_content: failed to read {path:?}: {e}"))?;
+        let config: types::content::ContentConfig = toml::from_str(&text)
+            .map_err(|e| format!("deliver_content: failed to parse {path:?}: {e}"))?;
+        let desc = config
+            .get(content_key)
+            .cloned()
+            .ok_or_else(|| format!("deliver_content: key '{content_key}' not found in {path:?}"))?;
+
+        let guard = self.channel_deliver_fn.read().map_err(|e| e.to_string())?;
+        let deliver_fn = guard
+            .as_ref()
+            .ok_or_else(|| "deliver_content: channel_deliver_fn not wired".to_string())?;
+        deliver_fn(channel_type, bot_id, user_id, &desc)
+            .map_err(|e| format!("deliver_content: {e}"))
+    }
+
     fn get_toolset_tools(
         &self,
         toolset_name: &str,

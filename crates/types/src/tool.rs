@@ -91,8 +91,9 @@ impl PermissionLevel {
             | "event_publish" | "schedule_create" | "schedule_delete"
             | "cron_create" | "cron_cancel"
             // Channel reply tools — send messages/media to platform users (Write-level)
+            // weixin_oa_send_miniprogram — kept for legacy charter-quoter flow
             // charter_create_order — creates a real order + notifies admins (external side effect)
-            | "weixin_oa_send_image" | "weixin_oa_send_miniprogram"
+            | "weixin_oa_send_miniprogram"
             | "charter_create_order" => Self::Write,
 
             // Execute — cross-boundary writes
@@ -527,7 +528,6 @@ mod tests {
         assert!(!is_admin_gated("flow_update"));
         assert!(!is_admin_gated("knowledge_add"));
         assert!(!is_admin_gated("file_write"));
-        assert!(!is_admin_gated("weixin_oa_send_miniprogram"));
         assert!(!is_admin_gated("knowledge_heal"));
         assert!(!is_admin_gated("apply_patch"));
     }

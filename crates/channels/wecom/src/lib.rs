@@ -16,12 +16,9 @@ pub mod channel;
 pub mod crypto;
 pub mod smartbot;
 pub mod token;
-pub mod tools;
 
-pub use tools::{
-    WecomSendFileTool, WecomSendImageTool, WecomSendLinkTool, WecomSendMenuTool,
-    WecomSendMiniprogramTool, WecomSendVideoTool, WecomSendVoiceTool,
-};
+// tools module removed — rich content is delivered via the unified
+// `Channel::deliver` path and `[DELIVER:key]` markers.
 
 // ---------------------------------------------------------------------------
 // SessionWatcher — unified watcher for all WeCom modes

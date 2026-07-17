@@ -288,6 +288,52 @@ pub async fn send_message_stream(
         .into_response()
 }
 
+/// POST /api/deliver — Deliver rich content to a user without an agent loop.
+///
+/// Body: `{ "agent": "agent-name", "content_key": "月票",
+///          "channel_type": "wecom", "bot_id": "86bus-kf",
+///          "user_id": "wm..." }`
+///
+/// Looks up the content descriptor from the agent's `content.toml` and delivers
+/// it via the channel's best-supported form (miniprogram card / file / video /
+/// image / link / text).
+pub async fn deliver_content(
+    State(state): State<std::sync::Arc<crate::routes::state::AppState>>,
+    Json(payload): Json<serde_json::Value>,
+) -> impl axum::response::IntoResponse {
+    let agent = payload["agent"].as_str().unwrap_or("");
+    let content_key = payload["content_key"].as_str().unwrap_or("");
+    let channel_type = payload["channel_type"].as_str().unwrap_or("");
+    let bot_id = payload["bot_id"].as_str().unwrap_or("");
+    let user_id = payload["user_id"].as_str().unwrap_or("");
+
+    if agent.is_empty()
+        || content_key.is_empty()
+        || channel_type.is_empty()
+        || bot_id.is_empty()
+        || user_id.is_empty()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "missing required field: agent, content_key, channel_type, bot_id, user_id" })),
+        )
+            .into_response();
+    }
+
+    match state.kernel.deliver_content(agent, content_key, channel_type, bot_id, user_id) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "delivered" })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
@@ -297,4 +343,5 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
             "/api/agents/{id}/message/stream",
             routing::post(send_message_stream),
         )
+        .route("/api/deliver", routing::post(deliver_content))
 }
