@@ -265,7 +265,31 @@ pub async fn run_daemon(
 
         // Register channel adapters from independent crates
         cm.register("feishu", Box::new(channel_feishu::SessionWatcher::new()));
-        cm.register("wecom", Box::new(channel_wecom::SessionWatcher::new()));
+        {
+            // wecom: register route_key (session name/bot_id) → bind_agent so
+            // inbound wecom messages (App/Kf/SmartBot) reach the bound agent.
+            let watcher = channel_wecom::SessionWatcher::new();
+            for (bot_id, agent) in watcher.route_mappings() {
+                let agent_ref = if let Ok(id) = agent.parse::<types::agent::AgentId>() {
+                    kernel
+                        .registry
+                        .get(id)
+                        .map(|e| e.manifest.name.clone())
+                        .unwrap_or_else(|| agent.clone())
+                } else {
+                    agent.clone()
+                };
+                if cm.get_sender_route(&bot_id).is_none() {
+                    cm.set_sender_route(&bot_id, &agent_ref);
+                    info!(
+                        bot_id = %bot_id,
+                        agent = %agent_ref,
+                        "wecom: registered route from bind_agent"
+                    );
+                }
+            }
+            cm.register("wecom", Box::new(watcher));
+        }
         cm.register("weixin", Box::new(channel_weixin::SessionWatcher::new()));
         cm.register("dingtalk", Box::new(channel_dingtalk::SessionWatcher::new()));
 

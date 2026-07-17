@@ -35,6 +35,33 @@ impl SessionWatcher {
             shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
+
+    /// `(route_key, bind_agent)` for every wecom session that declares a
+    /// bind_agent. route_key = sender_id (session `name` for app/kf, `bot_id`
+    /// for smartbot) — the same value channel-wecom puts in
+    /// `PluginMessage.bot_id`, which bridge uses as the route_key. Lets
+    /// server.rs register sender routing so inbound wecom messages reach the
+    /// bound agent (mirrors weixin-oa's route_mappings).
+    pub fn route_mappings(&self) -> Vec<(String, String)> {
+        let home = types::config::home_dir();
+        let mut out = Vec::new();
+        for (_sender_id, json) in types::config::scan_sender_sessions(&home) {
+            if json.get("channel").and_then(|v| v.as_str()) != Some("wecom") {
+                continue;
+            }
+            let sf: token::WecomSessionFile = match serde_json::from_value(json) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let sid = sf.sender_id();
+            if let Some(agent) = sf.bind_agent {
+                if !agent.is_empty() {
+                    out.push((sid, agent));
+                }
+            }
+        }
+        out
+    }
 }
 
 impl Default for SessionWatcher {

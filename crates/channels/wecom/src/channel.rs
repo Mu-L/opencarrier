@@ -357,6 +357,83 @@ async fn webhook_post(
         "event" if event == "subscribe" || event == "enter_agent" => {
             PluginContent::Command { name: event.to_string(), args: vec![] }
         }
+        "event" if event == "kf_msg_or_event" => {
+            // WeCom 微信客服: the callback carries only Token + OpenKfId (NO
+            // message body). Pull the real messages via sync_msg in a spawned
+            // task so we return "success" within WeCom's 5s limit.
+            let cb_token = fields.get("Token").cloned().unwrap_or_default();
+            let open_kfid_cb = fields.get("OpenKfId").cloned().unwrap_or_default();
+            let tx = state.tx.clone();
+            let bot_id = state.bot_id.clone();
+            // Extract owned data before spawning — DashMap Ref isn't Send.
+            let (http, access_token) = match token::WECOM_STATE.get_session_for_send(&bot_id) {
+                Some(bot) => match bot.entry.get_access_token() {
+                    Ok(tok) => (bot.entry.http.clone(), tok),
+                    Err(e) => {
+                        warn!(bot = %bot_id, error = %e, "kf: get_access_token failed");
+                        return "success";
+                    }
+                },
+                None => {
+                    warn!(bot = %bot_id, "kf callback: bot session not found");
+                    return "success";
+                }
+            };
+            tokio::spawn(async move {
+                let mut cursor = token::get_kf_cursor(&bot_id);
+                loop {
+                    let (list, next_cursor, has_more) = match token::sync_kf_msg(
+                        &http,
+                        &access_token,
+                        &cursor,
+                        &cb_token,
+                        &open_kfid_cb,
+                        1000,
+                    )
+                    .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => {
+                            warn!(bot = %bot_id, error = %e, "sync_kf_msg failed");
+                            return;
+                        }
+                    };
+                    for m in &list {
+                        // origin 3 = customer-sent; 4/5 = system/our own reply
+                        if m["origin"].as_i64() != Some(3) {
+                            continue;
+                        }
+                        let content = match m["msgtype"].as_str() {
+                            Some("text") => PluginContent::Text(
+                                m["text"]["content"].as_str().unwrap_or("").to_string(),
+                            ),
+                            _ => continue,
+                        };
+                        let ext = m["external_userid"].as_str().unwrap_or("").to_string();
+                        let _ = tx
+                            .send(PluginMessage {
+                                channel_type: "wecom".to_string(),
+                                platform_message_id: m["msgid"].as_str().unwrap_or("").to_string(),
+                                sender_id: ext.clone(),
+                                sender_name: ext,
+                                bot_id: bot_id.clone(),
+                                content,
+                                timestamp_ms: m["send_time"].as_i64().unwrap_or(0) as u64 * 1000,
+                                is_group: false,
+                                thread_id: None,
+                                metadata: HashMap::new(),
+                            })
+                            .await;
+                    }
+                    cursor = next_cursor;
+                    token::save_kf_cursor(&bot_id, &cursor);
+                    if !has_more {
+                        break;
+                    }
+                }
+            });
+            return "success";
+        }
         _ => {
             return "success";
         }

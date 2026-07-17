@@ -380,6 +380,62 @@ pub fn send_kf_message(bot: &BotEntry, user_id: &str, content: &str) -> Result<(
     Ok(())
 }
 
+/// Fetch incremental WeCom Kf messages via `cgi-bin/kf/sync_msg`.
+///
+/// WeCom kf does NOT put message text in the callback — the callback only
+/// carries a `Token` (cursor verifier) + `OpenKfId`. The receiver must call
+/// sync_msg to pull the actual `msg_list`. Returns `(msg_list, next_cursor,
+/// has_more)`; caller loops while `has_more` and persists `next_cursor`.
+pub async fn sync_kf_msg(
+    http: &Client,
+    access_token: &str,
+    cursor: &str,
+    cb_token: &str,
+    open_kfid: &str,
+    limit: u32,
+) -> Result<(Vec<serde_json::Value>, String, bool), String> {
+    let body = serde_json::json!({
+        "cursor": cursor,
+        "token": cb_token,
+        "limit": limit,
+        "open_kfid": open_kfid,
+    });
+    let resp = wedoc_post(http, "cgi-bin/kf/sync_msg", access_token, &body).await?;
+    let next_cursor = resp["next_cursor"]
+        .as_str()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| cursor.to_string());
+    let has_more = resp["has_more"].as_i64().unwrap_or(0) == 1;
+    let msg_list = resp["msg_list"].as_array().cloned().unwrap_or_default();
+    Ok((msg_list, next_cursor, has_more))
+}
+
+/// Load the persisted Kf sync cursor for a bot (senders/{bot}/kf_cursor.json).
+/// Empty string on first run / missing file (sync_msg accepts empty cursor).
+pub fn get_kf_cursor(bot_id: &str) -> String {
+    let path = types::config::home_dir()
+        .join("senders")
+        .join(bot_id)
+        .join("kf_cursor.json");
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("cursor").and_then(|c| c.as_str()).map(String::from))
+        .unwrap_or_default()
+}
+
+/// Persist the Kf sync cursor so a restart resumes from the last position
+/// (the API strongly recommends persisting next_cursor to avoid re-pulling
+/// from the start and message delays).
+pub fn save_kf_cursor(bot_id: &str, cursor: &str) {
+    let dir = types::config::home_dir().join("senders").join(bot_id);
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("kf_cursor.json");
+    if let Err(e) = std::fs::write(&path, serde_json::json!({"cursor": cursor}).to_string()) {
+        warn!(bot_id = %bot_id, error = %e, "Failed to save kf cursor");
+    }
+}
+
 /// Send a reply via the SmartBot response_url (HTTP POST with markdown).
 pub async fn send_smartbot_response_async(
     http: &Client,
