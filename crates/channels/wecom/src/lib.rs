@@ -16,6 +16,12 @@ pub mod channel;
 pub mod crypto;
 pub mod smartbot;
 pub mod token;
+pub mod tools;
+
+pub use tools::{
+    WecomSendFileTool, WecomSendImageTool, WecomSendLinkTool, WecomSendMenuTool,
+    WecomSendMiniprogramTool, WecomSendVideoTool, WecomSendVoiceTool,
+};
 
 // ---------------------------------------------------------------------------
 // SessionWatcher — unified watcher for all WeCom modes

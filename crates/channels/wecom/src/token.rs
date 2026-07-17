@@ -447,6 +447,59 @@ pub fn save_kf_cursor(bot_id: &str, cursor: &str) {
     }
 }
 
+/// Upload a temporary media file via `cgi-bin/media/upload` → `media_id`
+/// (valid 3 days). Used by kf image/voice/video/file/miniprogram-thumb sends.
+/// `media_type` = image|voice|video|file.
+pub async fn upload_kf_media(
+    http: &Client,
+    access_token: &str,
+    media_type: &str,
+    bytes: Vec<u8>,
+    filename: &str,
+) -> Result<String, String> {
+    let url = format!(
+        "{}/cgi-bin/media/upload?access_token={}&type={}",
+        WECOM_API_BASE, access_token, media_type
+    );
+    let part = reqwest::multipart::Part::bytes(bytes).file_name(filename.to_string());
+    let form = reqwest::multipart::Form::new().part("media", part);
+    let resp: serde_json::Value = http
+        .post(&url)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("media upload request failed: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("media upload response parse error: {e}"))?;
+    let errcode = resp["errcode"].as_i64().unwrap_or(0);
+    if errcode != 0 {
+        let errmsg = resp["errmsg"].as_str().unwrap_or("unknown");
+        return Err(format!("media upload error {errcode}: {errmsg}"));
+    }
+    resp["media_id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "media upload returned no media_id".into())
+}
+
+/// Send an arbitrary kf message via `cgi-bin/kf/send_msg`. `body` must contain
+/// `msgtype` + the msgtype-specific field (text/image/voice/video/file/link/
+/// miniprogram/menu). `touser` (= external_userid) and `open_kfid` are injected
+/// here. Rich-message tools build `body` and call this.
+pub async fn send_kf_msg(
+    http: &Client,
+    access_token: &str,
+    open_kfid: &str,
+    external_userid: &str,
+    mut body: serde_json::Value,
+) -> Result<(), String> {
+    body["touser"] = serde_json::Value::String(external_userid.to_string());
+    body["open_kfid"] = serde_json::Value::String(open_kfid.to_string());
+    wedoc_post(http, "cgi-bin/kf/send_msg", access_token, &body).await?;
+    Ok(())
+}
+
 /// Send a reply via the SmartBot response_url (HTTP POST with markdown).
 pub async fn send_smartbot_response_async(
     http: &Client,
