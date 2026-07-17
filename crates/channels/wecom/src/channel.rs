@@ -392,7 +392,18 @@ async fn webhook_post(
                     )
                     .await
                     {
-                        Ok(r) => r,
+                        Ok(r) => {
+                            if let Some(first) = r.0.first() {
+                                info!(
+                                    bot = %bot_id,
+                                    cb_open_kfid = %open_kfid_cb,
+                                    msg_open_kfid = %first["open_kfid"],
+                                    pulled = r.0.len(),
+                                    "kf sync_msg pulled messages"
+                                );
+                            }
+                            r
+                        }
                         Err(e) => {
                             warn!(bot = %bot_id, error = %e, "sync_kf_msg failed");
                             return;
