@@ -367,7 +367,7 @@ async fn webhook_post(
             let bot_id = state.bot_id.clone();
             // Extract owned data before spawning — DashMap Ref isn't Send.
             let (http, access_token) = match token::WECOM_STATE.get_session_for_send(&bot_id) {
-                Some(bot) => match bot.entry.get_access_token() {
+                Some(bot) => match bot.entry.get_access_token_async().await {
                     Ok(tok) => (bot.entry.http.clone(), tok),
                     Err(e) => {
                         warn!(bot = %bot_id, error = %e, "kf: get_access_token failed");

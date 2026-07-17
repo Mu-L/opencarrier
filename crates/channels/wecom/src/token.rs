@@ -204,6 +204,17 @@ impl BotEntry {
         }
     }
 
+    /// Async variant — safe to call from within an async runtime. The sync
+    /// `get_access_token` builds a new current_thread runtime and `block_on`,
+    /// which panics ("Cannot start a runtime from within a runtime") if the
+    /// caller is already on a tokio runtime (e.g. an axum webhook handler).
+    pub async fn get_access_token_async(&self) -> Result<String, String> {
+        match &self.mode {
+            WecomMode::SmartBot { .. } => Err("SmartBot mode does not use access tokens".into()),
+            _ => self.fetch_token().await,
+        }
+    }
+
     fn get_or_refresh_token(&self) -> Result<String, String> {
         // Check cache
         if let Some((token, expires_at)) = self.cached_token.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
