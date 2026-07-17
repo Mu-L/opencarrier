@@ -127,7 +127,7 @@ async fn deliver_kf_rich(
     external_userid: &str,
     content: &types::content::ContentDescriptor,
 ) -> Result<(), String> {
-    if let Some(mp) = content.miniprogram.as_ref() {
+    if let Some(mp) = content.miniprogram.as_ref().filter(|m| m.is_complete()) {
         // thumb: OA's thumb_media_id is INVALID on wecom (separate media
         // library) - always re-upload from thumb_url/thumb_file.
         let thumb_media = types::content::MediaRef {

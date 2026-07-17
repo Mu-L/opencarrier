@@ -12,6 +12,7 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::kernel::CarrierKernel;
+use runtime::kernel_handle::KernelHandle;
 
 // ── Cron delivery helper ───────────────────────────────────
 
@@ -226,8 +227,32 @@ pub(super) async fn cron_deliver_response(
         &agent_id.to_string(),
         response,
     );
-    // If the response was only publish markers, the draft was created and
-    // there's nothing left to deliver to the user.
+    // Process [DELIVER:key] markers the same way interactive replies do, so
+    // cron-triggered rich content (e.g. a charter confirm card) is delivered
+    // instead of shipping the raw marker to the channel. Targets the sender's
+    // last known channel; if none is known the markers are still stripped.
+    let deliver_fn = kernel
+        .channel_deliver_fn
+        .read()
+        .ok()
+        .and_then(|g| g.clone());
+    let config = kernel
+        .resolve_agent_workspace(&agent_id.to_string())
+        .and_then(|ws| {
+            std::fs::read_to_string(std::path::Path::new(&ws).join("content.toml")).ok()
+        })
+        .and_then(|text| toml::from_str::<types::content::ContentConfig>(&text).ok());
+    let cleaned = runtime::plugin::bridge::process_deliver_markers_pub(
+        deliver_fn,
+        config.as_ref(),
+        &pchannel,
+        &pbot,
+        sender_id,
+        &cleaned,
+    )
+    .await;
+    // If the response was only publish/deliver markers, there's nothing left
+    // to deliver to the user.
     if cleaned.trim().is_empty() {
         return Ok(());
     }

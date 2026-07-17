@@ -80,6 +80,17 @@ pub struct ContentDescriptor {
     pub miniprogram: Option<MiniprogramContent>,
 }
 
+impl MiniprogramContent {
+    /// Whether this card has the fields a channel needs to actually render it
+    /// (appid + pagepath + title). Thumb is resolved per-channel, so it is not
+    /// required here. Partial overrides that leave a required field empty should
+    /// be treated as "no miniprogram representation" so the channel degrades to
+    /// the next form instead of sending a broken card.
+    pub fn is_complete(&self) -> bool {
+        !self.appid.is_empty() && !self.pagepath.is_empty() && !self.title.is_empty()
+    }
+}
+
 impl ContentDescriptor {
     /// The best plain-text rendering (text itself, or a formatted link), for
     /// channels that can only send text (the default `deliver` fallback).
@@ -94,6 +105,98 @@ impl ContentDescriptor {
             return Some(format!("{}\n{}", l.title, l.url));
         }
         None
+    }
+
+    /// Apply one `field=value` override. `field` supports dotted paths such as
+    /// `miniprogram.appid`. Returns an error for unknown fields so callers can
+    /// surface typos (e.g. `miniprogram.app_id` vs `miniprogram.appid`) instead
+    /// of silently dropping the override and sending the wrong content.
+    pub fn apply_override(&mut self, field: &str, value: &str) -> Result<(), String> {
+        match field {
+            "text" => self.text = Some(value.to_string()),
+            "link.title" => {
+                self.link.get_or_insert_with(LinkContent::default).title = value.to_string();
+            }
+            "link.desc" => {
+                self.link.get_or_insert_with(LinkContent::default).desc = value.to_string();
+            }
+            "link.url" => {
+                self.link.get_or_insert_with(LinkContent::default).url = value.to_string();
+            }
+            "link.pic_url" => {
+                self.link.get_or_insert_with(LinkContent::default).pic_url = Some(value.to_string());
+            }
+            "image.url" => {
+                self.image.get_or_insert_with(MediaRef::default).url = Some(value.to_string());
+            }
+            "image.file_path" => {
+                self.image.get_or_insert_with(MediaRef::default).file_path = Some(value.to_string());
+            }
+            "image.media_id" => {
+                self.image.get_or_insert_with(MediaRef::default).media_id = Some(value.to_string());
+            }
+            "video.url" => {
+                self.video.get_or_insert_with(MediaRef::default).url = Some(value.to_string());
+            }
+            "video.file_path" => {
+                self.video.get_or_insert_with(MediaRef::default).file_path = Some(value.to_string());
+            }
+            "video.media_id" => {
+                self.video.get_or_insert_with(MediaRef::default).media_id = Some(value.to_string());
+            }
+            "file.url" => {
+                self.file.get_or_insert_with(MediaRef::default).url = Some(value.to_string());
+            }
+            "file.file_path" => {
+                self.file.get_or_insert_with(MediaRef::default).file_path = Some(value.to_string());
+            }
+            "file.media_id" => {
+                self.file.get_or_insert_with(MediaRef::default).media_id = Some(value.to_string());
+            }
+            "voice.url" => {
+                self.voice.get_or_insert_with(MediaRef::default).url = Some(value.to_string());
+            }
+            "voice.file_path" => {
+                self.voice.get_or_insert_with(MediaRef::default).file_path = Some(value.to_string());
+            }
+            "voice.media_id" => {
+                self.voice.get_or_insert_with(MediaRef::default).media_id = Some(value.to_string());
+            }
+            "miniprogram.appid" => {
+                self.miniprogram
+                    .get_or_insert_with(MiniprogramContent::default)
+                    .appid = value.to_string();
+            }
+            "miniprogram.pagepath" => {
+                self.miniprogram
+                    .get_or_insert_with(MiniprogramContent::default)
+                    .pagepath = value.to_string();
+            }
+            "miniprogram.title" => {
+                self.miniprogram
+                    .get_or_insert_with(MiniprogramContent::default)
+                    .title = value.to_string();
+            }
+            "miniprogram.thumb_media_id" => {
+                self.miniprogram
+                    .get_or_insert_with(MiniprogramContent::default)
+                    .thumb_media_id = Some(value.to_string());
+            }
+            "miniprogram.thumb_url" => {
+                self.miniprogram
+                    .get_or_insert_with(MiniprogramContent::default)
+                    .thumb_url = Some(value.to_string());
+            }
+            "miniprogram.thumb_file" => {
+                self.miniprogram
+                    .get_or_insert_with(MiniprogramContent::default)
+                    .thumb_file = Some(value.to_string());
+            }
+            _ => {
+                return Err(format!("unknown override field: {field}"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -186,5 +289,35 @@ thumb_url = "https://mmecoa.qpic.cn/cover.png"
             ..Default::default()
         };
         assert_eq!(d2.as_text().unwrap(), "plain");
+    }
+
+    #[test]
+    fn miniprogram_is_complete_requires_core_fields() {
+        let full = MiniprogramContent {
+            appid: "wx".into(),
+            pagepath: "pages/x".into(),
+            title: "t".into(),
+            ..Default::default()
+        };
+        assert!(full.is_complete());
+        // Missing any of appid/pagepath/title -> not complete (partial override
+        // case: must degrade instead of sending a broken card).
+        assert!(!MiniprogramContent { appid: String::new(), pagepath: "p".into(), title: "t".into(), ..Default::default() }.is_complete());
+        assert!(!MiniprogramContent { appid: "wx".into(), pagepath: String::new(), title: "t".into(), ..Default::default() }.is_complete());
+        assert!(!MiniprogramContent { appid: "wx".into(), pagepath: "p".into(), title: String::new(), ..Default::default() }.is_complete());
+    }
+
+    #[test]
+    fn apply_override_rejects_unknown_field() {
+        let mut d = ContentDescriptor::default();
+        // Typo: app_id vs appid - must error so the caller skips delivery
+        // instead of silently sending a card with an empty appid.
+        assert!(d.apply_override("miniprogram.app_id", "wx").is_err());
+        assert!(d.miniprogram.is_none());
+        // Correct field applies and makes the card complete.
+        d.apply_override("miniprogram.appid", "wx").unwrap();
+        d.apply_override("miniprogram.pagepath", "pages/x").unwrap();
+        d.apply_override("miniprogram.title", "t").unwrap();
+        assert!(d.miniprogram.as_ref().unwrap().is_complete());
     }
 }

@@ -366,7 +366,7 @@ async fn deliver_oa(
     openid: &str,
     content: &types::content::ContentDescriptor,
 ) -> Result<(), String> {
-    if let Some(mp) = content.miniprogram.as_ref() {
+    if let Some(mp) = content.miniprogram.as_ref().filter(|m| m.is_complete()) {
         let mut token = account.get_token().await?;
         let thumb = resolve_oa_thumb(account, &token, mp).await?;
         let res = api::custom_send_miniprogrampage(
