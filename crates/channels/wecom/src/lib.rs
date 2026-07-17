@@ -131,19 +131,14 @@ async fn deliver_kf_rich(
     content: &types::content::ContentDescriptor,
 ) -> Result<(), String> {
     if let Some(mp) = content.miniprogram.as_ref() {
-        // thumb: OA thumb_media_id is INVALID on wecom (separate media library) -
-        // must re-upload from thumb_url/thumb_file.
-        let thumb = if let Some(mid) = &mp.thumb_media_id {
-            // Still try the provided media_id first (may be a wecom-uploaded one).
-            mid.clone()
-        } else {
-            let media = types::content::MediaRef {
-                url: mp.thumb_url.clone(),
-                file_path: mp.thumb_file.clone(),
-                media_id: None,
-            };
-            resolve_kf_media_id(http, token, "image", &media, "thumb.jpg").await?
+        // thumb: OA's thumb_media_id is INVALID on wecom (separate media
+        // library) - always re-upload from thumb_url/thumb_file.
+        let thumb_media = types::content::MediaRef {
+            url: mp.thumb_url.clone(),
+            file_path: mp.thumb_file.clone(),
+            media_id: None,
         };
+        let thumb = resolve_kf_media_id(http, token, "image", &thumb_media, "thumb.jpg").await?;
         let body = serde_json::json!({
             "msgtype": "miniprogram",
             "miniprogram": {
