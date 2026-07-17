@@ -76,6 +76,125 @@ impl Default for SessionWatcher {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Rich content delivery (Kf mode)
+// ---------------------------------------------------------------------------
+
+/// Resolve a [`MediaRef`] to a wecom kf `media_id`: use a pre-uploaded
+/// `media_id`, else download `url` / read `file_path` and `upload_kf_media`.
+async fn resolve_kf_media_id(
+    http: &reqwest::Client,
+    token: &str,
+    media_type: &str,
+    media: &types::content::MediaRef,
+    default_filename: &str,
+) -> Result<String, String> {
+    if let Some(mid) = &media.media_id {
+        return Ok(mid.clone());
+    }
+    let bytes = if let Some(url) = &media.url {
+        let resp = http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("download media: {e}"))?;
+        resp.bytes()
+            .await
+            .map_err(|e| format!("read media body: {e}"))?
+            .to_vec()
+    } else if let Some(fp) = &media.file_path {
+        let resolved = if fp.starts_with('/') {
+            std::path::PathBuf::from(fp)
+        } else {
+            types::config::home_dir().join(fp)
+        };
+        std::fs::read(&resolved).map_err(|e| format!("read media {resolved:?}: {e}"))?
+    } else {
+        return Err(format!("media has no media_id, url, or file_path (for {media_type})"));
+    };
+    let filename = media
+        .url
+        .as_deref()
+        .and_then(|u| u.rsplit('/').next())
+        .unwrap_or(default_filename)
+        .to_string();
+    token::upload_kf_media(http, token, media_type, bytes, &filename).await
+}
+
+/// Deliver rich content to a wecom kf customer. Priority:
+/// miniprogram > file > video > image > link > text.
+async fn deliver_kf_rich(
+    http: &reqwest::Client,
+    token: &str,
+    open_kfid: &str,
+    external_userid: &str,
+    content: &types::content::ContentDescriptor,
+) -> Result<(), String> {
+    if let Some(mp) = content.miniprogram.as_ref() {
+        // thumb: OA thumb_media_id is INVALID on wecom (separate media library) -
+        // must re-upload from thumb_url/thumb_file.
+        let thumb = if let Some(mid) = &mp.thumb_media_id {
+            // Still try the provided media_id first (may be a wecom-uploaded one).
+            mid.clone()
+        } else {
+            let media = types::content::MediaRef {
+                url: mp.thumb_url.clone(),
+                file_path: mp.thumb_file.clone(),
+                media_id: None,
+            };
+            resolve_kf_media_id(http, token, "image", &media, "thumb.jpg").await?
+        };
+        let body = serde_json::json!({
+            "msgtype": "miniprogram",
+            "miniprogram": {
+                "appid": mp.appid,
+                "pagepath": mp.pagepath,
+                "title": mp.title,
+                "thumb_media_id": thumb,
+            }
+        });
+        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
+    }
+    if let Some(f) = content.file.as_ref() {
+        if !f.is_empty() {
+            let mid = resolve_kf_media_id(http, token, "file", f, "file").await?;
+            let body = serde_json::json!({ "msgtype": "file", "file": { "media_id": mid } });
+            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
+        }
+    }
+    if let Some(v) = content.video.as_ref() {
+        if !v.is_empty() {
+            let mid = resolve_kf_media_id(http, token, "video", v, "video.mp4").await?;
+            let body = serde_json::json!({ "msgtype": "video", "video": { "media_id": mid } });
+            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
+        }
+    }
+    if let Some(img) = content.image.as_ref() {
+        if !img.is_empty() {
+            let mid = resolve_kf_media_id(http, token, "image", img, "image.jpg").await?;
+            let body = serde_json::json!({ "msgtype": "image", "image": { "media_id": mid } });
+            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
+        }
+    }
+    if let Some(l) = content.link.as_ref() {
+        let body = serde_json::json!({
+            "msgtype": "link",
+            "link": {
+                "title": l.title,
+                "desc": l.desc,
+                "url": l.url,
+                "pic_url": l.pic_url.clone().unwrap_or_default(),
+            }
+        });
+        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
+    }
+    if let Some(text) = content.as_text() {
+        let body = serde_json::json!({ "msgtype": "text", "text": { "content": text } });
+        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
+    }
+    Err("wecom kf: content has no representation".into())
+}
+
 impl Channel for SessionWatcher {
     fn channel_type(&self) -> &str {
         "wecom"
@@ -151,6 +270,65 @@ impl Channel for SessionWatcher {
         }
 
         Ok(())
+    }
+
+    fn deliver(
+        &self,
+        content: &types::content::ContentDescriptor,
+        bot_id: &str,
+        user_id: &str,
+    ) -> Result<(), ChannelError> {
+        // Resolve Kf creds as owned data and drop the DashMap ref before the
+        // blocking thread spawn (avoids holding a shard lock across recv()).
+        // Non-Kf modes (App/SmartBot) degrade rich content to text via send().
+        let kf_creds = {
+            let session = token::WECOM_STATE
+                .get_session_for_send(bot_id)
+                .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
+            match &session.entry.mode {
+                token::WecomMode::Kf { .. } => {
+                    let open_kfid = session
+                        .entry
+                        .open_kfid()
+                        .map(|s| s.to_string())
+                        .ok_or_else(|| {
+                            ChannelError::NotSupported("kf session missing open_kfid".into())
+                        })?;
+                    let token = session
+                        .entry
+                        .get_access_token()
+                        .map_err(ChannelError::TokenFailed)?;
+                    Some((session.entry.http.clone(), token, open_kfid))
+                }
+                _ => None,
+            }
+        };
+
+        let Some((http, token, open_kfid)) = kf_creds else {
+            let text = content.as_text().ok_or_else(|| {
+                ChannelError::NotSupported(
+                    "wecom app/smartbot: no text representation for this content".into(),
+                )
+            })?;
+            return self.send(bot_id, user_id, &text);
+        };
+
+        let ext = user_id.to_string();
+        let content = content.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt.block_on(deliver_kf_rich(&http, &token, &open_kfid, &ext, &content)),
+                Err(e) => Err(format!("wecom deliver runtime: {e}")),
+            };
+            let _ = tx.send(result);
+        });
+        rx.recv()
+            .map_err(|e| ChannelError::Other(format!("wecom deliver thread disconnected: {e}")))?
+            .map_err(ChannelError::SendFailed)
     }
 
     fn stop(&mut self) {

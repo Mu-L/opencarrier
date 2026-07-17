@@ -20,6 +20,16 @@ use crate::kernel_handle::KernelHandle;
 pub type ChannelSendFn =
     Arc<dyn Fn(&str, &str, &str, &str) -> Result<(), ChannelError> + Send + Sync>;
 
+/// A function that delivers rich content through a channel.
+/// `(channel_type, bot_id, user_id, content)` -> result. Used by the bridge to
+/// deliver `[DELIVER:key]` marker content in the highest-fidelity form the
+/// channel supports (falls back to text via `Channel::deliver`'s default).
+pub type ChannelDeliverFn = Arc<
+    dyn Fn(&str, &str, &str, &types::content::ContentDescriptor) -> Result<(), ChannelError>
+        + Send
+        + Sync,
+>;
+
 /// A function that reports a channel type's routing mode.
 /// Used by the bridge to decide whether to run the multi-clone pipeline.
 pub type RoutingModeFn = Arc<dyn Fn(&str) -> RoutingMode + Send + Sync>;
@@ -198,7 +208,35 @@ fn parse_publish_content(content: &str) -> (String, Option<String>, Option<Strin
     (html_path, title, digest)
 }
 
-/// Process `[PUBLISH:app_id]html_path[/PUBLISH]` markers in an agent reply.
+/// Parse `[DELIVER:key]` markers (self-closing - the content descriptor is
+/// resolved by `key` from the agent's `content.toml`, not carried in the marker
+/// body). Returns (content keys, text with markers stripped).
+fn parse_deliver_markers(text: &str) -> (Vec<String>, String) {
+    let marker = "[DELIVER:";
+    let mut keys = Vec::new();
+    let mut cleaned = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(marker) {
+        cleaned.push_str(&rest[..start]);
+        let after = &rest[start + marker.len()..];
+        if let Some(end) = after.find(']') {
+            let key = after[..end].trim().to_string();
+            if !key.is_empty() {
+                keys.push(key);
+            }
+            rest = &after[end + 1..];
+        } else {
+            // Malformed (no closing ]), emit as-is and stop.
+            cleaned.push_str(marker);
+            cleaned.push_str(after);
+            rest = "";
+        }
+    }
+    cleaned.push_str(rest);
+    (keys, cleaned)
+}
+
+
 ///
 /// For each marker, spawns the reliable publish handler (cover → draft →
 /// publish) in the background; the marker is stripped from the text. Returns
@@ -530,6 +568,13 @@ pub struct PluginBridgeManager {
     kernel: Arc<dyn KernelHandle>,
     /// Function to send responses through channels (channel_type, bot_id, user_id, text).
     channel_send_fn: Option<ChannelSendFn>,
+    /// Function to deliver rich content through channels
+    /// (channel_type, bot_id, user_id, content). Backs `[DELIVER:key]` markers.
+    channel_deliver_fn: Option<ChannelDeliverFn>,
+    /// Per-agent content config cache: agent_id -> (content.toml mtime, config).
+    /// Reloaded lazily when the file's mtime changes.
+    content_cache:
+        Arc<DashMap<String, (std::time::SystemTime, Arc<types::content::ContentConfig>)>>,
     /// Function to look up a channel's routing mode by channel_type.
     routing_mode_fn: Option<RoutingModeFn>,
     /// Notify routing: notify_type → push target. Loaded from notify_routes.json.
@@ -548,6 +593,8 @@ impl PluginBridgeManager {
         Self {
             kernel,
             channel_send_fn: None,
+            channel_deliver_fn: None,
+            content_cache: Arc::new(DashMap::new()),
             routing_mode_fn: None,
             notify_routes: None,
             sender_router: None,
@@ -571,6 +618,11 @@ impl PluginBridgeManager {
         self.channel_send_fn = Some(f);
     }
 
+    /// Set the channel deliver function for delivering rich content (`[DELIVER]`).
+    pub fn set_channel_deliver_fn(&mut self, f: ChannelDeliverFn) {
+        self.channel_deliver_fn = Some(f);
+    }
+
     /// Set the routing-mode probe (tells the bridge which channels are DirectBind).
     pub fn set_routing_mode_fn(&mut self, f: RoutingModeFn) {
         self.routing_mode_fn = Some(f);
@@ -579,6 +631,100 @@ impl PluginBridgeManager {
     /// Set notify routing (enables `[NOTIFY:type]content[/NOTIFY] markers → cross-channel push).
     pub fn set_notify_routes(&mut self, routes: Arc<std::collections::HashMap<String, NotifyTarget>>) {
         self.notify_routes = Some(routes);
+    }
+
+    /// Load an agent's content config (`content.toml` in its workspace), cached
+    /// by file mtime so edits take effect on the next message without a restart.
+    /// Returns None if the agent has no content.toml (or it can't be parsed).
+    fn load_content_config(&self, agent_id: &str) -> Option<Arc<types::content::ContentConfig>> {
+        if agent_id.is_empty() {
+            return None;
+        }
+        let ws = self.kernel.resolve_agent_workspace(agent_id)?;
+        let path = std::path::Path::new(&ws).join("content.toml");
+        let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
+        if let Some(entry) = self.content_cache.get(agent_id) {
+            if entry.0 == mtime {
+                return Some(entry.1.clone());
+            }
+        }
+        let text = std::fs::read_to_string(&path).ok()?;
+        let config: types::content::ContentConfig = toml::from_str(&text)
+            .map_err(|e| {
+                warn!(%agent_id, error=%e, "Failed to parse content.toml");
+                e
+            })
+            .ok()?;
+        let config = Arc::new(config);
+        self.content_cache
+            .insert(agent_id.to_string(), (mtime, config.clone()));
+        Some(config)
+    }
+
+    /// Process `[DELIVER:key]` markers in an agent reply: deliver each content
+    /// key's descriptor via the channel's best-supported form (`channel_deliver_fn`),
+    /// strip markers from the user-facing text. If a deliver fails and the
+    /// remaining text is empty, fall back to the content's text representation so
+    /// the user still gets something (e.g. a link when a card can't be sent).
+    async fn process_deliver_markers(
+        &self,
+        original: &PluginMessage,
+        agent_id: &str,
+        response: &str,
+    ) -> String {
+        let (keys, cleaned) = parse_deliver_markers(response);
+        if keys.is_empty() {
+            return response.to_string();
+        }
+        let Some(deliver_fn) = self.channel_deliver_fn.clone() else {
+            warn!(?keys, "DELIVER markers present but no channel_deliver_fn configured");
+            return cleaned;
+        };
+        let config = self.load_content_config(agent_id);
+        let mut fallback_text: Option<String> = None;
+        for key in &keys {
+            let Some(desc) = config.as_ref().and_then(|c| c.get(key)) else {
+                warn!(%key, %agent_id, "DELIVER marker: content key not found in content.toml");
+                continue;
+            };
+            let desc = desc.clone();
+            let desc_text = desc.as_text();
+            let channel_type = original.channel_type.clone();
+            let bot_id = original.bot_id.clone();
+            let sender_id = original.sender_id.clone();
+            let deliver_fn = deliver_fn.clone();
+            let key_owned = key.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                deliver_fn(&channel_type, &bot_id, &sender_id, &desc)
+            })
+            .await;
+            match result {
+                Ok(Ok(())) => info!(
+                    key = %key_owned,
+                    channel = %original.channel_type,
+                    bot = %original.bot_id,
+                    "DELIVER: content delivered"
+                ),
+                Ok(Err(e)) => {
+                    warn!(
+                        key = %key_owned,
+                        channel = %original.channel_type,
+                        error = %e,
+                        "DELIVER: channel deliver failed; will fall back to text if reply empty"
+                    );
+                    if fallback_text.is_none() {
+                        fallback_text = desc_text;
+                    }
+                }
+                Err(e) => warn!(key = %key_owned, error = %e, "DELIVER: spawn_blocking join failed"),
+            }
+        }
+        if cleaned.trim().is_empty() {
+            if let Some(t) = fallback_text {
+                return t;
+            }
+        }
+        cleaned
     }
 
     /// Backward-compatible: add a loaded plugin to the bridge.
@@ -1257,6 +1403,12 @@ impl PluginBridgeManager {
             &cleaned,
         );
 
+        // Process [DELIVER:key] markers: deliver rich content via the channel's
+        // best-supported form, strip markers from the reply text.
+        let final_cleaned = self
+            .process_deliver_markers(original, &self.resolve_agent(original), &final_cleaned)
+            .await;
+
         let response = final_cleaned.as_str();
 
         // Suppress no-reply sentinels: the agent/flow intentionally chose not to
@@ -1317,7 +1469,7 @@ impl PluginBridgeManager {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_no_reply_sentinel, parse_publish_markers};
+    use super::{is_no_reply_sentinel, parse_deliver_markers, parse_publish_markers};
 
     #[test]
     fn detects_no_reply_sentinels() {
@@ -1368,5 +1520,23 @@ mod tests {
         let (none, same) = parse_publish_markers("plain reply");
         assert!(none.is_empty());
         assert_eq!(same, "plain reply");
+    }
+
+    #[test]
+    fn deliver_markers_are_stripped_and_keys_extracted() {
+        let (keys, cleaned) = parse_deliver_markers("月票来啦～ [DELIVER:月票] 收到吧");
+        assert_eq!(keys, vec!["月票".to_string()]);
+        assert!(!cleaned.contains("DELIVER"), "marker stripped: {cleaned}");
+        assert!(cleaned.contains("月票来啦～") && cleaned.contains("收到吧"));
+
+        // Bare marker only -> empty cleaned text, key extracted.
+        let (keys, cleaned) = parse_deliver_markers("[DELIVER:月卡]");
+        assert_eq!(keys, vec!["月卡".to_string()]);
+        assert!(cleaned.trim().is_empty());
+
+        // No markers -> unchanged.
+        let (none, same) = parse_deliver_markers("just text");
+        assert!(none.is_empty());
+        assert_eq!(same, "just text");
     }
 }

@@ -18,13 +18,13 @@ fn resolve_path(p: &str) -> std::path::PathBuf {
 }
 
 /// Returns true if the error indicates an expired/invalid access_token (WeChat errcode 40001).
-fn is_token_expired(err: &str) -> bool {
+pub(crate) fn is_token_expired(err: &str) -> bool {
     err.contains("40001")
 }
 
 /// Get a fresh access_token. If a prior call failed with 40001, call this to
 /// invalidate the cache and get a new token for one retry.
-async fn refresh_token(account: &crate::channel::OaAccountState) -> Result<String, String> {
+pub(crate) async fn refresh_token(account: &crate::channel::OaAccountState) -> Result<String, String> {
     account.invalidate_token().await;
     account.get_token().await
 }

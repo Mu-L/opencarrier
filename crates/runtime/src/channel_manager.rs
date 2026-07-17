@@ -13,7 +13,7 @@ use types::tool::ToolDefinition;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use crate::plugin::bridge::{ChannelSendFn, PluginBridgeManager};
+use crate::plugin::bridge::{ChannelDeliverFn, ChannelSendFn, PluginBridgeManager};
 use crate::plugin::router::SenderRouter;
 use crate::plugin::tool_dispatch::PluginToolDispatcher;
 use crate::kernel_handle::KernelHandle;
@@ -137,6 +137,27 @@ impl ChannelManager {
         });
         bridge.set_channel_send_fn(send_fn);
 
+        // Set up channel deliver function for bridge to deliver rich content
+        // (`[DELIVER:key]` markers). Dispatches by channel_type to Channel::deliver,
+        // which each channel overrides to pick its best-supported form.
+        let channels_for_deliver = self.channels.clone();
+        let deliver_fn: ChannelDeliverFn = Arc::new(
+            move |channel_type, bot_id, user_id, content| {
+                let channels =
+                    channels_for_deliver.lock().unwrap_or_else(|e| e.into_inner());
+                for channel in channels.values() {
+                    if channel.channel_type() == channel_type {
+                        return channel.deliver(content, bot_id, user_id);
+                    }
+                }
+                Err(ChannelError::UnknownBot(format!(
+                    "Channel not found for type: {}, bot: {}",
+                    channel_type, bot_id
+                )))
+            },
+        );
+        bridge.set_channel_deliver_fn(deliver_fn);
+
         // Set up routing-mode probe so the bridge can branch on DirectBind vs SenderBased
         let channels_for_mode = self.channels.clone();
         let mode_fn: crate::plugin::bridge::RoutingModeFn = Arc::new(move |channel_type| {
@@ -255,6 +276,44 @@ impl ChannelManager {
             for channel in channels.values() {
                 if channel.channel_type() == channel_type {
                     return channel.send(bot_id, user_id, text);
+                }
+            }
+            Err(ChannelError::UnknownBot(format!(
+                "Channel not found for type: {}, bot: {}",
+                channel_type, bot_id
+            )))
+        })
+    }
+
+    /// Deliver rich content through a channel by channel type and bot ID.
+    pub fn channel_deliver(
+        &self,
+        channel_type: &str,
+        bot_id: &str,
+        user_id: &str,
+        content: &types::content::ContentDescriptor,
+    ) -> Result<(), ChannelError> {
+        let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
+        for channel in channels.values() {
+            if channel.channel_type() == channel_type {
+                return channel.deliver(content, bot_id, user_id);
+            }
+        }
+        Err(ChannelError::UnknownBot(format!(
+            "Channel not found for type: {}, bot: {}",
+            channel_type, bot_id
+        )))
+    }
+
+    /// Build a closure that delivers rich content through this manager's
+    /// channels. Used by the kernel for script/cron delivery without an agent.
+    pub fn make_channel_deliver_fn(&self) -> ChannelDeliverFn {
+        let channels = self.channels.clone();
+        Arc::new(move |channel_type, bot_id, user_id, content| {
+            let channels = channels.lock().unwrap_or_else(|e| e.into_inner());
+            for channel in channels.values() {
+                if channel.channel_type() == channel_type {
+                    return channel.deliver(content, bot_id, user_id);
                 }
             }
             Err(ChannelError::UnknownBot(format!(

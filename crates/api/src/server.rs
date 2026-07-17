@@ -389,6 +389,8 @@ pub async fn run_daemon(
         {
             let send_fn = cm.make_channel_send_fn();
             *kernel.channel_send_fn.write().unwrap() = Some(send_fn);
+            let deliver_fn = cm.make_channel_deliver_fn();
+            *kernel.channel_deliver_fn.write().unwrap() = Some(deliver_fn);
             let probe = cm.make_supports_proactive_fn();
             *kernel.channel_supports_proactive_fn.write().unwrap() = Some(probe);
         }

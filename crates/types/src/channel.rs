@@ -99,6 +99,29 @@ pub trait Channel: Send + Sync {
     /// Send a text message through the channel.
     fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError>;
 
+    /// Deliver rich content. Each channel picks the highest-fidelity
+    /// representation it supports from `content` (miniprogram > video > file >
+    /// image > link > text) and sends it to `user_id` on bot `bot_id`.
+    ///
+    /// The default implementation degrades to plain text (or a formatted link)
+    /// via [`send`](Self::send) - so channels that only support text need do
+    /// nothing. Channels with richer native forms (weixin-oa miniprogram cards,
+    /// wecom kf files/video, weixin iLink images/video) override this to pick
+    /// their best form, resolving the sending account by `bot_id` (multi-tenant).
+    fn deliver(
+        &self,
+        content: &crate::content::ContentDescriptor,
+        bot_id: &str,
+        user_id: &str,
+    ) -> Result<(), ChannelError> {
+        let text = content.as_text().ok_or_else(|| {
+            ChannelError::NotSupported(
+                "channel has no representation for this content and no text fallback".into(),
+            )
+        })?;
+        self.send(bot_id, user_id, &text)
+    }
+
     /// Stop the channel and release resources.
     fn stop(&mut self);
 

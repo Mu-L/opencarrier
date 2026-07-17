@@ -7,6 +7,7 @@ pub mod agent;
 pub mod api_tool;
 pub mod brain;
 pub mod channel;
+pub mod content;
 pub mod env;
 pub mod capability;
 pub mod comms;

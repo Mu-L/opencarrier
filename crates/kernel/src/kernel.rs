@@ -141,6 +141,11 @@ pub struct CarrierKernel {
     /// Wired up by the API server after the ChannelManager starts. Used by
     /// cron delivery to send notifications back to users.
     pub channel_send_fn: std::sync::RwLock<Option<runtime::plugin::bridge::ChannelSendFn>>,
+    /// Channel deliver function: (channel_type, bot_id, user_id, content) -> Result.
+    /// Wired up alongside channel_send_fn. Backs `[DELIVER:key]` marker handling
+    /// and script/no-agent rich-content delivery.
+    pub channel_deliver_fn:
+        std::sync::RwLock<Option<runtime::plugin::bridge::ChannelDeliverFn>>,
     /// Channel proactive-push capability probe: channel_type → bool.
     /// Wired up alongside channel_send_fn.
     pub channel_supports_proactive_fn: std::sync::RwLock<Option<ChannelProactivePushFn>>,
@@ -563,6 +568,7 @@ impl CarrierKernel {
             metering,
             cron_scheduler,
             channel_send_fn: std::sync::RwLock::new(None),
+            channel_deliver_fn: std::sync::RwLock::new(None),
             channel_supports_proactive_fn: std::sync::RwLock::new(None),
             brain: KernelBrain {
                 brain: Arc::new(std::sync::RwLock::new(brain_arc)),

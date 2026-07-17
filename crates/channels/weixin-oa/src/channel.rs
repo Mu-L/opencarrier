@@ -12,6 +12,7 @@ use types::plugin::{PluginContent, PluginMessage};
 
 use crate::api;
 use crate::models::{OaMessage, WeixinOaSessionFile};
+use crate::tools::{is_token_expired, refresh_token};
 
 // --- Runtime state ---
 
@@ -293,6 +294,133 @@ fn build_message_text(msg: &OaMessage) -> String {
     }
 }
 
+// --- Rich content delivery ---
+
+/// Resolve a [`MediaRef`] to an OA permanent material `media_id`: use a
+/// pre-uploaded `media_id` directly, else download `url` / read `file_path`
+/// and upload via `upload_media_permanent`.
+async fn resolve_oa_media_id(
+    account: &OaAccountState,
+    token: &str,
+    media: &types::content::MediaRef,
+    default_filename: &str,
+) -> Result<String, String> {
+    if let Some(mid) = &media.media_id {
+        return Ok(mid.clone());
+    }
+    let bytes = if let Some(url) = &media.url {
+        let resp = account
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("download media: {e}"))?;
+        resp.bytes()
+            .await
+            .map_err(|e| format!("read media body: {e}"))?
+            .to_vec()
+    } else if let Some(fp) = &media.file_path {
+        let resolved = if fp.starts_with('/') {
+            std::path::PathBuf::from(fp)
+        } else {
+            types::config::home_dir().join(fp)
+        };
+        std::fs::read(&resolved).map_err(|e| format!("read media {resolved:?}: {e}"))?
+    } else {
+        return Err("media has no media_id, url, or file_path".into());
+    };
+    let filename = media
+        .url
+        .as_deref()
+        .and_then(|u| u.rsplit('/').next())
+        .unwrap_or(default_filename)
+        .to_string();
+    let (mid, _url) = api::upload_media_permanent(&account.http, token, bytes, &filename).await?;
+    Ok(mid)
+}
+
+/// Resolve a miniprogram card thumb to a permanent `media_id`: use
+/// `thumb_media_id` directly (OA permanent), else upload from
+/// `thumb_url`/`thumb_file`.
+async fn resolve_oa_thumb(
+    account: &OaAccountState,
+    token: &str,
+    mp: &types::content::MiniprogramContent,
+) -> Result<String, String> {
+    if let Some(mid) = &mp.thumb_media_id {
+        return Ok(mid.clone());
+    }
+    let media = types::content::MediaRef {
+        url: mp.thumb_url.clone(),
+        file_path: mp.thumb_file.clone(),
+        media_id: None,
+    };
+    resolve_oa_media_id(account, token, &media, "thumb.png").await
+}
+
+/// Deliver rich content to a weixin-oa follower. Priority: miniprogram, then
+/// image, then text (degrades via `as_text`, incl. a formatted link). Each send
+/// retries once on a 40001 (expired token) by refreshing.
+async fn deliver_oa(
+    account: &Arc<OaAccountState>,
+    openid: &str,
+    content: &types::content::ContentDescriptor,
+) -> Result<(), String> {
+    if let Some(mp) = content.miniprogram.as_ref() {
+        let mut token = account.get_token().await?;
+        let thumb = resolve_oa_thumb(account, &token, mp).await?;
+        let res = api::custom_send_miniprogrampage(
+            &account.http,
+            &token,
+            openid,
+            &mp.title,
+            &mp.pagepath,
+            &thumb,
+            &mp.appid,
+        )
+        .await;
+        return match res {
+            Ok(()) => Ok(()),
+            Err(e) if is_token_expired(&e) => {
+                token = refresh_token(account).await?;
+                api::custom_send_miniprogrampage(
+                    &account.http, &token, openid, &mp.title, &mp.pagepath, &thumb, &mp.appid,
+                )
+                .await
+            }
+            Err(e) => Err(e),
+        };
+    }
+    if let Some(img) = content.image.as_ref() {
+        if !img.is_empty() {
+            let mut token = account.get_token().await?;
+            let media_id = resolve_oa_media_id(account, &token, img, "image.png").await?;
+            let res = api::custom_send_image(&account.http, &token, openid, &media_id).await;
+            return match res {
+                Ok(()) => Ok(()),
+                Err(e) if is_token_expired(&e) => {
+                    token = refresh_token(account).await?;
+                    api::custom_send_image(&account.http, &token, openid, &media_id).await
+                }
+                Err(e) => Err(e),
+            };
+        }
+    }
+    if let Some(text) = content.as_text() {
+        let mut token = account.get_token().await?;
+        let res = api::custom_send_text(&account.http, &token, openid, &text).await;
+        return match res {
+            Ok(()) => Ok(()),
+            Err(e) if is_token_expired(&e) => {
+                token = refresh_token(account).await?;
+                api::custom_send_text(&account.http, &token, openid, &text).await
+            }
+            Err(e) => Err(e),
+        };
+    }
+    Err("weixin-oa: content has no miniprogram, image, or text representation".into())
+}
+
 // --- Channel trait impl ---
 
 impl Channel for SessionWatcher {
@@ -372,6 +500,36 @@ impl Channel for SessionWatcher {
         });
 
         Ok(())
+    }
+
+    fn deliver(
+        &self,
+        content: &types::content::ContentDescriptor,
+        bot_id: &str,
+        user_id: &str,
+    ) -> Result<(), ChannelError> {
+        let account = self
+            .get_account(bot_id)
+            .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
+        let openid = user_id.to_string();
+        let content = content.clone();
+        // Run the async deliver on a dedicated thread and block for the result
+        // (the bridge calls deliver_fn inside spawn_blocking, so blocking is OK;
+        // returning the real Result lets the marker handler fall back to text).
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt.block_on(deliver_oa(&account, &openid, &content)),
+                Err(e) => Err(format!("weixin-oa deliver runtime: {e}")),
+            };
+            let _ = tx.send(result);
+        });
+        rx.recv()
+            .map_err(|e| ChannelError::Other(format!("weixin-oa deliver thread disconnected: {e}")))?
+            .map_err(ChannelError::SendFailed)
     }
 
     fn stop(&mut self) {
