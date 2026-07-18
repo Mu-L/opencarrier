@@ -124,7 +124,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         error_tracker.remove(&looping_name);
         // Inject a system message telling the LLM to stop using this tool
         let warning = format!(
-            "工具 `{looping_name}` 连续多次返回相同结果，已被临时移除。请用其他方式完成任务，不要再用这个工具。如果是因为 flow 声明的工具未加载，请用 flow_update 修复 flow 的 tools 字段。"
+            "工具 `{looping_name}` 连续多次返回相同结果，已被临时移除。请换方式完成任务（例如该写文件时调用 file_write，不要反复 file_read 同一路径）。若 flow 的 tools 声明缺失或不对，成功后用 flow_update(name, tools=[...], body=...) 固化正确工具列表。"
         );
         messages.push(Message::system(&warning));
     }

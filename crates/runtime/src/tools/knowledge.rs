@@ -121,32 +121,43 @@ impl ToolModule for KnowledgeTools {
             },
             ToolDefinition {
                 name: "flow_create".to_string(),
-                description: "Create a new flow file in the workspace flows/ directory. Flows define reusable workflows with steps and tool requirements.".to_string(),
+                description: "Create a new flow in the workspace flows/ directory. Flows are tool prescriptions: frontmatter tools: are auto-injected when the flow matches; body is the hard workflow. Prefer declaring concrete tool names in tools (not tool_search).".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "name": {"type": "string", "description": "Flow name (used as filename)"},
                         "description": {"type": "string", "description": "Brief description of when to activate this flow"},
+                        "tools": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Tool names this flow needs (e.g. [\"file_read\", \"file_write\", \"web_search\"]). Injected automatically when the flow matches — do not rely on tool_search for these."
+                        },
                         "toolsets": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Toolset names this flow needs (e.g. [\"web\", \"filesystem\"]). Tools from these toolsets will be auto-activated when the flow matches."
+                            "description": "Deprecated alias for tools. Prefer tools."
                         },
-                        "body": {"type": "string", "description": "The flow content: workflow steps, instructions, and examples (markdown)"},
+                        "body": {"type": "string", "description": "The flow content: hard rules, workflow steps, instructions (markdown)"},
                     },
                     "required": ["name", "body"],
                 }),
             },
             ToolDefinition {
                 name: "flow_update".to_string(),
-                description: "Update the body of an existing flow. Preserves the flow's frontmatter (name, description).".to_string(),
+                description: "Update an existing flow after a successful discovery path. Can replace body and/or tools: frontmatter so next runs inject the proven tools without tool_search. Shared system flows are copy-on-write into the workspace private flows/.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "name": {"type": "string", "description": "Flow name to update"},
-                        "body": {"type": "string", "description": "New flow body content (replaces existing)"},
+                        "body": {"type": "string", "description": "New flow body (replaces existing body; omit to keep body)"},
+                        "tools": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Replace frontmatter tools: list with these names (proven tools to inject next time)"
+                        },
+                        "description": {"type": "string", "description": "Optional new frontmatter description"},
                     },
-                    "required": ["name", "body"],
+                    "required": ["name"],
                 }),
             },
             ToolDefinition {
@@ -504,6 +515,103 @@ async fn tool_knowledge_index(workspace_root: Option<&Path>) -> Result<String, S
     Ok("Knowledge index (MEMORY.md) rebuilt successfully.".to_string())
 }
 
+fn parse_string_list(input: &serde_json::Value, key: &str) -> Vec<String> {
+    input[key]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Format a YAML frontmatter `tools:` list block.
+fn format_tools_yaml(tools: &[String]) -> String {
+    if tools.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("tools:\n");
+    for t in tools {
+        out.push_str(&format!("  - {t}\n"));
+    }
+    out
+}
+
+/// Split a flow file into (frontmatter_inner, body). frontmatter_inner excludes the `---` fences.
+fn split_flow_file(content: &str) -> (Option<String>, String) {
+    let trimmed = content.trim_start();
+    if let Some(rest) = trimmed.strip_prefix("---") {
+        let rest = rest.strip_prefix('\n').unwrap_or(rest);
+        if let Some(end) = rest.find("\n---") {
+            let fm = rest[..end].to_string();
+            let after = &rest[end + 4..]; // skip \n---
+            let body = after.strip_prefix('\n').unwrap_or(after).to_string();
+            return (Some(fm), body);
+        }
+    }
+    (None, content.to_string())
+}
+
+/// Replace or insert `tools:` in YAML frontmatter text (without fences).
+fn upsert_frontmatter_tools(fm: &str, tools: &[String]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut skipping_tools_list = false;
+    let mut tools_written = false;
+    for line in fm.lines() {
+        let trimmed = line.trim();
+        if skipping_tools_list {
+            // Continue skipping multi-line list items under tools:
+            if trimmed.starts_with('-') || trimmed.is_empty() {
+                continue;
+            }
+            // Also skip inline tools: [...] was a single line already consumed
+            skipping_tools_list = false;
+        }
+        if trimmed.starts_with("tools:") {
+            if !tools_written {
+                lines.push(format_tools_yaml(tools).trim_end().to_string());
+                tools_written = true;
+            }
+            // Skip old tools value: either same-line list or following `-` lines
+            if trimmed == "tools:" || trimmed.ends_with(':') {
+                skipping_tools_list = true;
+            }
+            continue;
+        }
+        // Drop deprecated toolsets so tools: is the single source of truth
+        if trimmed.starts_with("toolsets:") {
+            if trimmed == "toolsets:" || trimmed.ends_with(':') && !trimmed.contains('[') {
+                skipping_tools_list = true;
+            }
+            continue;
+        }
+        lines.push(line.to_string());
+    }
+    if !tools_written && !tools.is_empty() {
+        lines.push(format_tools_yaml(tools).trim_end().to_string());
+    }
+    lines.join("\n")
+}
+
+fn upsert_frontmatter_description(fm: &str, description: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut written = false;
+    for line in fm.lines() {
+        if line.trim().starts_with("description:") {
+            lines.push(format!("description: {description}"));
+            written = true;
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if !written {
+        lines.push(format!("description: {description}"));
+    }
+    lines.join("\n")
+}
+
 async fn tool_flow_create(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
@@ -512,10 +620,11 @@ async fn tool_flow_create(
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
     let description = input["description"].as_str().unwrap_or("");
     let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
-    let toolsets: Vec<String> = input["toolsets"]
-        .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-        .unwrap_or_default();
+    // Prefer `tools`; accept legacy `toolsets` as alias (same list of tool names).
+    let mut tools = parse_string_list(input, "tools");
+    if tools.is_empty() {
+        tools = parse_string_list(input, "toolsets");
+    }
 
     let flows_dir = root.join("flows");
     tokio::fs::create_dir_all(&flows_dir)
@@ -535,9 +644,8 @@ async fn tool_flow_create(
     if !description.is_empty() {
         frontmatter.push_str(&format!("description: {description}\n"));
     }
-    if !toolsets.is_empty() {
-        let ts_str = toolsets.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", ");
-        frontmatter.push_str(&format!("toolsets: [{ts_str}]\n"));
+    if !tools.is_empty() {
+        frontmatter.push_str(&format_tools_yaml(&tools));
     }
     frontmatter.push_str("---\n");
 
@@ -546,7 +654,14 @@ async fn tool_flow_create(
         .await
         .map_err(|e| format!("Failed to write flow: {e}"))?;
 
-    Ok(format!("Flow '{name}' created successfully."))
+    Ok(format!(
+        "Flow '{name}' created successfully{}.",
+        if tools.is_empty() {
+            String::new()
+        } else {
+            format!(" with tools: [{}]", tools.join(", "))
+        }
+    ))
 }
 
 async fn tool_flow_update(
@@ -555,47 +670,101 @@ async fn tool_flow_update(
 ) -> Result<String, String> {
     let root = workspace_root.ok_or("flow_update requires a workspace root")?;
     let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
-    let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
+    let new_body = input["body"].as_str().filter(|s| !s.is_empty());
+    let new_tools = {
+        let t = parse_string_list(input, "tools");
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
+    };
+    let new_description = input["description"].as_str().filter(|s| !s.is_empty());
 
-    let flows_dir = root.join("flows");
+    if new_body.is_none() && new_tools.is_none() && new_description.is_none() {
+        return Err(
+            "flow_update requires at least one of: body, tools, description (non-empty)".to_string(),
+        );
+    }
+
+    let private_flows = root.join("flows");
+    let shared_flows = types::config::home_dir().join("flows");
     let filename = lifecycle::evolution::sanitize_filename(name);
-    let flat_path = flows_dir.join(format!("{filename}.md"));
-    // Directory format: prefer the canonical flow.md, fall back to legacy
-    // SKILL.md (still readable, see flow_dir_markdown in prompt_sources.rs).
-    let dir = flows_dir.join(&filename);
-    let dir_flow = dir.join("flow.md");
-    let dir_skill = dir.join("SKILL.md");
 
-    let target = if flat_path.exists() {
-        flat_path
-    } else if dir_flow.exists() {
-        dir_flow
-    } else if dir_skill.exists() {
-        dir_skill
-    } else {
-        return Err(format!("Flow '{name}' not found."));
+    // Prefer private workspace flow; fall back to shared (copy-on-write).
+    let private_path = find_flow_path(&private_flows, name).await;
+    let shared_path = find_flow_path(&shared_flows, name).await;
+
+    let (source_path, cow_to_private) = match (&private_path, &shared_path) {
+        (Some(p), _) => (p.clone(), false),
+        (None, Some(p)) => (p.clone(), true),
+        (None, None) => {
+            return Err(format!(
+                "Flow '{name}' not found in workspace or shared flows."
+            ));
+        }
     };
 
-    let existing = tokio::fs::read_to_string(&target)
+    let existing = tokio::fs::read_to_string(&source_path)
         .await
         .map_err(|e| format!("Failed to read flow: {e}"))?;
 
-    let updated = if let Some(rest) = existing.strip_prefix("---") {
-        if let Some(end) = rest.find("---") {
-            let fm_end = end + 6;
-            format!("{}\n{}", &existing[..fm_end].trim_end(), body)
+    let (fm_opt, old_body) = split_flow_file(&existing);
+    let mut fm = fm_opt.unwrap_or_else(|| format!("name: {name}"));
+    if let Some(desc) = new_description {
+        fm = upsert_frontmatter_description(&fm, desc);
+    }
+    if let Some(ref tools) = new_tools {
+        fm = upsert_frontmatter_tools(&fm, tools);
+    }
+    let body = new_body.unwrap_or(old_body.as_str());
+    let updated = format!("---\n{}\n---\n\n{}", fm.trim(), body.trim_start());
+
+    // Write target: private path if exists; else COW into workspace/flows/{name}.md
+    let target = if cow_to_private {
+        tokio::fs::create_dir_all(&private_flows)
+            .await
+            .map_err(|e| format!("Failed to create private flows dir: {e}"))?;
+        // Prefer dir format for new private overlays of shared dir-based flows
+        if source_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n == "flow.md" || n == "SKILL.md")
+        {
+            let dir = private_flows.join(&filename);
+            tokio::fs::create_dir_all(&dir)
+                .await
+                .map_err(|e| format!("Failed to create flow dir: {e}"))?;
+            dir.join("flow.md")
         } else {
-            body.to_string()
+            private_flows.join(format!("{filename}.md"))
         }
     } else {
-        body.to_string()
+        source_path
     };
 
     tokio::fs::write(&target, &updated)
         .await
         .map_err(|e| format!("Failed to write flow: {e}"))?;
 
-    Ok(format!("Flow '{name}' updated successfully."))
+    let mut notes = Vec::new();
+    if cow_to_private {
+        notes.push("private overlay created (shared flow left unchanged)".to_string());
+    }
+    if let Some(ref tools) = new_tools {
+        notes.push(format!("tools=[{}]", tools.join(", ")));
+    }
+    if new_body.is_some() {
+        notes.push("body updated".to_string());
+    }
+    if new_description.is_some() {
+        notes.push("description updated".to_string());
+    }
+
+    Ok(format!(
+        "Flow '{name}' updated successfully ({}).",
+        notes.join("; ")
+    ))
 }
 
 async fn tool_flow_load(
@@ -960,20 +1129,107 @@ pub fn read_skill_tools(workspace: &Path, skill_name: &str) -> Vec<String> {
         let trimmed = line.trim();
         if let Some(value) = trimmed.strip_prefix("tools:") {
             let val = value.trim();
-            if !val.starts_with('[') || !val.ends_with(']') {
-                continue;
+            if val.starts_with('[') && val.ends_with(']') {
+                let inner = &val[1..val.len() - 1];
+                if inner.is_empty() {
+                    return Vec::new();
+                }
+                return inner
+                    .split(',')
+                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
             }
-            let inner = &val[1..val.len() - 1];
-            if inner.is_empty() {
-                continue;
-            }
-            return inner
-                .split(',')
-                .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
+            // Multi-line list: tools:\n  - foo\n  - bar — parsed by caller via full content
+            break;
         }
     }
+    // Multi-line tools: under frontmatter
+    let mut tools = Vec::new();
+    let mut in_tools = false;
+    for line in fm.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("tools:") {
+            in_tools = true;
+            continue;
+        }
+        if in_tools {
+            if let Some(item) = trimmed.strip_prefix('-') {
+                let t = item.trim().trim_matches('"').trim_matches('\'').to_string();
+                if !t.is_empty() {
+                    tools.push(t);
+                }
+            } else if !trimmed.is_empty() {
+                break;
+            }
+        }
+    }
+    tools
+}
 
-    Vec::new()
+#[cfg(test)]
+mod flow_evolution_tests {
+    use super::*;
+
+    #[test]
+    fn upsert_tools_replaces_inline_list() {
+        let fm = "name: article-writer\ntools: [\"file_read\"]\nversion: 7\n";
+        let out = upsert_frontmatter_tools(fm, &["file_read".into(), "file_write".into()]);
+        assert!(out.contains("file_write"));
+        assert!(out.contains("file_read"));
+        assert!(out.contains("version: 7"));
+        assert!(!out.contains("tools: [\"file_read\"]"));
+    }
+
+    #[test]
+    fn upsert_tools_replaces_multiline_list() {
+        let fm = "name: x\ntools:\n  - file_read\n  - old_tool\nversion: 1\n";
+        let out = upsert_frontmatter_tools(fm, &["file_write".into()]);
+        assert!(out.contains("- file_write"));
+        assert!(!out.contains("old_tool"));
+        assert!(out.contains("version: 1"));
+    }
+
+    #[test]
+    fn split_flow_preserves_body() {
+        let content = "---\nname: x\n---\n\n# Body\n\nstep 1\n";
+        let (fm, body) = split_flow_file(content);
+        assert!(fm.unwrap().contains("name: x"));
+        assert!(body.contains("# Body"));
+    }
+
+    #[tokio::test]
+    async fn flow_update_tools_and_cow_from_shared() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        // Point OPENCARRIER_HOME at temp so shared flows resolve under it
+        // SAFETY: test-only env mutation
+        std::env::set_var("OPENCARRIER_HOME", home.path());
+        let shared = home.path().join("flows");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(
+            shared.join("demo.md"),
+            "---\nname: demo\ntools:\n  - file_read\n---\n\nold body\n",
+        )
+        .unwrap();
+
+        let input = serde_json::json!({
+            "name": "demo",
+            "tools": ["file_read", "file_write"],
+            "body": "new hard rules\n"
+        });
+        let msg = tool_flow_update(&input, Some(tmp.path()))
+            .await
+            .expect("update");
+        assert!(msg.contains("private overlay") || msg.contains("updated"));
+        let private = tmp.path().join("flows/demo.md");
+        assert!(private.exists(), "COW private flow");
+        let content = std::fs::read_to_string(&private).unwrap();
+        assert!(content.contains("file_write"));
+        assert!(content.contains("new hard rules"));
+        // Shared unchanged
+        let shared_content = std::fs::read_to_string(shared.join("demo.md")).unwrap();
+        assert!(shared_content.contains("old body"));
+        std::env::remove_var("OPENCARRIER_HOME");
+    }
 }

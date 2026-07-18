@@ -847,22 +847,29 @@ const SAFETY_SECTION: &str = "\
 
 /// System evolution prompt — auto-injected for all clones.
 /// Tells the clone about self-improvement tools so it can learn and adapt autonomously.
+///
+/// Contract: a matched flow is a **tool prescription**. Use declared tools first;
+/// explore with tool_search only when the path is unknown; on success, write proven
+/// tools + steps back into the flow via flow_update (self-evolving flows).
 const EVOLUTION_PROMPT: &str = "\
 ## 自我进化
-你拥有自我学习和改进的能力。在对话中发现有价值的新知识时，主动使用工具保存：
-- **kv_set**: 存储用户的重要信息到抽屉（账号、偏好、决策等）
-- **kv_get**: 在提问前先检查抽屉，避免重复询问用户已提供的信息
-- **knowledge_extract**: 从对话中提取新知识（事实、规则、偏好）并保存到知识库
-- **flow_create**: 创建新流程来扩展你的能力
-- **flow_update**: 改进现有流程的内容（如：发现缺少信息时，更新 flow 写入经验）
-- **session_summarize**: 总结长对话的关键信息以备后续回忆
+你拥有自我学习和改进的能力。**Flow = 工具处方 + 执行纪律**：frontmatter 的 tools 会在匹配时自动注入，body 是硬规则与步骤。
 
-重要学习模式：当你发现执行某个任务缺少关键信息（如公众号名称、API密钥等），
-向用户获取后成功完成任务，你应该：
-1. kv_set 存储这个信息（下次不用再问）
-2. flow_update 在对应的流程中写入经验（如：发公众号前先 kv_get(entity.wechat_accounts)）
+### 工具路径（优先顺序）
+1. **已匹配 flow**：只用该 flow 声明的 tools + body 步骤。**禁止**对声明内工具再 `tool_search`。
+2. **路径未知**（无匹配 flow / 声明不够）：才用 `tool_search` 或试探；这是例外，不是常态。
+3. **探索成功后必须固化**：用 `flow_update` 把**真正管用的工具名**写进 frontmatter `tools`，把硬规则/步骤写进 body。下次直接走处方，不再找工具。
+   - `flow_update(name, tools=[...], body=\"...\")` — tools 与 body 可只改其一
+   - 系统共享 flow 时会在你的 workspace 建私有副本（copy-on-write），不改系统共享文件
 
-不需要每次对话都调用，只在有实质性新知识或改进机会时使用。越用越好。";
+### 其它记忆
+- **kv_set / kv_get**：用户账号、偏好、密钥等事实（抽屉）；不是替代 flow 的工具列表
+- **knowledge_extract**：可复用的领域知识进知识库
+- **flow_create**：全新能力才建新 flow（务必带 tools: 具体工具名）
+- **session_summarize**：长对话摘要
+
+### 何时进化
+只在有实质性改进时调用（新工具路径验证成功、步骤踩坑后的硬规则、缺 tools 声明导致空转等）。不要每轮都 update。越用越好。";
 
 /// Static operational guidelines (replaces STABILITY_GUIDELINES).
 const OPERATIONAL_GUIDELINES: &str = "\
