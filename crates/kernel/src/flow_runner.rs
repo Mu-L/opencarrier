@@ -674,11 +674,26 @@ impl CarrierKernel {
             .and_then(|id| outputs.get(id))
             .cloned();
 
+        // Align with agent-loop silence contract: whole-text no-reply sentinels
+        // become silent=true + empty channel response; session still records a
+        // stable marker for prune/audit (same as end_turn).
+        let silent = runtime::outbound::is_no_reply_sentinel(&final_response);
+        let session_assistant = if silent {
+            "[no reply needed]".to_string()
+        } else {
+            final_response.clone()
+        };
+        let channel_response = if silent {
+            String::new()
+        } else {
+            final_response
+        };
+
         // Record the user exchange in the canonical session (run_agent_loop
         // would have done this for the single-step path).
         let new_messages = vec![
             Message::user(user_message),
-            Message::assistant(&final_response),
+            Message::assistant(&session_assistant),
         ];
         session.messages.extend_from_slice(&new_messages);
         let _ = self
@@ -704,16 +719,20 @@ impl CarrierKernel {
             final_step = ?final_id,
             steps_completed = outputs.len(),
             total_iterations,
+            silent,
             "Flow execution completed"
         );
 
         Ok(FlowOutcome::Completed {
             result: AgentLoopResult {
-                response: final_response,
+                response: channel_response,
                 total_usage,
                 iterations: total_iterations,
-                silent: false,
-                directives: Default::default(),
+                silent,
+                directives: types::message::ReplyDirectives {
+                    silent,
+                    ..Default::default()
+                },
                 plan: None,
             },
             final_value,

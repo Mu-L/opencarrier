@@ -111,7 +111,14 @@ pub struct AgentLoopResult {
     pub total_usage: TokenUsage,
     /// Number of iterations the loop ran.
     pub iterations: u32,
-    /// True when the agent intentionally chose not to reply (NO_REPLY token or [[silent]]).
+    /// True when the agent intentionally chose not to reply.
+    ///
+    /// Set by the agent loop (and multi-step flows) when the turn is silent:
+    /// `[[silent]]`, whole-text no-reply sentinels (`NO_REPLY`,
+    /// `[no reply needed]`, … — see `outbound::is_no_reply_sentinel`), etc.
+    /// When true, `response` is empty for channel delivery; session history may
+    /// still store a stable `[no reply needed]` marker. Outbound sinks keep a
+    /// text-sentinel safety net for non-loop producers.
     pub silent: bool,
     /// Reply directives extracted from the agent's response.
     pub directives: types::message::ReplyDirectives,

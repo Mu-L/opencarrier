@@ -79,9 +79,14 @@ pub(in crate::agent_loop) async fn handle_end_turn(
         crate::reply_directives::parse_directives(&text);
     let text = strip_tool_call_artifacts(&cleaned_text_s);
 
-    // NO_REPLY: agent intentionally chose not to reply
-    if text.trim() == "NO_REPLY" || parsed_directives_s.silent {
-        debug!(agent = %manifest.name, "Agent chose NO_REPLY/silent  — silent completion");
+    // Intentional silence: `[[silent]]` directive, or whole-text no-reply
+    // sentinels (`NO_REPLY`, `[no reply needed]`, `[无需回复]`, …). Same
+    // matcher as the outbound delivery safety net
+    // (`outbound::is_no_reply_sentinel`) so agent-loop and channel sinks share
+    // one contract. Channel-facing response is empty; session keeps a stable
+    // marker for prune/audit.
+    if parsed_directives_s.silent || crate::outbound::is_no_reply_sentinel(&text) {
+        debug!(agent = %manifest.name, "Agent chose NO_REPLY/silent — silent completion");
         // O6: Single-track — sync loop messages before pushing the final response
         super::helpers::sync_loop_messages(messages, session, session_base_len);
         session
