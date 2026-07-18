@@ -585,10 +585,22 @@ enum LlmCallOutcome {
 }
 
 async fn call_llm(ctx: &mut LoopContext<'_>, modality: &str) -> CarrierResult<LlmCallOutcome> {
+    // Dedup tools by name before every LLM call. Duplicates can arise when
+    // text-tool recovery / tool_search re-adds tools already injected by a
+    // flow; OpenAI-compatible APIs then reject with
+    // "function name X is duplicated".
+    let tools_for_llm = {
+        let mut seen = std::collections::HashSet::new();
+        ctx.tools()
+            .iter()
+            .filter(|t| seen.insert(t.name.clone()))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
     let request = CompletionRequest {
         model: String::new(),
         messages: ctx.messages.clone(),
-        tools: ctx.tools().to_vec(),
+        tools: tools_for_llm,
         max_tokens: ctx.manifest.model.max_tokens,
         temperature: ctx.manifest.model.temperature,
         system: Some(ctx.system_prompt.clone()),
@@ -691,17 +703,40 @@ async fn handle_text_recovery(
 
     let has_discovered = !result.discovered_tools.is_empty();
     if has_discovered {
-        for def in &result.discovered_tools {
-            ctx.discovered_tool_names.insert(def.name.clone());
+        // Dedup against tools already present (flow inject / prior tool_search).
+        // Without this, text recovery can re-add `web_fetch` etc. and the LLM
+        // API rejects the request: "function name web_fetch is duplicated".
+        let mut added = 0usize;
+        for def in result.discovered_tools {
+            if ctx.tools_owned.iter().any(|t| t.name == def.name) {
+                continue;
+            }
             info!(tool = %def.name, schema = %def.input_schema, "Discovered tool schema");
+            ctx.discovered_tool_names.insert(def.name.clone());
+            ctx.tools_owned.push(def);
+            added += 1;
         }
-        info!(found = result.discovered_tools.len(), "Auto-discovered tools from text-based tool call recovery");
-        ctx.tools_owned.extend(result.discovered_tools);
+        if added > 0 {
+            info!(
+                found = added,
+                total = ctx.tools_owned.len(),
+                "Auto-discovered tools from text-based tool call recovery"
+            );
+        }
     }
 
     if !result.calls.is_empty() {
         info!(count = result.calls.len(), "Recovered text-based tool calls → promoting to ToolUse");
-        response.tool_calls = result.calls;
+        // Normalize names so trailing punctuation from free-text recovery
+        // (`web_search,`) does not reach execute_tool / permission checks.
+        response.tool_calls = result
+            .calls
+            .into_iter()
+            .map(|mut tc| {
+                tc.name = types::tool_compat::normalize_tool_name(&tc.name).to_string();
+                tc
+            })
+            .collect();
         response.stop_reason = StopReason::ToolUse;
         let mut new_blocks: Vec<ContentBlock> = Vec::new();
         for block in &response.content {

@@ -132,12 +132,14 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     // Execute each tool call with timeout and truncation
     let mut tool_result_blocks = Vec::new();
     for tool_call in &response.tool_calls {
-        debug!(tool = %tool_call.name, id = %tool_call.id, "Executing tool");
+        // Canonicalize name up front so trailing punctuation from free-text
+        // recovery (`web_search,`) and aliases hit the right tool path.
+        let tool_name = types::tool_compat::normalize_tool_name(&tool_call.name).to_string();
+        debug!(tool = %tool_name, id = %tool_call.id, "Executing tool");
 
         // Notify phase: ToolUse
         if let Some(cb) = on_phase {
-            let sanitized: String = tool_call
-                .name
+            let sanitized: String = tool_name
                 .chars()
                 .filter(|c| !c.is_control())
                 .take(64)
@@ -154,18 +156,15 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 agent_id: &caller_id_str,
                 event: types::agent::HookEvent::BeforeToolCall,
                 data: serde_json::json!({
-                    "tool_name": &tool_call.name,
+                    "tool_name": &tool_name,
                     "input": &tool_call.input,
                 }),
             };
             if let Err(reason) = hook_reg.fire(&ctx) {
                 tool_result_blocks.push(ContentBlock::ToolResult {
                     tool_use_id: tool_call.id.clone(),
-                    tool_name: tool_call.name.clone(),
-                    content: format!(
-                        "Hook blocked tool '{}': {}",
-                        tool_call.name, reason
-                    ),
+                    tool_name: tool_name.clone(),
+                    content: format!("Hook blocked tool '{tool_name}': {reason}"),
                     is_error: true,
                 });
                 continue;
@@ -216,8 +215,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         };
 
         // Timeout-wrapped execution
-        let timeout_secs = if super::helpers::TOOL_LONG_TIMEOUT_NAMES
-            .contains(&tool_call.name.as_str())
+        let timeout_secs = if super::helpers::TOOL_LONG_TIMEOUT_NAMES.contains(&tool_name.as_str())
         {
             super::helpers::TOOL_TIMEOUT_LONG_SECS
         } else {
@@ -225,24 +223,16 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         };
         let result = match tokio::time::timeout(
             Duration::from_secs(timeout_secs),
-            tool_runner::execute_tool(
-                &tool_call.id,
-                &tool_call.name,
-                &tool_call.input,
-                &tool_ctx,
-            ),
+            tool_runner::execute_tool(&tool_call.id, &tool_name, &tool_call.input, &tool_ctx),
         )
         .await
         {
             Ok(result) => result,
             Err(_) => {
-                warn!(tool = %tool_call.name, "Tool execution timed out after {}s", timeout_secs);
+                warn!(tool = %tool_name, "Tool execution timed out after {}s", timeout_secs);
                 types::tool::ToolResult {
                     tool_use_id: tool_call.id.clone(),
-                    content: format!(
-                        "Tool '{}' timed out after {}s.",
-                        tool_call.name, timeout_secs
-                    ),
+                    content: format!("Tool '{tool_name}' timed out after {timeout_secs}s."),
                     is_error: true,
                 }
             }
@@ -255,7 +245,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 agent_id: caller_id_str.as_str(),
                 event: types::agent::HookEvent::AfterToolCall,
                 data: serde_json::json!({
-                    "tool_name": &tool_call.name,
+                    "tool_name": &tool_name,
                     "result": &result.content,
                     "is_error": result.is_error,
                 }),
@@ -266,7 +256,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         // Skill load deduplication: if the same skill was already loaded
         // in this agent loop, replace the full content with a short hint.
         // This prevents the LLM from looping on flow_load without executing.
-        if tool_call.name == "flow_load" {
+        if tool_name == "flow_load" {
             let skill_name = tool_call.input["name"]
                 .as_str()
                 .unwrap_or("")
@@ -280,12 +270,11 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                         "flow_load called for already-loaded flow — returning dedup hint"
                     );
                     let dedup_msg = format!(
-                        "Flow '{}' 已经加载过了，请直接按步骤执行，不要再调用 flow_load。",
-                        skill_name
+                        "Flow '{skill_name}' 已经加载过了，请直接按步骤执行，不要再调用 flow_load。"
                     );
                     tool_result_blocks.push(ContentBlock::ToolResult {
                         tool_use_id: result.tool_use_id,
-                        tool_name: tool_call.name.clone(),
+                        tool_name: tool_name.clone(),
                         content: dedup_msg,
                         is_error: false,
                     });
@@ -305,7 +294,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             if tx
                 .send(StreamEvent::ToolExecutionResult {
                     id: tool_call.id.clone(),
-                    name: tool_call.name.clone(),
+                    name: tool_name.clone(),
                     result_preview: preview,
                     is_error: result.is_error,
                 })
@@ -318,7 +307,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
 
         tool_result_blocks.push(ContentBlock::ToolResult {
             tool_use_id: result.tool_use_id,
-            tool_name: tool_call.name.clone(),
+            tool_name: tool_name.clone(),
             content: final_content,
             is_error: result.is_error,
         });

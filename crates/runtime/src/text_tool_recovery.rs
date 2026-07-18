@@ -5,6 +5,7 @@
 //! recovers those calls by pattern-matching 13 different text formats.
 
 use types::tool::{ToolCall, ToolDefinition};
+use types::tool_compat::normalize_tool_name;
 use tracing::{info, warn};
 
 /// Result of text-based tool call recovery, including any newly discovered
@@ -652,10 +653,12 @@ pub fn recover_text_tool_calls(
                 continue;
             };
             let inner = &after[..close];
-            let tool_name = inner
-                .find([' ', ':', '(', '{'])
+            let raw_name = inner
+                .find([' ', ':', '(', '{', ',', ';'])
                 .map(|pos| &inner[..pos])
                 .unwrap_or(inner);
+            // Normalize so `web_search,` / aliases resolve to canonical names.
+            let tool_name = normalize_tool_name(raw_name);
 
             if tool_name.is_empty() || tool_name.contains(' ') {
                 search_from += pos + "[Called ".len();
@@ -690,10 +693,29 @@ pub fn recover_text_tool_calls(
                     input,
                 });
             } else if let Some(ref search_fn) = tool_search_fn {
-                // Tool not in available_tools — try tool_search
+                // Tool not in available_tools — try tool_search (use cleaned name)
                 if let Some(def) = search_fn(tool_name) {
+                    // Skip re-adding if we already discovered this tool name.
+                    if discovered_tools.iter().any(|t| t.name == def.name)
+                        || tool_name_set.contains(def.name.as_str())
+                    {
+                        info!(
+                            tool = %def.name,
+                            "Skipping already-known tool from [Called ...] discovery"
+                        );
+                        // Still emit a call if we have a definition available.
+                        if !calls.iter().any(|c| c.name == def.name) {
+                            calls.push(ToolCall {
+                                id: format!("recovered_{}", uuid::Uuid::new_v4()),
+                                name: def.name.clone(),
+                                input,
+                            });
+                        }
+                        search_from += pos + "[Called ".len() + close + 1;
+                        continue;
+                    }
                     info!(
-                        tool = tool_name,
+                        tool = %def.name,
                         "Discovered tool via tool_search from [Called ...] pattern"
                     );
                     // Add to required_map for unified param filtering
@@ -706,10 +728,11 @@ pub fn recover_text_tool_calls(
                             required_map.insert(def.name.clone(), required);
                         }
                     }
+                    let call_name = def.name.clone();
                     discovered_tools.push(def);
                     calls.push(ToolCall {
                         id: format!("recovered_{}", uuid::Uuid::new_v4()),
-                        name: tool_name.to_string(),
+                        name: call_name,
                         input,
                     });
                 }

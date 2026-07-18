@@ -39,12 +39,32 @@ pub fn map_tool_name(name: &str) -> Option<&'static str> {
     }
 }
 
+/// Strip whitespace / wrapping quotes / trailing punctuation that LLMs often
+/// append when emitting tool names in free text (e.g. `web_search,` from
+/// `[Called web_search,]` or list-style "tools: web_search, web_fetch").
+///
+/// Returns a subslice of `name` (no allocation). Does not rewrite aliases —
+/// use [`normalize_tool_name`] for full mapping.
+pub fn sanitize_tool_name(name: &str) -> &str {
+    let name = name.trim().trim_matches(|c: char| {
+        matches!(c, '"' | '\'' | '`' | '“' | '”' | '‘' | '’' | '«' | '»')
+    });
+    name.trim_end_matches(|c: char| {
+        matches!(
+            c,
+            ',' | ';' | ':' | '.' | '!' | '?' | '，' | '。' | '、' | '；' | '：'
+        )
+    })
+    .trim()
+}
+
 /// Normalize a tool name to its canonical Carrier form.
 ///
-/// If the name is already a known Carrier tool, returns it as-is.
-/// Otherwise, tries to map it through [`map_tool_name`].
-/// Returns the original name if no mapping is found.
+/// Sanitizes trailing punctuation first, then if the name is already a known
+/// Carrier tool returns it as-is. Otherwise tries [`map_tool_name`].
+/// Returns the (possibly sanitized) original name if no mapping is found.
 pub fn normalize_tool_name(name: &str) -> &str {
+    let name = sanitize_tool_name(name);
     if is_known_carrier_tool(name) {
         return name;
     }
@@ -165,12 +185,26 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_tool_name_strips_trailing_punct() {
+        assert_eq!(sanitize_tool_name("web_search,"), "web_search");
+        assert_eq!(sanitize_tool_name("web_fetch;"), "web_fetch");
+        assert_eq!(sanitize_tool_name("  file_read  "), "file_read");
+        assert_eq!(sanitize_tool_name("\"web_search\""), "web_search");
+        assert_eq!(sanitize_tool_name("web_search，"), "web_search");
+    }
+
+    #[test]
     fn test_normalize_tool_name() {
         // Known Carrier tools pass through unchanged
         assert_eq!(normalize_tool_name("file_read"), "file_read");
         assert_eq!(normalize_tool_name("file_write"), "file_write");
         assert_eq!(normalize_tool_name("shell_exec"), "shell_exec");
         assert_eq!(normalize_tool_name("web_fetch"), "web_fetch");
+
+        // Trailing punctuation from text tool-call recovery (e.g. "web_search,")
+        assert_eq!(normalize_tool_name("web_search,"), "web_search");
+        assert_eq!(normalize_tool_name("web_fetch,"), "web_fetch");
+        assert_eq!(normalize_tool_name("fs-write,"), "file_write");
 
         // Aliases get normalized to canonical names
         assert_eq!(normalize_tool_name("fs-read"), "file_read");
@@ -190,7 +224,7 @@ mod tests {
             "mcp_server_tool"
         );
 
-        // Unknown names pass through unchanged
+        // Unknown names pass through unchanged (after sanitize)
     }
 
     #[test]
