@@ -231,14 +231,27 @@ OPENCARRIER_URL + OPENCARRIER_API_KEY
 
 ## 9. 与现状的关系（简要）
 
-| 已有基础 | 目标缺口（示意） |
-|----------|------------------|
-| `opencarrier/flows/` + deploy 同步共享 flows | 文档与实现统一「flows」命名（淘汰 skills 表述） |
-| DupHub publish（clones 侧） | 运行时 **`upgrade <name>`** 从 Hub 应用定义、保留运行时 |
-| capability-catalog 含工具 / MCP / shared_flows 字段 | clones 默认强制/提示 against-catalog；文档化 |
-| 双仓分离已存在 | 禁止双写：工程只 clones，上线只 Hub→upgrade |
+| 已有基础 | 状态 |
+|----------|------|
+| `opencarrier/flows/` + deploy 同步共享 flows | 已有 |
+| DupHub publish（clones 侧） | 已有 |
+| capability-catalog | 已有 |
+| **`opencarrier hub upgrade <name>`** | **已实现（Phase 1）** — 定义层替换 + Bearer 下载 + `hub_template_id` |
+| `POST /api/clones/{name}/upgrade` | 已接同一逻辑；`?version=` 可选 |
+| `opencarrier hub link <name>` | 给存量 workspace 补 `hub_template_id` |
+| install 写 `hub_template_id` | 已实现（= template name） |
 
-实现排期不在本文范围；落地时以本节「应更新 / 应保留」为验收标准。
+### 9.1 操作速查（Phase 1）
+
+```bash
+# 本地 clones：改分身 → pack → publish 到 DupHub
+clone-creator publish ./ai-writer.agx
+
+# 服务器 / 已装实例
+opencarrier hub link ai-writer          # 存量若无 hub_template_id 时先做一次
+opencarrier hub upgrade ai-writer       # 从 DupHub 拉定义层，保留 sessions/senders
+opencarrier hub upgrade ai-writer -v 2  # 指定版本（若 Hub 支持）
+```
 
 ---
 

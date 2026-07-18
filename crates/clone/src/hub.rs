@@ -259,8 +259,22 @@ pub async fn get_template(
     resp.json().await.context("解析 Hub 响应失败")
 }
 
+/// Hub template key used for download/upgrade (name or hub_template_id).
+/// DupHub version endpoints accept the template **name**; we also store that
+/// as `hub_template_id` so upgrade does not require a separate UUID.
+pub fn hub_template_key(name: &str, hub_template_id: Option<&str>) -> String {
+    hub_template_id
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(name)
+        .to_string()
+}
+
 /// Download and install a template from Hub.
 /// Returns the clone name on success.
+///
+/// Writes `clone_source.hub_template_id` = Hub template name so later
+/// `upgrade` can re-fetch without re-install.
 pub async fn install_template(
     hub_url: &str,
     api_key: &str,
@@ -268,54 +282,26 @@ pub async fn install_template(
     version: Option<&str>,
     workspace_dir: &Path,
 ) -> Result<String> {
-    validate_hub_url(hub_url)?;
-    let base = hub_url.trim_end_matches('/');
-    let url = if let Some(v) = version {
-        format!(
-            "{}/api/templates/{}/versions/{}",
-            base,
-            urlencoding::encode(name),
-            urlencoding::encode(v)
-        )
-    } else {
-        format!(
-            "{}/api/templates/{}/versions/latest",
-            base,
-            urlencoding::encode(name)
-        )
-    };
-
     tracing::info!("正在从 Hub 下载 {} ...", name);
-
-    let resp = hub_get(&url, api_key)
-        .send()
-        .await
-        .context("无法连接 Hub")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        bail!("下载失败 {}: {} — {}", name, status, body);
-    }
-
-    let bytes = resp.bytes().await.context("读取响应失败")?;
+    let bytes = download_template_bytes(hub_url, api_key, name, version).await?;
     tracing::info!("已下载 {} 字节", bytes.len());
 
     // v3: extract .agx directly to workspace
     crate::extract_agx(&bytes, workspace_dir)?;
 
-    // Build manifest from extracted workspace and write agent.toml
-    let manifest = crate::build_manifest_from_workspace(workspace_dir, name, None)?;
-    let toml_str = toml::to_string_pretty(&manifest)
-        .context("Failed to serialize agent.toml")?;
+    // hub_template_id = template name (name-based Hub API)
+    let hub_id = hub_template_key(name, None);
+    let manifest =
+        crate::build_manifest_from_workspace(workspace_dir, name, Some(hub_id))?;
+    let toml_str = toml::to_string_pretty(&manifest).context("Failed to serialize agent.toml")?;
     std::fs::write(workspace_dir.join("agent.toml"), toml_str)?;
 
-    tracing::info!("分身 '{}' 安装完成", name);
+    tracing::info!("分身 '{}' 安装完成 (hub_template_id set for upgrade)", name);
     Ok(name.to_string())
 }
 
 /// Download template .agx bytes from Hub (without installing).
-/// Used by API routes that handle installation separately.
+/// Used by API routes and upgrade.
 pub async fn download_template_bytes(
     hub_url: &str,
     api_key: &str,
@@ -324,19 +310,16 @@ pub async fn download_template_bytes(
 ) -> Result<Vec<u8>> {
     validate_hub_url(hub_url)?;
     let base = hub_url.trim_end_matches('/');
+    let key = urlencoding::encode(name);
     let url = if let Some(v) = version {
         format!(
             "{}/api/templates/{}/versions/{}",
             base,
-            urlencoding::encode(name),
+            key,
             urlencoding::encode(v)
         )
     } else {
-        format!(
-            "{}/api/templates/{}/versions/latest",
-            base,
-            urlencoding::encode(name)
-        )
+        format!("{}/api/templates/{}/versions/latest", base, key)
     };
 
     let resp = hub_get(&url, api_key)
@@ -352,6 +335,137 @@ pub async fn download_template_bytes(
 
     let bytes = resp.bytes().await.context("读取响应失败")?;
     Ok(bytes.to_vec())
+}
+
+/// Definition-layer files replaced on upgrade (identity / config).
+const UPGRADE_TEMPLATE_FILES: &[&str] = &[
+    "SOUL.md",
+    "system_prompt.md",
+    "profile.md",
+    "EVOLUTION.md",
+    "MEMORY.md",
+    "template.json",
+    "api_tools.toml",
+    "content.toml",
+];
+
+/// Definition-layer directories replaced wholesale on upgrade.
+const UPGRADE_TEMPLATE_DIRS: &[&str] = &["flows", "agents", "knowledge", "style"];
+
+/// Apply .agx definition files onto an existing workspace (preserve runtime dirs).
+///
+/// Replaces identity files + flows/agents/knowledge/style; does **not** touch
+/// sessions/, senders/, output/, logs/, history/, data/, users/.
+///
+/// Returns remote version string from staging `template.json` (may be empty).
+pub fn apply_agx_definition_upgrade(agx_bytes: &[u8], workspace: &Path) -> Result<String> {
+    let staging_dir =
+        std::env::temp_dir().join(format!("carrier-upgrade-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        crate::extract_agx(agx_bytes, &staging_dir).context("extract .agx to staging")?;
+
+        let remote_version: String = std::fs::read_to_string(staging_dir.join("template.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<crate::TemplateManifest>(&s).ok())
+            .map(|t| t.version)
+            .unwrap_or_default();
+
+        for filename in UPGRADE_TEMPLATE_FILES {
+            let src = staging_dir.join(filename);
+            if src.exists() {
+                std::fs::copy(&src, workspace.join(filename))
+                    .with_context(|| format!("copy {filename}"))?;
+            }
+        }
+
+        for dir_name in UPGRADE_TEMPLATE_DIRS {
+            let workspace_subdir = workspace.join(dir_name);
+            let staging_subdir = staging_dir.join(dir_name);
+            if workspace_subdir.exists() {
+                let _ = std::fs::remove_dir_all(&workspace_subdir);
+            }
+            if staging_subdir.exists() {
+                copy_dir_recursive(&staging_subdir, &workspace_subdir)
+                    .with_context(|| format!("copy dir {dir_name}"))?;
+            }
+        }
+
+        Ok(remote_version)
+    })();
+
+    let _ = std::fs::remove_dir_all(&staging_dir);
+    result
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Download from Hub and apply definition-layer upgrade into `workspace`.
+///
+/// `template_name` is the Hub template name (usually same as agent name).
+/// Returns the remote version string from template.json.
+pub async fn upgrade_workspace_from_hub(
+    hub_url: &str,
+    api_key: &str,
+    template_name: &str,
+    version: Option<&str>,
+    workspace: &Path,
+    hub_template_id: Option<&str>,
+) -> Result<String> {
+    let key = hub_template_key(template_name, hub_template_id);
+    tracing::info!(
+        template = %key,
+        version = ?version,
+        workspace = %workspace.display(),
+        "Upgrading clone definition from Hub"
+    );
+    let bytes = download_template_bytes(hub_url, api_key, &key, version).await?;
+    let remote_version = apply_agx_definition_upgrade(&bytes, workspace)?;
+
+    // Rebuild agent.toml with hub_template_id preserved/set
+    let mut manifest = crate::build_manifest_from_workspace(
+        workspace,
+        template_name,
+        Some(key.clone()),
+    )?;
+    if let Some(ref mut cs) = manifest.clone_source {
+        if !remote_version.is_empty() {
+            cs.agx_version = remote_version.clone();
+        }
+        cs.hub_template_id = Some(key);
+    }
+    let toml_str = toml::to_string_pretty(&manifest).context("serialize agent.toml")?;
+    std::fs::write(workspace.join("agent.toml"), toml_str)?;
+
+    Ok(if remote_version.is_empty() {
+        "upgraded".to_string()
+    } else {
+        remote_version
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hub_template_key_prefers_id() {
+        assert_eq!(hub_template_key("ai-writer", Some("uuid-1")), "uuid-1");
+        assert_eq!(hub_template_key("ai-writer", Some("  ")), "ai-writer");
+        assert_eq!(hub_template_key("ai-writer", None), "ai-writer");
+    }
 }
 
 /// Publish (upload) a clone .agx to Hub.

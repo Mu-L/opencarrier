@@ -587,7 +587,7 @@ impl CarrierKernel {
                 }
 
                 let agent_name = entry.name.clone();
-                match kernel.clone_upgrade(&agent_name).await {
+                match kernel.clone_upgrade(&agent_name, None).await {
                     Ok(ver) => info!(
                         agent = %agent_name,
                         new_version = %ver,

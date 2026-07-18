@@ -22,6 +22,8 @@ const SKIP_PACK: &[&str] = &[
     "logs",
     "users",
     "data",
+    "senders",
+    ".lifecycle",
 ];
 
 /// Extract a .agx (tar.gz) byte stream directly to a workspace directory.

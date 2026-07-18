@@ -230,9 +230,25 @@ enum HubCommands {
         /// Specific version (default: latest).
         #[arg(short, long)]
         version: Option<String>,
-        /// Update an existing clone (overwrite files, keep runtime state).
+        /// Prefer definition-layer upgrade when workspace already exists (same as `hub upgrade`).
         #[arg(long)]
         update: bool,
+    },
+    /// Upgrade an installed clone's definition from DupHub (preserve sessions/senders).
+    Upgrade {
+        /// Agent / template name.
+        name: String,
+        /// Specific version (default: latest).
+        #[arg(short, long)]
+        version: Option<String>,
+    },
+    /// Write hub_template_id on an existing workspace so upgrade works (no download).
+    Link {
+        /// Agent name (workspace under workspaces/).
+        name: String,
+        /// Hub template name/id (default: same as agent name).
+        #[arg(long)]
+        template: Option<String>,
     },
 }
 
@@ -3564,8 +3580,31 @@ async fn cmd_hub(cmd: HubCommands) {
         }
         HubCommands::Install { name, version, update } => {
             let workspace_dir = config.effective_workspaces_dir().join(&name);
+            if workspace_dir.exists() && update {
+                // Definition-layer upgrade path (not full re-extract)
+                match cmd_hub_upgrade_impl(
+                    &hub_url,
+                    &api_key,
+                    &name,
+                    version.as_deref(),
+                    &workspace_dir,
+                )
+                .await
+                {
+                    Ok(ver) => {
+                        println!("分身 '{name}' 已升级 (version={ver})");
+                        check_mcp_deps(&workspace_dir);
+                    }
+                    Err(e) => {
+                        eprintln!("升级失败: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
             if workspace_dir.exists() && !update {
-                eprintln!("分身 '{}' 已存在: {}", name, workspace_dir.display());
+                eprintln!("分身 '{name}' 已存在: {}", workspace_dir.display());
+                eprintln!("升级定义请用: opencarrier hub upgrade {name}");
                 std::process::exit(1);
             }
             match clone::hub::install_template(
@@ -3583,14 +3622,214 @@ async fn cmd_hub(cmd: HubCommands) {
                         clone_name,
                         workspace_dir.display()
                     );
-                    // Check MCP server dependencies
                     check_mcp_deps(&workspace_dir);
-                    println!("运行 'opencarrier agent spawn {}' 启动分身", clone_name);
+                    println!("运行 'opencarrier agent spawn {clone_name}' 启动分身");
+                    println!("之后迭代: 本地 publish 到 DupHub → opencarrier hub upgrade {clone_name}");
                 }
                 Err(e) => eprintln!("安装失败: {e}"),
             }
         }
+        HubCommands::Upgrade { name, version } => {
+            let workspace_dir = config.effective_workspaces_dir().join(&name);
+            // Prefer daemon API so registry restarts the agent
+            if let Some(base) = find_daemon_async().await {
+                let mut url = format!("{base}/api/clones/{name}/upgrade");
+                if let Some(ref v) = version {
+                    // version is typically semver / digits — minimal query escape
+                    let escaped = v.replace('&', "%26").replace('=', "%3D").replace(' ', "%20");
+                    url.push_str(&format!("?version={escaped}"));
+                }
+                let mut client_builder = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(300));
+                if let Some(key) = read_api_key() {
+                    let mut headers = reqwest::header::HeaderMap::new();
+                    if let Ok(val) =
+                        reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
+                    {
+                        headers.insert(reqwest::header::AUTHORIZATION, val);
+                    }
+                    client_builder = client_builder.default_headers(headers);
+                }
+                let client = client_builder.build().expect("http client");
+                match client.post(&url).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                        println!(
+                            "分身 '{name}' 已升级 (daemon): {}",
+                            body.get("version")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("ok")
+                        );
+                    }
+                    Ok(resp) => {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        eprintln!("daemon upgrade 失败 ({status}): {text}");
+                        eprintln!("尝试本地文件升级…");
+                        match cmd_hub_upgrade_impl(
+                            &hub_url,
+                            &api_key,
+                            &name,
+                            version.as_deref(),
+                            &workspace_dir,
+                        )
+                        .await
+                        {
+                            Ok(ver) => println!("分身 '{name}' 已升级 (local): version={ver}"),
+                            Err(e) => {
+                                eprintln!("升级失败: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("无法连接 daemon: {e}，尝试本地文件升级…");
+                        match cmd_hub_upgrade_impl(
+                            &hub_url,
+                            &api_key,
+                            &name,
+                            version.as_deref(),
+                            &workspace_dir,
+                        )
+                        .await
+                        {
+                            Ok(ver) => println!("分身 '{name}' 已升级 (local): version={ver}"),
+                            Err(e) => {
+                                eprintln!("升级失败: {e}");
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                }
+            } else {
+                if !workspace_dir.is_dir() {
+                    eprintln!("工作区不存在: {}", workspace_dir.display());
+                    std::process::exit(1);
+                }
+                match cmd_hub_upgrade_impl(
+                    &hub_url,
+                    &api_key,
+                    &name,
+                    version.as_deref(),
+                    &workspace_dir,
+                )
+                .await
+                {
+                    Ok(ver) => {
+                        println!("分身 '{name}' 已升级 (local): version={ver}");
+                        println!("若 daemon 在跑，请 restart 该 agent 以加载新定义");
+                    }
+                    Err(e) => {
+                        eprintln!("升级失败: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        HubCommands::Link { name, template } => {
+            let workspace_dir = config.effective_workspaces_dir().join(&name);
+            let hub_id = template.unwrap_or_else(|| name.clone());
+            match link_workspace_hub_id(&workspace_dir, &name, &hub_id) {
+                Ok(()) => {
+                    println!(
+                        "已写入 hub_template_id='{hub_id}' → {}",
+                        workspace_dir.join("agent.toml").display()
+                    );
+                    println!("现在可以: opencarrier hub upgrade {name}");
+                }
+                Err(e) => {
+                    eprintln!("link 失败: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
     }
+}
+
+async fn cmd_hub_upgrade_impl(
+    hub_url: &str,
+    api_key: &str,
+    name: &str,
+    version: Option<&str>,
+    workspace: &std::path::Path,
+) -> Result<String, String> {
+    if !workspace.is_dir() {
+        return Err(format!("workspace 不存在: {}", workspace.display()));
+    }
+    let hub_id = read_hub_template_id(workspace);
+    clone::hub::upgrade_workspace_from_hub(
+        hub_url,
+        api_key,
+        name,
+        version,
+        workspace,
+        hub_id.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+fn read_hub_template_id(workspace: &std::path::Path) -> Option<String> {
+    let toml_str = std::fs::read_to_string(workspace.join("agent.toml")).ok()?;
+    let v: toml::Value = toml::from_str(&toml_str).ok()?;
+    v.get("clone_source")
+        .and_then(|cs| cs.get("hub_template_id"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+fn link_workspace_hub_id(
+    workspace: &std::path::Path,
+    agent_name: &str,
+    hub_template_id: &str,
+) -> Result<(), String> {
+    if !workspace.is_dir() {
+        return Err(format!("workspace 不存在: {}", workspace.display()));
+    }
+    let agent_toml = workspace.join("agent.toml");
+    if agent_toml.exists() {
+        let s = std::fs::read_to_string(&agent_toml).map_err(|e| e.to_string())?;
+        let mut v: toml::Value = toml::from_str(&s).map_err(|e| e.to_string())?;
+        let table = v
+            .as_table_mut()
+            .ok_or_else(|| "agent.toml root not table".to_string())?;
+        let cs = table
+            .entry("clone_source")
+            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+        let cs_t = cs
+            .as_table_mut()
+            .ok_or_else(|| "clone_source not table".to_string())?;
+        cs_t.insert(
+            "template_name".into(),
+            toml::Value::String(agent_name.to_string()),
+        );
+        cs_t.insert(
+            "hub_template_id".into(),
+            toml::Value::String(hub_template_id.to_string()),
+        );
+        if !cs_t.contains_key("installed_at") {
+            cs_t.insert(
+                "installed_at".into(),
+                toml::Value::String(chrono::Utc::now().timestamp().to_string()),
+            );
+        }
+        if !cs_t.contains_key("agx_version") {
+            cs_t.insert("agx_version".into(), toml::Value::String("1".into()));
+        }
+        let out = toml::to_string_pretty(&v).map_err(|e| e.to_string())?;
+        std::fs::write(&agent_toml, out).map_err(|e| e.to_string())?;
+    } else {
+        let manifest = clone::build_manifest_from_workspace(
+            workspace,
+            agent_name,
+            Some(hub_template_id.to_string()),
+        )
+        .map_err(|e| e.to_string())?;
+        let out = toml::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
+        std::fs::write(&agent_toml, out).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

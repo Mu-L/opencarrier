@@ -516,45 +516,26 @@ pub async fn clone_verify(
     }
 }
 
-/// POST /api/clones/{name}/upgrade — Upgrade a clone from hub to latest version.
+/// POST /api/clones/{name}/upgrade — Upgrade definition layer from DupHub.
+///
+/// Query: `?version=x` optional (default latest).
+/// Uses `clone_source.hub_template_id` or `template_name` or agent name as Hub key.
+/// Preserves sessions/senders/output; replaces SOUL/prompt/flows/knowledge/…
 pub async fn upgrade_clone(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    // Verify the agent exists
-    let entry = match state.kernel.registry.find_by_name(&name) {
-        Some(e) => e,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Clone not found"})),
-            )
-        }
-    };
-
-    // Must be a clone with hub_template_id
-    if entry.manifest.clone_source.is_none() {
+    if state.kernel.registry.find_by_name(&name).is_none() {
         return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Not a clone agent"})),
-        );
-    }
-    if entry
-        .manifest
-        .clone_source
-        .as_ref()
-        .and_then(|cs| cs.hub_template_id.as_ref())
-        .is_none()
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({"error": "Clone has no hub_template_id, cannot upgrade from hub"}),
-            ),
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Clone not found"})),
         );
     }
 
-    match state.kernel.clone_upgrade(&name).await {
+    let version = params.get("version").map(|s| s.as_str());
+
+    match state.kernel.clone_upgrade(&name, version).await {
         Ok(version) => (
             StatusCode::OK,
             Json(serde_json::json!({
