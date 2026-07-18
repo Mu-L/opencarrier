@@ -13,6 +13,7 @@ pub mod daemon;
 pub mod dotenv;
 pub mod error;
 pub mod event_bus;
+pub mod flow;
 pub mod flow_runner;
 pub mod handle;
 pub mod heartbeat;
