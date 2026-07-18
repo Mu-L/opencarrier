@@ -111,6 +111,309 @@ pub async fn list_tools(State(state): State<Arc<AppState>>) -> impl IntoResponse
 
     Json(serde_json::json!({"tools": tools, "total": tools.len()}))
 }
+
+// ── Capability catalog (for clone-creator / generate / upgrade) ──────────
+
+/// Static deprecations — tools or MCP servers that must not be declared in new clones.
+fn deprecated_capabilities() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({
+            "name": "browser-mcp",
+            "kind": "mcp_server",
+            "replace_with": "browser_navigate, browser_read_page, browser_click, ... (builtin)",
+            "note": "Browser automation is built-in via AginxBrowser; do not declare browser-mcp"
+        }),
+        serde_json::json!({
+            "name": "mcp_searxng_web_search",
+            "kind": "tool",
+            "replace_with": "web_search",
+            "note": "Use builtin web_search; SearXNG is wired as the search backend when configured"
+        }),
+        serde_json::json!({
+            "name": "skill_load",
+            "kind": "tool",
+            "replace_with": "flow_load",
+            "note": "skills renamed to flows"
+        }),
+    ]
+}
+
+/// Scan shared system flows (`~/.opencarrier/flows`) for name + tools frontmatter.
+fn scan_shared_flows() -> Vec<serde_json::Value> {
+    let flows_dir = types::config::home_dir().join("flows");
+    if !flows_dir.is_dir() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&flows_dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let (name, content) = if path.is_dir() {
+            let flow_md = path.join("flow.md");
+            let skill_md = path.join("SKILL.md");
+            let md = if flow_md.exists() {
+                flow_md
+            } else if skill_md.exists() {
+                skill_md
+            } else {
+                continue;
+            };
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            let Ok(c) = std::fs::read_to_string(&md) else {
+                continue;
+            };
+            (name, c)
+        } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            let name = path
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            let Ok(c) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            (name, c)
+        } else {
+            continue;
+        };
+        if name.is_empty() || name == "SKILLS" {
+            continue;
+        }
+        let tools = parse_flow_tools_frontmatter(&content);
+        let description = parse_flow_description_frontmatter(&content);
+        out.push(serde_json::json!({
+            "name": name,
+            "description": description,
+            "tools": tools,
+        }));
+    }
+    out.sort_by(|a, b| {
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
+    });
+    out
+}
+
+fn parse_flow_tools_frontmatter(content: &str) -> Vec<String> {
+    let Some(rest) = content.strip_prefix("---") else {
+        return Vec::new();
+    };
+    let Some(end) = rest.find("\n---") else {
+        return Vec::new();
+    };
+    let fm = &rest[..end];
+    let mut tools = Vec::new();
+    let mut in_tools = false;
+    for line in fm.lines() {
+        let trimmed = line.trim();
+        if let Some(val) = trimmed.strip_prefix("tools:") {
+            let val = val.trim();
+            if val.starts_with('[') && val.ends_with(']') {
+                let inner = &val[1..val.len() - 1];
+                return inner
+                    .split(',')
+                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            in_tools = true;
+            continue;
+        }
+        if in_tools {
+            if let Some(item) = trimmed.strip_prefix('-') {
+                let t = item.trim().trim_matches('"').trim_matches('\'').to_string();
+                if !t.is_empty() {
+                    tools.push(t);
+                }
+            } else if !trimmed.is_empty() {
+                break;
+            }
+        }
+    }
+    tools
+}
+
+fn parse_flow_description_frontmatter(content: &str) -> String {
+    let Some(rest) = content.strip_prefix("---") else {
+        return String::new();
+    };
+    let Some(end) = rest.find("\n---") else {
+        return String::new();
+    };
+    for line in rest[..end].lines() {
+        if let Some(val) = line.trim().strip_prefix("description:") {
+            return val.trim().trim_matches('"').to_string();
+        }
+    }
+    String::new()
+}
+
+/// GET /api/v1/capability-catalog
+///
+/// Real-time capability surface for clone-creator (generate / upgrade / evaluate).
+/// Combines core tools, builtin tools, live MCP servers, deprecations, and shared flows.
+pub async fn capability_catalog(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let format = query
+        .get("format")
+        .map(|s| s.as_str())
+        .unwrap_or("full");
+    let compact = format == "compact";
+
+    let core_set: std::collections::HashSet<&str> =
+        types::tool::CORE_TOOL_NAMES.iter().copied().collect();
+    let core_tools: Vec<&str> = types::tool::CORE_TOOL_NAMES.to_vec();
+
+    let builtin_tools: Vec<serde_json::Value> =
+        builtin_tool_definitions(state.kernel.config.cli_exec.clone())
+            .into_iter()
+            .map(|t| {
+                let level = types::tool::PermissionLevel::for_tool(&t.name);
+                let level_str = match level {
+                    types::tool::PermissionLevel::None => "none",
+                    types::tool::PermissionLevel::ReadOnly => "readonly",
+                    types::tool::PermissionLevel::Write => "write",
+                    types::tool::PermissionLevel::Execute => "execute",
+                    types::tool::PermissionLevel::Dangerous => "dangerous",
+                };
+                let is_core = core_set.contains(t.name.as_str());
+                if compact {
+                    serde_json::json!({
+                        "name": t.name,
+                        "source": "builtin",
+                        "core": is_core,
+                        "permission_level": level_str,
+                        "status": "active",
+                    })
+                } else {
+                    serde_json::json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "source": "builtin",
+                        "core": is_core,
+                        "permission_level": level_str,
+                        "status": "active",
+                    })
+                }
+            })
+            .collect();
+
+    // Configured MCP names
+    let configured: std::collections::HashMap<String, &types::config::McpServerConfigEntry> = state
+        .kernel
+        .config
+        .mcp_servers
+        .iter()
+        .map(|s| (s.name.clone(), s))
+        .collect();
+
+    let mut mcp_servers: Vec<serde_json::Value> = Vec::new();
+    let mut seen_mcp: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Connected first (rich tool lists)
+    for entry in state.kernel.plugins.mcp_connections.iter() {
+        let name = entry.value().name().to_string();
+        seen_mcp.insert(name.clone());
+        let tools: Vec<serde_json::Value> = entry
+            .value()
+            .tools()
+            .iter()
+            .map(|t| {
+                if compact {
+                    serde_json::json!({ "name": t.name })
+                } else {
+                    serde_json::json!({
+                        "name": t.name,
+                        "description": t.description,
+                    })
+                }
+            })
+            .collect();
+        mcp_servers.push(serde_json::json!({
+            "name": name,
+            "configured": configured.contains_key(&name),
+            "connected": true,
+            "status": "active",
+            "tools_count": tools.len(),
+            "tools": tools,
+        }));
+    }
+
+    // Configured but not connected
+    for name in configured.keys() {
+        if seen_mcp.contains(name) {
+            continue;
+        }
+        mcp_servers.push(serde_json::json!({
+            "name": name,
+            "configured": true,
+            "connected": false,
+            "status": "configured_offline",
+            "tools_count": 0,
+            "tools": [],
+        }));
+    }
+
+    mcp_servers.sort_by(|a, b| {
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
+    });
+
+    let shared_flows = scan_shared_flows();
+    let deprecated = deprecated_capabilities();
+
+    // Declarable names (non-core builtins + connected MCP tools) for compact prompt injection
+    let mut declarable: Vec<String> = builtin_tools
+        .iter()
+        .filter(|t| t["core"].as_bool() != Some(true))
+        .filter_map(|t| t["name"].as_str().map(|s| s.to_string()))
+        .collect();
+    for srv in &mcp_servers {
+        if srv["connected"].as_bool() != Some(true) {
+            continue;
+        }
+        if let Some(tools) = srv["tools"].as_array() {
+            for t in tools {
+                if let Some(n) = t["name"].as_str() {
+                    declarable.push(n.to_string());
+                }
+            }
+        }
+    }
+    declarable.sort();
+    declarable.dedup();
+
+    Json(serde_json::json!({
+        "schema_version": 1,
+        "opencarrier_version": env!("CARGO_PKG_VERSION"),
+        "generated_at": chrono::Utc::now().to_rfc3339(),
+        "core_tools": core_tools,
+        "builtin_tools": builtin_tools,
+        "mcp_servers": mcp_servers,
+        "deprecated": deprecated,
+        "shared_flows": shared_flows,
+        "declarable_tools": declarable,
+        "notes": [
+            "core_tools are always loaded — do not list them in flow frontmatter tools:",
+            "Prefer builtin tools over mcp_* equivalents when both exist",
+            "Only declare mcp_servers that appear with connected=true (or configured if offline install is intentional)",
+            "Use flow.md under flows/<name>/ (not skills/SKILL.md)"
+        ],
+    }))
+}
+
 // ── MCP HTTP Endpoint ───────────────────────────────────────────────────
 
 /// POST /mcp — Handle MCP JSON-RPC requests over HTTP.
@@ -364,4 +667,8 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         )
         .route("/api/mcp/servers", routing::get(list_mcp_servers))
         .route("/api/tools", routing::get(list_tools))
+        .route(
+            "/api/v1/capability-catalog",
+            routing::get(capability_catalog),
+        )
 }
