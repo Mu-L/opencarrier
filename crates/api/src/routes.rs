@@ -1,5 +1,6 @@
 //! Route handlers for the Carrier API.
 
+pub mod agent_channels;
 pub mod agents;
 pub mod auth;
 pub mod bindings;

@@ -36,11 +36,54 @@
 </div>
 
 <div class="tabs" style="display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:0">
-  <button class="btn tab-btn active" onclick="switchTab('users')" style="border-radius:6px 6px 0 0;border-bottom:none">用户列表</button>
+  <button class="btn tab-btn active" onclick="switchTab('channels')" style="border-radius:6px 6px 0 0;border-bottom:none">渠道绑定</button>
+  <button class="btn tab-btn" onclick="switchTab('users')" style="border-radius:6px 6px 0 0;border-bottom:none">用户 / 管理员</button>
   <button class="btn tab-btn" onclick="switchTab('files')" style="border-radius:6px 6px 0 0;border-bottom:none">文件管理</button>
 </div>
 
-<div id="tab-users" class="tab-panel">
+<div id="tab-channels" class="tab-panel">
+
+<div class="card">
+  <h3 style="font-size:16px;margin-bottom:8px">服务号对话（微信）</h3>
+  <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px">绑定后，粉丝给服务号发消息将由本分身接待。用户无感。与「公众号发文章」无关。</p>
+  <div id="oa-list"><p style="color:var(--text-dim)">加载中…</p></div>
+  <details style="margin-top:16px">
+    <summary style="cursor:pointer;font-size:14px;font-weight:500">+ 绑定服务号</summary>
+    <div style="margin-top:12px;display:grid;gap:10px;max-width:480px">
+      <label style="font-size:13px">显示名<input id="oa-name" class="input" placeholder="如 86巴士服务号" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">app_id<input id="oa-app-id" class="input" placeholder="wx…" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">app_secret<input id="oa-app-secret" class="input" type="password" placeholder="新建必填；换绑可留空" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">Token（URL 验证）<input id="oa-token" class="input" type="password" placeholder="公众号后台服务器配置 Token" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">原始 ID（可选）<input id="oa-wechat-id" class="input" placeholder="gh_…" style="width:100%;margin-top:4px"></label>
+      <button class="btn btn-primary btn-sm" onclick="bindOa()" style="width:fit-content">保存绑定</button>
+      <p id="oa-form-msg" style="font-size:13px;color:var(--text-dim)"></p>
+    </div>
+  </details>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <h3 style="font-size:16px;margin-bottom:8px">微信客服（企微）</h3>
+  <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px">企微「微信客服」独立产品。绑定后用户进客服会话由本分身接待。</p>
+  <div id="kf-list"><p style="color:var(--text-dim)">加载中…</p></div>
+  <details style="margin-top:16px">
+    <summary style="cursor:pointer;font-size:14px;font-weight:500">+ 绑定微信客服</summary>
+    <div style="margin-top:12px;display:grid;gap:10px;max-width:480px">
+      <label style="font-size:13px">名称（标识）<input id="kf-name" class="input" placeholder="如 86bus-kf" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">corp_id<input id="kf-corp-id" class="input" placeholder="ww…" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">open_kfid<input id="kf-open-kfid" class="input" placeholder="wk…" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">secret<input id="kf-secret" class="input" type="password" placeholder="客服 Secret" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">callback_token（可选）<input id="kf-callback-token" class="input" type="password" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">encoding_aes_key（可选）<input id="kf-aes-key" class="input" type="password" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">webhook 端口<input id="kf-port" class="input" type="number" value="9100" style="width:100%;margin-top:4px"></label>
+      <button class="btn btn-primary btn-sm" onclick="bindKf()" style="width:fit-content">保存绑定</button>
+      <p id="kf-form-msg" style="font-size:13px;color:var(--text-dim)"></p>
+    </div>
+  </details>
+</div>
+
+</div><!-- end tab-channels -->
+
+<div id="tab-users" class="tab-panel" style="display:none">
 
 <div class="card">
   <h3 style="font-size:16px;margin-bottom:16px">管理权限</h3>
@@ -264,14 +307,133 @@ async function revokeAdmin(senderId) {
 }
 
 // ── Tab switching ──
-let currentTab = 'users';
+let currentTab = 'channels';
 function switchTab(tab) {
   currentTab = tab;
   document.querySelectorAll('.tab-panel').forEach(el => el.style.display = 'none');
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + tab).style.display = 'block';
   document.querySelector(`.tab-btn[onclick*="'${tab}'"]`).classList.add('active');
+  if (tab === 'channels') loadChannels();
 }
+
+// ── Channel bindings (服务号 + 微信客服) ──
+async function loadChannels() {
+  const oaEl = document.getElementById('oa-list');
+  const kfEl = document.getElementById('kf-list');
+  if (!oaEl) return;
+  try {
+    const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/channels`);
+    const data = await res.json();
+    if (!res.ok) {
+      oaEl.innerHTML = `<p style="color:#e74c3c">${esc(data.error || '加载失败')}</p>`;
+      kfEl.innerHTML = '';
+      return;
+    }
+    const oa = data.weixin_oa || [];
+    if (oa.length === 0) {
+      oaEl.innerHTML = '<p style="color:var(--text-dim);font-size:13px">尚未绑定服务号</p>';
+    } else {
+      oaEl.innerHTML = '<div class="table-wrap"><table><thead><tr><th>名称</th><th>app_id</th><th>回调 URL</th><th>凭证</th><th>操作</th></tr></thead><tbody>' +
+        oa.map(c => `<tr>
+          <td style="font-weight:500">${esc(c.name || c.app_id)}</td>
+          <td style="font-size:12px;font-family:monospace">${esc(c.app_id)}</td>
+          <td style="font-size:12px;word-break:break-all"><code>${esc(location.origin + (c.callback_url || ''))}</code>
+            <button class="btn btn-sm btn-ghost" onclick="navigator.clipboard.writeText(location.origin + ${JSON.stringify(c.callback_url || '')})">复制</button></td>
+          <td style="font-size:12px">${c.has_token && c.has_app_secret ? '<span class="badge badge-green">已配置</span>' : '<span class="badge badge-yellow">不完整</span>'}</td>
+          <td><button class="btn btn-sm btn-danger" onclick="unbindOa(${JSON.stringify(c.app_id)})">解绑</button></td>
+        </tr>`).join('') + '</tbody></table></div>';
+    }
+    const kf = data.wecom_kf || [];
+    if (kf.length === 0) {
+      kfEl.innerHTML = '<p style="color:var(--text-dim);font-size:13px">尚未绑定微信客服</p>';
+    } else {
+      kfEl.innerHTML = '<div class="table-wrap"><table><thead><tr><th>名称</th><th>open_kfid</th><th>corp_id</th><th>凭证</th><th>操作</th></tr></thead><tbody>' +
+        kf.map(c => `<tr>
+          <td style="font-weight:500">${esc(c.name)}</td>
+          <td style="font-size:12px;font-family:monospace">${esc(c.open_kfid || '')}</td>
+          <td style="font-size:12px;font-family:monospace">${esc(c.corp_id || '')}</td>
+          <td style="font-size:12px">${c.has_secret ? '<span class="badge badge-green">已配置</span>' : '<span class="badge badge-yellow">缺 secret</span>'}</td>
+          <td><button class="btn btn-sm btn-danger" onclick="unbindKf(${JSON.stringify(c.name)})">解绑</button></td>
+        </tr>`).join('') + '</tbody></table></div>';
+    }
+  } catch (e) {
+    oaEl.innerHTML = `<p style="color:#e74c3c">请求失败: ${esc(e.message)}</p>`;
+  }
+}
+
+async function bindOa() {
+  const msg = document.getElementById('oa-form-msg');
+  const body = {
+    name: document.getElementById('oa-name').value.trim(),
+    app_id: document.getElementById('oa-app-id').value.trim(),
+    app_secret: document.getElementById('oa-app-secret').value.trim(),
+    token: document.getElementById('oa-token').value.trim(),
+    wechat_id: document.getElementById('oa-wechat-id').value.trim(),
+  };
+  if (!body.app_id) { msg.textContent = '请填写 app_id'; return; }
+  msg.textContent = '保存中…';
+  try {
+    const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/channels/weixin-oa`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) { msg.textContent = data.error || '失败'; return; }
+    msg.textContent = '已绑定。请把回调 URL 配到公众号后台：' + (data.callback_url || '');
+    loadChannels();
+  } catch (e) { msg.textContent = e.message; }
+}
+
+async function unbindOa(appId) {
+  if (!confirm('确定解绑该服务号？凭证会保留，仅清除分身路由。')) return;
+  const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/channels/weixin-oa/${encodeURIComponent(appId)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || '解绑失败'); return; }
+  loadChannels();
+}
+
+async function bindKf() {
+  const msg = document.getElementById('kf-form-msg');
+  const body = {
+    name: document.getElementById('kf-name').value.trim(),
+    corp_id: document.getElementById('kf-corp-id').value.trim(),
+    open_kfid: document.getElementById('kf-open-kfid').value.trim(),
+    secret: document.getElementById('kf-secret').value.trim(),
+    callback_token: document.getElementById('kf-callback-token').value.trim(),
+    encoding_aes_key: document.getElementById('kf-aes-key').value.trim(),
+    webhook_port: parseInt(document.getElementById('kf-port').value, 10) || 9100,
+  };
+  if (!body.name || !body.corp_id || !body.open_kfid || !body.secret) {
+    msg.textContent = '名称 / corp_id / open_kfid / secret 必填';
+    return;
+  }
+  msg.textContent = '保存中…';
+  try {
+    const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/channels/wecom-kf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) { msg.textContent = data.error || '失败'; return; }
+    msg.textContent = '已绑定微信客服';
+    loadChannels();
+  } catch (e) { msg.textContent = e.message; }
+}
+
+async function unbindKf(name) {
+  if (!confirm('确定解绑该微信客服？凭证会保留，仅清除分身路由。')) return;
+  const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/channels/wecom-kf/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (!res.ok) { alert(data.error || '解绑失败'); return; }
+  loadChannels();
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  loadChannels();
+});
 
 // ── File Management ──
 let fileCurrentPath = '';

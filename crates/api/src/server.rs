@@ -133,6 +133,7 @@ pub async fn build_router(
     // API router — JSON endpoints protected by auth middleware
     let api_router = Router::new()
         .merge(routes::agents::router())
+        .merge(routes::agent_channels::router())
         .merge(routes::auth::router())
         .merge(routes::bindings::router())
         .merge(routes::bots::router())
