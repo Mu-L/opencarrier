@@ -26,6 +26,9 @@ pub struct OutboundCtx<'a> {
     pub channel_type: &'a str,
     pub bot_id: &'a str,
     pub sender_id: &'a str,
+    /// Agent **name** used as `workspaces/<agent_id>/…` path segment (e.g.
+    /// `ai-writer`). Must not be the UUID `AgentId` string — profile / PUBLISH
+    /// secret lookup and HTML paths all join under the name-based workspace.
     pub agent_id: &'a str,
     /// Interactive only: process `[NOTIFY:…]` markers.
     pub process_notify: bool,

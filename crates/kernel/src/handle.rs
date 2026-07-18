@@ -573,9 +573,12 @@ impl KernelHandle for CarrierKernel {
     }
 
     fn resolve_agent_workspace(&self, agent_name: &str) -> Option<String> {
+        // Accept either agent name or UUID string — callers (esp. cron) may pass
+        // either form. Workspace path still comes from the manifest (name-based dir).
         self.registry
-            .find_by_name(agent_name)
-            .and_then(|entry| entry.manifest.workspace.clone())
+            .resolve(agent_name)
+            .ok()
+            .and_then(|(_, entry)| entry.manifest.workspace.clone())
             .map(|p| p.to_string_lossy().to_string())
     }
 

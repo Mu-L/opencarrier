@@ -16,6 +16,27 @@ use runtime::kernel_handle::KernelHandle;
 
 // ── Cron delivery helper ───────────────────────────────────
 
+/// Filesystem / profile key for outbound side-effects (PUBLISH profile lookup,
+/// HTML/cover paths under `workspaces/<key>/senders/...`, content.toml cache).
+///
+/// Must be the agent **name** (e.g. `ai-writer`), never `AgentId` UUID string.
+/// Interactive bridge routes already store names; cron jobs only have UUID and
+/// must resolve here — otherwise `read_wechat_app_secret` looks under a
+/// non-existent `workspaces/<uuid>/` and reports a false "app_secret missing".
+fn outbound_agent_key(kernel: &CarrierKernel, agent_id: AgentId) -> String {
+    match kernel.registry.get(agent_id) {
+        Some(entry) => entry.name,
+        None => {
+            warn!(
+                %agent_id,
+                "Cron outbound: agent not in registry; falling back to UUID \
+                 (profile/PUBLISH paths will likely fail)"
+            );
+            agent_id.to_string()
+        }
+    }
+}
+
 /// Turn a free-form cron job name into a path/key-safe slug.
 ///
 /// `job.name` may contain CJK, punctuation, spaces, etc. (validate only rejects
@@ -213,6 +234,9 @@ pub(super) async fn cron_deliver_response(
 
     // Same outbound pipeline as the interactive bridge (PUBLISH + DELIVER +
     // no-reply suppress). Cron intentionally skips NOTIFY and WeChat sanitize.
+    //
+    // Use agent **name** (not UUID) for workspace/profile paths — see
+    // [`outbound_agent_key`].
     let sender_id = owner_id.unwrap_or("");
     let (pchannel, pbot, psend_fn) = cron_publish_followup_target(kernel, sender_id);
     let deliver_fn = kernel
@@ -220,12 +244,12 @@ pub(super) async fn cron_deliver_response(
         .read()
         .ok()
         .and_then(|g| g.clone());
-    let agent_id_str = agent_id.to_string();
+    let agent_name = outbound_agent_key(kernel, agent_id);
     let content = kernel
-        .resolve_agent_workspace(&agent_id_str)
+        .resolve_agent_workspace(&agent_name)
         .and_then(|ws| {
             runtime::outbound::ContentRegistry::global()
-                .load(&agent_id_str, std::path::Path::new(&ws))
+                .load(&agent_name, std::path::Path::new(&ws))
         });
     let kh: std::sync::Arc<dyn runtime::kernel_handle::KernelHandle> = kernel.clone();
     let out = runtime::outbound::prepare_outbound(
@@ -238,7 +262,7 @@ pub(super) async fn cron_deliver_response(
             channel_type: &pchannel,
             bot_id: &pbot,
             sender_id,
-            agent_id: &agent_id_str,
+            agent_id: &agent_name,
             process_notify: false,
             notify_routes: None,
             admin_sender_ids: &[],
@@ -956,6 +980,104 @@ impl CarrierKernel {
 #[cfg(test)]
 mod tests {
     use super::slugify;
+    use crate::registry::AgentRegistry;
+    use chrono::Utc;
+    use std::collections::HashMap;
+    use types::agent::*;
+
+    fn entry_with(id: AgentId, name: &str) -> AgentEntry {
+        AgentEntry {
+            id,
+            name: name.to_string(),
+            manifest: AgentManifest {
+                name: name.to_string(),
+                display_name: String::new(),
+                version: "0.1.0".to_string(),
+                description: "test".to_string(),
+                author: "test".to_string(),
+                module: "test".to_string(),
+                schedule: ScheduleMode::default(),
+                model: ModelConfig::default(),
+                resources: ResourceQuota::default(),
+                priority: Priority::default(),
+                capabilities: ManifestCapabilities::default(),
+                profile: None,
+                tools: HashMap::new(),
+                flows: vec![],
+                mcp_servers: vec![],
+                max_tool_level: types::tool::PermissionLevel::Write,
+                intent_classifier_enabled: None,
+                metadata: HashMap::new(),
+                tags: vec![],
+                autonomous: None,
+                workspace: Some(std::path::PathBuf::from(format!(
+                    "/tmp/workspaces/{name}"
+                ))),
+                generate_identity_files: true,
+                exec_policy: None,
+                cli_exec: None,
+                tool_allowlist: vec![],
+                tool_blocklist: vec![],
+                clone_source: None,
+                knowledge_files: vec![],
+                plugins: vec![],
+                subagents: vec![],
+            },
+            state: AgentState::Created,
+            mode: AgentMode::default(),
+            created_at: Utc::now(),
+            last_active: Utc::now(),
+            parent: None,
+            children: vec![],
+            session_id: SessionId::new(),
+            tags: vec![],
+            identity: Default::default(),
+            onboarding_completed: false,
+            onboarding_completed_at: None,
+        }
+    }
+
+    /// Contract: cron must resolve AgentId → name before PUBLISH profile lookup.
+    /// Interactive routes store names; UUID must never become the workspaces/ segment.
+    #[test]
+    fn outbound_agent_key_contract_name_not_uuid() {
+        let id = AgentId::new();
+        let reg = AgentRegistry::new();
+        reg.register(entry_with(id, "ai-writer")).unwrap();
+        // Same lookup outbound_agent_key uses via kernel.registry.get
+        let name = reg.get(id).map(|e| e.name).expect("registered");
+        assert_eq!(name, "ai-writer");
+        assert_ne!(name, id.to_string());
+        // Profile path segment must match interactive bridge (agent name)
+        let profile_via_name = types::config::sender_data_dir(
+            std::path::Path::new("/home/u/.opencarrier"),
+            "sender@im.wechat",
+            &name,
+            Some("sender@im.wechat"),
+        );
+        let profile_via_uuid = types::config::sender_data_dir(
+            std::path::Path::new("/home/u/.opencarrier"),
+            "sender@im.wechat",
+            &id.to_string(),
+            Some("sender@im.wechat"),
+        );
+        assert!(profile_via_name.ends_with("workspaces/ai-writer/senders/sender@im.wechat"));
+        assert!(!profile_via_uuid
+            .to_string_lossy()
+            .contains("workspaces/ai-writer/"));
+    }
+
+    #[test]
+    fn registry_resolve_accepts_uuid_or_name_for_workspace() {
+        let id = AgentId::new();
+        let reg = AgentRegistry::new();
+        reg.register(entry_with(id, "ai-writer")).unwrap();
+        let by_name = reg.resolve("ai-writer").unwrap();
+        let by_uuid = reg.resolve(&id.to_string()).unwrap();
+        assert_eq!(by_name.1.name, "ai-writer");
+        assert_eq!(by_uuid.1.name, "ai-writer");
+        assert_eq!(by_name.1.manifest.workspace, by_uuid.1.manifest.workspace);
+    }
 
     #[test]
     fn slugify_keeps_cjk_and_strips_path_chars() {
