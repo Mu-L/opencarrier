@@ -590,15 +590,21 @@ impl KernelHandle for CarrierKernel {
         let ws = self.resolve_agent_workspace(agent).ok_or_else(|| {
             format!("deliver_content: agent {agent} not found or has no workspace")
         })?;
-        let path = std::path::Path::new(&ws).join("content.toml");
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| format!("deliver_content: failed to read {path:?}: {e}"))?;
-        let config: types::content::ContentConfig = toml::from_str(&text)
-            .map_err(|e| format!("deliver_content: failed to parse {path:?}: {e}"))?;
-        let desc = config
-            .get(content_key)
-            .cloned()
-            .ok_or_else(|| format!("deliver_content: key '{content_key}' not found in {path:?}"))?;
+        let ws_path = std::path::Path::new(&ws);
+        let config = runtime::outbound::ContentRegistry::global()
+            .load(agent, ws_path)
+            .ok_or_else(|| {
+                format!(
+                    "deliver_content: failed to load content.toml for agent {agent} under {}",
+                    ws_path.display()
+                )
+            })?;
+        let desc = config.get(content_key).cloned().ok_or_else(|| {
+            format!(
+                "deliver_content: key '{content_key}' not found in {}/content.toml",
+                ws_path.display()
+            )
+        })?;
 
         let guard = self.channel_deliver_fn.read().map_err(|e| e.to_string())?;
         let deliver_fn = guard

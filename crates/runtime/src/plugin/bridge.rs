@@ -18,11 +18,10 @@ use crate::kernel_handle::KernelHandle;
 // Re-export outbound types and marker APIs so existing
 // `runtime::plugin::bridge::…` imports keep compiling.
 pub use crate::outbound::{
-    ChannelDeliverFn, ChannelSendFn, NotifyTarget, RoutingModeFn, is_no_reply_sentinel,
-    process_deliver_markers_pub, process_publish_markers,
+    ChannelDeliverFn, ChannelSendFn, ContentRegistry, NotifyTarget, OutboundCtx, OutboundResult,
+    RoutingModeFn, is_no_reply_sentinel, prepare_outbound, process_deliver_markers_pub,
+    process_publish_markers,
 };
-// Bridge-internal helpers (not part of the stable re-export surface).
-use crate::outbound::{parse_notify_markers, sanitize_wechat_text};
 
 // ---------------------------------------------------------------------------
 // Plugin bridge manager
@@ -39,10 +38,6 @@ pub struct PluginBridgeManager {
     /// Function to deliver rich content through channels
     /// (channel_type, bot_id, user_id, content). Backs `[DELIVER:key]` markers.
     channel_deliver_fn: Option<ChannelDeliverFn>,
-    /// Per-agent content config cache: agent_id -> (content.toml mtime, config).
-    /// Reloaded lazily when the file's mtime changes.
-    content_cache:
-        Arc<DashMap<String, (std::time::SystemTime, Arc<types::content::ContentConfig>)>>,
     /// Function to look up a channel's routing mode by channel_type.
     routing_mode_fn: Option<RoutingModeFn>,
     /// Notify routing: notify_type → push target. Loaded from notify_routes.json.
@@ -62,7 +57,6 @@ impl PluginBridgeManager {
             kernel,
             channel_send_fn: None,
             channel_deliver_fn: None,
-            content_cache: Arc::new(DashMap::new()),
             routing_mode_fn: None,
             notify_routes: None,
             sender_router: None,
@@ -101,57 +95,27 @@ impl PluginBridgeManager {
         self.notify_routes = Some(routes);
     }
 
-    /// Load an agent's content config (`content.toml` in its workspace), cached
-    /// by file mtime so edits take effect on the next message without a restart.
-    /// Returns None if the agent has no content.toml (or it can't be parsed).
+    /// Load an agent's content config via the shared [`ContentRegistry`].
     fn load_content_config(&self, agent_id: &str) -> Option<Arc<types::content::ContentConfig>> {
-        if agent_id.is_empty() {
-            return None;
-        }
         let ws = self.kernel.resolve_agent_workspace(agent_id)?;
-        let path = std::path::Path::new(&ws).join("content.toml");
-        let mtime = std::fs::metadata(&path).ok()?.modified().ok()?;
-        if let Some(entry) = self.content_cache.get(agent_id) {
-            if entry.0 == mtime {
-                return Some(entry.1.clone());
-            }
-        }
-        let text = std::fs::read_to_string(&path).ok()?;
-        let config: types::content::ContentConfig = toml::from_str(&text)
-            .map_err(|e| {
-                warn!(%agent_id, error=%e, "Failed to parse content.toml");
-                e
-            })
-            .ok()?;
-        let config = Arc::new(config);
-        self.content_cache
-            .insert(agent_id.to_string(), (mtime, config.clone()));
-        Some(config)
+        ContentRegistry::global().load(agent_id, std::path::Path::new(&ws))
     }
 
-    /// Process `[DELIVER:key]` and `[DELIVER:key|field=value|...]` markers in an
-    /// agent reply: resolve the base content descriptor from `content.toml`,
-    /// apply any inline overrides, deliver via the channel's best-supported
-    /// form (`channel_deliver_fn`), and strip markers from the user-facing text.
-    /// If a deliver fails and the remaining text is empty, fall back to the
-    /// content's text representation so the user still gets something (e.g. a
-    /// link when a card can't be sent).
-    async fn process_deliver_markers(
-        &self,
-        original: &PluginMessage,
-        agent_id: &str,
-        response: &str,
-    ) -> String {
-        let config = self.load_content_config(agent_id);
-        process_deliver_markers_pub(
-            self.channel_deliver_fn.clone(),
-            config.as_deref(),
-            &original.channel_type,
-            &original.bot_id,
-            &original.sender_id,
-            response,
-        )
-        .await
+    /// Resolve admin sender_ids for `[NOTIFY]` `recipients=admins` fan-out.
+    fn resolve_admin_sender_ids(&self, agent_id: &str) -> Vec<String> {
+        if agent_id.is_empty() {
+            return Vec::new();
+        }
+        self.kernel
+            .resolve_agent_workspace(agent_id)
+            .map(|ws| {
+                crate::plugin::admin_store::read_admins(std::path::Path::new(&ws))
+                    .admins
+                    .into_iter()
+                    .map(|a| a.sender_id)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Backward-compatible: add a loaded plugin to the bridge.
@@ -724,135 +688,35 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     async fn send_response(&self, original: &PluginMessage, response: &str) {
-        // Parse cross-channel notify markers before sending to the user.
-        // Each [NOTIFY:type]content[/NOTIFY] triggers a push via channel_send_fn;
-        // the marker is stripped from the user-facing reply.
-        let (notifications, cleaned) = parse_notify_markers(response);
-        if !notifications.is_empty() {
-            if let (Some(send_fn), Some(routes)) =
-                (self.channel_send_fn.clone(), self.notify_routes.clone())
-            {
-                for (ntype, content) in &notifications {
-                    if let Some(target) = routes.get(ntype) {
-                        let msg = match &target.prefix {
-                            Some(p) if !p.is_empty() => {
-                                format!("{p}\n{content}\n来源用户: {}", original.sender_id)
-                            }
-                            _ => format!("{content}\n来源用户: {}", original.sender_id),
-                        };
+        let agent_id = self.resolve_agent(original);
+        let content = self.load_content_config(&agent_id);
+        let admin_sender_ids = self.resolve_admin_sender_ids(&agent_id);
+        let sanitize_wechat = matches!(original.channel_type.as_str(), "weixin" | "weixin-oa");
 
-                        // Resolve recipient user_ids with per-recipient channel routing.
-                        // iLink IDs ("xxx@im.wechat") go through the weixin (iLink)
-                        // channel; bare openids go through weixin-oa (customer-send API).
-                        // This ensures every admin receives the push on their actual
-                        // channel regardless of the route's default.
-                        let recipient_ids: Vec<(String, String, String)> =
-                            if target.recipients.as_deref() == Some("admins") {
-                                let agent_id = self.resolve_agent(original);
-                                let admins = if !agent_id.is_empty() {
-                                    self.kernel
-                                        .resolve_agent_workspace(&agent_id)
-                                        .map(|ws| {
-                                            crate::plugin::admin_store::read_admins(
-                                                std::path::Path::new(&ws),
-                                            )
-                                            .admins
-                                        })
-                                        .unwrap_or_default()
-                                } else {
-                                    Vec::new()
-                                };
-                                if admins.is_empty() {
-                                    warn!(
-                                        notify_type = %ntype,
-                                        agent = %agent_id,
-                                        "recipients=admins but no admins resolved"
-                                    );
-                                }
-                                admins.into_iter().map(|a| {
-                                    // Route by sender_id format:
-                                    //   @im.wechat → iLink (target channel/bot_id)
-                                    //   bare openid → weixin-oa (app_id from original msg)
-                                    if a.sender_id.contains("@im.wechat") {
-                                        (target.channel.clone(), target.bot_id.clone(), a.sender_id)
-                                    } else {
-                                        ("weixin-oa".to_string(), original.bot_id.clone(), a.sender_id)
-                                    }
-                                }).collect()
-                            } else if target.user_id.is_empty() {
-                                warn!(
-                                    notify_type = %ntype,
-                                    "Notify route has empty user_id and recipients != admins"
-                                );
-                                Vec::new()
-                            } else {
-                                vec![(target.channel.clone(), target.bot_id.clone(), target.user_id.clone())]
-                            };
+        let out = prepare_outbound(
+            response,
+            OutboundCtx {
+                kernel: Some(self.kernel.clone()),
+                send_fn: self.channel_send_fn.clone(),
+                deliver_fn: self.channel_deliver_fn.clone(),
+                content: content.as_deref(),
+                channel_type: &original.channel_type,
+                bot_id: &original.bot_id,
+                sender_id: &original.sender_id,
+                agent_id: &agent_id,
+                process_notify: true,
+                notify_routes: self.notify_routes.as_deref(),
+                admin_sender_ids: &admin_sender_ids,
+                sanitize_wechat,
+            },
+        )
+        .await;
 
-                        for (channel, bot_id, user_id) in recipient_ids {
-                            info!(
-                                notify_type = %ntype,
-                                target_channel = %channel,
-                                target_user = %user_id,
-                                "Notify marker matched, pushing cross-channel"
-                            );
-                            let send_fn = send_fn.clone();
-                            let msg = msg.clone();
-                            tokio::task::spawn_blocking(move || {
-                                if let Err(e) = send_fn(&channel, &bot_id, &user_id, &msg) {
-                                    error!(%channel, %user_id, error = %e, "Notify push failed");
-                                }
-                            });
-                        }
-                    } else {
-                        warn!(notify_type = %ntype, "Notify marker has no route in notify_routes.json");
-                    }
-                }
-            } else {
-                warn!(
-                    notify_count = notifications.len(),
-                    "Notify markers present but no notify_routes/send_fn configured"
-                );
-            }
-        }
-
-        // Parse [PUBLISH:app_id]html_path[/PUBLISH] markers. Each fires a
-        // reliable publish handler (cover → draft → publish) in the background;
-        // the marker is stripped from the user-facing reply and the result is
-        // pushed as a follow-up message when the publish completes.
-        let final_cleaned = process_publish_markers(
-            self.kernel.clone(),
-            self.channel_send_fn.clone(),
-            &original.channel_type,
-            &original.bot_id,
-            &original.sender_id,
-            &self.resolve_agent(original),
-            &cleaned,
-        );
-
-        // Process [DELIVER:key] markers: deliver rich content via the channel's
-        // best-supported form, strip markers from the reply text.
-        let final_cleaned = self
-            .process_deliver_markers(original, &self.resolve_agent(original), &final_cleaned)
-            .await;
-
-        let response = final_cleaned.as_str();
-
-        // Suppress no-reply sentinels: the agent/flow intentionally chose not to
-        // reply. Sending the literal marker would either 45015 on WeChat 客服消息
-        // (48h window closed, common for event-triggered turns) or deliver the
-        // marker text itself to the user. NOTIFY/PUBLISH directives above still
-        // fire — only the final text send is skipped.
-        if is_no_reply_sentinel(response) {
-            info!(
-                channel = %original.channel_type,
-                bot = %original.bot_id,
-                sender = %original.sender_id,
-                "Bridge suppressing no-reply sentinel — not sending to channel"
-            );
+        if out.suppress_text_send {
             return;
         }
 
+        let response = out.cleaned_text.as_str();
         info!(
             channel = %original.channel_type,
             bot = %original.bot_id,
@@ -867,12 +731,6 @@ impl PluginBridgeManager {
             let bot_id = original.bot_id.clone();
             let sender_id = original.sender_id.clone();
             let text = response.to_string();
-            // WeChat iLink and OA don't support some Unicode characters (emoji,
-            // special symbols, variation selectors) — they show as ???. Strip them.
-            let text = match original.channel_type.as_str() {
-                "weixin" | "weixin-oa" => sanitize_wechat_text(&text),
-                _ => text,
-            };
             let _ = tokio::task::spawn_blocking(move || {
                 if let Err(e) = send_fn(&channel_type, &bot_id, &sender_id, &text) {
                     error!(

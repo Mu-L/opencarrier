@@ -206,71 +206,50 @@ pub(super) async fn cron_deliver_response(
 ) -> Result<(), String> {
     use types::scheduler::CronDelivery;
 
+    // Empty before markers: keep historical cron behaviour (skip all processing).
     if response.is_empty() {
         return Ok(());
     }
 
-    // Process [PUBLISH] markers the same way interactive replies do, so
-    // cron-triggered publishes actually create drafts (previously this path
-    // shipped the raw marker text to the channel and never published). The
-    // follow-up uses the sender's last known channel if any; the draft itself
-    // is created via the kernel regardless of delivery target.
+    // Same outbound pipeline as the interactive bridge (PUBLISH + DELIVER +
+    // no-reply suppress). Cron intentionally skips NOTIFY and WeChat sanitize.
     let sender_id = owner_id.unwrap_or("");
     let (pchannel, pbot, psend_fn) = cron_publish_followup_target(kernel, sender_id);
-    let kh: std::sync::Arc<dyn runtime::kernel_handle::KernelHandle> = kernel.clone();
-    let cleaned = runtime::plugin::bridge::process_publish_markers(
-        kh,
-        psend_fn,
-        &pchannel,
-        &pbot,
-        sender_id,
-        &agent_id.to_string(),
-        response,
-    );
-    // Process [DELIVER:key] markers the same way interactive replies do, so
-    // cron-triggered rich content (e.g. a charter confirm card) is delivered
-    // instead of shipping the raw marker to the channel. Targets the sender's
-    // last known channel; if none is known the markers are still stripped.
     let deliver_fn = kernel
         .channel_deliver_fn
         .read()
         .ok()
         .and_then(|g| g.clone());
-    let config = kernel
-        .resolve_agent_workspace(&agent_id.to_string())
+    let agent_id_str = agent_id.to_string();
+    let content = kernel
+        .resolve_agent_workspace(&agent_id_str)
         .and_then(|ws| {
-            std::fs::read_to_string(std::path::Path::new(&ws).join("content.toml")).ok()
-        })
-        .and_then(|text| toml::from_str::<types::content::ContentConfig>(&text).ok());
-    let cleaned = runtime::plugin::bridge::process_deliver_markers_pub(
-        deliver_fn,
-        config.as_ref(),
-        &pchannel,
-        &pbot,
-        sender_id,
-        &cleaned,
+            runtime::outbound::ContentRegistry::global()
+                .load(&agent_id_str, std::path::Path::new(&ws))
+        });
+    let kh: std::sync::Arc<dyn runtime::kernel_handle::KernelHandle> = kernel.clone();
+    let out = runtime::outbound::prepare_outbound(
+        response,
+        runtime::outbound::OutboundCtx {
+            kernel: Some(kh),
+            send_fn: psend_fn,
+            deliver_fn,
+            content: content.as_deref(),
+            channel_type: &pchannel,
+            bot_id: &pbot,
+            sender_id,
+            agent_id: &agent_id_str,
+            process_notify: false,
+            notify_routes: None,
+            admin_sender_ids: &[],
+            sanitize_wechat: false,
+        },
     )
     .await;
-    // If the response was only publish/deliver markers, there's nothing left
-    // to deliver to the user.
-    if cleaned.trim().is_empty() {
+    if out.suppress_text_send {
         return Ok(());
     }
-    let response = cleaned.as_str();
-
-    // Suppress no-reply sentinels on the cron path too — same convention as the
-    // interactive send_response path (bridge.rs). A scheduled turn that resolves
-    // to "no reply" (e.g. a flow's final step emitting `[no reply needed]`, or a
-    // non-LLM agent printing it) would otherwise ship the literal marker to
-    // 客服消息 (45015) or the webhook. PUBLISH markers above already fired, so
-    // only the final text send is skipped.
-    if runtime::plugin::bridge::is_no_reply_sentinel(response) {
-        tracing::info!(
-            agent = %agent_id,
-            "Cron suppressing no-reply sentinel — not sending to channel"
-        );
-        return Ok(());
-    }
+    let response = out.cleaned_text.as_str();
 
     match delivery {
         CronDelivery::None => Ok(()),

@@ -1,26 +1,28 @@
-//! Outbound reply processing: markers, silence, and channel send/deliver types.
+//! Outbound reply processing: markers, silence, content registry, and pipeline.
 //!
 //! Agent replies may embed side-effect markers (`[PUBLISH]`, `[DELIVER]`,
 //! `[NOTIFY]`) and no-reply sentinels. This module owns the parsing and
 //! processing of those markers so both the interactive bridge path and the
-//! cron delivery path share one implementation.
+//! cron delivery path share one implementation via [`prepare_outbound`].
 //!
 //! `plugin::bridge` re-exports the public API for backward-compatible import
 //! paths (`runtime::plugin::bridge::process_*`).
 
+mod content;
 mod deliver;
+mod notify;
 mod parse;
+mod pipeline;
 mod publish;
 mod silence;
 mod types;
 
+pub use content::ContentRegistry;
 pub use deliver::process_deliver_markers_pub;
+pub use pipeline::{prepare_outbound, OutboundCtx, OutboundResult};
 pub use publish::process_publish_markers;
 pub use silence::{is_no_reply_sentinel, sanitize_wechat_text};
 pub use types::{ChannelDeliverFn, ChannelSendFn, NotifyTarget, RoutingModeFn};
-
-// Used by the interactive bridge orchestrator (send_response).
-pub(crate) use parse::parse_notify_markers;
 
 #[cfg(test)]
 mod tests {
@@ -178,5 +180,13 @@ mod tests {
         let err = desc.apply_override("miniprogram.app_id", "wxapp");
         assert!(err.is_err());
         assert!(desc.miniprogram.is_none());
+    }
+
+    #[test]
+    fn empty_or_sentinel_should_suppress() {
+        // Mirrors prepare_outbound suppress rules (unit-level without async).
+        assert!(is_no_reply_sentinel("[no reply needed]"));
+        assert!("".trim().is_empty() || is_no_reply_sentinel(""));
+        assert!(!"hello".trim().is_empty() && !is_no_reply_sentinel("hello"));
     }
 }
