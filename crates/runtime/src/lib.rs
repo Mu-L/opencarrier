@@ -33,6 +33,7 @@ pub mod llm_errors;
 pub mod mcp;
 pub mod mcp_server;
 pub mod media_understanding;
+pub mod outbound;
 pub mod plugin;
 pub mod process_manager;
 pub mod prompt_builder;
