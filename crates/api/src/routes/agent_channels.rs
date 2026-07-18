@@ -6,11 +6,95 @@
 use crate::routes::common::resolve_to_name;
 use crate::routes::state::AppState;
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
 use std::sync::Arc;
 use tracing::{info, warn};
+
+/// Generate a random Token for WeChat OA URL verification (we provide this, ops paste into 公众号后台).
+fn generate_weixin_oa_token() -> String {
+    // 32 hex chars — alphanumeric-safe for WeChat Token field
+    uuid::Uuid::new_v4().simple().to_string()
+}
+
+/// Public base URL from reverse-proxy headers (https://carrier.example.com).
+fn public_base_from_headers(headers: &HeaderMap) -> Option<String> {
+    let host = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get("host"))
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty())?;
+    // Prefer forwarded proto (behind nginx TLS termination)
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| *s == "http" || *s == "https")
+        .unwrap_or("https");
+    Some(format!("{proto}://{host}"))
+}
+
+/// Server egress IPs for 公众号 IP 白名单 (ops copy into WeChat admin).
+/// Sources: env `OPENCARRIER_IP_WHITELIST` (comma-separated) or `~/.opencarrier/ip_whitelist.txt`.
+fn weixin_ip_whitelist() -> Vec<String> {
+    if let Ok(v) = std::env::var("OPENCARRIER_IP_WHITELIST") {
+        let list: Vec<String> = v
+            .split(|c| c == ',' || c == ' ' || c == '\n')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+        if !list.is_empty() {
+            return list;
+        }
+    }
+    let path = types::config::home_dir().join("ip_whitelist.txt");
+    if let Ok(s) = std::fs::read_to_string(path) {
+        return s
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(String::from)
+            .collect();
+    }
+    Vec::new()
+}
+
+/// Setup guide for 微信公众平台 after bind (all values we provide except app_id/secret).
+fn weixin_oa_setup_guide(
+    app_id: &str,
+    token: &str,
+    public_base: Option<&str>,
+) -> serde_json::Value {
+    let path = format!("/api/weixin-oa/{app_id}/callback");
+    let callback_url = match public_base {
+        Some(b) => format!("{}{path}", b.trim_end_matches('/')),
+        None => path.clone(),
+    };
+    let ips = weixin_ip_whitelist();
+    serde_json::json!({
+        "callback_url": callback_url,
+        "callback_path": path,
+        "token": token,
+        "ip_whitelist": ips,
+        "ip_whitelist_note": if ips.is_empty() {
+            "未配置出口 IP。运维请设置环境变量 OPENCARRIER_IP_WHITELIST 或写入 ~/.opencarrier/ip_whitelist.txt（每行一个 IP）"
+        } else {
+            "复制下列 IP 到微信公众平台 → 开发 → 基本配置 → IP 白名单"
+        },
+        "encrypt_mode": "明文模式",
+        "encrypt_mode_en": "plain",
+        "data_format": "XML",
+        "steps": [
+            "1. 打开微信公众平台 → 设置与开发 → 基本配置",
+            "2. 「服务器配置」点修改/启用，按下方填入 URL、Token",
+            "3. 消息加解密方式选：明文模式",
+            "4. 数据格式选：XML",
+            "5. 「IP 白名单」添加下方全部 IP 后保存",
+            "6. 点「启用」完成 URL 验证（本系统会自动通过校验）",
+        ],
+    })
+}
 
 // ─── List ───────────────────────────────────────────────────────────────────
 
@@ -61,8 +145,14 @@ pub async fn list_agent_channels(
                     .get("app_secret")
                     .and_then(|v| v.as_str())
                     .is_some_and(|t| !t.is_empty());
-                // Relative path; admin fills host in 公众号后台 (or prepends known domain).
-                let callback_url = format!("/api/weixin-oa/{app_id}/callback");
+                let token = json
+                    .get("token")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                // Relative path; UI prefixes location.origin. Full guide for re-copy.
+                let callback_path = format!("/api/weixin-oa/{app_id}/callback");
+                let setup = weixin_oa_setup_guide(&app_id, &token, None);
                 weixin_oa.push(serde_json::json!({
                     "type": "weixin-oa",
                     "id": app_id,
@@ -71,7 +161,9 @@ pub async fn list_agent_channels(
                     "wechat_id": json.get("wechat_id").and_then(|v| v.as_str()).unwrap_or(""),
                     "has_token": token_ok,
                     "has_app_secret": secret_ok,
-                    "callback_url": callback_url,
+                    "token": token,
+                    "callback_url": callback_path,
+                    "setup": setup,
                     "bind_openid_url": json.get("bind_openid_url").and_then(|v| v.as_str()),
                 }));
             }
@@ -128,10 +220,12 @@ pub async fn list_agent_channels(
 
 /// POST /api/agents/{agent}/channels/weixin-oa
 ///
-/// Create or update a 服务号 session and bind it to this agent.
+/// Step 1: ops submit name + app_id + app_secret (+ optional 原始 ID).
+/// We generate Token if missing, save session, return setup guide (URL / Token / IP / 明文 / XML).
 pub async fn bind_weixin_oa(
     State(state): State<Arc<AppState>>,
     Path(agent): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let agent_name = match resolve_to_name(&agent, &state.kernel.registry) {
@@ -178,25 +272,28 @@ pub async fn bind_weixin_oa(
         .or_else(|| existing.as_ref().map(|e| e.app_secret.clone()))
         .unwrap_or_default();
 
+    // Token: optional from client; else keep existing; else auto-generate (we provide to 公众号后台)
+    let mut token_generated = false;
     let token = body
         .get("token")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-        .or_else(|| existing.as_ref().map(|e| e.token.clone()))
-        .unwrap_or_default();
+        .or_else(|| {
+            existing
+                .as_ref()
+                .map(|e| e.token.clone())
+                .filter(|t| !t.is_empty())
+        })
+        .unwrap_or_else(|| {
+            token_generated = true;
+            generate_weixin_oa_token()
+        });
 
     if app_secret.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "缺少 app_secret（新建必须填写）"})),
-        )
-            .into_response();
-    }
-    if token.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "缺少 token（公众号后台 URL 验证用）"})),
+            Json(serde_json::json!({"error": "缺少 app_secret（第一步必填）"})),
         )
             .into_response();
     }
@@ -221,8 +318,8 @@ pub async fn bind_weixin_oa(
         name: name.clone(),
         app_id: app_id.clone(),
         app_secret,
-        token,
-        wechat_id,
+        token: token.clone(),
+        wechat_id: wechat_id.clone(),
         bind_agent: Some(agent_name.clone()),
         bind_openid_url,
     };
@@ -268,9 +365,15 @@ pub async fn bind_weixin_oa(
         pm.set_sender_route(&app_id, &agent_name);
     }
 
-    info!(%app_id, agent = %agent_name, "Bound weixin-oa channel to agent");
+    info!(%app_id, agent = %agent_name, token_generated, "Bound weixin-oa channel to agent");
 
-    let callback_url = format!("/api/weixin-oa/{app_id}/callback");
+    let public_base = public_base_from_headers(&headers);
+    let setup = weixin_oa_setup_guide(&app_id, &token, public_base.as_deref());
+    let callback_url = setup
+        .get("callback_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     (
         StatusCode::OK,
@@ -279,9 +382,13 @@ pub async fn bind_weixin_oa(
             "type": "weixin-oa",
             "app_id": app_id,
             "name": name,
+            "wechat_id": wechat_id,
             "agent": agent_name,
+            "token": token,
+            "token_generated": token_generated,
             "callback_url": callback_url,
-            "callback_url_hint": "填公众号后台时加上域名，如 https://your.host" ,
+            "setup": setup,
+            "message": "第一步已保存。请按 setup 指引到微信公众平台填写 URL / Token / IP 白名单（明文模式 + XML）",
         })),
     )
         .into_response()

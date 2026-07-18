@@ -47,16 +47,20 @@
   <h3 style="font-size:16px;margin-bottom:8px">服务号对话（微信）</h3>
   <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px">绑定后，粉丝给服务号发消息将由本分身接待。用户无感。与「公众号发文章」无关。</p>
   <div id="oa-list"><p style="color:var(--text-dim)">加载中…</p></div>
-  <details style="margin-top:16px">
-    <summary style="cursor:pointer;font-size:14px;font-weight:500">+ 绑定服务号</summary>
-    <div style="margin-top:12px;display:grid;gap:10px;max-width:480px">
-      <label style="font-size:13px">显示名<input id="oa-name" class="input" placeholder="如 86巴士服务号" style="width:100%;margin-top:4px"></label>
-      <label style="font-size:13px">app_id<input id="oa-app-id" class="input" placeholder="wx…" style="width:100%;margin-top:4px"></label>
-      <label style="font-size:13px">app_secret<input id="oa-app-secret" class="input" type="password" placeholder="新建必填；换绑可留空" style="width:100%;margin-top:4px"></label>
-      <label style="font-size:13px">Token（URL 验证）<input id="oa-token" class="input" type="password" placeholder="公众号后台服务器配置 Token" style="width:100%;margin-top:4px"></label>
+  <details style="margin-top:16px" id="oa-bind-details">
+    <summary style="cursor:pointer;font-size:14px;font-weight:500">+ 绑定服务号（两步引导）</summary>
+    <div style="margin-top:12px;display:grid;gap:10px;max-width:560px">
+      <p style="font-size:13px;color:var(--text-dim);margin:0;line-height:1.5">
+        <strong>第一步</strong>：填写微信公众平台「开发者 ID」信息并提交。<br>
+        <strong>第二步</strong>：系统给出 URL / Token / IP 白名单，复制到微信后台完成服务器配置。
+      </p>
+      <label style="font-size:13px">名称<input id="oa-name" class="input" placeholder="如 莫老师餐饮识堂" style="width:100%;margin-top:4px"></label>
       <label style="font-size:13px">原始 ID（可选）<input id="oa-wechat-id" class="input" placeholder="gh_…" style="width:100%;margin-top:4px"></label>
-      <button class="btn btn-primary btn-sm" onclick="bindOa()" style="width:fit-content">保存绑定</button>
-      <p id="oa-form-msg" style="font-size:13px;color:var(--text-dim)"></p>
+      <label style="font-size:13px">app_id<input id="oa-app-id" class="input" placeholder="wx…" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">app_secret<input id="oa-app-secret" class="input" type="password" placeholder="开发者密码（必填）" style="width:100%;margin-top:4px"></label>
+      <button class="btn btn-primary btn-sm" onclick="bindOa()" style="width:fit-content">提交并生成微信配置</button>
+      <p id="oa-form-msg" style="font-size:13px;color:var(--text-dim);margin:0"></p>
+      <div id="oa-setup-panel" style="display:none;margin-top:8px;padding:14px;border:1px solid var(--border, #ddd);border-radius:8px;background:var(--bg-soft, #f8f9fa)"></div>
     </div>
   </details>
 </div>
@@ -335,14 +339,21 @@ async function loadChannels() {
       oaEl.innerHTML = '<p style="color:var(--text-dim);font-size:13px">尚未绑定服务号</p>';
     } else {
       oaEl.innerHTML = '<div class="table-wrap"><table><thead><tr><th>名称</th><th>app_id</th><th>回调 URL</th><th>凭证</th><th>操作</th></tr></thead><tbody>' +
-        oa.map(c => `<tr>
+        oa.map((c, i) => {
+          const fullUrl = oaFullCallbackUrl(c);
+          return `<tr>
           <td style="font-weight:500">${esc(c.name || c.app_id)}</td>
           <td style="font-size:12px;font-family:monospace">${esc(c.app_id)}</td>
-          <td style="font-size:12px;word-break:break-all"><code>${esc(location.origin + (c.callback_url || ''))}</code>
-            <button class="btn btn-sm btn-ghost" onclick="navigator.clipboard.writeText(location.origin + ${JSON.stringify(c.callback_url || '')})">复制</button></td>
+          <td style="font-size:12px;word-break:break-all"><code>${esc(fullUrl)}</code>
+            <button class="btn btn-sm btn-ghost" type="button" onclick="navigator.clipboard.writeText(${JSON.stringify(fullUrl)})">复制</button></td>
           <td style="font-size:12px">${c.has_token && c.has_app_secret ? '<span class="badge badge-green">已配置</span>' : '<span class="badge badge-yellow">不完整</span>'}</td>
-          <td><button class="btn btn-sm btn-danger" onclick="unbindOa(${JSON.stringify(c.app_id)})">解绑</button></td>
-        </tr>`).join('') + '</tbody></table></div>';
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm btn-ghost" type="button" onclick="showOaSetupFromList(${i})">微信配置</button>
+            <button class="btn btn-sm btn-danger" type="button" onclick="unbindOa(${JSON.stringify(c.app_id)})">解绑</button>
+          </td>
+        </tr>`;
+        }).join('') + '</tbody></table></div>';
+      window.__oaChannelsCache = oa;
     }
     const kf = data.wecom_kf || [];
     if (kf.length === 0) {
@@ -362,17 +373,76 @@ async function loadChannels() {
   }
 }
 
+function oaFullCallbackUrl(c) {
+  const path = (c.setup && c.setup.callback_path) || c.callback_url || '';
+  if (path.startsWith('http')) return path;
+  return location.origin + path;
+}
+
+function renderOaSetupPanel(setup, opts) {
+  opts = opts || {};
+  const panel = document.getElementById('oa-setup-panel');
+  if (!panel || !setup) return;
+  const url = setup.callback_url && setup.callback_url.startsWith('http')
+    ? setup.callback_url
+    : (location.origin + (setup.callback_path || setup.callback_url || ''));
+  const token = setup.token || '';
+  const ips = setup.ip_whitelist || [];
+  const ipText = ips.length ? ips.join('\n') : '（未配置，请运维设置 OPENCARRIER_IP_WHITELIST 或 ip_whitelist.txt）';
+  const steps = (setup.steps || []).map(s => `<li style="margin:4px 0">${esc(s)}</li>`).join('');
+  const row = (label, value, copyVal) => {
+    const v = value || '';
+    const copy = copyVal !== undefined ? copyVal : v;
+    return `<div style="margin:10px 0">
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:4px">${esc(label)}</div>
+      <div style="display:flex;gap:8px;align-items:flex-start">
+        <code style="flex:1;font-size:12px;word-break:break-all;white-space:pre-wrap;padding:8px;background:#fff;border-radius:4px;border:1px solid var(--border,#e5e5e5)">${esc(v)}</code>
+        <button type="button" class="btn btn-sm btn-ghost" onclick="navigator.clipboard.writeText(${JSON.stringify(copy)}).then(()=>this.textContent='已复制').catch(()=>{})">复制</button>
+      </div>
+    </div>`;
+  };
+  panel.style.display = 'block';
+  panel.innerHTML = `
+    <h4 style="margin:0 0 8px;font-size:15px">第二步：复制到微信公众平台</h4>
+    <p style="font-size:13px;color:var(--text-dim);margin:0 0 10px">路径：设置与开发 → 基本配置 → 服务器配置 / IP 白名单</p>
+    <ol style="font-size:13px;margin:0 0 12px 18px;padding:0;line-height:1.45">${steps}</ol>
+    ${row('服务器 URL（回调地址）', url)}
+    ${row('Token', token)}
+    ${row('IP 白名单（可多行）', ipText, ips.length ? ips.join('\n') : '')}
+    ${row('消息加解密方式', setup.encrypt_mode || '明文模式')}
+    ${row('数据格式', setup.data_format || 'XML')}
+    <p style="font-size:12px;color:var(--text-dim);margin:12px 0 0">填完后在微信后台点「启用」。系统会自动校验 URL。${opts.tokenGenerated ? ' Token 已由系统自动生成。' : ''}</p>
+  `;
+  // open the details if closed
+  const det = document.getElementById('oa-bind-details');
+  if (det) det.open = true;
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function showOaSetupFromList(index) {
+  const list = window.__oaChannelsCache || [];
+  const c = list[index];
+  if (!c) return;
+  const setup = Object.assign({}, c.setup || {}, {
+    token: c.token || (c.setup && c.setup.token) || '',
+    callback_url: oaFullCallbackUrl(c),
+    callback_path: (c.setup && c.setup.callback_path) || c.callback_url,
+  });
+  renderOaSetupPanel(setup, {});
+}
+
 async function bindOa() {
   const msg = document.getElementById('oa-form-msg');
   const body = {
     name: document.getElementById('oa-name').value.trim(),
     app_id: document.getElementById('oa-app-id').value.trim(),
     app_secret: document.getElementById('oa-app-secret').value.trim(),
-    token: document.getElementById('oa-token').value.trim(),
     wechat_id: document.getElementById('oa-wechat-id').value.trim(),
   };
-  if (!body.app_id) { msg.textContent = '请填写 app_id'; return; }
-  msg.textContent = '保存中…';
+  if (!body.app_id) { msg.textContent = '请填写 app_id'; msg.style.color = '#e74c3c'; return; }
+  if (!body.app_secret) { msg.textContent = '请填写 app_secret'; msg.style.color = '#e74c3c'; return; }
+  msg.style.color = 'var(--text-dim)';
+  msg.textContent = '提交中…';
   try {
     const res = await fetch(`/api/agents/${encodeURIComponent(agentName)}/channels/weixin-oa`, {
       method: 'POST',
@@ -380,10 +450,18 @@ async function bindOa() {
       body: JSON.stringify(body),
     });
     const data = await res.json();
-    if (!res.ok) { msg.textContent = data.error || '失败'; return; }
-    msg.textContent = '已绑定。请把回调 URL 配到公众号后台：' + (data.callback_url || '');
+    if (!res.ok) { msg.textContent = data.error || '失败'; msg.style.color = '#e74c3c'; return; }
+    msg.style.color = 'var(--text-dim)';
+    msg.textContent = data.message || '第一步已保存，请按下方配置填写微信公众平台';
+    if (data.setup) {
+      // Ensure absolute URL for display
+      if (data.setup.callback_path && (!data.setup.callback_url || !String(data.setup.callback_url).startsWith('http'))) {
+        data.setup.callback_url = location.origin + data.setup.callback_path;
+      }
+      renderOaSetupPanel(data.setup, { tokenGenerated: data.token_generated });
+    }
     loadChannels();
-  } catch (e) { msg.textContent = e.message; }
+  } catch (e) { msg.textContent = e.message; msg.style.color = '#e74c3c'; }
 }
 
 async function unbindOa(appId) {
