@@ -307,20 +307,11 @@ impl Channel for SessionWatcher {
 
         let ext = user_id.to_string();
         let content = content.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let result = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt.block_on(deliver_kf_rich(&http, &token, &open_kfid, &ext, &content)),
-                Err(e) => Err(format!("wecom deliver runtime: {e}")),
-            };
-            let _ = tx.send(result);
-        });
-        rx.recv()
-            .map_err(|e| ChannelError::Other(format!("wecom deliver thread disconnected: {e}")))?
-            .map_err(ChannelError::SendFailed)
+        types::channel::block_on_detached(async move {
+            deliver_kf_rich(&http, &token, &open_kfid, &ext, &content)
+                .await
+                .map_err(ChannelError::SendFailed)
+        })
     }
 
     fn stop(&mut self) {

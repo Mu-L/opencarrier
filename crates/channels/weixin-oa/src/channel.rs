@@ -358,6 +358,23 @@ async fn resolve_oa_thumb(
     resolve_oa_media_id(account, token, &media, "thumb.png").await
 }
 
+/// Run `send` once; on token-expired (40001) refresh and retry once.
+async fn with_token_retry<F, Fut>(account: &Arc<OaAccountState>, send: F) -> Result<(), String>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let token = account.get_token().await?;
+    match send(token).await {
+        Ok(()) => Ok(()),
+        Err(e) if is_token_expired(&e) => {
+            let token = refresh_token(account).await?;
+            send(token).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Deliver rich content to a weixin-oa follower. Priority: miniprogram, then
 /// image, then text (degrades via `as_text`, incl. a formatted link). Each send
 /// retries once on a 40001 (expired token) by refreshing.
@@ -367,56 +384,49 @@ async fn deliver_oa(
     content: &types::content::ContentDescriptor,
 ) -> Result<(), String> {
     if let Some(mp) = content.miniprogram.as_ref().filter(|m| m.is_complete()) {
-        let mut token = account.get_token().await?;
+        // Resolve thumb once (uses the current token); then send with retry.
+        let token = account.get_token().await?;
         let thumb = resolve_oa_thumb(account, &token, mp).await?;
-        let res = api::custom_send_miniprogrampage(
-            &account.http,
-            &token,
-            openid,
-            &mp.title,
-            &mp.pagepath,
-            &thumb,
-            &mp.appid,
-        )
-        .await;
-        return match res {
-            Ok(()) => Ok(()),
-            Err(e) if is_token_expired(&e) => {
-                token = refresh_token(account).await?;
+        let title = mp.title.clone();
+        let pagepath = mp.pagepath.clone();
+        let appid = mp.appid.clone();
+        return with_token_retry(account, |token| {
+            let http = account.http.clone();
+            let openid = openid.to_string();
+            let thumb = thumb.clone();
+            let title = title.clone();
+            let pagepath = pagepath.clone();
+            let appid = appid.clone();
+            async move {
                 api::custom_send_miniprogrampage(
-                    &account.http, &token, openid, &mp.title, &mp.pagepath, &thumb, &mp.appid,
+                    &http, &token, &openid, &title, &pagepath, &thumb, &appid,
                 )
                 .await
             }
-            Err(e) => Err(e),
-        };
+        })
+        .await;
     }
     if let Some(img) = content.image.as_ref() {
         if !img.is_empty() {
-            let mut token = account.get_token().await?;
+            let token = account.get_token().await?;
             let media_id = resolve_oa_media_id(account, &token, img, "image.png").await?;
-            let res = api::custom_send_image(&account.http, &token, openid, &media_id).await;
-            return match res {
-                Ok(()) => Ok(()),
-                Err(e) if is_token_expired(&e) => {
-                    token = refresh_token(account).await?;
-                    api::custom_send_image(&account.http, &token, openid, &media_id).await
-                }
-                Err(e) => Err(e),
-            };
+            return with_token_retry(account, |token| {
+                let http = account.http.clone();
+                let openid = openid.to_string();
+                let media_id = media_id.clone();
+                async move { api::custom_send_image(&http, &token, &openid, &media_id).await }
+            })
+            .await;
         }
     }
     if let Some(text) = content.as_text() {
-        let mut token = account.get_token().await?;
-        let res = api::custom_send_text(&account.http, &token, openid, &text).await;
-        return match res {
-            Ok(()) => Ok(()),
-            Err(e) if is_token_expired(&e) => {
-                token = refresh_token(account).await?;
-                api::custom_send_text(&account.http, &token, openid, &text).await
-            }
-            Err(e) => Err(e),
-        };
+        return with_token_retry(account, |token| {
+            let http = account.http.clone();
+            let openid = openid.to_string();
+            let text = text.clone();
+            async move { api::custom_send_text(&http, &token, &openid, &text).await }
+        })
+        .await;
     }
     Err("weixin-oa: content has no miniprogram, image, or text representation".into())
 }
@@ -513,23 +523,13 @@ impl Channel for SessionWatcher {
             .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
         let openid = user_id.to_string();
         let content = content.clone();
-        // Run the async deliver on a dedicated thread and block for the result
-        // (the bridge calls deliver_fn inside spawn_blocking, so blocking is OK;
-        // returning the real Result lets the marker handler fall back to text).
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let result = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt.block_on(deliver_oa(&account, &openid, &content)),
-                Err(e) => Err(format!("weixin-oa deliver runtime: {e}")),
-            };
-            let _ = tx.send(result);
-        });
-        rx.recv()
-            .map_err(|e| ChannelError::Other(format!("weixin-oa deliver thread disconnected: {e}")))?
-            .map_err(ChannelError::SendFailed)
+        // Dedicated thread + runtime: safe from Tokio workers / spawn_blocking.
+        // Returning the real Result lets the marker handler fall back to text.
+        types::channel::block_on_detached(async move {
+            deliver_oa(&account, &openid, &content)
+                .await
+                .map_err(ChannelError::SendFailed)
+        })
     }
 
     fn stop(&mut self) {

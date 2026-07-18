@@ -45,6 +45,36 @@ impl From<String> for ChannelError {
     }
 }
 
+/// Run async work from a sync [`Channel`] method on a dedicated OS thread.
+///
+/// Channel `send`/`deliver` are synchronous (object-safe trait) but the real
+/// I/O is async. Callers may already be on a Tokio worker (`spawn_blocking` or
+/// an axum handler calling through a sync `ChannelDeliverFn`), so nesting
+/// `block_on` on the current thread would panic. This helper always detaches
+/// onto a new current-thread runtime.
+///
+/// Prefer this over copy-pasting `thread::spawn` + `Builder::new_current_thread`
+/// in each channel crate.
+pub fn block_on_detached<F, T>(fut: F) -> Result<T, ChannelError>
+where
+    F: std::future::Future<Output = Result<T, ChannelError>> + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt.block_on(fut),
+            Err(e) => Err(ChannelError::Other(format!("runtime: {e}"))),
+        };
+        let _ = tx.send(result);
+    });
+    rx.recv()
+        .map_err(|e| ChannelError::Other(format!("deliver/send thread disconnected: {e}")))?
+}
+
 /// How a channel routes inbound messages to agents.
 ///
 /// Declared by each channel via `Channel::routing_mode()`. The bridge branches

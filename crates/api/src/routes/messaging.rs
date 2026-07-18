@@ -288,6 +288,32 @@ pub async fn send_message_stream(
         .into_response()
 }
 
+/// Request body for `POST /api/deliver`.
+#[derive(Debug, serde::Deserialize)]
+pub struct DeliverRequest {
+    pub agent: String,
+    pub content_key: String,
+    pub channel_type: String,
+    pub bot_id: String,
+    pub user_id: String,
+}
+
+impl DeliverRequest {
+    fn validate(&self) -> Result<(), &'static str> {
+        if self.agent.is_empty()
+            || self.content_key.is_empty()
+            || self.channel_type.is_empty()
+            || self.bot_id.is_empty()
+            || self.user_id.is_empty()
+        {
+            return Err(
+                "missing required field: agent, content_key, channel_type, bot_id, user_id",
+            );
+        }
+        Ok(())
+    }
+}
+
 /// POST /api/deliver — Deliver rich content to a user without an agent loop.
 ///
 /// Body: `{ "agent": "agent-name", "content_key": "月票",
@@ -299,28 +325,23 @@ pub async fn send_message_stream(
 /// image / link / text).
 pub async fn deliver_content(
     State(state): State<std::sync::Arc<crate::routes::state::AppState>>,
-    Json(payload): Json<serde_json::Value>,
+    Json(payload): Json<DeliverRequest>,
 ) -> impl axum::response::IntoResponse {
-    let agent = payload["agent"].as_str().unwrap_or("");
-    let content_key = payload["content_key"].as_str().unwrap_or("");
-    let channel_type = payload["channel_type"].as_str().unwrap_or("");
-    let bot_id = payload["bot_id"].as_str().unwrap_or("");
-    let user_id = payload["user_id"].as_str().unwrap_or("");
-
-    if agent.is_empty()
-        || content_key.is_empty()
-        || channel_type.is_empty()
-        || bot_id.is_empty()
-        || user_id.is_empty()
-    {
+    if let Err(msg) = payload.validate() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "missing required field: agent, content_key, channel_type, bot_id, user_id" })),
+            Json(serde_json::json!({ "error": msg })),
         )
             .into_response();
     }
 
-    match state.kernel.deliver_content(agent, content_key, channel_type, bot_id, user_id) {
+    match state.kernel.deliver_content(
+        &payload.agent,
+        &payload.content_key,
+        &payload.channel_type,
+        &payload.bot_id,
+        &payload.user_id,
+    ) {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({ "status": "delivered" })),

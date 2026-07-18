@@ -497,38 +497,21 @@ impl Channel for SessionWatcher {
         let user_id = user_id.to_string();
         let context_token = context_token.to_string();
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(e) => {
-                    let _ = tx.send(Err(ChannelError::Other(format!("Failed to create deliver runtime: {e}"))));
-                    return;
-                }
-            };
-            let result = rt.block_on(async {
-                match send_kind {
-                    "video" => api::send_video(
-                        &http, &bot_token, &baseurl, &user_id, &context_token, &client_id, &payload,
-                    )
-                    .await
-                    .map_err(ChannelError::SendFailed),
-                    "image" => api::send_image(
-                        &http, &bot_token, &baseurl, &user_id, &context_token, &client_id, &payload,
-                    )
-                    .await
-                    .map_err(ChannelError::SendFailed),
-                    _ => unreachable!(),
-                }
-            });
-            let _ = tx.send(result);
-        });
-
-        rx.recv()
-            .map_err(|e| ChannelError::Other(format!("Deliver thread disconnected: {e}")))?
+        types::channel::block_on_detached(async move {
+            match send_kind {
+                "video" => api::send_video(
+                    &http, &bot_token, &baseurl, &user_id, &context_token, &client_id, &payload,
+                )
+                .await
+                .map_err(ChannelError::SendFailed),
+                "image" => api::send_image(
+                    &http, &bot_token, &baseurl, &user_id, &context_token, &client_id, &payload,
+                )
+                .await
+                .map_err(ChannelError::SendFailed),
+                _ => unreachable!(),
+            }
+        })
     }
 
     fn stop(&mut self) {
