@@ -286,10 +286,73 @@ impl CarrierKernel {
             ))));
         }
         // Tool content is often JSON; parse to a structured value when possible,
-        // else keep the raw string.
-        let out_val = serde_json::from_str::<Value>(&result.content)
-            .unwrap_or_else(|_| Value::String(result.content.clone()));
+        // else keep the raw string. shell_exec wraps as:
+        //   Exit code: 0\n\nSTDOUT:\n{json}\nSTDERR:\n
+        // so peel STDOUT before parsing so user_reply / view_url are available.
+        let out_val = parse_tool_step_content(&result.content);
         // Tool execution uses no LLM tokens; count as one iteration.
         Ok((out_val, TokenUsage::default(), 1))
+    }
+}
+
+/// Parse tool step stdout into JSON when possible (incl. shell_exec wrapper).
+fn parse_tool_step_content(content: &str) -> Value {
+    let trimmed = content.trim();
+    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
+        return v;
+    }
+    // shell_exec format
+    if let Some(after) = content.split("STDOUT:").nth(1) {
+        let body = after
+            .split("STDERR:")
+            .next()
+            .unwrap_or(after)
+            .trim()
+            .trim_start_matches('\n');
+        if let Ok(v) = serde_json::from_str::<Value>(body) {
+            return v;
+        }
+        // first JSON object in body
+        if let Some(start) = body.find('{') {
+            if let Some(end) = body.rfind('}') {
+                if end > start {
+                    if let Ok(v) = serde_json::from_str::<Value>(&body[start..=end]) {
+                        return v;
+                    }
+                }
+            }
+        }
+    }
+    Value::String(content.to_string())
+}
+
+#[cfg(test)]
+mod parse_tool_content_tests {
+    use super::parse_tool_step_content;
+    use serde_json::json;
+
+    #[test]
+    fn parses_raw_json() {
+        let v = parse_tool_step_content(r#"{"ok":true,"user_reply":"hi"}"#);
+        assert_eq!(v["user_reply"], "hi");
+    }
+
+    #[test]
+    fn parses_shell_exec_wrapper() {
+        let content = r#"Exit code: 0
+
+STDOUT:
+{"ok": true, "user_reply": "海报做好了\nhttps://x", "view_url": "https://x"}
+STDERR:
+"#;
+        let v = parse_tool_step_content(content);
+        assert_eq!(v["view_url"], "https://x");
+        assert!(v["user_reply"].as_str().unwrap().contains("海报"));
+    }
+
+    #[test]
+    fn falls_back_to_string() {
+        let v = parse_tool_step_content("not json at all");
+        assert_eq!(v, json!("not json at all"));
     }
 }
