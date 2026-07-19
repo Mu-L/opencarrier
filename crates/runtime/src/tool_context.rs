@@ -43,4 +43,10 @@ pub struct ToolContext<'a> {
     pub is_clone_admin: bool,
     /// Public base URL (e.g. `https://file.yinnho.cn`) for `view_url` on file outputs.
     pub external_url: Option<&'a str>,
+    /// Tools elevated for this turn by a shared system flow (`privilege: system`).
+    /// Admin-gated tools in this list may run without clone-admin for the turn.
+    pub flow_elevated_tools: Option<&'a [String]>,
+    /// Shell command allow-patterns from the elevated system flow (`shell_allow`).
+    /// When non-empty, elevated `shell_exec` must match at least one pattern.
+    pub flow_shell_allow: Option<&'a [String]>,
 }

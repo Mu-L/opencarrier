@@ -559,6 +559,17 @@ pub struct FlowMatch {
     /// Full parsed flow definition (includes `steps` for multi-step DAG flows).
     /// `flow_def.steps` non-empty => multi-step flow to be executed by `run_flow`.
     pub flow_def: types::flow::FlowDef,
+    /// True when the definition was loaded from shared `~/.opencarrier/flows`
+    /// (not a private workspace overlay). Required for system-flow elevation.
+    pub is_system_shared: bool,
+}
+
+impl FlowMatch {
+    /// Turn-scoped elevation is allowed only for shared system flows that
+    /// declare `privilege: system`.
+    pub fn elevates(&self) -> bool {
+        self.is_system_shared && self.flow_def.elevates_when_system_shared()
+    }
 }
 
 /// Classify which flow (if any) matches the user message using an LLM.
@@ -572,13 +583,18 @@ pub async fn classify_flow_with_llm(
     // on name collisions with shared system flows:
     //   1. workspace/flows/  — agent's private flows
     //   2. ~/.opencarrier/flows/ — system-level shared flows (see docs/SKILL-STANDARD.md)
+    // Each entry: (name, description, path, is_system_shared)
     let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut flow_summaries: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+    let mut flow_summaries: Vec<(String, String, std::path::PathBuf, bool)> = Vec::new();
 
-    for dir in [workspace.join("flows"), types::config::home_dir().join("flows")] {
+    let shared_dir = types::config::home_dir().join("flows");
+    for (dir, is_system_shared) in [
+        (workspace.join("flows"), false),
+        (shared_dir, true),
+    ] {
         for (name, description, path) in collect_flow_summaries(&dir) {
             if seen_names.insert(name.to_lowercase()) {
-                flow_summaries.push((name, description, path));
+                flow_summaries.push((name, description, path, is_system_shared));
             }
         }
     }
@@ -589,7 +605,7 @@ pub async fn classify_flow_with_llm(
 
     // Build classification prompt
     let mut prompt = String::from("Available flows:\n");
-    for (name, description, _) in &flow_summaries {
+    for (name, description, _, _) in &flow_summaries {
         prompt.push_str(&format!("- {}: {}\n", name, description));
     }
 
@@ -670,9 +686,9 @@ pub async fn classify_flow_with_llm(
     // Find matching flow (exact or case-insensitive)
     let matched = flow_summaries
         .iter()
-        .find(|(name, _, _)| name.to_lowercase() == flow_name)
+        .find(|(name, _, _, _)| name.to_lowercase() == flow_name)
         .or_else(|| {
-            flow_summaries.iter().find(|(name, _, _)| {
+            flow_summaries.iter().find(|(name, _, _, _)| {
                 name.to_lowercase().contains(&flow_name)
                     || flow_name.contains(&name.to_lowercase())
             })
@@ -680,7 +696,7 @@ pub async fn classify_flow_with_llm(
         // Fallback: some LLMs (e.g. DeepSeek) output a reasoning chain instead of
         // just the flow name. Scan the full response for any known flow name.
         .or_else(|| {
-            flow_summaries.iter().find(|(name, _, _)| {
+            flow_summaries.iter().find(|(name, _, _, _)| {
                 raw.contains(&name.to_lowercase())
             })
         });
@@ -690,7 +706,7 @@ pub async fn classify_flow_with_llm(
         None => {
             tracing::warn!(
                 flow_name = %flow_name,
-                available = ?flow_summaries.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>(),
+                available = ?flow_summaries.iter().map(|(n, _, _, _)| n.clone()).collect::<Vec<_>>(),
                 "LLM returned unknown flow name"
             );
             return None;
@@ -700,11 +716,14 @@ pub async fn classify_flow_with_llm(
     // Load full flow content from the recorded path (private or shared system dir)
     let content = std::fs::read_to_string(&matched_flow.2).ok()?;
     let flow_def = types::flow::parse_flow_def(&content);
+    let is_system_shared = matched_flow.3;
 
     tracing::info!(
         flow = %flow_def.name,
         tools = ?flow_def.tools,
         multi_step = !flow_def.steps.is_empty(),
+        is_system_shared,
+        privilege = ?flow_def.privilege,
         "Flow classified by LLM"
     );
 
@@ -714,6 +733,7 @@ pub async fn classify_flow_with_llm(
         max_iterations: flow_def.max_iterations,
         tools: flow_def.tools.clone(),
         flow_def,
+        is_system_shared,
     })
 }
 
@@ -725,7 +745,11 @@ pub async fn classify_flow_with_llm(
 /// (case-insensitive). Returns `None` if no such flow exists (e.g. it was
 /// deleted/renamed between suspend and resume).
 pub fn load_flow_by_name(workspace: &std::path::Path, flow_name: &str) -> Option<FlowMatch> {
-    for dir in [workspace.join("flows"), types::config::home_dir().join("flows")] {
+    let shared_dir = types::config::home_dir().join("flows");
+    for (dir, is_system_shared) in [
+        (workspace.join("flows"), false),
+        (shared_dir, true),
+    ] {
         for (name, _description, path) in collect_flow_summaries(&dir) {
             if !name.eq_ignore_ascii_case(flow_name) {
                 continue;
@@ -738,6 +762,7 @@ pub fn load_flow_by_name(workspace: &std::path::Path, flow_name: &str) -> Option
                     max_iterations: flow_def.max_iterations,
                     tools: flow_def.tools.clone(),
                     flow_def,
+                    is_system_shared,
                 });
             }
         }

@@ -184,6 +184,30 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             false
         };
 
+        // Turn-scoped system-flow elevation stamped onto manifest.metadata.
+        let flow_elevated_owned: Vec<String> = manifest
+            .metadata
+            .get(types::flow::META_FLOW_ELEVATED_TOOLS)
+            .and_then(|v| {
+                v.as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+        let flow_shell_allow_owned: Vec<String> = manifest
+            .metadata
+            .get(types::flow::META_FLOW_SHELL_ALLOW)
+            .and_then(|v| {
+                v.as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+
         let tool_ctx = ToolContext {
             kernel,
             memory: memory_handle,
@@ -214,6 +238,16 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             max_tool_level: manifest.max_tool_level,
             is_clone_admin,
             external_url: external_url_buf.as_deref(),
+            flow_elevated_tools: if flow_elevated_owned.is_empty() {
+                None
+            } else {
+                Some(flow_elevated_owned.as_slice())
+            },
+            flow_shell_allow: if flow_shell_allow_owned.is_empty() {
+                None
+            } else {
+                Some(flow_shell_allow_owned.as_slice())
+            },
         };
 
         // Timeout-wrapped execution

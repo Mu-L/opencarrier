@@ -2,11 +2,17 @@
 name: office-docx
 description: 生成 Word 文档 DOCX（报告、合同、纪要、公文），python-docx 写脚本落盘 output/
 version: 1
+privilege: system
 tools:
   - file_write
   - file_list
   - file_read
   - shell_exec
+shell_allow:
+  - "python3 output/scripts/*"
+  - "python output/scripts/*"
+  - "pip3 install python-docx"
+  - "pip install python-docx"
 ---
 
 # Office DOCX — 生成 Word 文档

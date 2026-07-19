@@ -79,6 +79,97 @@ struct PreparedContext {
 }
 
 impl CarrierKernel {
+    /// Inject flow-declared tools into the turn's tool list.
+    ///
+    /// When `elevate` is true (shared system flow with `privilege: system`), tools
+    /// are resolved by **exact catalog lookup** including Dangerous tools like
+    /// `shell_exec` (bypassing `search_tools`' level filter). Otherwise tools are
+    /// resolved via `search_tools` under the agent's `max_tool_level`.
+    fn inject_flow_tools(
+        &self,
+        tools: &mut Vec<types::tool::ToolDefinition>,
+        flow: &crate::prompt_sources::FlowMatch,
+        max_tool_level: types::tool::PermissionLevel,
+        elevate: bool,
+        cli_exec: types::config::CliExecConfig,
+    ) -> Vec<String> {
+        let mut warnings: Vec<String> = Vec::new();
+        if flow.tools.is_empty() {
+            warnings.push(format!(
+                "Flow '{}' has no declared tools in its frontmatter. \
+                 If this flow requires tools, use flow_update to add a tools: [\"tool1\", \"tool2\"] field.",
+                flow.name
+            ));
+            return warnings;
+        }
+
+        let lookup_level = if elevate {
+            types::tool::PermissionLevel::Dangerous
+        } else {
+            max_tool_level
+        };
+
+        for t in &flow.tools {
+            if tools.iter().any(|d| d.name == *t) {
+                continue;
+            }
+
+            // Exact builtin / plugin match first (honors Dangerous when elevating).
+            if let Some(def) = self.lookup_tool_definition_exact(t, cli_exec.clone(), elevate) {
+                let level = types::tool::PermissionLevel::for_tool(t);
+                if elevate || level <= max_tool_level {
+                    tools.push(def);
+                    continue;
+                }
+            }
+
+            // Fallback: scored search (MCP tools, fuzzy names) under lookup_level.
+            if let Some((_, def)) = self.search_tools(t, 1, lookup_level).into_iter().next() {
+                tools.push(def);
+            } else {
+                warnings.push(format!(
+                    "Flow '{}' declared tool '{}' but it was not found in the tool catalog. \
+                     Use flow_update to remove or correct this tool declaration.",
+                    flow.name, t
+                ));
+            }
+        }
+        warnings
+    }
+
+    /// Exact-name tool definition from builtin modules or plugin dispatcher.
+    /// When `allow_dangerous` is false, Dangerous tools are skipped.
+    fn lookup_tool_definition_exact(
+        &self,
+        name: &str,
+        cli_exec: types::config::CliExecConfig,
+        allow_dangerous: bool,
+    ) -> Option<types::tool::ToolDefinition> {
+        let level = types::tool::PermissionLevel::for_tool(name);
+        if !allow_dangerous && level == types::tool::PermissionLevel::Dangerous {
+            return None;
+        }
+        if let Some(def) = runtime::tool_runner::builtin_tool_definitions(cli_exec)
+            .into_iter()
+            .find(|d| d.name == name)
+        {
+            return Some(def);
+        }
+        // Plugin tool dispatcher (channel tools registered as ToolProvider).
+        if let Some(dispatcher) = self
+            .plugins
+            .plugin_tool_dispatcher
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+        {
+            if let Some(def) = dispatcher.definitions().into_iter().find(|d| d.name == name) {
+                return Some(def);
+            }
+        }
+        None
+    }
+
     /// Shared preparation for LLM agent execution: session loading, compaction
     /// check, core tool set assembly, flow/subagent classification, and manifest
     /// mutation. Returns a `PreparedContext` that both streaming and non-streaming
@@ -245,31 +336,22 @@ impl CarrierKernel {
                         let flow_name = flow.name.clone();
                         let flow_body = flow.body.clone();
                         let flow_max_iter = flow.max_iterations;
+                        let elevate = flow.elevates();
+                        let flow_warnings = self.inject_flow_tools(
+                            &mut tools,
+                            &flow,
+                            entry.manifest.max_tool_level,
+                            elevate,
+                            entry.manifest.cli_exec.clone().unwrap_or_default(),
+                        );
 
-                        // Auto-discover flow-declared tools (same as classify branch)
-                        let mut flow_warnings: Vec<String> = Vec::new();
-                        if flow.tools.is_empty() {
-                            flow_warnings.push(format!(
-                                "Flow '{}' has no declared tools in its frontmatter. \
-                                 If this flow requires tools, use flow_update to add a tools: [\"tool1\", \"tool2\"] field.",
-                                flow_name
-                            ));
-                        }
-                        for t in &flow.tools {
-                            if !tools.iter().any(|d| d.name == *t) {
-                                if let Some((_, def)) = self.search_tools(t, 1, entry.manifest.max_tool_level).into_iter().next() {
-                                    tools.push(def);
-                                } else {
-                                    flow_warnings.push(format!(
-                                        "Flow '{}' declared tool '{}' but it was not found in the tool catalog. \
-                                         Use flow_update to remove or correct this tool declaration.",
-                                        flow_name, t
-                                    ));
-                                }
-                            }
-                        }
-
-                        info!(agent = %entry.name, flow = %flow_name, "Flow loaded for resume");
+                        info!(
+                            agent = %entry.name,
+                            flow = %flow_name,
+                            elevate,
+                            is_system_shared = flow.is_system_shared,
+                            "Flow loaded for resume"
+                        );
 
                         let mut flow_prompt = format!("**{}**\n{}", flow_name, flow_body);
                         if !flow_warnings.is_empty() {
@@ -305,33 +387,20 @@ impl CarrierKernel {
                     let flow_name = flow.name.clone();
                     let flow_body = flow.body.clone();
                     let flow_max_iter = flow.max_iterations;
-
-                    // Auto-discover flow-declared tools and collect diagnostics
-                    let mut flow_warnings: Vec<String> = Vec::new();
-                    if flow.tools.is_empty() {
-                        flow_warnings.push(format!(
-                            "Flow '{}' has no declared tools in its frontmatter. \
-                             If this flow requires tools, use flow_update to add a tools: [\"tool1\", \"tool2\"] field.",
-                            flow_name
-                        ));
-                    }
-                    for t in &flow.tools {
-                        if !tools.iter().any(|d| d.name == *t) {
-                            if let Some((_, def)) = self.search_tools(t, 1, entry.manifest.max_tool_level).into_iter().next() {
-                                tools.push(def);
-                            } else {
-                                flow_warnings.push(format!(
-                                    "Flow '{}' declared tool '{}' but it was not found in the tool catalog. \
-                                     Use flow_update to remove or correct this tool declaration.",
-                                    flow_name, t
-                                ));
-                            }
-                        }
-                    }
+                    let elevate = flow.elevates();
+                    let flow_warnings = self.inject_flow_tools(
+                        &mut tools,
+                        &flow,
+                        entry.manifest.max_tool_level,
+                        elevate,
+                        entry.manifest.cli_exec.clone().unwrap_or_default(),
+                    );
 
                     info!(
                         agent = %entry.name,
                         flow = %flow_name,
+                        elevate,
+                        is_system_shared = flow.is_system_shared,
                         "Flow classified by LLM"
                     );
 
@@ -388,6 +457,34 @@ impl CarrierKernel {
         let ctx_window: Option<usize> = None;
 
         let mut manifest = entry.manifest.clone();
+
+        // System-flow turn elevation: raise max_tool_level and stamp elevated
+        // tool names + shell_allow onto manifest.metadata for tool_runner.
+        if let Some(ref flow) = matched_flow {
+            if flow.elevates() {
+                let required = flow.flow_def.required_max_tool_level();
+                if required > manifest.max_tool_level {
+                    info!(
+                        agent = %entry.name,
+                        flow = %flow.name,
+                        from = ?manifest.max_tool_level,
+                        to = ?required,
+                        "System flow elevates max_tool_level for this turn"
+                    );
+                    manifest.max_tool_level = required;
+                }
+                manifest.metadata.insert(
+                    types::flow::META_FLOW_ELEVATED_TOOLS.to_string(),
+                    serde_json::json!(flow.tools),
+                );
+                if !flow.flow_def.shell_allow.is_empty() {
+                    manifest.metadata.insert(
+                        types::flow::META_FLOW_SHELL_ALLOW.to_string(),
+                        serde_json::json!(flow.flow_def.shell_allow),
+                    );
+                }
+            }
+        }
 
         // Apply flow's max_iterations override
         if let Some(max_iter) = flow_max_iterations {

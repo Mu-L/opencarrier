@@ -2,11 +2,17 @@
 name: office-pptx
 description: 生成 PowerPoint 演示文稿 PPTX（汇报、路演、培训幻灯片），python-pptx 写脚本落盘 output/
 version: 1
+privilege: system
 tools:
   - file_write
   - file_list
   - file_read
   - shell_exec
+shell_allow:
+  - "python3 output/scripts/*"
+  - "python output/scripts/*"
+  - "pip3 install python-pptx"
+  - "pip install python-pptx"
 ---
 
 # Office PPTX — 生成演示文稿

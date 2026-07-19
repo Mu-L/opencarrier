@@ -2,11 +2,17 @@
 name: office-xlsx
 description: 生成 Excel 表格 XLSX（报表、清单、统计、带公式/简单图表），openpyxl 写脚本落盘 output/
 version: 1
+privilege: system
 tools:
   - file_write
   - file_list
   - file_read
   - shell_exec
+shell_allow:
+  - "python3 output/scripts/*"
+  - "python output/scripts/*"
+  - "pip3 install openpyxl"
+  - "pip install openpyxl"
 ---
 
 # Office XLSX — 生成 Excel 表格

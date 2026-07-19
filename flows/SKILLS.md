@@ -46,8 +46,8 @@ topic-researcher → outline-writer → article-writer → article-formatter →
 
 | Skill / Flow | 说明 |
 |--------------|------|
-| `office-docx` | 生成 Word（DOCX）：报告、合同草稿、纪要 |
-| `office-xlsx` | 生成 Excel（XLSX）：报表、清单、公式表 |
+| `office-docx` | 生成 Word（DOCX）：报告、合同草稿、纪要（`privilege: system`，回合级 shell 提权） |
+| `office-xlsx` | 生成 Excel（XLSX）：报表、清单、公式表（`privilege: system`，回合级 shell 提权） |
 | `office-pptx` | 生成 PPT（PPTX）：汇报、路演、培训幻灯片 |
 | `office-pdf` | 生成 PDF：可打印报告（reportlab / 简单场景 file_convert） |
 

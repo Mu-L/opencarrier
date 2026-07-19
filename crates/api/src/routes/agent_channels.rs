@@ -39,7 +39,7 @@ fn public_base_from_headers(headers: &HeaderMap) -> Option<String> {
 fn weixin_ip_whitelist() -> Vec<String> {
     if let Ok(v) = std::env::var("OPENCARRIER_IP_WHITELIST") {
         let list: Vec<String> = v
-            .split(|c| c == ',' || c == ' ' || c == '\n')
+            .split([',', ' ', '\n'])
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(String::from)

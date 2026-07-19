@@ -53,6 +53,8 @@ pub async fn execute_tool(
         cli_exec_config: _,
         is_clone_admin,
         external_url: _,
+        flow_elevated_tools,
+        flow_shell_allow,
     } = *ctx;
 
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
@@ -61,13 +63,17 @@ pub async fn execute_tool(
 
     let input_ref = input;
 
+    let flow_elevated = flow_elevated_tools
+        .map(|names| names.iter().any(|n| n == tool_name))
+        .unwrap_or(false);
+
     // Admin gate — orthogonal to max_tool_level. A small set of irreversible /
     // brand-affecting tools (shell execution, publishing to a public account)
     // require the caller to be a clone admin (creator or approved admin, per
-    // admins.json). Self-evolution tools (flow_create/knowledge_add/create_draft)
-    // are intentionally NOT gated — the clone uses them in its judgment loop.
-    // See docs/ADMIN-MECHANISM.md.
-    if !is_clone_admin && types::tool::is_admin_gated(tool_name) {
+    // admins.json). System-flow elevation may bypass this for tools listed in
+    // the shared flow's `tools:` (e.g. office-xlsx shell_exec).
+    // See docs/ADMIN-MECHANISM.md and docs/OFFICE-SYSTEM-FLOWS.md.
+    if !is_clone_admin && types::tool::is_admin_gated(tool_name) && !flow_elevated {
         warn!(tool_name, "Permission denied: admin-gated tool, caller is not a clone admin");
         return ToolResult {
             tool_use_id: tool_use_id.to_string(),
@@ -78,6 +84,32 @@ pub async fn execute_tool(
         };
     }
 
+    // System-flow shell_allow: elevated shell_exec must match declared patterns.
+    if tool_name == "shell_exec" {
+        if let Some(patterns) = flow_shell_allow {
+            if !patterns.is_empty() {
+                let command = input_ref["command"].as_str().unwrap_or("");
+                if !types::flow::command_matches_shell_allow(command, patterns) {
+                    warn!(
+                        tool_name,
+                        command = %crate::str_utils::safe_truncate_str(command, 80),
+                        "Permission denied: shell command not in flow shell_allow"
+                    );
+                    return ToolResult {
+                        tool_use_id: tool_use_id.to_string(),
+                        content: format!(
+                            "Permission denied: shell command not allowed by system flow shell_allow. \
+                             Allowed patterns: {}. Command was: {}",
+                            patterns.join(", "),
+                            crate::str_utils::safe_truncate_str(command, 120)
+                        ),
+                        is_error: true,
+                    };
+                }
+            }
+        }
+    }
+
     // Permission enforcement: reject tools above max_tool_level or Dangerous
     let cli_exec_config = ctx.cli_exec_config.cloned().unwrap_or_default();
     let modules = crate::tools::builtin_modules(cli_exec_config);
@@ -85,7 +117,7 @@ pub async fn execute_tool(
     for module in &modules {
         if module.definitions().iter().any(|d| d.name == tool_name) {
             let level = module.permission_level(tool_name);
-            if level > max_tool_level {
+            if level > max_tool_level && !flow_elevated {
                 warn!(tool_name, ?level, ?max_tool_level, "Permission denied: tool exceeds max level");
                 return ToolResult {
                     tool_use_id: tool_use_id.to_string(),
@@ -105,7 +137,7 @@ pub async fn execute_tool(
     // centralized PermissionLevel::for_tool() for permission checks.
     if !permission_checked {
         let level = types::tool::PermissionLevel::for_tool(tool_name);
-        if level > max_tool_level {
+        if level > max_tool_level && !flow_elevated {
             // Suggest likely intended tool names when the LLM hallucinates
             // a toolset name (e.g. "filesystem") instead of a real tool name.
             let suggestion = match tool_name {
@@ -389,7 +421,70 @@ mod tests {
             max_tool_level: types::tool::PermissionLevel::Write,
             is_clone_admin: false,
             external_url: None,
+            flow_elevated_tools: None,
+            flow_shell_allow: None,
         }
+    }
+
+    #[tokio::test]
+    async fn test_flow_elevated_shell_exec_bypasses_admin_and_level() {
+        // Without elevation: shell_exec denied (Write level + non-admin).
+        let denied = execute_tool(
+            "t1",
+            "shell_exec",
+            &serde_json::json!({"command": "python3 output/scripts/gen.py"}),
+            &noop_ctx(),
+        )
+        .await;
+        assert!(denied.is_error);
+        assert!(denied.content.contains("Permission denied"));
+
+        // With elevation + matching shell_allow: admin + level gates pass.
+        // Command may still fail at execution (no workspace), but not permission.
+        let elevated = ["shell_exec".to_string()];
+        let allow = ["python3 output/scripts/*".to_string()];
+        let mut ctx = noop_ctx();
+        ctx.max_tool_level = types::tool::PermissionLevel::Dangerous;
+        ctx.flow_elevated_tools = Some(&elevated);
+        ctx.flow_shell_allow = Some(&allow);
+        let result = execute_tool(
+            "t2",
+            "shell_exec",
+            &serde_json::json!({"command": "python3 output/scripts/gen.py"}),
+            &ctx,
+        )
+        .await;
+        // Not a permission deny (admin/level/shell_allow). May fail on spawn.
+        assert!(
+            !result.content.contains("需要管理员权限")
+                && !result.content.contains("not allowed by system flow shell_allow")
+                && !result.content.contains("requires Dangerous level"),
+            "unexpected permission deny: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_flow_shell_allow_blocks_unmatched_command() {
+        let elevated = ["shell_exec".to_string()];
+        let allow = ["python3 output/scripts/*".to_string()];
+        let mut ctx = noop_ctx();
+        ctx.max_tool_level = types::tool::PermissionLevel::Dangerous;
+        ctx.flow_elevated_tools = Some(&elevated);
+        ctx.flow_shell_allow = Some(&allow);
+        let result = execute_tool(
+            "t3",
+            "shell_exec",
+            &serde_json::json!({"command": "rm -rf /tmp/foo"}),
+            &ctx,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(
+            result.content.contains("shell_allow") || result.content.contains("not allowed"),
+            "got: {}",
+            result.content
+        );
     }
 
     #[test]

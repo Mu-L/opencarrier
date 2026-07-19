@@ -144,6 +144,33 @@ impl StepDef {
     }
 }
 
+/// Privilege tier for a flow. `System` grants turn-scoped elevation only when
+/// the flow is loaded from the shared `~/.opencarrier/flows` directory (not a
+/// private workspace overlay). See `docs/OFFICE-SYSTEM-FLOWS.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FlowPrivilege {
+    /// Default: no elevation; tools still filtered by agent `max_tool_level`.
+    #[default]
+    Agent,
+    /// Platform system capability: when loaded from shared flows dir, inject
+    /// declared tools and raise `max_tool_level` for this turn only.
+    System,
+}
+
+impl FlowPrivilege {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "system" => Self::System,
+            _ => Self::Agent,
+        }
+    }
+}
+
+/// Metadata keys written onto `AgentManifest.metadata` for turn-scoped system
+/// flow elevation (not persisted to agent.toml).
+pub const META_FLOW_ELEVATED_TOOLS: &str = "flow_elevated_tools";
+pub const META_FLOW_SHELL_ALLOW: &str = "flow_shell_allow";
+
 /// A parsed flow definition.
 #[derive(Debug, Clone, Default)]
 pub struct FlowDef {
@@ -162,12 +189,32 @@ pub struct FlowDef {
     pub entry: Option<bool>,
     /// Top-level `output` for single-step flows.
     pub output: Option<String>,
+    /// Privilege tier (`agent` default, or `system` for shared platform flows).
+    pub privilege: FlowPrivilege,
+    /// Shell command allow-patterns for elevated `shell_exec` (glob `*`).
+    /// Example: `python3 output/scripts/*`
+    pub shell_allow: Vec<String>,
 }
 
 impl FlowDef {
     /// True if this is a multi-step (DAG) flow.
     pub fn is_multi_step(&self) -> bool {
         !self.steps.is_empty()
+    }
+
+    /// True when this flow may elevate agent tool permissions for the turn.
+    /// Callers must also confirm the flow was loaded from the shared system dir.
+    pub fn elevates_when_system_shared(&self) -> bool {
+        self.privilege == FlowPrivilege::System
+    }
+
+    /// Highest permission level among declared tools (for turn elevation).
+    pub fn required_max_tool_level(&self) -> crate::tool::PermissionLevel {
+        self.tools
+            .iter()
+            .map(|t| crate::tool::PermissionLevel::for_tool(t))
+            .max()
+            .unwrap_or(crate::tool::PermissionLevel::Write)
     }
 }
 
@@ -229,9 +276,16 @@ pub fn parse_flow_def(content: &str) -> FlowDef {
             let s = unquote(val);
             def.output = (!s.is_empty()).then_some(s);
             i += 1;
+        } else if let Some(val) = trimmed.strip_prefix("privilege:") {
+            def.privilege = FlowPrivilege::parse(&unquote(val));
+            i += 1;
         } else if trimmed == "tools:" || trimmed.starts_with("tools:") {
-            let (list, consumed) = parse_top_array(&lines, i);
+            let (list, consumed) = parse_top_array(&lines, i, "tools");
             def.tools = list;
+            i += consumed.max(1);
+        } else if trimmed == "shell_allow:" || trimmed.starts_with("shell_allow:") {
+            let (list, consumed) = parse_top_array(&lines, i, "shell_allow");
+            def.shell_allow = list;
             i += consumed.max(1);
         } else if trimmed == "steps:" || trimmed.starts_with("steps:") {
             let inline = trimmed.strip_prefix("steps:").unwrap_or("").trim();
@@ -269,11 +323,13 @@ fn split_frontmatter(content: &str) -> (&str, &str) {
 }
 
 /// Parse a top-level array field (inline `[a, b]` or block `  - a` form).
+/// `key` is the field name without colon (e.g. `"tools"`, `"shell_allow"`).
 /// Returns (values, lines_consumed_including_the_key_line).
-fn parse_top_array(lines: &[&str], key_idx: usize) -> (Vec<String>, usize) {
+fn parse_top_array(lines: &[&str], key_idx: usize, key: &str) -> (Vec<String>, usize) {
+    let prefix = format!("{key}:");
     let inline = lines[key_idx]
         .trim()
-        .strip_prefix("tools:")
+        .strip_prefix(&prefix)
         .unwrap_or("")
         .trim();
     if !inline.is_empty() {
@@ -306,6 +362,59 @@ fn parse_top_array(lines: &[&str], key_idx: usize) -> (Vec<String>, usize) {
         }
     }
     (out, j - key_idx)
+}
+
+/// Match a shell command against flow `shell_allow` glob patterns.
+///
+/// Patterns support a single `*` wildcard (e.g. `python3 output/scripts/*`).
+/// Matching is against the full command string (trimmed). Empty patterns deny all.
+pub fn command_matches_shell_allow(command: &str, patterns: &[String]) -> bool {
+    if patterns.is_empty() {
+        return false;
+    }
+    let cmd = command.trim();
+    if cmd.is_empty() {
+        return false;
+    }
+    patterns.iter().any(|p| shell_allow_glob_match(p.trim(), cmd))
+}
+
+fn shell_allow_glob_match(pattern: &str, text: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if !pattern.contains('*') {
+        return pattern == text;
+    }
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 2 {
+        let (prefix, suffix) = (parts[0], parts[1]);
+        return text.starts_with(prefix)
+            && text.ends_with(suffix)
+            && text.len() >= prefix.len() + suffix.len();
+    }
+    // Multi-star: sequential scan
+    let mut rest = text;
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            if !rest.starts_with(part) {
+                return false;
+            }
+            rest = &rest[part.len()..];
+        } else if i == parts.len() - 1 {
+            if !rest.ends_with(part) {
+                return false;
+            }
+        } else if let Some(pos) = rest.find(part) {
+            rest = &rest[pos + part.len()..];
+        } else {
+            return false;
+        }
+    }
+    true
 }
 
 /// Parse the nested `steps:` block into step definitions.
@@ -1029,5 +1138,68 @@ b"#;
         assert_eq!(per_ep.body.as_ref().unwrap().len(), 2);
         assert_eq!(per_ep.depends_on, vec!["eps"]);
         assert_eq!(f.final_step.as_deref(), Some("per_ep"));
+    }
+
+    #[test]
+    fn privilege_and_shell_allow_parsed() {
+        let content = r#"---
+name: office-xlsx
+description: gen excel
+privilege: system
+tools:
+  - file_write
+  - shell_exec
+shell_allow:
+  - "python3 output/scripts/*"
+  - python output/scripts/*
+---
+body"#;
+        let f = parse_flow_def(content);
+        assert_eq!(f.privilege, FlowPrivilege::System);
+        assert!(f.elevates_when_system_shared());
+        assert_eq!(f.tools, vec!["file_write", "shell_exec"]);
+        assert_eq!(
+            f.shell_allow,
+            vec![
+                "python3 output/scripts/*".to_string(),
+                "python output/scripts/*".to_string()
+            ]
+        );
+        assert_eq!(
+            f.required_max_tool_level(),
+            crate::tool::PermissionLevel::Dangerous
+        );
+    }
+
+    #[test]
+    fn privilege_defaults_to_agent() {
+        let content = r#"---
+name: t
+description: d
+tools: [file_read]
+---
+b"#;
+        let f = parse_flow_def(content);
+        assert_eq!(f.privilege, FlowPrivilege::Agent);
+        assert!(!f.elevates_when_system_shared());
+        assert!(f.shell_allow.is_empty());
+    }
+
+    #[test]
+    fn shell_allow_glob_matches() {
+        let patterns = vec!["python3 output/scripts/*".to_string()];
+        assert!(command_matches_shell_allow(
+            "python3 output/scripts/gen_xlsx_a.py",
+            &patterns
+        ));
+        assert!(!command_matches_shell_allow("rm -rf /", &patterns));
+        assert!(!command_matches_shell_allow(
+            "python3 /tmp/evil.py",
+            &patterns
+        ));
+        assert!(!command_matches_shell_allow(
+            "python3 output/scripts/a.py",
+            &[]
+        ));
     }
 }

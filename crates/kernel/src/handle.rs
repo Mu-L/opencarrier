@@ -721,10 +721,12 @@ impl KernelHandle for CarrierKernel {
 
         scored.sort_by(|a, b| b.0.cmp(&a.0));
 
-        // Filter by max_level + always exclude Dangerous
+        // Filter by max_level. Dangerous tools (e.g. shell_exec) are only
+        // visible when max_level is Dangerous — typically via system-flow
+        // turn elevation, not a permanent agent grant.
         scored.retain(|(_, _, def)| {
             let level = types::tool::PermissionLevel::for_tool(&def.name);
-            level <= max_level && level != types::tool::PermissionLevel::Dangerous
+            level <= max_level
         });
 
         let count = scored.len();

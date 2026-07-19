@@ -175,6 +175,28 @@ impl CarrierKernel {
         let workspace_root: Option<&Path> = manifest.workspace.as_deref();
         let is_clone_admin =
             matches!((sender_id, workspace_root), (Some(sid), Some(root)) if is_admin(root, sid));
+        let flow_elevated_owned: Vec<String> = manifest
+            .metadata
+            .get(types::flow::META_FLOW_ELEVATED_TOOLS)
+            .and_then(|v| {
+                v.as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
+        let flow_shell_allow_owned: Vec<String> = manifest
+            .metadata
+            .get(types::flow::META_FLOW_SHELL_ALLOW)
+            .and_then(|v| {
+                v.as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
         let tool_ctx = ToolContext {
             kernel: kernel_handle.as_ref(),
             memory: memory_handle.as_ref(),
@@ -200,6 +222,16 @@ impl CarrierKernel {
             max_tool_level: manifest.max_tool_level,
             is_clone_admin,
             external_url: self.config.external_url.as_deref(),
+            flow_elevated_tools: if flow_elevated_owned.is_empty() {
+                None
+            } else {
+                Some(flow_elevated_owned.as_slice())
+            },
+            flow_shell_allow: if flow_shell_allow_owned.is_empty() {
+                None
+            } else {
+                Some(flow_shell_allow_owned.as_slice())
+            },
         };
 
         let tool_use_id = format!("flow:{}:{}", step.id, tool_name);

@@ -2,12 +2,19 @@
 name: short-video
 description: 根据主题生成短视频(研究→脚本→图片→配音→合成mp4)，适合小红书/抖音/视频号
 version: 1
+privilege: system
 tools:
   - file_read
   - file_write
   - shell_exec
   - image_generate
   - web_search
+shell_allow:
+  - "python3 output/*"
+  - "python output/*"
+  - "python3 output/short-video/*"
+  - "python output/short-video/*"
+  - "ffmpeg *"
 ---
 
 # Short Video Creator — 短视频生成

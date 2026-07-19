@@ -2,12 +2,18 @@
 name: office-pdf
 description: 生成 PDF 文档（报告、海报式单页、可打印材料），reportlab 写脚本落盘 output/
 version: 1
+privilege: system
 tools:
   - file_write
   - file_list
   - file_read
   - shell_exec
   - file_convert
+shell_allow:
+  - "python3 output/scripts/*"
+  - "python output/scripts/*"
+  - "pip3 install reportlab"
+  - "pip install reportlab"
 ---
 
 # Office PDF — 生成 PDF
