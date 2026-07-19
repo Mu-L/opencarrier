@@ -701,6 +701,20 @@ async fn handle_text_recovery(
     });
     let result = recover_text_tool_calls(&response.text(), ctx.tools(), tool_search_fn);
 
+    // Flow deny_tools: never re-introduce blocked tools via text recovery.
+    let deny: Vec<String> = ctx
+        .manifest
+        .metadata
+        .get(types::flow::META_FLOW_DENY_TOOLS)
+        .and_then(|v| {
+            v.as_array().map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
+
     let has_discovered = !result.discovered_tools.is_empty();
     if has_discovered {
         // Dedup against tools already present (flow inject / prior tool_search).
@@ -708,6 +722,10 @@ async fn handle_text_recovery(
         // API rejects the request: "function name web_fetch is duplicated".
         let mut added = 0usize;
         for def in result.discovered_tools {
+            if deny.iter().any(|d| d == &def.name) {
+                info!(tool = %def.name, "Skipping text-recovered tool (flow deny_tools)");
+                continue;
+            }
             if ctx.tools_owned.iter().any(|t| t.name == def.name) {
                 continue;
             }
@@ -729,14 +747,23 @@ async fn handle_text_recovery(
         info!(count = result.calls.len(), "Recovered text-based tool calls → promoting to ToolUse");
         // Normalize names so trailing punctuation from free-text recovery
         // (`web_search,`) does not reach execute_tool / permission checks.
+        // Drop calls that the active flow explicitly denies.
         response.tool_calls = result
             .calls
             .into_iter()
-            .map(|mut tc| {
+            .filter_map(|mut tc| {
                 tc.name = types::tool_compat::normalize_tool_name(&tc.name).to_string();
-                tc
+                if deny.iter().any(|d| d == &tc.name) {
+                    info!(tool = %tc.name, "Dropping text-recovered call (flow deny_tools)");
+                    return None;
+                }
+                Some(tc)
             })
             .collect();
+        if response.tool_calls.is_empty() {
+            // All recovered calls were denied — fall through as normal end turn.
+            return TextRecoveryOutcome::Proceed(response);
+        }
         response.stop_reason = StopReason::ToolUse;
         let mut new_blocks: Vec<ContentBlock> = Vec::new();
         for block in &response.content {

@@ -55,6 +55,7 @@ pub async fn execute_tool(
         external_url: _,
         flow_elevated_tools,
         flow_shell_allow,
+        flow_deny_tools,
     } = *ctx;
 
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
@@ -66,6 +67,20 @@ pub async fn execute_tool(
     let flow_elevated = flow_elevated_tools
         .map(|names| names.iter().any(|n| n == tool_name))
         .unwrap_or(false);
+
+    // Flow deny_tools (e.g. image_generate on template poster flows).
+    if let Some(denied) = flow_deny_tools {
+        if denied.iter().any(|d| d == tool_name) {
+            warn!(tool_name, "Permission denied: tool blocked by flow deny_tools");
+            return ToolResult {
+                tool_use_id: tool_use_id.to_string(),
+                content: format!(
+                    "Permission denied: '{tool_name}' 被当前 flow 禁止（deny_tools）。请按 flow 指定的脚本/模板路径执行，不要用此工具。"
+                ),
+                is_error: true,
+            };
+        }
+    }
 
     // Admin gate — orthogonal to max_tool_level. A small set of irreversible /
     // brand-affecting tools (shell execution, publishing to a public account)
@@ -423,6 +438,7 @@ mod tests {
             external_url: None,
             flow_elevated_tools: None,
             flow_shell_allow: None,
+            flow_deny_tools: None,
         }
     }
 

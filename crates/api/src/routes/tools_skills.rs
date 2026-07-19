@@ -507,6 +507,7 @@ pub async fn mcp_http(
             external_url: state.kernel.config.external_url.as_deref(),
             flow_elevated_tools: None,
             flow_shell_allow: None,
+            flow_deny_tools: None,
         };
         let result = runtime::tool_runner::execute_tool(
             "mcp-http", tool_name, &arguments, &tool_ctx,

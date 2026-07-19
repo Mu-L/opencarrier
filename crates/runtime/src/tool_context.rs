@@ -49,4 +49,6 @@ pub struct ToolContext<'a> {
     /// Shell command allow-patterns from the elevated system flow (`shell_allow`).
     /// When non-empty, elevated `shell_exec` must match at least one pattern.
     pub flow_shell_allow: Option<&'a [String]>,
+    /// Tools blocked for this turn by the matched flow's `deny_tools`.
+    pub flow_deny_tools: Option<&'a [String]>,
 }

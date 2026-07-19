@@ -170,6 +170,8 @@ impl FlowPrivilege {
 /// flow elevation (not persisted to agent.toml).
 pub const META_FLOW_ELEVATED_TOOLS: &str = "flow_elevated_tools";
 pub const META_FLOW_SHELL_ALLOW: &str = "flow_shell_allow";
+/// Tools stripped for this turn (and blocked at execute / text-recovery).
+pub const META_FLOW_DENY_TOOLS: &str = "flow_deny_tools";
 
 /// A parsed flow definition.
 #[derive(Debug, Clone, Default)]
@@ -194,6 +196,9 @@ pub struct FlowDef {
     /// Shell command allow-patterns for elevated `shell_exec` (glob `*`).
     /// Example: `python3 output/scripts/*`
     pub shell_allow: Vec<String>,
+    /// Tools forbidden for this turn even if they are core/always-on
+    /// (e.g. `image_generate` on a template-based poster flow).
+    pub deny_tools: Vec<String>,
 }
 
 impl FlowDef {
@@ -286,6 +291,10 @@ pub fn parse_flow_def(content: &str) -> FlowDef {
         } else if trimmed == "shell_allow:" || trimmed.starts_with("shell_allow:") {
             let (list, consumed) = parse_top_array(&lines, i, "shell_allow");
             def.shell_allow = list;
+            i += consumed.max(1);
+        } else if trimmed == "deny_tools:" || trimmed.starts_with("deny_tools:") {
+            let (list, consumed) = parse_top_array(&lines, i, "deny_tools");
+            def.deny_tools = list;
             i += consumed.max(1);
         } else if trimmed == "steps:" || trimmed.starts_with("steps:") {
             let inline = trimmed.strip_prefix("steps:").unwrap_or("").trim();
@@ -1201,5 +1210,20 @@ b"#;
             "python3 output/scripts/a.py",
             &[]
         ));
+    }
+
+    #[test]
+    fn deny_tools_parsed() {
+        let content = r#"---
+name: bus-schedule-poster
+description: d
+tools: [shell_exec, file_write]
+deny_tools:
+  - image_generate
+  - video_generate
+---
+body"#;
+        let f = parse_flow_def(content);
+        assert_eq!(f.deny_tools, vec!["image_generate", "video_generate"]);
     }
 }

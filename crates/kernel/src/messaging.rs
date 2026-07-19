@@ -460,7 +460,29 @@ impl CarrierKernel {
 
         // Flow turn elevation (shared system OR private skill with shell_allow):
         // raise max_tool_level and stamp elevated tool names + shell_allow for tool_runner.
+        // Also enforce deny_tools: strip from LLM tool list for this turn.
         if let Some(ref flow) = matched_flow {
+            if !flow.flow_def.deny_tools.is_empty() {
+                let before = tools.len();
+                tools.retain(|t| {
+                    !flow
+                        .flow_def
+                        .deny_tools
+                        .iter()
+                        .any(|d| d == &t.name || t.name.ends_with(&format!("__{d}")))
+                });
+                manifest.metadata.insert(
+                    types::flow::META_FLOW_DENY_TOOLS.to_string(),
+                    serde_json::json!(flow.flow_def.deny_tools),
+                );
+                info!(
+                    agent = %entry.name,
+                    flow = %flow.name,
+                    denied = ?flow.flow_def.deny_tools,
+                    removed = before.saturating_sub(tools.len()),
+                    "Flow deny_tools applied for this turn"
+                );
+            }
             if flow.elevates() {
                 let required = flow.flow_def.required_max_tool_level();
                 if required > manifest.max_tool_level {
