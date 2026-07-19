@@ -225,24 +225,23 @@ async fn process_inbound_message(
                     PluginContent::Text(text)
                 }
                 ITEM_TYPE_IMAGE => {
-                    let (image_url, image_data) = match item.image_item.as_ref().and_then(|i| i.media.as_ref()) {
-                        Some(media) => {
-                            match download_cdn_raw(http, media).await {
-                                Ok(bytes) => {
-                                    let mime = types::media::detect_image_mime(&bytes);
-                                    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
-                                    let data_uri = format!("data:{mime};base64,{b64}");
-                                    (data_uri, Some(bytes))
-                                }
-                                Err(e) => {
-                                    warn!(error = %e, "Failed to download WeChat image from CDN");
-                                    (String::new(), None)
-                                }
+                    // Download image bytes for local save. Do NOT embed base64 in
+                    // `url` — vision will use a public view_url after save.
+                    let image_data = match item.image_item.as_ref().and_then(|i| i.media.as_ref()) {
+                        Some(media) => match download_cdn_raw(http, media).await {
+                            Ok(bytes) => Some(bytes),
+                            Err(e) => {
+                                warn!(error = %e, "Failed to download WeChat image from CDN");
+                                None
                             }
-                        }
-                        None => (String::new(), None),
+                        },
+                        None => None,
                     };
-                    PluginContent::Image { url: image_url, caption: None, data: image_data }
+                    PluginContent::Image {
+                        url: String::new(),
+                        caption: None,
+                        data: image_data,
+                    }
                 }
                 ITEM_TYPE_VOICE => {
                     // If voice has text transcription, use it directly

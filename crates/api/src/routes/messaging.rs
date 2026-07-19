@@ -51,6 +51,7 @@ pub fn resolve_attachments(
                 blocks.push(types::message::ContentBlock::Image {
                     media_type: content_type,
                     data: b64,
+                    url: None,
                 });
             }
             Err(e) => {

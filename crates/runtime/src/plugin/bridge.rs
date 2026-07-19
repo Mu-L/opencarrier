@@ -183,8 +183,20 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     async fn handle_inbound(&self, msg: PluginMessage) {
+        // Text is resolved immediately. Images/files are described *after*
+        // agent routing + save, so we can hand vision a public view_url
+        // instead of a huge base64 data URI.
+        let mut deferred_media = false;
         let text = match msg.content.as_text() {
             Some(t) => t.to_string(),
+            None if matches!(
+                msg.content,
+                PluginContent::Image { .. } | PluginContent::File { .. }
+            ) =>
+            {
+                deferred_media = true;
+                String::new()
+            }
             None => self.resolve_non_text_content(&msg).await,
         };
 
@@ -377,9 +389,26 @@ impl PluginBridgeManager {
         // Save media data (files and images) to the agent's workspace input/ directory
         let saved_filename = self.save_media_to_input(&msg, &agent_id, &rk).await;
 
-        // Append file_read hint if media was saved
+        // Describe images via public view_url after save (vision fetches URL).
+        let text = if deferred_media {
+            self.resolve_media_after_save(&msg, &agent_id, &rk, saved_filename.as_deref())
+                .await
+        } else {
+            text
+        };
+
+        // Append file_read / path hint if media was saved
         let final_text = match saved_filename {
-            Some(rel_path) => format!("{}\n[文件已保存至 {}，请用 file_read 读取]", text, rel_path),
+            Some(ref rel_path) => {
+                // Prefer a short relative path under the sender dir (input/xxx)
+                let short = rel_path
+                    .rsplit_once("/input/")
+                    .map(|(_, f)| format!("input/{f}"))
+                    .unwrap_or_else(|| rel_path.clone());
+                format!(
+                    "{text}\n[文件已保存至 {short}，可用 file_list(\"input/\") 或 image_analyze 路径读取]"
+                )
+            }
             None => text,
         };
 
@@ -563,25 +592,117 @@ impl PluginBridgeManager {
         String::new()
     }
 
-    /// Resolve non-text content into a text description.
-    /// Images go through the vision model; other types use hardcoded fallback.
+    /// Resolve non-text content into a text description (non-image media, or
+    /// legacy path when save-before-describe is unavailable).
     async fn resolve_non_text_content(&self, msg: &PluginMessage) -> String {
         if let PluginContent::Image { url, caption, .. } = &msg.content {
-            match self
-                .kernel
-                .describe_content("image", url, caption.as_deref())
-                .await
-            {
-                Ok(desc) => {
-                    info!(url = %url, desc_len = desc.len(), "Vision model described image");
-                    return desc;
-                }
-                Err(e) => {
-                    warn!(url = %url, error = %e, "describe_content failed, using fallback");
+            // Only try vision here when we already have an HTTP(S) URL.
+            if url.starts_with("https://") || url.starts_with("http://") {
+                match self
+                    .kernel
+                    .describe_content("image", url, caption.as_deref())
+                    .await
+                {
+                    Ok(desc) => {
+                        info!(%url, desc_len = desc.len(), "Vision model described image (direct URL)");
+                        return desc;
+                    }
+                    Err(e) => {
+                        warn!(%url, error = %e, "describe_content failed, using fallback");
+                    }
                 }
             }
         }
         self.describe_non_text_content(msg)
+    }
+
+    /// After media is saved under senders/…/input/, build a public view_url and
+    /// call vision with that URL (no base64 in the LLM request).
+    async fn resolve_media_after_save(
+        &self,
+        msg: &PluginMessage,
+        agent_name: &str,
+        route_key: &str,
+        saved_rel: Option<&str>,
+    ) -> String {
+        if let PluginContent::Image { url, caption, .. } = &msg.content {
+            // 1) Prefer already-public HTTP(S) URL from the channel.
+            let mut candidates: Vec<String> = Vec::new();
+            if url.starts_with("https://") || url.starts_with("http://") {
+                candidates.push(url.clone());
+            }
+            // 2) Public view URL for the saved file (requires external_url).
+            if let Some(rel) = saved_rel {
+                // rel is home-relative: workspaces/{agent}/senders/{owner}/input/file
+                // view path is relative to sender data dir: input/file
+                if let Some(under_sender) = rel
+                    .rsplit_once("/input/")
+                    .map(|(_, f)| format!("input/{f}"))
+                    .or_else(|| {
+                        if rel.contains("input/") {
+                            Some(rel[rel.find("input/").unwrap()..].to_string())
+                        } else {
+                            None
+                        }
+                    })
+                {
+                    let sid = if msg.sender_id.is_empty() {
+                        route_key
+                    } else {
+                        msg.sender_id.as_str()
+                    };
+                    if let Some(view) = crate::file_view::build_file_view_url(
+                        self.kernel.external_url().as_deref(),
+                        agent_name,
+                        &under_sender,
+                        sid,
+                    ) {
+                        candidates.push(view);
+                    }
+                }
+            }
+
+            for candidate in &candidates {
+                match self
+                    .kernel
+                    .describe_content("image", candidate, caption.as_deref())
+                    .await
+                {
+                    Ok(desc) => {
+                        info!(
+                            url = %candidate,
+                            desc_len = desc.len(),
+                            "Vision model described image via URL"
+                        );
+                        let path_hint = saved_rel
+                            .and_then(|r| r.rsplit_once("/input/").map(|(_, f)| format!("input/{f}")))
+                            .unwrap_or_default();
+                        if path_hint.is_empty() {
+                            return format!("[用户发送了一张图片]\n视觉描述：{desc}");
+                        }
+                        return format!(
+                            "[用户发送了一张图片，已保存至 {path_hint}]\n视觉描述：{desc}\nview_url: {candidate}"
+                        );
+                    }
+                    Err(e) => {
+                        warn!(url = %candidate, error = %e, "describe_content via URL failed");
+                    }
+                }
+            }
+        }
+
+        // Fallback: text placeholder (no base64 vision attempt).
+        let mut fallback = self.describe_non_text_content(msg);
+        if let Some(rel) = saved_rel {
+            let short = rel
+                .rsplit_once("/input/")
+                .map(|(_, f)| format!("input/{f}"))
+                .unwrap_or_else(|| rel.to_string());
+            fallback.push_str(&format!(
+                "\n[文件已保存至 {short}，请用 image_analyze 或 media_describe 分析]"
+            ));
+        }
+        fallback
     }
 
     fn describe_non_text_content(&self, msg: &PluginMessage) -> String {

@@ -194,10 +194,10 @@ impl ToolModule for MediaTools {
     ) -> Option<Result<String, String>> {
         match name {
             // Image analysis
-            "image_analyze" => Some(tool_image_analyze(input).await),
+            "image_analyze" => Some(tool_image_analyze(input, ctx).await),
 
             // Media understanding
-            "media_describe" => Some(tool_media_describe(input, ctx.brain).await),
+            "media_describe" => Some(tool_media_describe(input, ctx).await),
             "media_transcribe" => Some(tool_media_transcribe(input, ctx.brain).await),
 
             // Image generation
@@ -300,13 +300,45 @@ impl ToolModule for MediaTools {
 // Image analysis tool
 // ---------------------------------------------------------------------------
 
-async fn tool_image_analyze(input: &serde_json::Value) -> Result<String, String> {
+async fn tool_image_analyze(
+    input: &serde_json::Value,
+    ctx: &crate::tool_context::ToolContext<'_>,
+) -> Result<String, String> {
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
     let prompt = input["prompt"].as_str().unwrap_or("");
 
-    let data = tokio::fs::read(path)
+    // Resolve through sender sandbox so input/xxx and output/xxx work.
+    let resolved = if path.starts_with("/tmp/") || path.starts_with('/') {
+        std::path::PathBuf::from(path)
+    } else if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
+        let rel = path.replace('\\', "/");
+        let rel = rel.trim_start_matches('/');
+        if rel.starts_with("input/") || rel.starts_with("output/") || rel.starts_with("memory/") {
+            let oid = ctx.owner_id.unwrap_or(sid);
+            types::config::sender_data_dir(hd, oid, an, Some(sid)).join(rel)
+        } else if let Some(idx) = rel.find("input/") {
+            let oid = ctx.owner_id.unwrap_or(sid);
+            types::config::sender_data_dir(hd, oid, an, Some(sid)).join(&rel[idx..])
+        } else {
+            crate::tools::resolve_file_path_for_read(
+                path,
+                ctx.workspace_root,
+                ctx.sender_id,
+                ctx.agent_name,
+            )?
+        }
+    } else {
+        crate::tools::resolve_file_path_for_read(
+            path,
+            ctx.workspace_root,
+            ctx.sender_id,
+            ctx.agent_name,
+        )?
+    };
+
+    let data = tokio::fs::read(&resolved)
         .await
-        .map_err(|e| format!("Failed to read image '{path}': {e}"))?;
+        .map_err(|e| format!("Failed to read image '{path}' ({}): {e}", resolved.display()))?;
 
     let file_size = data.len();
 
@@ -460,28 +492,53 @@ fn format_file_size(bytes: usize) -> String {
 // ---------------------------------------------------------------------------
 
 /// Describe an image using a vision-capable LLM through the Brain fallback chain.
+/// Prefer a public view_url so the provider fetches the image (no base64 payload).
 async fn tool_media_describe(
     input: &serde_json::Value,
-    brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
+    ctx: &crate::tool_context::ToolContext<'_>,
 ) -> Result<String, String> {
-    use base64::Engine;
-    let brain = brain.ok_or("Brain not available. Check configuration.")?;
+    let brain = ctx.brain.ok_or("Brain not available. Check configuration.")?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
     let prompt = input["prompt"]
         .as_str()
         .unwrap_or("Describe this image in detail.");
-    // Allow /tmp/ paths for browser screenshots; validate relative paths normally
-    if !path.starts_with("/tmp/") {
-        let _ = crate::tools::validate_path(path)?;
+
+    // Resolve path (sender sandbox or /tmp screenshots)
+    let resolved = if path.starts_with("/tmp/") {
+        std::path::PathBuf::from(path)
+    } else if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
+        // Prefer user-data paths: input/… output/…
+        let normalized = path.replace('\\', "/");
+        let rel = normalized.trim_start_matches('/');
+        if rel.starts_with("input/") || rel.starts_with("output/") || rel.starts_with("memory/") {
+            let oid = ctx.owner_id.unwrap_or(sid);
+            types::config::sender_data_dir(hd, oid, an, Some(sid)).join(rel)
+        } else {
+            crate::tools::resolve_file_path_for_read(
+                path,
+                ctx.workspace_root,
+                ctx.sender_id,
+                ctx.agent_name,
+            )?
+        }
+    } else {
+        crate::tools::resolve_file_path_for_read(
+            path,
+            ctx.workspace_root,
+            ctx.sender_id,
+            ctx.agent_name,
+        )?
+    };
+
+    if !resolved.is_file() {
+        return Err(format!(
+            "Failed to read image file: {} (resolved {})",
+            path,
+            resolved.display()
+        ));
     }
 
-    // Read image file
-    let data = tokio::fs::read(path)
-        .await
-        .map_err(|e| format!("Failed to read image file: {e}"))?;
-
-    // Detect MIME type from extension
-    let ext = std::path::Path::new(path)
+    let ext = resolved
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
@@ -492,32 +549,68 @@ async fn tool_media_describe(
         "gif" => "image/gif",
         "webp" => "image/webp",
         "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
         _ => return Err(format!("Unsupported image format: .{ext}")),
     };
 
-    // Validate image size
-    let max_bytes = 5 * 1024 * 1024; // 5 MB
-    if data.len() > max_bytes {
-        return Err(format!(
-            "Image too large: {} bytes (max {} MB)",
-            data.len(),
-            max_bytes / (1024 * 1024)
-        ));
+    // Prefer public URL for vision.
+    let mut image_url: Option<String> = None;
+    if let (Some(an), Some(sid)) = (ctx.agent_name, ctx.sender_id) {
+        let rel = path.replace('\\', "/");
+        let rel = rel.trim_start_matches('/');
+        let under_sender = if rel.starts_with("input/")
+            || rel.starts_with("output/")
+            || rel.starts_with("memory/")
+        {
+            rel.to_string()
+        } else if let Some(idx) = rel.find("input/") {
+            rel[idx..].to_string()
+        } else if let Some(idx) = rel.find("output/") {
+            rel[idx..].to_string()
+        } else {
+            format!("input/{rel}")
+        };
+        image_url = crate::file_view::build_file_view_url(
+            ctx.external_url,
+            an,
+            &under_sender,
+            sid,
+        );
     }
 
-    let base64_data = base64::engine::general_purpose::STANDARD.encode(&data);
+    let image_block = if let Some(url) = image_url.clone() {
+        types::message::ContentBlock::Image {
+            media_type: mime.to_string(),
+            data: String::new(),
+            url: Some(url),
+        }
+    } else {
+        // Fallback: base64 (legacy / no external_url)
+        use base64::Engine;
+        let data = tokio::fs::read(&resolved)
+            .await
+            .map_err(|e| format!("Failed to read image file: {e}"))?;
+        let max_bytes = 5 * 1024 * 1024;
+        if data.len() > max_bytes {
+            return Err(format!(
+                "Image too large: {} bytes (max {} MB) and no public view_url available",
+                data.len(),
+                max_bytes / (1024 * 1024)
+            ));
+        }
+        let base64_data = base64::engine::general_purpose::STANDARD.encode(&data);
+        types::message::ContentBlock::Image {
+            media_type: mime.to_string(),
+            data: base64_data,
+            url: None,
+        }
+    };
 
-    // Build a CompletionRequest with the image for the vision modality
     let request = crate::llm_driver::CompletionRequest {
-        model: String::new(), // brain sets this from the resolved endpoint
+        model: String::new(),
         messages: vec![types::message::Message {
             role: types::message::Role::User,
             content: types::message::MessageContent::Blocks(vec![
-                types::message::ContentBlock::Image {
-                    media_type: mime.to_string(),
-                    data: base64_data,
-                },
+                image_block,
                 types::message::ContentBlock::Text {
                     text: prompt.to_string(),
                     provider_metadata: None,
@@ -542,13 +635,21 @@ async fn tool_media_describe(
         return Err("Vision model returned empty response".into());
     }
 
-    let result = serde_json::json!({
+    let mut result = serde_json::json!({
         "description": description,
+        "path": path,
+        "via_url": image_url.is_some(),
         "usage": {
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
         },
     });
+    if let Some(u) = image_url {
+        result
+            .as_object_mut()
+            .unwrap()
+            .insert("view_url".into(), serde_json::json!(u));
+    }
     serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
 }
 

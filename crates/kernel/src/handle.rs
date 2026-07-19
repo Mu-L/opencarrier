@@ -90,83 +90,52 @@ impl KernelHandle for CarrierKernel {
             return Ok(format!("[用户发送了非文本内容: {content_type}]"));
         }
 
-        // Parse image data — either from data URI or HTTP download
-        let (base64_data, mime) = if let Some(rest) = url.strip_prefix("data:") {
-            // Data URI: data:{mime};base64,{data}
+        // Prefer HTTP(S) URL → vision provider fetches the image itself.
+        // Avoids embedding large base64 payloads (token bloat / timeouts).
+        let image_block = if url.starts_with("https://") || url.starts_with("http://") {
+            // Soft SSRF guard: block obvious private-network targets even when
+            // the provider does the fetch (we still don't want to pass them).
+            if let Err(e) = types::ssrf::check_ssrf(url) {
+                return Err(format!("Image URL rejected: {e}"));
+            }
+            let mime = mime_from_image_url(url);
+            tracing::info!(%url, %mime, "Vision describe via public URL (no base64)");
+            ContentBlock::Image {
+                media_type: mime,
+                data: String::new(),
+                url: Some(url.to_string()),
+            }
+        } else if let Some(rest) = url.strip_prefix("data:") {
+            // Legacy data-URI path (fallback only).
             let sep = rest.find(";base64,").ok_or("Invalid data URI format")?;
             let mime = rest[..sep].to_string();
             let b64 = rest[sep + ";base64,".len()..].to_string();
-
-            // Size check (base64 is ~33% larger than raw)
             let max_b64 = 5 * 1024 * 1024 * 2;
             if b64.len() > max_b64 {
                 return Err(format!("Image too large (data URI): {} chars", b64.len()));
             }
-
-            (b64, mime)
+            tracing::warn!(
+                b64_len = b64.len(),
+                "Vision describe falling back to data URI base64"
+            );
+            ContentBlock::Image {
+                media_type: mime,
+                data: b64,
+                url: None,
+            }
         } else {
-            // HTTP download — SSRF protection before fetching
-            types::ssrf::check_ssrf(url)?;
-
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
-
-            let response = client
-                .get(url)
-                .send()
-                .await
-                .map_err(|e| format!("Failed to download image: {e}"))?;
-
-            if !response.status().is_success() {
-                return Err(format!("Image download failed with status: {}", response.status()));
-            }
-
-            let data = response
-                .bytes()
-                .await
-                .map_err(|e| format!("Failed to read image bytes: {e}"))?;
-
-            // Size check (5 MB max)
-            let max_bytes = 5 * 1024 * 1024;
-            if data.len() > max_bytes {
-                return Err(format!("Image too large: {} bytes (max 5 MB)", data.len()));
-            }
-
-            // Detect MIME from URL extension
-            let mime = {
-                let path = std::path::Path::new(url);
-                let ext = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                match ext.as_str() {
-                    "png" => "image/png",
-                    "jpg" | "jpeg" => "image/jpeg",
-                    "gif" => "image/gif",
-                    "webp" => "image/webp",
-                    _ => "image/jpeg",
-                }
-                .to_string()
-            };
-
-            use base64::Engine;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-            (b64, mime)
+            let preview: String = url.chars().take(80).collect();
+            return Err(format!(
+                "Unsupported image reference (need https:// URL or data URI): {preview}"
+            ));
         };
 
-        // Build vision request
         let request = CompletionRequest {
-            model: String::new(), // brain sets this from the resolved endpoint
+            model: String::new(),
             messages: vec![Message {
                 role: Role::User,
                 content: MessageContent::Blocks(vec![
-                    ContentBlock::Image {
-                        media_type: mime,
-                        data: base64_data.clone(),
-                    },
+                    image_block,
                     ContentBlock::Text {
                         text: "请详细描述这张图片的内容。".to_string(),
                         provider_metadata: None,
@@ -195,7 +164,12 @@ impl KernelHandle for CarrierKernel {
             return Err("Vision model returned empty description".into());
         }
 
-        tracing::info!(content_type, b64_len = base64_data.len(), desc_len = description.len(), "Content described by vision model");
+        tracing::info!(
+            content_type,
+            desc_len = description.len(),
+            via_url = url.starts_with("http"),
+            "Content described by vision model"
+        );
         Ok(description)
     }
 
@@ -1306,4 +1280,22 @@ impl MemoryHandle for MemorySubstrateHandle {
         self.inner.analytics_recent_conversations(agent_id, limit)
             .map_err(|e| e.to_string())
     }
+}
+
+fn mime_from_image_url(url: &str) -> String {
+    // Strip query string for extension detection.
+    let path = url.split('?').next().unwrap_or(url);
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => "image/jpeg",
+    }
+    .to_string()
 }

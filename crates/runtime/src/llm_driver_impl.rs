@@ -238,11 +238,28 @@ impl UnifiedHttpDriver {
                             ContentBlock::Text { text, .. } => {
                                 parts.push(OaiContentPart::Text { text: text.clone() });
                             }
-                            ContentBlock::Image { data, media_type, .. } => {
+                            ContentBlock::Image {
+                                data,
+                                media_type,
+                                url,
+                            } => {
+                                // Prefer a real HTTP(S) URL so providers fetch the image
+                                // themselves (avoids huge base64 payloads / token bloat).
+                                let image_url = match url.as_ref() {
+                                    Some(u)
+                                        if u.starts_with("https://")
+                                            || u.starts_with("http://") =>
+                                    {
+                                        u.clone()
+                                    }
+                                    _ if !data.is_empty() => {
+                                        format!("data:{media_type};base64,{data}")
+                                    }
+                                    Some(u) if !u.is_empty() => u.clone(),
+                                    _ => continue,
+                                };
                                 parts.push(OaiContentPart::ImageUrl {
-                                    image_url: OaiImageUrl {
-                                        url: format!("data:{media_type};base64,{data}"),
-                                    },
+                                    image_url: OaiImageUrl { url: image_url },
                                 });
                             }
                             ContentBlock::Audio { data, media_type, .. } => {

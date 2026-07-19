@@ -66,13 +66,18 @@ pub enum ContentBlock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<serde_json::Value>,
     },
-    /// An inline base64-encoded image.
+    /// An image: prefer a fetchable HTTP(S) `url` for vision providers; fall
+    /// back to inline base64 `data` when no public URL is available.
     #[serde(rename = "image")]
     Image {
         /// MIME type (e.g. "image/png", "image/jpeg").
         media_type: String,
-        /// Base64-encoded image data.
+        /// Base64-encoded image data. Empty when `url` is set.
+        #[serde(default)]
         data: String,
+        /// Public or provider-fetchable image URL (preferred for vision).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
     },
     /// An inline base64-encoded audio clip.
     #[serde(rename = "audio")]
@@ -325,6 +330,7 @@ mod tests {
         let block = ContentBlock::Image {
             media_type: "image/png".to_string(),
             data: "base64data".to_string(),
+            url: None,
         };
         let json = serde_json::to_value(&block).unwrap();
         assert_eq!(json["type"], "image");
@@ -348,6 +354,7 @@ mod tests {
             ContentBlock::Image {
                 media_type: "image/jpeg".to_string(),
                 data: "base64data".to_string(),
+                url: None,
             },
         ];
         let msg = Message::user_with_blocks(blocks);

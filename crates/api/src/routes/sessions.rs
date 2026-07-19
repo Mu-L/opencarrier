@@ -49,6 +49,7 @@ pub async fn get_agent_session(
                                 types::message::ContentBlock::Image {
                                     media_type,
                                     data,
+                                    url: _,
                                 } => {
                                     texts.push("[Image]".to_string());
                                     // Persist image to upload dir so it can be
