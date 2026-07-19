@@ -54,21 +54,34 @@ impl ToolModule for ShellTools {
             )));
         }
 
-        // Exec policy enforcement (allowlist / deny / full)
-        if let Some(policy) = exec_policy {
-            if let Err(reason) =
-                crate::subprocess_sandbox::validate_command_allowlist(command, policy)
-            {
-                return Some(Err(format!(
-                    "shell_exec blocked: {reason}. Current exec_policy.mode = '{:?}'. \
-                     To allow shell commands, set exec_policy.mode = 'full' in the agent manifest or config.toml.",
-                    policy.mode
-                )));
+        // Flow-scoped shell_allow (private brand skills / system office flows):
+        // when the turn stamped non-empty shell_allow and this command matches,
+        // that list IS the allowlist for this call — skip global exec_policy
+        // allowlist (which often lacks python3 on CS clones). Metachar +
+        // shell_allow were already enforced in tool_runner; re-check allow here.
+        let flow_shell_scoped = ctx
+            .flow_shell_allow
+            .map(|p| !p.is_empty() && types::flow::command_matches_shell_allow(command, p))
+            .unwrap_or(false);
+
+        // Exec policy enforcement (allowlist / deny / full) — unless flow-scoped.
+        if !flow_shell_scoped {
+            if let Some(policy) = exec_policy {
+                if let Err(reason) =
+                    crate::subprocess_sandbox::validate_command_allowlist(command, policy)
+                {
+                    return Some(Err(format!(
+                        "shell_exec blocked: {reason}. Current exec_policy.mode = '{:?}'. \
+                         To allow shell commands, set exec_policy.mode = 'full' in the agent manifest or config.toml.",
+                        policy.mode
+                    )));
+                }
             }
         }
 
-        // Skip heuristic taint patterns for Full exec policy
-        let is_full_exec = exec_policy.is_some_and(|p| p.mode == ExecSecurityMode::Full);
+        // Skip heuristic taint patterns for Full exec policy or flow-scoped allow.
+        let is_full_exec = flow_shell_scoped
+            || exec_policy.is_some_and(|p| p.mode == ExecSecurityMode::Full);
         if !is_full_exec {
             let suspicious_patterns = ["curl ", "wget ", "| sh", "| bash", "base64 -d", "eval "];
             for pattern in &suspicious_patterns {
