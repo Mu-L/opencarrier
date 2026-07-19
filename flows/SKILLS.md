@@ -34,12 +34,6 @@ topic-researcher → outline-writer → article-writer → article-formatter →
 |-------|------|
 | `schedule-chart` | 生成人员排班表与全天在岗覆盖 HTML（非巴士海报） |
 
-## 巴士运营物料
-
-| Skill / Flow | 说明 |
-|--------------|------|
-| `bus-schedule-poster` | **86巴士班次时刻表海报**（Pillow 蓝白官方模板，文字清晰；`privilege: system`） |
-
 ## 视频生产
 
 | Skill | 说明 |

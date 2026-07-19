@@ -458,8 +458,8 @@ impl CarrierKernel {
 
         let mut manifest = entry.manifest.clone();
 
-        // System-flow turn elevation: raise max_tool_level and stamp elevated
-        // tool names + shell_allow onto manifest.metadata for tool_runner.
+        // Flow turn elevation (shared system OR private skill with shell_allow):
+        // raise max_tool_level and stamp elevated tool names + shell_allow for tool_runner.
         if let Some(ref flow) = matched_flow {
             if flow.elevates() {
                 let required = flow.flow_def.required_max_tool_level();
@@ -467,9 +467,10 @@ impl CarrierKernel {
                     info!(
                         agent = %entry.name,
                         flow = %flow.name,
+                        is_system_shared = flow.is_system_shared,
                         from = ?manifest.max_tool_level,
                         to = ?required,
-                        "System flow elevates max_tool_level for this turn"
+                        "Flow elevates max_tool_level for this turn"
                     );
                     manifest.max_tool_level = required;
                 }

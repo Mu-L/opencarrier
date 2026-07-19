@@ -565,10 +565,28 @@ pub struct FlowMatch {
 }
 
 impl FlowMatch {
-    /// Turn-scoped elevation is allowed only for shared system flows that
-    /// declare `privilege: system`.
+    /// Turn-scoped tool elevation for this matched flow.
+    ///
+    /// 1. **Shared system flow** with `privilege: system` (platform capabilities).
+    /// 2. **Private workspace flow** that declares both `shell_exec` and a non-empty
+    ///    `shell_allow` — clone-local brand skills (e.g. 86 班次海报) can run
+    ///    allowlisted python without permanent agent shell / without living under
+    ///    shared `~/.opencarrier/flows/`.
     pub fn elevates(&self) -> bool {
-        self.is_system_shared && self.flow_def.elevates_when_system_shared()
+        if self.is_system_shared && self.flow_def.elevates_when_system_shared() {
+            return true;
+        }
+        if !self.is_system_shared
+            && !self.flow_def.shell_allow.is_empty()
+            && self
+                .flow_def
+                .tools
+                .iter()
+                .any(|t| t == "shell_exec" || t == "process_start")
+        {
+            return true;
+        }
+        false
     }
 }
 
