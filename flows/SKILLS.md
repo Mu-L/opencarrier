@@ -40,6 +40,21 @@ topic-researcher → outline-writer → article-writer → article-formatter →
 |-------|------|
 | `short-video` | 根据主题生成短视频（研究→脚本→图片→配音→合成），适合小红书/抖音/视频号 |
 
+## Office 文档（系统能力）
+
+任意分身可命中；产物统一写 `output/`，并贴 `view_url` 给用户。
+
+| Skill / Flow | 说明 |
+|--------------|------|
+| `office-docx` | 生成 Word（DOCX）：报告、合同草稿、纪要 |
+| `office-xlsx` | 生成 Excel（XLSX）：报表、清单、公式表 |
+| `office-pptx` | 生成 PPT（PPTX）：汇报、路演、培训幻灯片 |
+| `office-pdf` | 生成 PDF：可打印报告（reportlab / 简单场景 file_convert） |
+
+**运行时依赖（服务器 Python3）**：`python-docx`、`python-pptx`、`openpyxl`、`reportlab`。  
+安装示例：`pip3 install python-docx python-pptx openpyxl reportlab`  
+中文 PDF 需系统字体（如 `fonts-wqy-microhei` / Noto CJK）。
+
 ## 设计原则
 
 - **系统 skill = 通用工作流**：≥2 个分身会重复用的纯流程，与具体人格/语气无关
