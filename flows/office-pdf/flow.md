@@ -1,6 +1,6 @@
 ---
 name: office-pdf
-description: 生成 PDF 文档（报告、海报式单页、可打印材料），reportlab 写脚本落盘 output/
+description: 生成 PDF 文档（报告、可打印材料、合同页），reportlab 写脚本落盘；不做班次海报图
 version: 1
 privilege: system
 tools:

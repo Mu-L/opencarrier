@@ -1,6 +1,6 @@
 ---
 name: schedule-chart
-description: 生成排班表和全天在岗覆盖图，支持多班次、多人排班可视化
+description: 生成人员排班表与全天在岗覆盖 HTML（餐饮/门店排班），不是巴士时刻表宣传海报
 version: 1
 tools:
   - file_read
