@@ -20,6 +20,7 @@ pub mod context_budget;
 pub mod context_overflow;
 pub mod drivers;
 pub mod embedding;
+pub mod file_view;
 pub mod graceful_shutdown;
 pub mod hooks;
 pub mod host_functions;

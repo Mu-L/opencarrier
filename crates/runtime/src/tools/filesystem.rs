@@ -33,7 +33,7 @@ impl super::ToolModule for FilesystemTools {
             },
             ToolDefinition {
                 name: "file_write".to_string(),
-                description: "Write content to a file. Use 'output/' prefix for user-specific task outputs (articles, reports, drafts, generated content). Use 'memory/' prefix for user-specific private notes. Paths are sandboxed per-user automatically.".to_string(),
+                description: "Write content to a file. Use 'output/' prefix for user-specific task outputs (articles, reports, drafts, generated content). Use 'memory/' prefix for user-specific private notes. Paths are sandboxed per-user automatically. On success the result includes view_url — paste that link so the user can open the file in a browser.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -265,11 +265,25 @@ async fn tool_file_write(input: &Value, ctx: &ToolContext<'_>) -> Result<String,
     tokio::fs::write(&resolved, content)
         .await
         .map_err(|e| format!("Failed to write file: {e}"))?;
-    Ok(format!(
+
+    // Public view URL so any clone can paste a clickable link (system capability).
+    let mut msg = format!(
         "Successfully wrote {} bytes to {}",
         content.len(),
-        resolved.display()
-    ))
+        raw_path
+    );
+    if let (Some(an), Some(sid)) = (ctx.agent_name, ctx.sender_id) {
+        if let Some(rel) = crate::file_view::rel_path_for_user_write(raw_path) {
+            if let Some(url) =
+                crate::file_view::build_file_view_url(ctx.external_url, an, &rel, sid)
+            {
+                msg.push_str(&format!(
+                    "\nview_url: {url}\n(将 view_url 贴给用户即可在浏览器中打开；勿把全文粘进聊天。)"
+                ));
+            }
+        }
+    }
+    Ok(msg)
 }
 
 async fn tool_file_list(input: &Value, ctx: &ToolContext<'_>) -> Result<String, String> {

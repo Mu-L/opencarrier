@@ -52,6 +52,7 @@ pub async fn execute_tool(
         max_tool_level,
         cli_exec_config: _,
         is_clone_admin,
+        external_url: _,
     } = *ctx;
 
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
@@ -387,6 +388,7 @@ mod tests {
             channel_type: None,
             max_tool_level: types::tool::PermissionLevel::Write,
             is_clone_admin: false,
+            external_url: None,
         }
     }
 

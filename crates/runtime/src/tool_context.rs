@@ -41,4 +41,6 @@ pub struct ToolContext<'a> {
     pub channel_type: Option<&'a str>,
     pub max_tool_level: PermissionLevel,
     pub is_clone_admin: bool,
+    /// Public base URL (e.g. `https://file.yinnho.cn`) for `view_url` on file outputs.
+    pub external_url: Option<&'a str>,
 }

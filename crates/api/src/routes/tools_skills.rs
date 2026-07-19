@@ -504,6 +504,7 @@ pub async fn mcp_http(
             channel_type: None,
             max_tool_level: types::tool::PermissionLevel::Write,
             is_clone_admin: false,
+            external_url: state.kernel.config.external_url.as_deref(),
         };
         let result = runtime::tool_runner::execute_tool(
             "mcp-http", tool_name, &arguments, &tool_ctx,

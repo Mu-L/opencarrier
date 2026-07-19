@@ -59,7 +59,7 @@ impl ToolModule for MediaTools {
             // --- Image generation tool ---
             ToolDefinition {
                 name: "image_generate".to_string(),
-                description: "Generate images from a text prompt. Uses the configured image modality. Generated images are saved to the user's output directory. Response includes base64 data for the first image — pass it directly to upload tools.".to_string(),
+                description: "Generate images from a text prompt. Uses the configured image modality. Images are saved under the user's output/ directory. The result always includes view_url / view_urls — paste those into the reply so the user can open the image in a browser. saved_to is the local filesystem path for tools that need a file path.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -75,7 +75,7 @@ impl ToolModule for MediaTools {
             // --- Video generation tool ---
             ToolDefinition {
                 name: "video_generate".to_string(),
-                description: "Generate a short video from a text prompt. Uses AI video generation (e.g. Kling, Runway). The generated video URL is returned — use weixin_send_video to send it to a WeChat user.".to_string(),
+                description: "Generate a short video from a text prompt. Uses AI video generation (e.g. Kling, Runway). Returns video_url (provider URL). When a local copy is saved, also returns view_url for the user to open in a browser.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -202,7 +202,18 @@ impl ToolModule for MediaTools {
 
             // Image generation
             "image_generate" => {
-                Some(tool_image_generate(input, ctx.brain, ctx.home_dir, ctx.agent_name, ctx.owner_id, ctx.sender_id).await)
+                Some(
+                    tool_image_generate(
+                        input,
+                        ctx.brain,
+                        ctx.home_dir,
+                        ctx.agent_name,
+                        ctx.owner_id,
+                        ctx.sender_id,
+                        ctx.external_url,
+                    )
+                    .await,
+                )
             }
 
             // Video generation
@@ -212,7 +223,18 @@ impl ToolModule for MediaTools {
 
             // TTS/STT
             "text_to_speech" => {
-                Some(tool_text_to_speech(input, ctx.brain, ctx.home_dir, ctx.agent_name, ctx.owner_id, ctx.sender_id).await)
+                Some(
+                    tool_text_to_speech(
+                        input,
+                        ctx.brain,
+                        ctx.home_dir,
+                        ctx.agent_name,
+                        ctx.owner_id,
+                        ctx.sender_id,
+                        ctx.external_url,
+                    )
+                    .await,
+                )
             }
             "speech_to_text" => {
                 Some(tool_speech_to_text(input, ctx.brain, ctx.workspace_root).await)
@@ -243,7 +265,18 @@ impl ToolModule for MediaTools {
 
             // Canvas / A2UI
             "canvas_present" => {
-                Some(tool_canvas_present(input, ctx.workspace_root, ctx.home_dir, ctx.agent_name, ctx.owner_id, ctx.sender_id).await)
+                Some(
+                    tool_canvas_present(
+                        input,
+                        ctx.workspace_root,
+                        ctx.home_dir,
+                        ctx.agent_name,
+                        ctx.owner_id,
+                        ctx.sender_id,
+                        ctx.external_url,
+                    )
+                    .await,
+                )
             }
 
             _ => None,
@@ -595,8 +628,9 @@ async fn tool_image_generate(
     brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
     home_dir: Option<&Path>,
     agent_name: Option<&str>,
-    _owner_id: Option<&str>,
+    owner_id: Option<&str>,
     sender_id: Option<&str>,
+    external_url: Option<&str>,
 ) -> Result<String, String> {
     let brain = brain.ok_or("Brain not available. Ensure image modality is configured.")?;
     let prompt = input["prompt"]
@@ -680,16 +714,19 @@ async fn tool_image_generate(
     }
 
     // Save images to workspace output directory if available
-    let saved_paths = if let (Some(hd), Some(an)) = (home_dir, agent_name) {
-        // Use workspaces/{agent_name}/{sender}/output for per-sender isolation
+    let mut saved_paths: Vec<String> = Vec::new();
+    let mut rel_paths: Vec<String> = Vec::new();
+    if let (Some(hd), Some(an)) = (home_dir, agent_name) {
+        // Match file_write / files/view: workspaces/{agent}/senders/{owner}[/users/{sid}]/output
         let sid = sender_id.unwrap_or("shared");
-        let output_dir = types::config::sender_data_dir(hd, sid, an, None).join("output");
+        let oid = owner_id.unwrap_or(sid);
+        let output_dir =
+            types::config::sender_data_dir(hd, oid, an, Some(sid)).join("output");
         tokio::fs::create_dir_all(&output_dir)
             .await
             .map_err(|e| format!("Failed to create output dir: {e}"))?;
 
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
-        let mut paths = Vec::new();
 
         for (i, image) in images.iter().enumerate() {
             let filename = if images.len() == 1 {
@@ -724,12 +761,11 @@ async fn tool_image_generate(
                 .await
                 .map_err(|e| format!("Failed to write image: {e}"))?;
 
-            paths.push(output_dir.join(&filename).to_string_lossy().to_string());
+            // Absolute path for tools that need direct filesystem access (e.g. upload).
+            saved_paths.push(path.to_string_lossy().to_string());
+            rel_paths.push(format!("output/{filename}"));
         }
-        paths
-    } else {
-        Vec::new()
-    };
+    }
 
     // Also save to the uploads temp dir so the web UI can serve them via
     // GET /api/uploads/{file_id}. Each image gets a UUID filename.
@@ -799,9 +835,32 @@ async fn tool_image_generate(
     let mut response = serde_json::Map::new();
     response.insert("images_generated".into(), serde_json::json!(images.len()));
     response.insert("saved_to".into(), serde_json::json!(saved_paths));
+    response.insert("rel_paths".into(), serde_json::json!(rel_paths));
     response.insert("image_urls".into(), serde_json::json!(image_urls));
     response.insert("temp_paths".into(), serde_json::json!(temp_paths));
     response.insert("provider".into(), serde_json::json!("brain"));
+
+    // System capability: public browser links for every saved image.
+    if let (Some(an), Some(sid)) = (agent_name, sender_id) {
+        let view_urls = crate::file_view::build_file_view_urls(
+            external_url,
+            an,
+            &rel_paths,
+            sid,
+        );
+        if !view_urls.is_empty() {
+            response.insert("view_urls".into(), serde_json::json!(view_urls.clone()));
+            if let Some(first) = view_urls.first() {
+                response.insert("view_url".into(), serde_json::json!(first));
+            }
+            response.insert(
+                "note".into(),
+                serde_json::json!(
+                    "Paste view_url / view_urls into the user reply so they can open the image. saved_to is the local path for tools that need a filesystem path."
+                ),
+            );
+        }
+    }
 
     // Only include base64 if explicitly requested (for small images or debugging)
     if include_base64 {
@@ -809,7 +868,9 @@ async fn tool_image_generate(
     } else {
         response.insert("base64".into(), serde_json::json!(null));
         response.insert("base64_truncated".into(), serde_json::json!(true));
-        response.insert("note".into(), serde_json::json!("base64 omitted to avoid response truncation. Use include_base64=true if needed, or use saved_to/temp_paths paths directly."));
+        if !response.contains_key("note") {
+            response.insert("note".into(), serde_json::json!("base64 omitted to avoid response truncation. Use include_base64=true if needed, or use saved_to/temp_paths paths directly."));
+        }
     }
 
     serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
@@ -888,6 +949,7 @@ async fn tool_text_to_speech(
     agent_name: Option<&str>,
     owner_id: Option<&str>,
     sender_id: Option<&str>,
+    external_url: Option<&str>,
 ) -> Result<String, String> {
     let brain = brain.ok_or("Brain not available. Ensure tts modality is configured.")?;
     let text = input["text"].as_str().ok_or("Missing 'text' parameter")?;
@@ -932,7 +994,9 @@ async fn tool_text_to_speech(
     };
 
     // Save audio to per-sender output directory
-    let saved_path = if let (Some(hd), Some(an)) = (home_dir, agent_name) {
+    let mut saved_path: Option<String> = None;
+    let mut view_url: Option<String> = None;
+    if let (Some(hd), Some(an)) = (home_dir, agent_name) {
         let sid = sender_id.ok_or("Cannot save audio: no sender context")?;
         let oid = owner_id.unwrap_or(sid);
         let rel_dir = types::config::sender_relative_path(oid, an, Some(sid), "output");
@@ -949,18 +1013,24 @@ async fn tool_text_to_speech(
             .await
             .map_err(|e| format!("Failed to write audio file: {e}"))?;
 
-        Some(format!("{}/{}", rel_dir, filename))
-    } else {
-        None
-    };
+        let rel = format!("output/{filename}");
+        saved_path = Some(rel.clone());
+        view_url = crate::file_view::build_file_view_url(external_url, an, &rel, sid);
+    }
 
-    let response = serde_json::json!({
+    let mut response = serde_json::json!({
         "saved_to": saved_path,
         "format": format,
         "provider": "brain",
         "duration_estimate_ms": duration_ms,
         "size_bytes": audio_data.len(),
     });
+    if let Some(url) = view_url {
+        response
+            .as_object_mut()
+            .unwrap()
+            .insert("view_url".into(), serde_json::json!(url));
+    }
 
     serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
 }
@@ -1229,6 +1299,7 @@ async fn tool_canvas_present(
     agent_name: Option<&str>,
     owner_id: Option<&str>,
     sender_id: Option<&str>,
+    external_url: Option<&str>,
 ) -> Result<String, String> {
     let html = input["html"].as_str().ok_or("Missing 'html' parameter")?;
     let title = input["title"].as_str().unwrap_or("Canvas");
@@ -1268,12 +1339,23 @@ async fn tool_canvas_present(
         .await
         .map_err(|e| format!("Failed to save canvas: {e}"))?;
 
-    let response = serde_json::json!({
+    let rel = format!("output/{filename}");
+    let sid = sender_id.unwrap_or("");
+    let mut response = serde_json::json!({
         "canvas_id": canvas_id,
         "title": title,
         "saved_to": format!("{}/{}", rel_dir, filename),
+        "rel_path": rel,
         "size_bytes": full_html.len(),
     });
+    if let Some(an) = agent_name {
+        if let Some(url) = crate::file_view::build_file_view_url(external_url, an, &rel, sid) {
+            response
+                .as_object_mut()
+                .unwrap()
+                .insert("view_url".into(), serde_json::json!(url));
+        }
+    }
 
     serde_json::to_string_pretty(&response).map_err(|e| format!("Serialize error: {e}"))
 }

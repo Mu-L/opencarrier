@@ -28,6 +28,38 @@ use crate::workspace::append_daily_memory_log;
 /// one openid, two months, a dozen unrelated tasks in one 45-message session).
 const SESSION_STALE_SECS: i64 = 12 * 60 * 60; // 12 hours
 
+/// List files under `output_dir` as relative paths (`foo.md`, `subdir/a.png`).
+fn list_output_rel_paths(output_dir: &Path) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    if !output_dir.is_dir() {
+        return out;
+    }
+    fn walk(dir: &Path, prefix: &str, out: &mut std::collections::HashSet<String>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let rel = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, &rel, out);
+            } else if path.is_file() {
+                out.insert(rel);
+            }
+        }
+    }
+    walk(output_dir, "", &mut out);
+    out
+}
+
 /// Shared preparation context for LLM agent execution.
 ///
 /// Both `send_message_streaming` and `execute_llm_agent` perform the same
@@ -1108,18 +1140,18 @@ impl CarrierKernel {
         let ctx_window: Option<usize> = None;
 
         // Snapshot output directory before the agent loop to detect new files
+        // (recursive relative paths under output/, for automatic view_url append).
         let output_dir_before = sender_id.as_ref().and_then(|sid| {
             manifest.workspace.as_ref().map(|_ws| {
                 let oid = owner_id.as_deref().unwrap_or(sid);
-                let dir = types::config::sender_data_dir(&self.config.home_dir, oid, &manifest.name, Some(sid)).join("output");
-                let existing = std::fs::read_dir(&dir)
-                    .ok()
-                    .map(|rd| {
-                        rd.filter_map(|e| e.ok())
-                            .map(|e| e.file_name().to_string_lossy().to_string())
-                            .collect::<std::collections::HashSet<String>>()
-                    })
-                    .unwrap_or_default();
+                let dir = types::config::sender_data_dir(
+                    &self.config.home_dir,
+                    oid,
+                    &manifest.name,
+                    Some(sid),
+                )
+                .join("output");
+                let existing = list_output_rel_paths(&dir);
                 (dir, existing)
             })
         });
@@ -1280,25 +1312,34 @@ impl CarrierKernel {
         if let (Some((dir, before)), Some(ref sid), Some(ref ext_url)) =
             (&output_dir_before, &sender_id, &self.config.external_url)
         {
-            let after: std::collections::HashSet<String> = std::fs::read_dir(dir)
-                .ok()
-                .map(|rd| {
-                    rd.filter_map(|e| e.ok())
-                        .map(|e| e.file_name().to_string_lossy().to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let new_files: Vec<&String> = after.iter().filter(|f| !before.contains(*f)).collect();
+            let after = list_output_rel_paths(dir);
+            let mut new_files: Vec<String> = after
+                .into_iter()
+                .filter(|f| !before.contains(f))
+                .collect();
+            new_files.sort();
             if !new_files.is_empty() {
-                let base = ext_url.trim_end_matches('/');
-                let aid = agent_id.to_string();
-                let links: Vec<String> = new_files
-                    .iter()
-                    .map(|f| format!("{base}/api/agents/{aid}/output/{f}?sender_id={sid}"))
-                    .collect();
-                result.response.push_str("\n\n📎 生成的文件:\n");
-                for link in &links {
-                    result.response.push_str(&format!("- {link}\n"));
+                // Prefer /api/files/view/{agent_name}/… so links work like the file explorer.
+                let mut links: Vec<String> = Vec::new();
+                for rel in &new_files {
+                    let under_sender = format!("output/{rel}");
+                    if let Some(url) = runtime::file_view::build_file_view_url(
+                        Some(ext_url.as_str()),
+                        &manifest.name,
+                        &under_sender,
+                        sid,
+                    ) {
+                        links.push(url);
+                    }
+                }
+                // Avoid duplicating links the agent already pasted from tool view_url.
+                let existing = result.response.clone();
+                links.retain(|u| !existing.contains(u));
+                if !links.is_empty() {
+                    result.response.push_str("\n\n📎 生成的文件:\n");
+                    for link in &links {
+                        result.response.push_str(&format!("- {link}\n"));
+                    }
                 }
             }
         }

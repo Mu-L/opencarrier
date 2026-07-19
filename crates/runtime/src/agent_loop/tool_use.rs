@@ -175,6 +175,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         let effective_exec_policy = manifest.exec_policy.as_ref();
 
         let home_dir_buf = kernel.and_then(|k| k.home_dir());
+        let external_url_buf = kernel.and_then(|k| k.external_url());
 
         // Check if sender is a clone admin
         let is_clone_admin = if let (Some(sid), Some(root)) = (sender_id, workspace_root) {
@@ -212,6 +213,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             channel_type,
             max_tool_level: manifest.max_tool_level,
             is_clone_admin,
+            external_url: external_url_buf.as_deref(),
         };
 
         // Timeout-wrapped execution

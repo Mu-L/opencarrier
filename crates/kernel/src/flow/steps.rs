@@ -199,6 +199,7 @@ impl CarrierKernel {
             channel_type,
             max_tool_level: manifest.max_tool_level,
             is_clone_admin,
+            external_url: self.config.external_url.as_deref(),
         };
 
         let tool_use_id = format!("flow:{}:{}", step.id, tool_name);

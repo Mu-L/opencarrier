@@ -572,6 +572,10 @@ impl KernelHandle for CarrierKernel {
         Some(self.config.home_dir.clone())
     }
 
+    fn external_url(&self) -> Option<String> {
+        self.config.external_url.clone()
+    }
+
     fn resolve_agent_workspace(&self, agent_name: &str) -> Option<String> {
         // Accept either agent name or UUID string — callers (esp. cron) may pass
         // either form. Workspace path still comes from the manifest (name-based dir).

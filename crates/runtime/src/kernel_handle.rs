@@ -200,6 +200,11 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
+    /// Public base URL for constructing file `view_url`s (e.g. `https://file.yinnho.cn`).
+    fn external_url(&self) -> Option<String> {
+        None
+    }
+
     /// Deliver rich content by key for an agent, without running an agent loop.
     /// Scripts/cron call this to send `[DELIVER:key]`-equivalent content directly
     /// to a user on a given channel/bot. Default implementation returns an error
