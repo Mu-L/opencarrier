@@ -285,10 +285,9 @@ impl CarrierKernel {
                 step.id, tool_name, result.content
             ))));
         }
-        // Tool content is often JSON; parse to a structured value when possible,
-        // else keep the raw string. shell_exec wraps as:
-        //   Exit code: 0\n\nSTDOUT:\n{json}\nSTDERR:\n
-        // so peel STDOUT before parsing so user_reply / view_url are available.
+        // Tool content is often JSON; parse when possible, else keep raw string.
+        // shell_exec wraps stdout as `Exit code / STDOUT / STDERR` — peel that
+        // so structured fields from the tool remain available to the flow.
         let out_val = parse_tool_step_content(&result.content);
         // Tool execution uses no LLM tokens; count as one iteration.
         Ok((out_val, TokenUsage::default(), 1))
@@ -342,12 +341,12 @@ mod parse_tool_content_tests {
         let content = r#"Exit code: 0
 
 STDOUT:
-{"ok": true, "user_reply": "海报做好了\nhttps://x", "view_url": "https://x"}
+{"ok": true, "user_reply": "done\nhttps://example.test/file", "result_id": "42"}
 STDERR:
 "#;
         let v = parse_tool_step_content(content);
-        assert_eq!(v["view_url"], "https://x");
-        assert!(v["user_reply"].as_str().unwrap().contains("海报"));
+        assert_eq!(v["result_id"], "42");
+        assert!(v["user_reply"].as_str().unwrap().contains("done"));
     }
 
     #[test]

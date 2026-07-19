@@ -215,26 +215,16 @@ pub(crate) fn eval_when(expr: &str, outputs: &HashMap<String, Value>, input: &Va
 pub(crate) fn value_to_string(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
-        // Tool/JSON step outputs: prefer a ready-made user-facing field so flows
-        // can end on a tool step without a second LLM "deliver" step.
+        // Convention for tool/JSON step outputs: if the tool returns an object
+        // with a standard user-facing string field, use that as channel text so
+        // a flow can end on a tool step without a second LLM deliver step.
+        // Domain wording belongs in the tool/flow (e.g. scripts), not here.
         Value::Object(map) => {
             for key in ["user_reply", "reply", "message", "text"] {
                 if let Some(s) = map.get(key).and_then(|x| x.as_str()) {
                     if !s.trim().is_empty() {
                         return s.to_string();
                     }
-                }
-            }
-            if let Some(url) = map.get("view_url").and_then(|x| x.as_str()) {
-                if !url.is_empty() {
-                    let path = map
-                        .get("saved_to")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("");
-                    if path.is_empty() {
-                        return format!("做好了：\n{url}");
-                    }
-                    return format!("做好了：\n{url}");
                 }
             }
             v.to_string()
