@@ -121,16 +121,58 @@ fn find_file_recursive(dir: &std::path::Path, filename: &str) -> Option<String> 
     best.map(|(p, _)| p)
 }
 
-/// Resolve the article title: first non-empty line of the sibling `.md` file
-/// (with leading `#` stripped), else the html filename stem.
+/// Extract the title from a leading `<!-- ... -->` META header block written by
+/// article-writer etc. Recognizes `META_TITLE:` (the writer's format) and
+/// `title:`. Returns None if there is no comment block or it has no title field.
+fn extract_meta_title(content: &str) -> Option<String> {
+    let start = content.find("<!--")?;
+    let rest = &content[start..];
+    let end = rest.find("-->")?;
+    let block = &rest[4..end];
+    for line in block.lines() {
+        let trimmed = line.trim();
+        let val = trimmed
+            .strip_prefix("META_TITLE:")
+            .or_else(|| trimmed.strip_prefix("title:"))
+            .map(|s| s.trim());
+        if let Some(v) = val {
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Resolve the article title. Prefer a `META_TITLE:` field in a leading
+/// `<!-- ... -->` META header block; fall back to the first markdown heading or
+/// content line of the sibling `.md` (skipping the META comment block and
+/// `key: value` metadata lines); finally the HTML `<title>` tag or filename stem.
 fn resolve_article_title(html_path: &str) -> String {
     let p = std::path::Path::new(html_path);
     let md = p.with_extension("md");
     if let Ok(content) = std::fs::read_to_string(&md) {
-        // Skip metadata-like lines (e.g. "流水线ID: ...") and find the first
-        // markdown heading (# title) or the first non-metadata content line.
+        // 1. Leading META header block: `<!--\nMETA_TITLE: ...\n-->`.
+        if let Some(title) = extract_meta_title(&content) {
+            return title;
+        }
+        // 2. First markdown heading or real content line, skipping HTML comment
+        //    blocks (which may span multiple lines) and `key: value` metadata.
+        let mut in_comment = false;
         for line in content.lines() {
             let trimmed = line.trim();
+            if in_comment {
+                if trimmed.contains("-->") {
+                    in_comment = false;
+                }
+                continue;
+            }
+            if trimmed.starts_with("<!--") {
+                if !trimmed.contains("-->") {
+                    in_comment = true;
+                }
+                continue;
+            }
             if trimmed.is_empty() {
                 continue;
             }
@@ -341,5 +383,68 @@ async fn handle_publish_marker(
             }
         })
         .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_meta_title, resolve_article_title};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// Write `content` to a unique temp `article.md` and return its path. The
+    /// `.html` sibling (which `resolve_article_title` is given) need not exist:
+    /// the resolver reads the `.md` first.
+    fn tmp_md(content: &str) -> std::path::PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("oc_publish_test_{n}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let md = dir.join("article.md");
+        std::fs::write(&md, content).unwrap();
+        md
+    }
+
+    #[test]
+    fn extract_meta_title_prefers_meta_title_field() {
+        let content = "<!--\nMETA_TITLE: 我的标题\nMETA_AUTHOR: 小载\n-->\n\n# 正文";
+        assert_eq!(extract_meta_title(content).unwrap(), "我的标题");
+    }
+
+    #[test]
+    fn extract_meta_title_accepts_plain_title_field() {
+        let content = "<!-- META\ntitle: 备选格式\n-->";
+        assert_eq!(extract_meta_title(content).unwrap(), "备选格式");
+    }
+
+    #[test]
+    fn extract_meta_title_none_without_title_field() {
+        assert!(extract_meta_title("no comment here").is_none());
+        // Block present but no title field.
+        assert!(extract_meta_title("<!--\nMETA_AUTHOR: x\n-->").is_none());
+    }
+
+    #[test]
+    fn resolve_title_from_meta_block() {
+        let md = tmp_md("<!--\nMETA_TITLE: 以前怕你不卖芯片\nMETA_AUTHOR: 小载\n-->\n\n# 别的标题\n正文");
+        let html = md.with_extension("html");
+        assert_eq!(resolve_article_title(html.to_str().unwrap()), "以前怕你不卖芯片");
+    }
+
+    #[test]
+    fn resolve_title_skips_comment_block_to_heading() {
+        // Regression: a leading `<!--` (no META_TITLE) must NOT become the
+        // title; the comment block is skipped and the `#` heading is used.
+        // Previously this returned `<!--`, producing draft titles like `《<!--》`.
+        let md = tmp_md("<!--\nMETA_AUTHOR: 小载\n-->\n\n# 真正的标题\n正文");
+        let html = md.with_extension("html");
+        assert_eq!(resolve_article_title(html.to_str().unwrap()), "真正的标题");
+    }
+
+    #[test]
+    fn resolve_title_from_heading_without_meta() {
+        let md = tmp_md("# 标题直接开头\n\n正文");
+        let html = md.with_extension("html");
+        assert_eq!(resolve_article_title(html.to_str().unwrap()), "标题直接开头");
     }
 }
