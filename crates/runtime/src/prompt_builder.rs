@@ -859,8 +859,7 @@ const EVOLUTION_PROMPT: &str = "\
 1. **已匹配 flow**：只用该 flow 声明的 tools + body 步骤。**禁止**对声明内工具再 `tool_search`。
 2. **路径未知**（无匹配 flow / 声明不够）：才用 `tool_search` 或试探；这是例外，不是常态。
 3. **探索成功后必须固化**：用 `flow_update` 把**真正管用的工具名**写进 frontmatter `tools`，把硬规则/步骤写进 body。下次直接走处方，不再找工具。
-   - `flow_update(name, tools=[...], body=\"...\")` — tools 与 body 可只改其一
-   - 系统共享 flow 时会在你的 workspace 建私有副本（copy-on-write），不改系统共享文件
+   - `flow_update(name, tools=[...], body=\"...\")` — tools 与 body 可只改其一；**只能改 workspace 私有 flow，系统共享 flow 只读**（不再 copy-on-write，需人手工更新或用 flow_create 建私有变体）
 
 ### 其它记忆
 - **kv_set / kv_get**：用户账号、偏好、密钥等事实（抽屉）；不是替代 flow 的工具列表

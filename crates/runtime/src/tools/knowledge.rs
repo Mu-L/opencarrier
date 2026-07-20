@@ -144,7 +144,7 @@ impl ToolModule for KnowledgeTools {
             },
             ToolDefinition {
                 name: "flow_update".to_string(),
-                description: "Update an existing flow after a successful discovery path. Can replace body and/or tools: frontmatter so next runs inject the proven tools without tool_search. Shared system flows are copy-on-write into the workspace private flows/.".to_string(),
+                description: "Update an existing PRIVATE flow (body and/or tools: frontmatter) to固化 a proven tool path so next runs inject it without tool_search. Only workspace-private flows can be updated; shared system flows are READ-ONLY (no copy-on-write) — request a human to update shared flows, or use flow_create for a clone-specific variant.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -689,15 +689,20 @@ async fn tool_flow_update(
 
     let private_flows = root.join("flows");
     let shared_flows = types::config::home_dir().join("flows");
-    let filename = lifecycle::evolution::sanitize_filename(name);
 
-    // Prefer private workspace flow; fall back to shared (copy-on-write).
+    // Private workspace flows can be updated in place. Shared system flows are
+    // READ-ONLY: agents must NOT fork them via copy-on-write — evolve shared
+    // flows through the human platform path instead.
     let private_path = find_flow_path(&private_flows, name).await;
     let shared_path = find_flow_path(&shared_flows, name).await;
 
-    let (source_path, cow_to_private) = match (&private_path, &shared_path) {
-        (Some(p), _) => (p.clone(), false),
-        (None, Some(p)) => (p.clone(), true),
+    let source_path = match (&private_path, &shared_path) {
+        (Some(p), _) => p.clone(),
+        (None, Some(_)) => {
+            return Err(format!(
+                "Flow '{name}' is a shared system flow and read-only. Agents cannot modify shared flows (copy-on-write is disabled). Ask a human to update it in the platform flows source, or create a clone-specific variant with flow_create."
+            ));
+        }
         (None, None) => {
             return Err(format!(
                 "Flow '{name}' not found in workspace or shared flows."
@@ -720,37 +725,15 @@ async fn tool_flow_update(
     let body = new_body.unwrap_or(old_body.as_str());
     let updated = format!("---\n{}\n---\n\n{}", fm.trim(), body.trim_start());
 
-    // Write target: private path if exists; else COW into workspace/flows/{name}.md
-    let target = if cow_to_private {
-        tokio::fs::create_dir_all(&private_flows)
-            .await
-            .map_err(|e| format!("Failed to create private flows dir: {e}"))?;
-        // Prefer dir format for new private overlays of shared dir-based flows
-        if source_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n == "flow.md" || n == "SKILL.md")
-        {
-            let dir = private_flows.join(&filename);
-            tokio::fs::create_dir_all(&dir)
-                .await
-                .map_err(|e| format!("Failed to create flow dir: {e}"))?;
-            dir.join("flow.md")
-        } else {
-            private_flows.join(format!("{filename}.md"))
-        }
-    } else {
-        source_path
-    };
+    // Write in place at the private path (shared flows are refused above, so
+    // source_path is always a private workspace flow).
+    let target = source_path;
 
     tokio::fs::write(&target, &updated)
         .await
         .map_err(|e| format!("Failed to write flow: {e}"))?;
 
     let mut notes = Vec::new();
-    if cow_to_private {
-        notes.push("private overlay created (shared flow left unchanged)".to_string());
-    }
     if let Some(ref tools) = new_tools {
         notes.push(format!("tools=[{}]", tools.join(", ")));
     }
@@ -1199,7 +1182,7 @@ mod flow_evolution_tests {
     }
 
     #[tokio::test]
-    async fn flow_update_tools_and_cow_from_shared() {
+    async fn flow_update_shared_flow_is_readonly() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         // Point OPENCARRIER_HOME at temp so shared flows resolve under it
@@ -1218,15 +1201,12 @@ mod flow_evolution_tests {
             "tools": ["file_read", "file_write"],
             "body": "new hard rules\n"
         });
-        let msg = tool_flow_update(&input, Some(tmp.path()))
+        let err = tool_flow_update(&input, Some(tmp.path()))
             .await
-            .expect("update");
-        assert!(msg.contains("private overlay") || msg.contains("updated"));
-        let private = tmp.path().join("flows/demo.md");
-        assert!(private.exists(), "COW private flow");
-        let content = std::fs::read_to_string(&private).unwrap();
-        assert!(content.contains("file_write"));
-        assert!(content.contains("new hard rules"));
+            .expect_err("shared flow must be read-only (no copy-on-write)");
+        assert!(err.contains("read-only"), "got: {err}");
+        // No private overlay created — shared flows are never forked.
+        assert!(!tmp.path().join("flows/demo.md").exists(), "no COW private flow");
         // Shared unchanged
         let shared_content = std::fs::read_to_string(shared.join("demo.md")).unwrap();
         assert!(shared_content.contains("old body"));
