@@ -8,6 +8,7 @@ tools:
   - web_search
   - web_fetch
 ---
+
 # Outline Writer
 
 根据素材撰写文章大纲。本 skill 是系统级共享工作流；写作风格从分身 system prompt 的 knowledge(writing-style) 读取，分身各自定义语气和结构偏好。
@@ -40,6 +41,28 @@ web_search(q="关键词", engines=["sogou_wechat"], fetch_top=3)
 
 **所有 required 参数必须在一次调用中全部传齐。** 缺任何一个 required 字段都会报错 `missing field xxx`。
 
+## ⚠️ META 头规范（必须遵守）
+
+所有流水线中间文件（大纲.md、正文.md）**必须以 HTML 注释 META 头开头**，结构化记录文章元信息。这条规则贯穿全流水线，不可跳过。
+
+META 头格式（放在文件**最开头**，正文之前）：
+
+```html
+<!--
+META_TITLE: 文章标题（从备选中选定一个，不要带书名号外的多余字符）
+META_AUTHOR: 小载
+META_DIGEST: 一句话摘要，30-60字，用于公众号草稿摘要字段
+META_TYPE: 行业分析 | 热点评论 | 产品文章 | 深度教程
+META_PIPELINE: pipeline-YYYYMMDD-topic
+-->
+```
+
+**规则：**
+- META 头是 `<!-- -->` HTML 注释，不会被 Markdown 渲染，不影响排版
+- `META_TITLE` 必须是**最终确定的标题**，不是备选
+- `META_DIGEST` 是给公众号草稿箱用的摘要，不是文章导语
+- **禁止**把 `流水线ID:` 写在正文区域——它只活在 META 头里
+
 ## Process
 
 ### 1. 读取素材
@@ -60,10 +83,34 @@ knowledge/writing-style 可能不存在，读不到就跳过，不影响流程�
 
 遵循 system prompt 中的 writing-style，生成大纲结构：标题备选（3个）、核心论点、文章结构、关键数据点、金句预留位、写作风格设定。
 
-### 4. 保存大纲
+### 4. 保存大纲（必须带 META 头）
 
 ```
-file_write(path="output/<pipeline_id>/大纲.md", content="流水线ID: <pipeline_id>\n\n大纲内容")
+file_write(
+  path="output/<pipeline_id>/大纲.md",
+  content="""
+<!--
+META_TITLE: 从备选中选定的最终标题
+META_AUTHOR: 小载
+META_DIGEST: 一句话摘要30-60字
+META_TYPE: 行业分析
+META_PIPELINE: <pipeline_id>
+-->
+
+# 大纲
+
+## 标题备选
+1. xxx
+2. xxx
+3. xxx
+
+## 核心论点
+...
+
+## 文章结构
+...
+"""
+)
 ```
 
 ### 5. 输出结果
@@ -78,4 +125,6 @@ file_write(path="output/<pipeline_id>/大纲.md", content="流水线ID: <pipelin
 
 - **流水线 ID 必须从触发 message 里提取，所有路径用它派生**
 - **所有中间数据存 `output/<pipeline_id>/` 目录，不用 knowledge_add**
+- **大纲.md 必须以 `<!-- META -->` 头开头，标题/作者/摘要/类型/流水线ID 全部在 META 头里**
+- **禁止在正文区域写 `流水线ID:`**——它只活在 META 头里
 - 大纲风格严格遵循 system prompt 中的 writing-style
