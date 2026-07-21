@@ -16,6 +16,7 @@ const SKIP_EXTRACT: &[&str] = &["agent.toml", "AGENT.json"];
 const SKIP_PACK: &[&str] = &[
     "agent.toml",
     "AGENT.json",
+    "admins.json",
     "output",
     "sessions",
     "history",
@@ -201,7 +202,9 @@ pub fn pack_workspace_as_agx(workspace: &Path) -> Result<Vec<u8>> {
 
             // Skip runtime files/directories
             let top = rel_str.split('/').next().unwrap_or(&rel_str);
-            if SKIP_PACK.contains(&top) || top.starts_with("test-") || top.ends_with(".bak") {
+            if SKIP_PACK.contains(&top) || crate::manifest::is_test_dir(top)
+                || crate::manifest::is_bak(top)
+            {
                 continue;
             }
 

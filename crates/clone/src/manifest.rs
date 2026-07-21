@@ -13,10 +13,11 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
 /// Runtime dirs/files excluded from the manifest (mirror `extractor::SKIP_PACK`
-/// plus `.dup/` VCS state dir).
+/// plus `.dup/` VCS state dir + `admins.json` deployment-specific admin list).
 const SKIP: &[&str] = &[
     "agent.toml",
     "AGENT.json",
+    "admins.json",
     "output",
     "sessions",
     "history",
@@ -27,6 +28,19 @@ const SKIP: &[&str] = &[
     ".lifecycle",
     ".dup",
 ];
+
+/// True if a top-level entry is a test-workspace dir: `test`, `test2`, ... or
+/// `test-foo`. (Catches `test`/`testN` that the old `test-` prefix missed.)
+pub fn is_test_dir(top: &str) -> bool {
+    top == "test"
+        || top.starts_with("test-")
+        || (top.starts_with("test") && top[4..].chars().all(|c| c.is_ascii_digit()))
+}
+
+/// True if a file name is a backup: `foo.bak` or `foo.bak.<timestamp>`.
+pub fn is_bak(top: &str) -> bool {
+    top.ends_with(".bak") || top.contains(".bak.")
+}
 
 /// A file-level snapshot of a workspace's definition layer.
 ///
@@ -83,8 +97,8 @@ fn walk(base: &Path, cur: &Path, files: &mut BTreeMap<String, String>) -> Result
             let rel = path.strip_prefix(base).unwrap_or(&path);
             let rel_str = rel.to_string_lossy().replace('\\', "/");
             let top = rel_str.split('/').next().unwrap_or(&rel_str);
-            // Mirror extractor.rs:204 skip logic (runtime layer + test-/.bak).
-            if SKIP.contains(&top) || top.starts_with("test-") || top.ends_with(".bak") {
+            // Skip runtime layer + test-workspace dirs + backup files.
+            if SKIP.contains(&top) || is_test_dir(top) || is_bak(top) {
                 continue;
             }
             let data = std::fs::read(&path)

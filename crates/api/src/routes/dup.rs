@@ -24,6 +24,7 @@ use std::sync::Arc;
 const SKIP: &[&str] = &[
     "agent.toml",
     "AGENT.json",
+    "admins.json",
     "output",
     "sessions",
     "history",
@@ -191,7 +192,7 @@ fn safe_path(workspace: &StdPath, rel: &str) -> Result<PathBuf, (StatusCode, Str
         return Err((StatusCode::FORBIDDEN, "Path traversal denied".into()));
     }
     let top = rel.split('/').next().unwrap_or(rel);
-    if SKIP.contains(&top) || top.starts_with("test-") || top.ends_with(".bak") {
+    if SKIP.contains(&top) || clone::is_test_dir(top) || clone::is_bak(top) {
         return Err((StatusCode::FORBIDDEN, "Path not in definition layer".into()));
     }
     let ws_canonical = match workspace.canonicalize() {
