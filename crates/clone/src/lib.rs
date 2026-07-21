@@ -5,10 +5,12 @@
 
 pub mod extractor;
 pub mod hub;
+pub mod manifest;
 pub mod manifest_builder;
 mod loader;
 
 pub use extractor::{extract_agx, pack_workspace_as_agx, scan_workspace_security};
+pub use manifest::{build_manifest, sha256_hex, Manifest};
 pub use loader::{
     format_string_array, parse_frontmatter, parse_string_array, parse_toml_description,
     TemplateManifest,

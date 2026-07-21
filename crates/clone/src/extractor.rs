@@ -201,7 +201,7 @@ pub fn pack_workspace_as_agx(workspace: &Path) -> Result<Vec<u8>> {
 
             // Skip runtime files/directories
             let top = rel_str.split('/').next().unwrap_or(&rel_str);
-            if SKIP_PACK.contains(&top) {
+            if SKIP_PACK.contains(&top) || top.starts_with("test-") || top.ends_with(".bak") {
                 continue;
             }
 

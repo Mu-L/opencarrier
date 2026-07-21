@@ -12,6 +12,7 @@ pub mod common;
 pub mod comms;
 pub mod config;
 pub mod cron;
+pub mod dup;
 pub mod files;
 pub mod hub;
 pub mod invites;
