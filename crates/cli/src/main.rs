@@ -7,7 +7,6 @@ mod acp;
 mod mcp;
 pub mod serve;
 mod setup;
-mod templates;
 mod ui;
 
 use api::server::read_daemon_info;
@@ -83,7 +82,6 @@ const AFTER_HELP: &str = "\
   opencarrier                    直接启动
 
 \x1b[1;36mExamples:\x1b[0m
-  opencarrier agent new coder      创建新的 coder agent
   opencarrier models list          查看可用模型
   opencarrier doctor               运行诊断检查
 
@@ -366,11 +364,6 @@ enum ConfigCommands {
 
 #[derive(Subcommand)]
 enum AgentCommands {
-    /// Spawn a new agent from a template (interactive or by name).
-    New {
-        /// Template name (e.g., "coder", "assistant"). Interactive picker if omitted.
-        template: Option<String>,
-    },
     /// Spawn a new agent from a manifest file.
     Spawn {
         /// Path to the agent manifest TOML file.
@@ -565,7 +558,6 @@ fn main() {
         Commands::Start => cmd_start(cli.config),
         Commands::Stop => cmd_stop(),
         Commands::Agent(sub) => match sub {
-            AgentCommands::New { template } => cmd_agent_new(cli.config, template),
             AgentCommands::Spawn { manifest } => cmd_agent_spawn(cli.config, manifest),
             AgentCommands::List { json } => cmd_agent_list(cli.config, json),
             AgentCommands::Kill { agent_id } => cmd_agent_kill(cli.config, &agent_id),
@@ -860,9 +852,7 @@ fn cmd_start(config: Option<PathBuf>) {
     if setup::needs_setup(&carrier_dir) {
         // Ensure directories exist
         std::fs::create_dir_all(&carrier_dir).ok();
-        for sub in ["data", "agents"] {
-            std::fs::create_dir_all(carrier_dir.join(sub)).ok();
-        }
+        std::fs::create_dir_all(carrier_dir.join("data")).ok();
         match setup::run_first_time_setup(&carrier_dir, "https://hub.aginx.net") {
             Ok(creds) => {
                 let _ = setup::save_login_secret(&carrier_dir, &creds.1);
@@ -1062,7 +1052,7 @@ fn cmd_agent_spawn(config: Option<PathBuf>, manifest_path: PathBuf) {
     if !manifest_path.exists() {
         ui::error_with_fix(
             &format!("Manifest file not found: {}", manifest_path.display()),
-            "Use `opencarrier agent new` to spawn from a template instead",
+            "Check the manifest path, or use `opencarrier hub install <name>` to install from DupHub",
         );
         std::process::exit(1);
     }
@@ -1433,117 +1423,6 @@ fn cmd_agent_restart(_config: Option<PathBuf>, name_or_id: &str) {
     }
 }
 
-fn cmd_agent_new(config: Option<PathBuf>, template_name: Option<String>) {
-    let all_templates = templates::load_all_templates();
-    if all_templates.is_empty() {
-        ui::error_with_fix(
-            "No agent templates found",
-            "Run `opencarrier init` to set up the agents directory",
-        );
-        std::process::exit(1);
-    }
-
-    // Resolve template: by name or interactive picker
-    let chosen = match template_name {
-        Some(ref name) => match all_templates.iter().find(|t| t.name == *name) {
-            Some(t) => t,
-            None => {
-                ui::error_with_fix(
-                    &format!("Template '{name}' not found"),
-                    "Run `opencarrier agent new` to see available templates",
-                );
-                std::process::exit(1);
-            }
-        },
-        None => {
-            ui::section("Available Agent Templates");
-            ui::blank();
-            for (i, t) in all_templates.iter().enumerate() {
-                let desc = if t.description.is_empty() {
-                    String::new()
-                } else {
-                    format!("  {}", t.description)
-                };
-                println!(
-                    "    {:>2}. {:<22}{}",
-                    i + 1,
-                    t.name,
-                    colored::Colorize::dimmed(desc.as_str())
-                );
-            }
-            ui::blank();
-            let choice = prompt_input("  Choose template [1]: ");
-            let idx = if choice.is_empty() {
-                0
-            } else {
-                choice
-                    .parse::<usize>()
-                    .unwrap_or(1)
-                    .saturating_sub(1)
-                    .min(all_templates.len() - 1)
-            };
-            &all_templates[idx]
-        }
-    };
-
-    // Spawn the agent
-    spawn_template_agent(config, chosen);
-}
-
-/// Spawn an agent from a template, via daemon or in-process.
-fn spawn_template_agent(config: Option<PathBuf>, template: &templates::AgentTemplate) {
-    if let Some(base) = find_daemon() {
-        let client = daemon_client();
-        let body = daemon_json(
-            client
-                .post(format!("{base}/api/agents"))
-                .json(&serde_json::json!({"manifest_toml": template.content}))
-                .send(),
-        );
-        if let Some(id) = body["agent_id"].as_str() {
-            ui::blank();
-            ui::success(&format!("Agent '{}' spawned", template.name));
-            ui::kv("ID", id);
-            if let Some(model) = body["model_name"].as_str() {
-                let provider = body["model_provider"].as_str().unwrap_or("?");
-                ui::kv("Model", &format!("{provider}/{model}"));
-            }
-            ui::blank();
-            ui::hint(&format!("Chat: opencarrier chat {}", template.name));
-        } else {
-            ui::error(&format!(
-                "Failed to spawn: {}",
-                body["error"].as_str().unwrap_or("Unknown error")
-            ));
-            std::process::exit(1);
-        }
-    } else {
-        let manifest: AgentManifest = toml::from_str(&template.content).unwrap_or_else(|e| {
-            ui::error_with_fix(
-                &format!("Failed to parse template '{}': {e}", template.name),
-                "The template manifest may be corrupted",
-            );
-            std::process::exit(1);
-        });
-        let kernel = boot_kernel(config);
-        match kernel.spawn_agent(manifest) {
-            Ok(id) => {
-                ui::blank();
-                ui::success(&format!("Agent '{}' spawned (in-process)", template.name));
-                ui::kv("ID", &id.to_string());
-                ui::blank();
-                ui::hint(&format!("Chat: opencarrier chat {}", template.name));
-                ui::hint("Note: Agent will be lost when this process exits");
-                ui::hint("For persistent agents, use `opencarrier start` first");
-            }
-            Err(e) => {
-                ui::error(&format!("Failed to spawn agent: {e}"));
-                std::process::exit(1);
-            }
-        }
-    }
-}
-
 fn cmd_status(config: Option<PathBuf>, json: bool) {
     if let Some(base) = find_daemon() {
         let client = daemon_client();
@@ -1652,9 +1531,7 @@ fn cmd_doctor(json: bool, repair: bool) {
             if answer.is_empty() || answer.starts_with('y') || answer.starts_with('Y') {
                 if std::fs::create_dir_all(&carrier_dir).is_ok() {
                     restrict_dir_permissions(&carrier_dir);
-                    for sub in ["data", "agents"] {
-                        let _ = std::fs::create_dir_all(carrier_dir.join(sub));
-                    }
+                    let _ = std::fs::create_dir_all(carrier_dir.join("data"));
                     if !json {
                         ui::check_ok("Created OpenCarrier directory");
                     }
@@ -1909,43 +1786,6 @@ fn cmd_doctor(json: bool, repair: bool) {
             }
         }
 
-        // --- Check 8: Agent manifests parse correctly ---
-        let agents_dir = carrier_dir.join("agents");
-        if agents_dir.exists() {
-            let mut agent_errors = Vec::new();
-            if let Ok(entries) = std::fs::read_dir(&agents_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("toml") {
-                        if let Ok(content) = std::fs::read_to_string(&path) {
-                            if let Err(e) = toml::from_str::<AgentManifest>(&content) {
-                                agent_errors.push((
-                                    path.file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy()
-                                        .to_string(),
-                                    e.to_string(),
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-            if agent_errors.is_empty() {
-                if !json {
-                    ui::check_ok("Agent manifests are valid");
-                }
-                checks.push(serde_json::json!({"check": "agent_manifests", "status": "ok"}));
-            } else {
-                for (file, err) in &agent_errors {
-                    if !json {
-                        ui::check_fail(&format!("Invalid manifest {file}: {err}"));
-                    }
-                }
-                checks.push(serde_json::json!({"check": "agent_manifests", "status": "fail", "errors": agent_errors.len()}));
-                all_ok = false;
-            }
-        }
     } else {
         if !json {
             ui::check_fail("Could not determine home directory");
