@@ -258,28 +258,6 @@ async fn poll_loop_inner(
     }
 }
 
-#[cfg(test)]
-mod dedup_tests {
-    use super::*;
-
-    #[test]
-    fn claim_inbound_drops_second_same_keys() {
-        // Isolate keys with unique bot id so parallel tests don't clash.
-        let bot = format!("test-bot-{}", uuid::Uuid::new_v4());
-        let keys = vec![format!("mid:{bot}:42"), format!("fp:{bot}:u:1:t3:abc")];
-        assert!(claim_inbound(&keys), "first claim should succeed");
-        assert!(!claim_inbound(&keys), "second claim should be dropped as duplicate");
-    }
-
-    #[test]
-    fn content_snippet_text_includes_len() {
-        let c = PluginContent::Text("你好世界".into());
-        let s = content_snippet(&c);
-        assert!(s.starts_with("t"), "{s}");
-        assert!(s.contains('4') || s.contains("你好"), "{s}");
-    }
-}
-
 /// Download a CDN media file, AES-decrypt it, and return raw bytes.
 async fn download_cdn_raw(
     http: &reqwest::Client,
@@ -755,4 +733,26 @@ fn respawn_watcher_loop(sender: mpsc::Sender<PluginMessage>, shutdown: Arc<Atomi
             }
         }
     });
+}
+
+#[cfg(test)]
+mod dedup_tests {
+    use super::*;
+
+    #[test]
+    fn claim_inbound_drops_second_same_keys() {
+        // Isolate keys with unique bot id so parallel tests don't clash.
+        let bot = format!("test-bot-{}", uuid::Uuid::new_v4());
+        let keys = vec![format!("mid:{bot}:42"), format!("fp:{bot}:u:1:t3:abc")];
+        assert!(claim_inbound(&keys), "first claim should succeed");
+        assert!(!claim_inbound(&keys), "second claim should be dropped as duplicate");
+    }
+
+    #[test]
+    fn content_snippet_text_includes_len() {
+        let c = PluginContent::Text("你好世界".into());
+        let s = content_snippet(&c);
+        assert!(s.starts_with("t"), "{s}");
+        assert!(s.contains('4') || s.contains("你好"), "{s}");
+    }
 }

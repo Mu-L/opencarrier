@@ -456,18 +456,6 @@ pub async fn upgrade_workspace_from_hub(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hub_template_key_prefers_id() {
-        assert_eq!(hub_template_key("ai-writer", Some("uuid-1")), "uuid-1");
-        assert_eq!(hub_template_key("ai-writer", Some("  ")), "ai-writer");
-        assert_eq!(hub_template_key("ai-writer", None), "ai-writer");
-    }
-}
-
 /// Publish (upload) a clone .agx to Hub.
 pub async fn publish_template(
     hub_url: &str,
@@ -810,4 +798,16 @@ fn format_stars(avg: f64) -> String {
         .map(|i| if i < full { "★" } else { "☆" })
         .collect::<Vec<_>>()
         .join("")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hub_template_key_prefers_id() {
+        assert_eq!(hub_template_key("ai-writer", Some("uuid-1")), "uuid-1");
+        assert_eq!(hub_template_key("ai-writer", Some("  ")), "ai-writer");
+        assert_eq!(hub_template_key("ai-writer", None), "ai-writer");
+    }
 }
