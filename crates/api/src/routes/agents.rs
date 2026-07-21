@@ -1235,12 +1235,19 @@ pub async fn verify_clone_access(
 /// can show a picker without authentication. Includes category,
 /// tags, color, and install_count for search/filter/sort.
 pub async fn share_list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Count senders per agent for install_count
+    // Count senders per agent for install_count.
+    // Routes store the agent *name* (sometimes a UUID for legacy hub-installed
+    // binds), so normalize each route value to its canonical agent_id here -
+    // otherwise the lookup below (by e.id) never matches and every agent shows 0.
     let mut install_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     if let Some(ref cm) = state.channel_manager {
         let cm = cm.lock().await;
-        for (_sender_id, agent_id) in cm.list_sender_routes() {
-            *install_counts.entry(agent_id).or_insert(0) += 1;
+        for (_sender_id, agent_ref) in cm.list_sender_routes() {
+            let key = match crate::routes::common::resolve_agent_id(&agent_ref, &state.kernel.registry) {
+                Ok((id, _)) => id.to_string(),
+                Err(_) => agent_ref, // stale/unresolvable route - count under raw value
+            };
+            *install_counts.entry(key).or_insert(0) += 1;
         }
     }
 

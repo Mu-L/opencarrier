@@ -10,7 +10,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Try to auto-install a Hub template when the agent is not found locally.
-/// Returns (agent_id, display_name, share_url) on success, or None if install fails.
+/// Returns (agent_name, display_name, share_url) on success, or None if install fails.
+///
+/// The first element is the agent *name* (not UUID) so it matches what
+/// `set_sender_route` stores and keeps `session.json`'s `bind_agent` field
+/// consistent regardless of whether the agent was found locally or installed
+/// from hub on demand.
 async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<(String, String, Option<String>)> {
     let hub_url = state.kernel.config.hub.url.trim_end_matches('/').to_string();
     if hub_url.is_empty() {
@@ -41,7 +46,9 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<(Stri
             let share_url = state.kernel.config.external_url.as_ref().map(|url| {
                 format!("{}/share?clone={}", url.trim_end_matches('/'), agent_name)
             });
-            Some((agent_id, display_name, share_url))
+            // Return the name (not agent_id) so bind_agent stays consistent
+            // with the local-found path and with set_sender_route.
+            Some((agent_name, display_name, share_url))
         }
         Err(e) => {
             tracing::warn!(error = %e, "Hub template install failed");
