@@ -48,6 +48,10 @@ pub struct PluginBridgeManager {
     cron_delivery: Option<Arc<memory::CronDeliveryStore>>,
     /// route_key of users currently in the "naming" flow (waiting for agent name).
     pending_naming: Arc<DashMap<String, String>>,
+    /// Per route_key mutex so same-user messages (esp. WeChat) run serially.
+    /// Prevents concurrent agent loops racing the same session when multiple
+    /// inbounds land close together. Cross-user traffic still concurrent.
+    route_locks: Arc<DashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl PluginBridgeManager {
@@ -62,6 +66,7 @@ impl PluginBridgeManager {
             sender_router: None,
             cron_delivery: None,
             pending_naming: Arc::new(DashMap::new()),
+            route_locks: Arc::new(DashMap::new()),
         }
     }
 
@@ -148,9 +153,9 @@ impl PluginBridgeManager {
 
     /// Run the message processing loop (consumes self).
     ///
-    /// Each message is handled in its own tokio task, allowing concurrent
-    /// processing of messages from different users. Same-owner messages are
-    /// still serialized via the per-owner lock in messaging.rs.
+    /// Each message is handled in its own tokio task so different users stay
+    /// concurrent. Same `route_key` is serialized inside `handle_inbound`
+    /// via `route_locks` (WeChat iLink redelivery / rapid multi-send).
     pub async fn run(self, mut rx: mpsc::Receiver<PluginMessage>) {
         info!("Plugin bridge started");
 
@@ -183,6 +188,16 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     async fn handle_inbound(&self, msg: PluginMessage) {
+        // Serialize same route_key early (before heavy work / agent loop) so
+        // concurrent WeChat redeliveries queue instead of multi-replying.
+        let rk = self.route_key(&msg);
+        let lock = self
+            .route_locks
+            .entry(rk.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        let _route_guard = lock.lock().await;
+
         // Text is resolved immediately. Images/files are described *after*
         // agent routing + save, so we can hand vision a public view_url
         // instead of a huge base64 data URI.
@@ -200,12 +215,12 @@ impl PluginBridgeManager {
             None => self.resolve_non_text_content(&msg).await,
         };
 
-        let rk = self.route_key(&msg);
         info!(
             channel = %msg.channel_type,
             bot = %msg.bot_id,
             route_key = %rk,
             text_len = text.len(),
+            platform_message_id = %msg.platform_message_id,
             "Bridge handling inbound message"
         );
 

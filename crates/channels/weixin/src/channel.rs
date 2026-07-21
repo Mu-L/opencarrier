@@ -5,13 +5,99 @@ use crate::token::WEIXIN_STATE;
 use crate::models::*;
 use crate::crypto;
 use types::plugin::{PluginContent, PluginMessage};
+use dashmap::DashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use types::channel::{Channel, ChannelError};
+
+/// Drop redelivered getUpdates items (same message_id / seq / content window).
+/// Without this, iLink can hand the same inbound item multiple times within
+/// seconds and each spawn a full agent reply — users see "repeated answers".
+const INBOUND_DEDUP_TTL: Duration = Duration::from_secs(120);
+const INBOUND_DEDUP_MAX: usize = 10_000;
+
+static INBOUND_DEDUP: std::sync::LazyLock<DashMap<String, Instant>> =
+    std::sync::LazyLock::new(DashMap::new);
+
+/// Build one or more dedup keys for an inbound iLink message.
+/// Any previously claimed key → drop. Prefer platform ids; fall back to content.
+fn inbound_dedup_keys(bot_id: &str, msg: &ILnkMessage, content: &PluginContent) -> Vec<String> {
+    let mut keys = Vec::with_capacity(3);
+    if let Some(id) = msg.message_id {
+        if id != 0 {
+            keys.push(format!("mid:{bot_id}:{id}"));
+        }
+    }
+    if let Some(seq) = msg.seq {
+        if seq != 0 {
+            keys.push(format!("seq:{bot_id}:{seq}"));
+        }
+    }
+    // Content fingerprint catches redeliveries when mid/seq are missing or
+    // unstable. Include create_time_ms when present so legitimate repeats of
+    // short texts ("好的") still work if sent as separate messages later.
+    let from = msg.from_user_id.as_deref().unwrap_or("");
+    let ts = msg.create_time_ms.unwrap_or(0);
+    let snip = content_snippet(content);
+    keys.push(format!("fp:{bot_id}:{from}:{ts}:{snip}"));
+    keys
+}
+
+fn content_snippet(content: &PluginContent) -> String {
+    match content {
+        PluginContent::Text(t) => {
+            let preview: String = t.chars().take(128).collect();
+            format!("t{}:{preview}", t.len())
+        }
+        PluginContent::Image { caption, .. } => {
+            format!("img:{}", caption.as_deref().unwrap_or(""))
+        }
+        PluginContent::File { filename, .. } => format!("file:{filename}"),
+        PluginContent::Voice { .. } => "voice".into(),
+        PluginContent::Video { caption, .. } => {
+            format!("vid:{}", caption.as_deref().unwrap_or(""))
+        }
+        PluginContent::Location { lat, lon } => format!("loc:{lat}:{lon}"),
+        PluginContent::Command { name, args } => format!("cmd:{name}:{}", args.len()),
+    }
+}
+
+/// Returns true if this message should be processed (newly claimed).
+/// Returns false if any key was already seen within the TTL window.
+fn claim_inbound(keys: &[String]) -> bool {
+    evict_inbound_dedup();
+    for k in keys {
+        if INBOUND_DEDUP.contains_key(k) {
+            return false;
+        }
+    }
+    let now = Instant::now();
+    for k in keys {
+        INBOUND_DEDUP.insert(k.clone(), now);
+    }
+    true
+}
+
+fn evict_inbound_dedup() {
+    let now = Instant::now();
+    INBOUND_DEDUP.retain(|_, at| now.duration_since(*at) < INBOUND_DEDUP_TTL);
+    if INBOUND_DEDUP.len() > INBOUND_DEDUP_MAX {
+        let overflow = INBOUND_DEDUP.len() - INBOUND_DEDUP_MAX;
+        let stale: Vec<String> = INBOUND_DEDUP
+            .iter()
+            .take(overflow)
+            .map(|e| e.key().clone())
+            .collect();
+        for k in stale {
+            INBOUND_DEDUP.remove(&k);
+        }
+    }
+}
 
 /// Main polling loop (runs in a dedicated thread with its own runtime).
 /// `session_key` is the user_id used as the DashMap key in WEIXIN_STATE.bots.
@@ -172,6 +258,28 @@ async fn poll_loop_inner(
     }
 }
 
+#[cfg(test)]
+mod dedup_tests {
+    use super::*;
+
+    #[test]
+    fn claim_inbound_drops_second_same_keys() {
+        // Isolate keys with unique bot id so parallel tests don't clash.
+        let bot = format!("test-bot-{}", uuid::Uuid::new_v4());
+        let keys = vec![format!("mid:{bot}:42"), format!("fp:{bot}:u:1:t3:abc")];
+        assert!(claim_inbound(&keys), "first claim should succeed");
+        assert!(!claim_inbound(&keys), "second claim should be dropped as duplicate");
+    }
+
+    #[test]
+    fn content_snippet_text_includes_len() {
+        let c = PluginContent::Text("你好世界".into());
+        let s = content_snippet(&c);
+        assert!(s.starts_with("t"), "{s}");
+        assert!(s.contains('4') || s.contains("你好"), "{s}");
+    }
+}
+
 /// Download a CDN media file, AES-decrypt it, and return raw bytes.
 async fn download_cdn_raw(
     http: &reqwest::Client,
@@ -294,9 +402,25 @@ async fn process_inbound_message(
         _ => PluginContent::Text(String::new()),
     };
 
+    // Dedup redelivered getUpdates items before they hit the bridge/agent.
+    let keys = inbound_dedup_keys(bot_id, msg, &content);
+    if !claim_inbound(&keys) {
+        info!(
+            bot_id = bot_id,
+            from = %from_user_id,
+            message_id = ?msg.message_id,
+            seq = ?msg.seq,
+            keys = ?keys,
+            "Dropping duplicate WeChat inbound message"
+        );
+        return;
+    }
+
     info!(
         bot_id = bot_id,
         from = %from_user_id,
+        message_id = ?msg.message_id,
+        seq = ?msg.seq,
         item_type = match msg.item_list.as_ref() {
             Some(items) if !items.is_empty() => items[0].type_.unwrap_or(0),
             _ => 0,
