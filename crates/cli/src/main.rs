@@ -115,7 +115,7 @@ enum Commands {
     Start,
     /// Stop the running daemon.
     Stop,
-    /// Manage agents (new, list, kill, spawn) [*].
+    /// Manage agents (spawn, list, kill, restart) [*].
     #[command(subcommand)]
     Agent(AgentCommands),
     /// Show or edit configuration (show, edit, get, set, unset, providers) [*].
