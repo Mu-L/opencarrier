@@ -84,8 +84,9 @@ impl CarrierKernel {
         }
     }
 
-    /// Upgrade a clone from DupHub: download .agx (Bearer), apply definition
-    /// layer only, preserve sessions/senders/output, rebuild agent.toml, restart.
+    /// Upgrade a clone from DupHub: fetch definition files (Bearer, file-level
+    /// dup), apply definition layer only, preserve sessions/senders/output,
+    /// rebuild agent.toml, restart.
     ///
     /// `version`: `None` = latest. Hub key = `hub_template_id` or `template_name` or agent name.
     pub async fn clone_upgrade(

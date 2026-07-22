@@ -3603,8 +3603,7 @@ async fn cmd_hub(cmd: HubCommands) {
                     std::process::exit(1);
                 }
             };
-            // File-level push (manifest hash debounce + dup/push endpoint), with
-            // .agx fallback handled inside clone::hub::push_workspace_to_hub.
+            // File-level push (manifest hash debounce + dup/push endpoint).
             match clone::hub::push_workspace_to_hub(&hub_url, &api_key, &workspace_dir, &hub_id)
                 .await
             {
