@@ -382,7 +382,7 @@ impl CarrierKernel {
                     (intent, outcome)
                 })
                 .collect();
-            match crate::prompt_sources::classify_flow_with_llm(message, ws, brain, &recent_turns).await {
+            match crate::prompt_sources::classify_flow_with_llm(message, ws, brain, &entry.manifest.flows, &recent_turns).await {
                 Some(flow) => {
                     let flow_name = flow.name.clone();
                     let flow_body = flow.body.clone();

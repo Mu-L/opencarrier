@@ -595,6 +595,7 @@ pub async fn classify_flow_with_llm(
     message: &str,
     workspace: &std::path::Path,
     brain: &std::sync::Arc<dyn runtime::llm_driver::Brain>,
+    declared_flows: &[String],
     recent_turns: &[(String, String)],
 ) -> Option<FlowMatch> {
     // Collect flow summaries from two sources, private first so it wins
@@ -615,6 +616,18 @@ pub async fn classify_flow_with_llm(
                 flow_summaries.push((name, description, path, is_system_shared));
             }
         }
+    }
+
+    // If the agent declared a flow allowlist (agent.toml `flows = [...]`),
+    // restrict candidates to those names — the agent explicitly opts into a
+    // fixed flow set and must not fall through to a generic system flow.
+    // (e.g. an agent built around `product-short-drama` should never be
+    // intercepted by the shared `short-video` flow.) Empty declared list
+    // = consider all candidates (default, backward-compatible).
+    if !declared_flows.is_empty() {
+        let allow: std::collections::HashSet<String> =
+            declared_flows.iter().map(|f| f.to_lowercase()).collect();
+        flow_summaries.retain(|(name, _, _, _)| allow.contains(&name.to_lowercase()));
     }
 
     if flow_summaries.is_empty() {
