@@ -54,9 +54,7 @@ pub async fn install_hub_template(
 
     tracing::info!(template = %name, "Installing from Hub");
 
-    // File-level install (dup manifest + per-file). Falls back to .agx blob if
-    // the Hub doesn't expose the dup endpoints yet (older deploy) or the fetch
-    // fails - .agx is the legacy authoritative path.
+    // File-level install (dup manifest + per-file).
     let install_result: Result<(String, String, usize), String> =
         match clone::hub::fetch_dup_files(&hub_url, &hub_api_key, &name, None).await {
             Ok((_manifest, files)) => {
@@ -73,27 +71,10 @@ pub async fn install_hub_template(
                     .map(|(id, n, _)| (id, n, size))
             }
             Err(e) => {
-                tracing::warn!(
-                    template = %name,
-                    error = %e,
-                    "dup file-level fetch failed, falling back to .agx"
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({"error": format!("Hub fetch failed: {e}")})),
                 );
-                match clone::hub::download_template_bytes(&hub_url, &hub_api_key, &name, None).await {
-                    Ok(agx_bytes) => {
-                        let size = agx_bytes.len();
-                        state
-                            .kernel
-                            .clone_install(&name, &agx_bytes)
-                            .await
-                            .map(|(id, n, _)| (id, n, size))
-                    }
-                    Err(e) => {
-                        return (
-                            StatusCode::BAD_GATEWAY,
-                            Json(serde_json::json!({"error": format!("Hub download failed: {e}")})),
-                        );
-                    }
-                }
             }
         };
 

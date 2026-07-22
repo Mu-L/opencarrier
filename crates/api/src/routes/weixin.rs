@@ -32,8 +32,8 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<(Stri
 
     tracing::info!(template = %name, "Auto-installing Hub template for QR binding");
 
-    // File-level (dup) install with .agx fallback. Returns agent_name (not UUID)
-    // so bind_agent stays consistent with the local-found path + set_sender_route.
+    // File-level (dup) install. Returns agent_name (not UUID) so bind_agent
+    // stays consistent with the local-found path + set_sender_route.
     let install = match clone::hub::fetch_dup_files(&hub_url, &api_key, name, None).await {
         Ok((_manifest, files)) => {
             tracing::info!(
@@ -47,15 +47,9 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<(Stri
             tracing::warn!(
                 template = %name,
                 error = %e,
-                "dup file-level fetch failed, falling back to .agx"
+                "dup file-level fetch failed for auto-install"
             );
-            match clone::hub::download_template_bytes(&hub_url, &api_key, name, None).await {
-                Ok(agx_bytes) => state.kernel.clone_install(name, &agx_bytes).await,
-                Err(e) => {
-                    tracing::warn!(error = %e, "Hub download failed for auto-install");
-                    return None;
-                }
-            }
+            return None;
         }
     };
 

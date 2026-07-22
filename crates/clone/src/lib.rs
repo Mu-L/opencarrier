@@ -1,15 +1,13 @@
-//! Carrier Clone — .agx template extraction and manifest building.
+//! Carrier Clone — file-level (dup) definition sync + manifest building.
 //!
-//! v3: "源码格式 = 运行时格式，解压即 workspace，无转换"。
-//! The .agx IS the workspace, just compressed.
+//! Definition layer is shipped as individual files (path -> bytes) + a manifest
+//! (path -> SHA-256 + state hash), never as a compressed blob.
 
-pub mod extractor;
 pub mod hub;
 pub mod manifest;
 pub mod manifest_builder;
 mod loader;
 
-pub use extractor::{extract_agx, pack_workspace_as_agx, scan_workspace_security};
 pub use manifest::{build_manifest, is_bak, is_test_dir, sha256_hex, write_files_to_workspace, Manifest};
 pub use loader::{
     format_string_array, parse_frontmatter, parse_string_array, parse_toml_description,

@@ -2,9 +2,9 @@
 //!
 //! Used by the `dup` VCS and the opencarrier dup-remote endpoints to do
 //! git-style file-level sync (no packed archive). The manifest is a map of
-//! relative path -> SHA-256 for every definition-layer file (exactly what
-//! would go into a .agx pack), plus a top-level `hash` (SHA-256 of the sorted
-//! `path:hash` serialization) used as a state id for fast-forward comparison.
+//! relative path -> SHA-256 for every definition-layer file, plus a top-level
+//! `hash` (SHA-256 of the sorted `path:hash` serialization) used as a state id
+//! for fast-forward comparison.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path};
@@ -66,9 +66,9 @@ impl Manifest {
 }
 
 /// Build a manifest by walking `workspace` and hashing every definition-layer
-/// file. Selection mirrors `extractor::pack_workspace_as_agx` (same skip rules)
-/// plus `.dup/` VCS state, so the manifest tracks exactly the files that would
-/// be sent file-level to DupHub.
+/// file. Selection uses `iter_definition_files` (the shared definition-layer
+/// walk, excludes runtime dirs + `.dup/` VCS state), so the manifest tracks
+/// exactly the files sent file-level to DupHub.
 pub fn build_manifest(workspace: &Path) -> Result<Manifest> {
     let entries = iter_definition_files(workspace)?;
     let mut files: BTreeMap<String, String> = BTreeMap::new();
@@ -85,9 +85,8 @@ pub fn build_manifest(workspace: &Path) -> Result<Manifest> {
 /// with `build_manifest`, so the file set (and thus the manifest hash) is
 /// guaranteed identical. Used by `hub push` to send file-level content to DupHub.
 ///
-/// Uses `SKIP` (which includes `.dup/`), so unlike `extractor::pack_workspace_as_agx`
-/// (whose `SKIP_PACK` omits `.dup`) this does NOT leak the local `.dup/` VCS
-/// state into the pushed payload.
+/// Uses `SKIP` (which includes `.dup/`), so the local `.dup/` VCS state is NOT
+/// leaked into the pushed payload.
 pub fn collect_definition_files(workspace: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
     let entries = iter_definition_files(workspace)?;
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
@@ -172,9 +171,9 @@ pub fn sha256_hex(data: &[u8]) -> String {
 /// definition layer (runtime dirs, `agent.toml`/`AGENT.json`, test dirs, `.bak`)
 /// are skipped with a warning rather than written.
 ///
-/// This is the file-level counterpart of `extract_agx`: instead of unpacking a
-/// tar.gz blob, it writes individually-fetched files (e.g. pulled from a DupHub
-/// manifest). Returns security warnings (empty on clean).
+/// This writes individually-fetched files (e.g. pulled from a DupHub manifest)
+/// into the workspace, enforcing the definition-layer boundary. Returns security
+/// warnings (empty on clean).
 pub fn write_files_to_workspace(
     files: &BTreeMap<String, Vec<u8>>,
     workspace: &Path,
