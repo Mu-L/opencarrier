@@ -144,6 +144,9 @@ pub fn write_files_to_workspace(
     workspace: &Path,
 ) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
+    // The workspace may not exist yet (fresh install, unlike the dup push path
+    // where it always does) - create it so canonicalize works.
+    std::fs::create_dir_all(workspace).with_context(|| format!("mkdir {}", workspace.display()))?;
     let ws_canonical = workspace
         .canonicalize()
         .with_context(|| format!("canonicalize {}", workspace.display()))?;
@@ -161,20 +164,19 @@ pub fn write_files_to_workspace(
             continue;
         }
         let file_path = workspace.join(rel);
-        // For new files, validate via the parent dir; for existing, via the file.
-        let check = if file_path.exists() {
-            file_path
+        // Defense-in-depth: for an EXISTING entry, canonicalize and ensure it
+        // stays within the workspace (catches symlink escape). New files are
+        // already confined by the component check above (no `..` / root), so we
+        // don't canonicalize their (possibly non-existent) parent - that would
+        // compare a canonical workspace against a non-canonical join and false-
+        // reject when the workspace ancestor is a symlink (e.g. macOS /var).
+        if file_path.exists() {
+            let canon = file_path
                 .canonicalize()
-                .unwrap_or_else(|_| file_path.clone())
-        } else {
-            file_path
-                .parent()
-                .and_then(|p| p.canonicalize().ok())
-                .map(|p| p.join(file_path.file_name().unwrap_or_default()))
-                .unwrap_or_else(|| file_path.clone())
-        };
-        if !check.starts_with(&ws_canonical) {
-            anyhow::bail!("path traversal denied: {rel}");
+                .unwrap_or_else(|_| file_path.clone());
+            if !canon.starts_with(&ws_canonical) {
+                anyhow::bail!("path traversal denied: {rel}");
+            }
         }
         if let Some(parent) = file_path.parent() {
             std::fs::create_dir_all(parent).with_context(|| format!("mkdir {rel}"))?;
@@ -192,4 +194,61 @@ pub fn write_files_to_workspace(
         }
     }
     Ok(warnings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn tmp_dir(name: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("oc-manifest-{name}"));
+        let _ = std::fs::remove_dir_all(&p);
+        p
+    }
+
+    #[test]
+    fn write_files_creates_fresh_workspace_and_writes() {
+        let tmp = tmp_dir("fresh");
+        assert!(!tmp.exists(), "precondition: workspace must not exist");
+        let mut files = BTreeMap::new();
+        files.insert("SOUL.md".to_string(), b"hello".to_vec());
+        files.insert("knowledge/nested/deep.md".to_string(), b"world".to_vec());
+        let warnings = write_files_to_workspace(&files, &tmp).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(std::fs::read(tmp.join("SOUL.md")).unwrap(), b"hello");
+        assert_eq!(
+            std::fs::read(tmp.join("knowledge/nested/deep.md")).unwrap(),
+            b"world"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn write_files_rejects_traversal() {
+        let tmp = tmp_dir("trav");
+        let mut files = BTreeMap::new();
+        files.insert("../escape.md".to_string(), b"x".to_vec());
+        assert!(write_files_to_workspace(&files, &tmp).is_err());
+        assert!(!tmp.join("../escape.md").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn write_files_skips_runtime_layer_with_warnings() {
+        let tmp = tmp_dir("skip");
+        let mut files = BTreeMap::new();
+        files.insert("agent.toml".to_string(), b"regen".to_vec());
+        files.insert("sessions/x.json".to_string(), b"runtime".to_vec());
+        files.insert("admins.json".to_string(), b"adm".to_vec());
+        files.insert("SOUL.md".to_string(), b"keep".to_vec());
+        let warnings = write_files_to_workspace(&files, &tmp).unwrap();
+        // agent.toml + sessions/ + admins.json skipped; SOUL.md kept.
+        assert_eq!(warnings.len(), 3);
+        assert!(!tmp.join("agent.toml").exists());
+        assert!(!tmp.join("sessions/x.json").exists());
+        assert!(!tmp.join("admins.json").exists());
+        assert_eq!(std::fs::read(tmp.join("SOUL.md")).unwrap(), b"keep");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
