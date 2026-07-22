@@ -121,6 +121,88 @@ fn detect_binary_kind(header: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// Binary document formats file_read can't read as text, but markitdown can
+/// extract. Images/video are intentionally NOT here - those go to image_analyze.
+const DOCUMENT_EXTS: &[&str] = &[
+    "pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "odt", "ods", "odp", "rtf", "epub",
+];
+
+/// Return the lowercased extension if `path` is a document format markitdown
+/// handles, else None.
+fn document_extension(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_lowercase();
+    if DOCUMENT_EXTS.contains(&ext.as_str()) {
+        Some(ext)
+    } else {
+        None
+    }
+}
+
+/// Extract text from a binary document (pdf/docx/xlsx/pptx/...) by shelling out
+/// to `markitdown`, which converts many formats to markdown for LLM consumption.
+/// Mirrors the `file_convert` (pandoc) shell-out pattern. Returns an error
+/// (never falls back to a raw text read) when markitdown is absent or fails,
+/// since the file is binary and unreadable as text.
+async fn extract_document_with_markitdown(path: &Path, raw_path: &str) -> Result<String, String> {
+    // Guard against huge files - markitdown + its parsers can be slow/memory-heavy.
+    let size = tokio::fs::metadata(path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if size > 50 * 1024 * 1024 {
+        return Err(format!(
+            "文件 '{raw_path}' 太大（{size} bytes，上限 50MB），无法提取文本。"
+        ));
+    }
+
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        tokio::process::Command::new("markitdown").arg(path).output(),
+    )
+    .await;
+
+    let output = match out {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(
+                "未安装 markitdown，无法读取文档格式（pdf/docx/xlsx/pptx 等）。\
+                 请管理员安装：pip install 'markitdown[all]'。"
+                    .to_string(),
+            )
+        }
+        Ok(Err(e)) => return Err(format!("运行 markitdown 失败：{e}")),
+        Err(_) => {
+            return Err(format!("markitdown 提取 '{raw_path}' 超时（120s）。文件可能过大或格式异常。"))
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "markitdown 提取 '{raw_path}' 失败：{}",
+            stderr.trim()
+        ));
+    }
+
+    let md = String::from_utf8_lossy(&output.stdout).into_owned();
+    if md.trim().is_empty() {
+        return Err(format!(
+            "markitdown 从 '{raw_path}' 提取的内容为空（可能是扫描件/图片型 PDF 或受保护文档）。\
+             图片型内容可用 image_analyze。"
+        ));
+    }
+    // Truncate very large extractions (char-safe) so we don't blow the context.
+    if md.len() > 200_000 {
+        let head: String = md.chars().take(50_000).collect();
+        Ok(format!(
+            "{head}\n\n…（内容过长，已截断显示前 50000 字符，原文共 {n} 字节）",
+            n = md.len()
+        ))
+    } else {
+        Ok(md)
+    }
+}
+
 /// Resolve output/memory (and catch-all) paths to the top-level senders directory.
 ///
 /// Returns `None` if the path is a workspace-internal path (knowledge/, flows/, etc.)
@@ -201,6 +283,15 @@ async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> Result<String, 
     };
 
     tracing::info!(raw_path, resolved = %resolved.display(), "file_read resolved path");
+
+    // Binary document formats (pdf/docx/xlsx/pptx/odt/...) - extract text via
+    // markitdown so the agent can read user-sent documents, not just plain text.
+    // Images/video are not documents and fall through to the binary-refuse path
+    // (use image_analyze). markitdown not installed => clear error (no fallback
+    // to a raw text read, since the file is binary).
+    if document_extension(&resolved).is_some() {
+        return extract_document_with_markitdown(&resolved, raw_path).await;
+    }
 
     // Friendly error: detect binary files (images, etc.) before reading.
     // file_read only handles text; binary files should use image_analyze etc.
@@ -529,5 +620,23 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(p_catch, h.join("workspaces/ag/senders/u1/output/foo.md"));
+    }
+
+    #[test]
+    fn document_extension_detects_formats() {
+        use std::path::Path;
+        assert_eq!(document_extension(Path::new("foo.pdf")), Some("pdf".to_string()));
+        assert_eq!(
+            document_extension(Path::new("销售.XLSX")),
+            Some("xlsx".to_string())
+        );
+        assert_eq!(
+            document_extension(Path::new("input/report.docx")),
+            Some("docx".to_string())
+        );
+        assert_eq!(document_extension(Path::new("a.pptx")), Some("pptx".to_string()));
+        assert_eq!(document_extension(Path::new("notes.md")), None);
+        assert_eq!(document_extension(Path::new("data.csv")), None);
+        assert_eq!(document_extension(Path::new("noext")), None);
     }
 }
