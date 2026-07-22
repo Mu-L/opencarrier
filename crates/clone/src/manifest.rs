@@ -66,16 +66,56 @@ impl Manifest {
 }
 
 /// Build a manifest by walking `workspace` and hashing every definition-layer
-/// file. Selection mirrors `extractor::pack_workspace_as_agx` (same skip rules),
-/// so the manifest tracks exactly the files that would be packed.
+/// file. Selection mirrors `extractor::pack_workspace_as_agx` (same skip rules)
+/// plus `.dup/` VCS state, so the manifest tracks exactly the files that would
+/// be sent file-level to DupHub.
 pub fn build_manifest(workspace: &Path) -> Result<Manifest> {
+    let entries = iter_definition_files(workspace)?;
     let mut files: BTreeMap<String, String> = BTreeMap::new();
-    walk(workspace, workspace, &mut files)?;
+    for (rel, abs) in &entries {
+        let data = std::fs::read(abs).with_context(|| format!("read {}", abs.display()))?;
+        files.insert(rel.clone(), sha256_hex(&data));
+    }
     let hash = manifest_hash(&files);
     Ok(Manifest { files, hash })
 }
 
-fn walk(base: &Path, cur: &Path, files: &mut BTreeMap<String, String>) -> Result<()> {
+/// Read every definition-layer file in `workspace` into a `path -> bytes` map.
+/// The local-side mirror of `hub::fetch_dup_files`: shares `iter_definition_files`
+/// with `build_manifest`, so the file set (and thus the manifest hash) is
+/// guaranteed identical. Used by `hub push` to send file-level content to DupHub.
+///
+/// Uses `SKIP` (which includes `.dup/`), so unlike `extractor::pack_workspace_as_agx`
+/// (whose `SKIP_PACK` omits `.dup`) this does NOT leak the local `.dup/` VCS
+/// state into the pushed payload.
+pub fn collect_definition_files(workspace: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
+    let entries = iter_definition_files(workspace)?;
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for (rel, abs) in &entries {
+        let data = std::fs::read(abs).with_context(|| format!("read {}", abs.display()))?;
+        files.insert(rel.clone(), data);
+    }
+    Ok(files)
+}
+
+/// Walk `workspace` and return the sorted `(rel_path, abs_path)` pairs for every
+/// definition-layer file. Applies `SKIP` (runtime dirs, `agent.toml`,
+/// `AGENT.json`, `admins.json`, `.dup/`) with `is_test_dir` and `is_bak`, and
+/// skips macOS `._`/`.DS_Store` plus dup VCS artifacts (`.dup-theirs`,
+/// `.duptmp`). Shared by `build_manifest` and `collect_definition_files` so both
+/// enumerate the same file set.
+fn iter_definition_files(workspace: &Path) -> Result<Vec<(String, std::path::PathBuf)>> {
+    let mut out: Vec<(String, std::path::PathBuf)> = Vec::new();
+    walk_collect(workspace, workspace, &mut out)?;
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+fn walk_collect(
+    base: &Path,
+    cur: &Path,
+    out: &mut Vec<(String, std::path::PathBuf)>,
+) -> Result<()> {
     let entries = std::fs::read_dir(cur).with_context(|| format!("read_dir {}", cur.display()))?;
     for entry in entries {
         let entry = entry?;
@@ -92,20 +132,16 @@ fn walk(base: &Path, cur: &Path, files: &mut BTreeMap<String, String>) -> Result
         }
 
         if path.is_dir() {
-            walk(base, &path, files)?;
+            walk_collect(base, &path, out)?;
         } else {
             let rel = path.strip_prefix(base).unwrap_or(&path);
             let rel_str = rel.to_string_lossy().replace('\\', "/");
             let top = rel_str.split('/').next().unwrap_or(&rel_str);
-            // Skip runtime layer + test-workspace dirs + backup files.
+            // Skip runtime layer + .dup VCS + test-workspace dirs + backup files.
             if SKIP.contains(&top) || is_test_dir(top) || is_bak(top) {
                 continue;
             }
-            let data = std::fs::read(&path)
-                .with_context(|| format!("read {}", path.display()))?;
-            let mut h = Sha256::new();
-            h.update(&data);
-            files.insert(rel_str, format!("{:x}", h.finalize()));
+            out.push((rel_str, path));
         }
     }
     Ok(())
@@ -249,6 +285,39 @@ mod tests {
         assert!(!tmp.join("sessions/x.json").exists());
         assert!(!tmp.join("admins.json").exists());
         assert_eq!(std::fs::read(tmp.join("SOUL.md")).unwrap(), b"keep");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn build_manifest_and_collect_definition_files_agree_and_exclude_dup() {
+        let tmp = tmp_dir("agree");
+        std::fs::create_dir_all(tmp.join("knowledge")).unwrap();
+        std::fs::create_dir_all(tmp.join(".dup")).unwrap();
+        std::fs::create_dir_all(tmp.join("sessions")).unwrap();
+        std::fs::write(tmp.join("SOUL.md"), b"soul").unwrap();
+        std::fs::write(tmp.join("knowledge/a.md"), b"a").unwrap();
+        // .dup/ VCS state + sessions/ runtime must be excluded.
+        std::fs::write(tmp.join(".dup/state"), b"vcs").unwrap();
+        std::fs::write(tmp.join("sessions/x.json"), b"rt").unwrap();
+
+        let manifest = build_manifest(&tmp).unwrap();
+        let collected = collect_definition_files(&tmp).unwrap();
+
+        // Identical file set (shared walk).
+        let manifest_keys: Vec<&String> = manifest.files.keys().collect();
+        let collect_keys: Vec<&String> = collected.keys().collect();
+        assert_eq!(manifest_keys, collect_keys);
+
+        // Definition files present, .dup + sessions excluded.
+        assert!(manifest.files.contains_key("SOUL.md"));
+        assert!(manifest.files.contains_key("knowledge/a.md"));
+        assert!(!manifest.files.contains_key(".dup/state"));
+        assert!(!manifest.files.contains_key("sessions/x.json"));
+
+        // Per-file sha in manifest matches sha256 of collected bytes.
+        assert_eq!(manifest.files["SOUL.md"], sha256_hex(b"soul"));
+        assert_eq!(collected["SOUL.md"], b"soul");
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

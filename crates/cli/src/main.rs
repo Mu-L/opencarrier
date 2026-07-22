@@ -3603,25 +3603,16 @@ async fn cmd_hub(cmd: HubCommands) {
                     std::process::exit(1);
                 }
             };
-            let packed = match clone::extractor::pack_workspace_as_agx(&workspace_dir) {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("打包失败: {e}");
-                    std::process::exit(1);
+            // File-level push (manifest hash debounce + dup/push endpoint), with
+            // .agx fallback handled inside clone::hub::push_workspace_to_hub.
+            match clone::hub::push_workspace_to_hub(&hub_url, &api_key, &workspace_dir, &hub_id)
+                .await
+            {
+                Ok(clone::hub::PushOutcome::NoChange) => {
+                    println!("无变更，跳过推送（{} 与 Hub latest 一致）", name);
                 }
-            };
-            // 防抖: 与 Hub latest 比对，一致则跳过（首次推送/下载失败时照常推）
-            let skip = match clone::hub::download_template_bytes(&hub_url, &api_key, &hub_id, None).await {
-                Ok(latest_bytes) => workspaces_definition_eq(&packed, &latest_bytes).unwrap_or(false),
-                Err(_) => false,
-            };
-            if skip {
-                println!("无变更，跳过推送（{} 与 Hub latest 一致）", name);
-                return;
-            }
-            match clone::hub::publish_template(&hub_url, &api_key, &packed, None, None).await {
-                Ok(_) => {
-                    println!("已推送: {} -> DupHub ({} 字节)", name, packed.len());
+                Ok(clone::hub::PushOutcome::Pushed) => {
+                    println!("已推送: {} -> DupHub", name);
                     println!("本地拉取: clone-creator pull {name}");
                 }
                 Err(e) => {
@@ -3664,51 +3655,6 @@ fn read_hub_template_id(workspace: &std::path::Path) -> Option<String> {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-}
-
-/// Compare two .agx byte streams by extracting both to temp dirs and comparing
-/// definition files. Used by `hub push` no-op check. Fail-open (returns
-/// `Ok(false)` on extract error so push proceeds rather than silently skipping).
-fn workspaces_definition_eq(packed: &[u8], latest: &[u8]) -> std::result::Result<bool, String> {
-    let dir_a = std::env::temp_dir().join(format!("carrier-push-a-{}", uuid::Uuid::new_v4()));
-    let dir_b = std::env::temp_dir().join(format!("carrier-push-b-{}", uuid::Uuid::new_v4()));
-    let res = (|| -> std::result::Result<bool, String> {
-        clone::extract_agx(packed, &dir_a).map_err(|e| e.to_string())?;
-        clone::extract_agx(latest, &dir_b).map_err(|e| e.to_string())?;
-        Ok(dirs_equal(&dir_a, &dir_b))
-    })();
-    let _ = std::fs::remove_dir_all(&dir_a);
-    let _ = std::fs::remove_dir_all(&dir_b);
-    res
-}
-
-fn dirs_equal(a: &std::path::Path, b: &std::path::Path) -> bool {
-    fn collect(root: &std::path::Path) -> std::collections::BTreeMap<String, Vec<u8>> {
-        let mut m = std::collections::BTreeMap::new();
-        let _ = walk_collect(root, root, &mut m);
-        m
-    }
-    collect(a) == collect(b)
-}
-
-fn walk_collect(
-    base: &std::path::Path,
-    cur: &std::path::Path,
-    m: &mut std::collections::BTreeMap<String, Vec<u8>>,
-) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(cur)? {
-        let entry = entry?;
-        let p = entry.path();
-        if p.is_dir() {
-            walk_collect(base, &p, m)?;
-        } else {
-            let rel = p.strip_prefix(base).unwrap_or(&p).to_string_lossy().to_string();
-            if let Ok(bytes) = std::fs::read(&p) {
-                m.insert(rel, bytes);
-            }
-        }
-    }
-    Ok(())
 }
 
 fn link_workspace_hub_id(

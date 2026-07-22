@@ -445,47 +445,59 @@ const UPGRADE_TEMPLATE_DIRS: &[&str] = &["flows", "agents", "knowledge", "style"
 
 /// Apply .agx definition files onto an existing workspace (preserve runtime dirs).
 ///
-/// Replaces identity files + flows/agents/knowledge/style; does **not** touch
-/// sessions/, senders/, output/, logs/, history/, data/, users/.
-///
-/// Returns remote version string from staging `template.json` (may be empty).
+/// Extracts the .agx to a temp staging dir and delegates to
+/// `apply_definition_upgrade_from_staging`. Returns remote version string from
+/// staging `template.json` (may be empty).
 pub fn apply_agx_definition_upgrade(agx_bytes: &[u8], workspace: &Path) -> Result<String> {
     let staging_dir =
         std::env::temp_dir().join(format!("carrier-upgrade-{}", uuid::Uuid::new_v4()));
     let result = (|| {
         crate::extract_agx(agx_bytes, &staging_dir).context("extract .agx to staging")?;
-
-        let remote_version: String = std::fs::read_to_string(staging_dir.join("template.json"))
-            .ok()
-            .and_then(|s| serde_json::from_str::<crate::TemplateManifest>(&s).ok())
-            .map(|t| t.version)
-            .unwrap_or_default();
-
-        for filename in UPGRADE_TEMPLATE_FILES {
-            let src = staging_dir.join(filename);
-            if src.exists() {
-                std::fs::copy(&src, workspace.join(filename))
-                    .with_context(|| format!("copy {filename}"))?;
-            }
-        }
-
-        for dir_name in UPGRADE_TEMPLATE_DIRS {
-            let workspace_subdir = workspace.join(dir_name);
-            let staging_subdir = staging_dir.join(dir_name);
-            if workspace_subdir.exists() {
-                let _ = std::fs::remove_dir_all(&workspace_subdir);
-            }
-            if staging_subdir.exists() {
-                copy_dir_recursive(&staging_subdir, &workspace_subdir)
-                    .with_context(|| format!("copy dir {dir_name}"))?;
-            }
-        }
-
-        Ok(remote_version)
+        apply_definition_upgrade_from_staging(&staging_dir, workspace)
     })();
-
     let _ = std::fs::remove_dir_all(&staging_dir);
     result
+}
+
+/// Apply a definition-layer upgrade from a staging directory into `workspace`.
+///
+/// Replaces identity files (`UPGRADE_TEMPLATE_FILES`) + flows/agents/knowledge/
+/// style (`UPGRADE_TEMPLATE_DIRS`, removed then re-copied); does **not** touch
+/// sessions/, senders/, output/, logs/, history/, data/, users/.
+///
+/// `staging` must already contain the definition files (extracted from .agx or
+/// written from a fetched dup file map). The caller owns staging creation and
+/// cleanup so both the .agx path and the file-level path share this core.
+///
+/// Returns remote version string from staging `template.json` (may be empty).
+fn apply_definition_upgrade_from_staging(staging: &Path, workspace: &Path) -> Result<String> {
+    let remote_version: String = std::fs::read_to_string(staging.join("template.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<crate::TemplateManifest>(&s).ok())
+        .map(|t| t.version)
+        .unwrap_or_default();
+
+    for filename in UPGRADE_TEMPLATE_FILES {
+        let src = staging.join(filename);
+        if src.exists() {
+            std::fs::copy(&src, workspace.join(filename))
+                .with_context(|| format!("copy {filename}"))?;
+        }
+    }
+
+    for dir_name in UPGRADE_TEMPLATE_DIRS {
+        let workspace_subdir = workspace.join(dir_name);
+        let staging_subdir = staging.join(dir_name);
+        if workspace_subdir.exists() {
+            let _ = std::fs::remove_dir_all(&workspace_subdir);
+        }
+        if staging_subdir.exists() {
+            copy_dir_recursive(&staging_subdir, &workspace_subdir)
+                .with_context(|| format!("copy dir {dir_name}"))?;
+        }
+    }
+
+    Ok(remote_version)
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -505,6 +517,12 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 /// Download from Hub and apply definition-layer upgrade into `workspace`.
 ///
+/// File-level primary: fetches the template's manifest + files via the dup
+/// endpoints, writes them to a temp staging dir, and applies the definition
+/// upgrade from staging. Falls back to the .agx blob path
+/// (`download_template_bytes` + `apply_agx_definition_upgrade`) if the dup
+/// fetch or apply fails (e.g. older Hub without dup endpoints).
+///
 /// `template_name` is the Hub template name (usually same as agent name).
 /// Returns the remote version string from template.json.
 pub async fn upgrade_workspace_from_hub(
@@ -522,8 +540,40 @@ pub async fn upgrade_workspace_from_hub(
         workspace = %workspace.display(),
         "Upgrading clone definition from Hub"
     );
-    let bytes = download_template_bytes(hub_url, api_key, &key, version).await?;
-    let remote_version = apply_agx_definition_upgrade(&bytes, workspace)?;
+
+    let remote_version = match fetch_dup_files(hub_url, api_key, &key, version).await {
+        Ok((_manifest, files)) => {
+            // File-level: write fetched files to a temp staging dir, then apply
+            // the definition upgrade from staging (shared with the .agx path).
+            let staging_dir = std::env::temp_dir()
+                .join(format!("carrier-upgrade-dup-{}", uuid::Uuid::new_v4()));
+            let res = (|| {
+                crate::manifest::write_files_to_workspace(&files, &staging_dir)
+                    .context("write dup files to staging")?;
+                apply_definition_upgrade_from_staging(&staging_dir, workspace)
+            })();
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            match res {
+                Ok(v) => {
+                    tracing::info!("clone definition upgraded via dup file-level");
+                    v
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "dup file-level apply failed, falling back to .agx"
+                    );
+                    let bytes = download_template_bytes(hub_url, api_key, &key, version).await?;
+                    apply_agx_definition_upgrade(&bytes, workspace)?
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "dup file-level fetch failed, falling back to .agx");
+            let bytes = download_template_bytes(hub_url, api_key, &key, version).await?;
+            apply_agx_definition_upgrade(&bytes, workspace)?
+        }
+    };
 
     // Rebuild agent.toml with hub_template_id preserved/set
     let mut manifest = crate::build_manifest_from_workspace(
@@ -596,6 +646,124 @@ pub async fn publish_template(
     let status = body["status"].as_str().unwrap_or("unknown");
     tracing::info!("发布成功: {} v{} ({})", name, version, status);
     Ok(name.to_string())
+}
+
+/// Push a clone's definition-layer files to Hub as a new template version via
+/// the dup file-level write endpoint (`POST /api/templates/{name}/dup/push`).
+/// File-level counterpart of `publish_template` (which sends a .agx blob).
+///
+/// `files` is `path -> bytes`; `hash` is the manifest state id (server logs it
+/// for verification - the endpoint does NOT enforce fast-forward; each push is a
+/// new version snapshot, with client-side debounce handled by the caller).
+/// Returns the template name.
+pub async fn push_dup_files(
+    hub_url: &str,
+    api_key: &str,
+    name: &str,
+    files: &std::collections::BTreeMap<String, Vec<u8>>,
+    hash: &str,
+    changelog: Option<&str>,
+    visibility: Option<&str>,
+) -> Result<String> {
+    validate_hub_url(hub_url)?;
+    use base64::Engine;
+    let base = hub_url.trim_end_matches('/');
+    let url = format!("{}/api/templates/{}/dup/push", base, name);
+
+    let mut files_b64 = serde_json::Map::new();
+    for (path, bytes) in files {
+        files_b64.insert(
+            path.clone(),
+            serde_json::Value::String(base64::engine::general_purpose::STANDARD.encode(bytes)),
+        );
+    }
+    let mut payload = serde_json::json!({
+        "files": serde_json::Value::Object(files_b64),
+        "hash": hash,
+    });
+    if let Some(c) = changelog {
+        payload["changelog"] = serde_json::Value::String(c.to_string());
+    }
+    if let Some(vis) = visibility {
+        payload["visibility"] = serde_json::Value::String(vis.to_string());
+    }
+
+    let total_kb = files.values().map(|b| b.len()).sum::<usize>() as f64 / 1024.0;
+    tracing::info!("正在推送到 Hub 文件级 ({} files / {:.1} KB)...", files.len(), total_kb);
+
+    let resp = hub_post(&url, api_key)
+        .json(&payload)
+        .send()
+        .await
+        .context("无法连接 Hub")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        bail!("文件级推送失败: {} — {}", status, body);
+    }
+
+    let body: serde_json::Value = resp.json().await.context("解析 Hub 响应失败")?;
+    let resp_name = body["name"].as_str().unwrap_or("unknown");
+    let resp_version = body["version"].as_str().unwrap_or("unknown");
+    tracing::info!("文件级推送成功: {} v{}", resp_name, resp_version);
+    Ok(resp_name.to_string())
+}
+
+/// Outcome of `push_workspace_to_hub` - either a new version was pushed or the
+/// content was unchanged vs Hub latest (debounced, no-op).
+#[derive(Debug)]
+pub enum PushOutcome {
+    /// A new version was published (file-level primary, .agx fallback).
+    Pushed,
+    /// Local content is identical to Hub latest - nothing to do.
+    NoChange,
+}
+
+/// Push a running clone's definition layer to Hub as a new version. Closes the
+/// loop: runtime evolution (knowledge_add / flow_update / MEMORY) -> Hub.
+///
+/// Builds the manifest + collects definition files in one walk (manifest hash
+/// is computed from the collected bytes, so the two cannot diverge). Debounces
+/// against Hub latest manifest by hash (no-op if identical; Hub fetch error is
+/// treated as first publish and proceeds). Then pushes via the dup file-level
+/// write endpoint, falling back to the .agx blob path
+/// (`pack_workspace_as_agx` + `publish_template`) on any push error (e.g. older
+/// DupHub without the `/dup/push` endpoint).
+///
+/// `hub_id` is the Hub template key (name or UUID; read from clone_source).
+pub async fn push_workspace_to_hub(
+    hub_url: &str,
+    api_key: &str,
+    workspace: &Path,
+    hub_id: &str,
+) -> Result<PushOutcome> {
+    let files = crate::manifest::collect_definition_files(workspace)?;
+    let manifest_files: std::collections::BTreeMap<String, String> = files
+        .iter()
+        .map(|(p, b)| (p.clone(), crate::manifest::sha256_hex(b)))
+        .collect();
+    let hash = crate::manifest::manifest_hash(&manifest_files);
+
+    // Debounce: compare local manifest hash vs Hub latest. If Hub doesn't have
+    // the template yet (404 / Err), treat as first publish and proceed.
+    let skip = match fetch_dup_manifest(hub_url, api_key, hub_id, None).await {
+        Ok(hub_manifest) => hub_manifest.hash == hash,
+        Err(e) => {
+            tracing::info!(error = %e, "Hub manifest fetch failed, treating as first push");
+            false
+        }
+    };
+    if skip {
+        return Ok(PushOutcome::NoChange);
+    }
+
+    if let Err(e) = push_dup_files(hub_url, api_key, hub_id, &files, &hash, None, None).await {
+        tracing::warn!(error = %e, "dup file-level push failed, falling back to .agx");
+        let packed = crate::extractor::pack_workspace_as_agx(workspace)?;
+        publish_template(hub_url, api_key, &packed, None, None).await?;
+    }
+    Ok(PushOutcome::Pushed)
 }
 
 // === Plugins ===
