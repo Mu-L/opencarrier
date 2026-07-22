@@ -152,6 +152,14 @@ fn resolve_user_data_path(
         let rest = rel.strip_prefix("memory").unwrap_or("");
         let rest = rest.strip_prefix('/').unwrap_or(rest);
         ("memory", rest)
+    } else if rel.starts_with("input/") || rel == "input" {
+        // input/ holds files the user sent to the agent (saved by the channel
+        // bridge into senders/{sender}/input/). Route there so file_read /
+        // file_list / file_convert can read received attachments. Writes to
+        // input/ are blocked in tool_file_write to protect received files.
+        let rest = rel.strip_prefix("input").unwrap_or("");
+        let rest = rest.strip_prefix('/').unwrap_or(rest);
+        ("input", rest)
     } else if crate::workspace_sandbox::is_internal_path(rel) {
         // Internal paths go through sandbox
         return None;
@@ -232,6 +240,16 @@ async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> Result<String, 
 
 async fn tool_file_write(input: &Value, ctx: &ToolContext<'_>) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
+
+    // input/ is the user's inbox (attachments they sent, saved by the channel
+    // bridge). It's read-only from the agent's side - block writes here so a
+    // file_write can't overwrite a received file. Direct output to output/.
+    let normalized = raw_path.replace('\\', "/");
+    if normalized == "input" || normalized.starts_with("input/") {
+        return Err(
+            "input/ 是用户发来的文件收件箱（只读），请改用 output/ 前缀写文件。".to_string(),
+        );
+    }
 
     let resolved = if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
         match resolve_user_data_path(raw_path, hd, sid, ctx.owner_id, an) {
@@ -452,4 +470,64 @@ async fn tool_file_convert(input: &Value, ctx: &ToolContext<'_>) -> Result<Strin
         output_path.display(),
         out_size,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn home() -> PathBuf {
+        PathBuf::from("/tmp/oc-fs-test-home")
+    }
+
+    #[test]
+    fn input_path_resolves_to_sender_input_dir() {
+        // Files the user sent are saved by the bridge into
+        // senders/{sender}/input/. file_read/file_list must resolve input/
+        // there (not into output/input/ as the old catch-all did).
+        let h = home();
+        let sender = "u1@im.wechat";
+        let p = resolve_user_data_path("input/为.md", &h, sender, None, "mo-catering-ops")
+            .expect("input/ should resolve (not internal)")
+            .expect("path should be ok");
+        let expected = h
+            .join("workspaces")
+            .join("mo-catering-ops")
+            .join("senders")
+            .join(sender)
+            .join("input")
+            .join("为.md");
+        assert_eq!(p, expected);
+    }
+
+    #[test]
+    fn input_alone_resolves_to_input_dir() {
+        let h = home();
+        let p = resolve_user_data_path("input", &h, "u1", None, "ag")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p, h.join("workspaces/ag/senders/u1/input"));
+    }
+
+    #[test]
+    fn output_memory_and_catchall_unchanged() {
+        // Regression: existing output/ / memory/ / catch-all routing must not
+        // change when adding the input/ branch.
+        let h = home();
+        let p_out = resolve_user_data_path("output/r.md", &h, "u1", None, "ag")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p_out, h.join("workspaces/ag/senders/u1/output/r.md"));
+
+        let p_mem = resolve_user_data_path("memory/n.md", &h, "u1", None, "ag")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p_mem, h.join("workspaces/ag/senders/u1/memory/n.md"));
+
+        // catch-all (no recognized prefix) still goes to output/
+        let p_catch = resolve_user_data_path("foo.md", &h, "u1", None, "ag")
+            .unwrap()
+            .unwrap();
+        assert_eq!(p_catch, h.join("workspaces/ag/senders/u1/output/foo.md"));
+    }
 }

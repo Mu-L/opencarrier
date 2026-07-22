@@ -181,6 +181,11 @@
       <option value="">— 请选择用户 —</option>
     </select>
   </div>
+  <div style="margin-bottom:12px">
+    <label style="font-size:13px;margin-right:8px;color:var(--text-dim)">目录：</label>
+    <button id="file-tab-input" class="btn btn-sm" onclick="switchFileBase('input')" style="margin-right:6px">📥 收到的文件 (input)</button>
+    <button id="file-tab-output" class="btn btn-sm btn-ghost" onclick="switchFileBase('output')">📤 生成的文件 (output)</button>
+  </div>
   <div id="file-tree">
     <p style="color:var(--text-dim);font-size:13px">选择用户后显示文件列表</p>
   </div>
@@ -515,7 +520,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // ── File Management ──
 let fileCurrentPath = '';
-let fileCurrentBasePath = 'output';
+let fileCurrentBasePath = 'input';
 const FILE_VIEW_BASE = ''; // Use '' for relative URLs (same domain); set to 'https://file.yinnho.cn' when nginx is configured
 
 // Populate user dropdown when users data is available
@@ -534,6 +539,21 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
 });
+
+function switchFileBase(base) {
+  fileCurrentBasePath = base;
+  fileCurrentPath = '';
+  const i = document.getElementById('file-tab-input');
+  const o = document.getElementById('file-tab-output');
+  if (base === 'input') {
+    i.classList.remove('btn-ghost');
+    o.classList.add('btn-ghost');
+  } else {
+    o.classList.remove('btn-ghost');
+    i.classList.add('btn-ghost');
+  }
+  loadFileTree();
+}
 
 async function loadFileTree() {
   const sel = document.getElementById('file-user-select');

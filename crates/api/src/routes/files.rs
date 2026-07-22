@@ -757,14 +757,27 @@ pub async fn list_files_tree(
         _ => base.clone(),
     };
 
-    // Canonicalize and security check
+    // Canonicalize and security check. If the directory doesn't exist yet
+    // (e.g. a sender who never generated output, or hasn't received any
+    // input), return an empty listing (200) instead of 404 so the UI shows
+    // "该目录为空" rather than "加载失败: Directory not found".
     let base_canonical = match base.canonicalize() {
         Ok(p) => p,
-        Err(_) => return err(StatusCode::NOT_FOUND, "Directory not found"),
+        Err(_) => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({ "items": [], "base_path": subdir })),
+            )
+        }
     };
     let target_canonical = match target.canonicalize() {
         Ok(p) => p,
-        Err(_) => return err(StatusCode::NOT_FOUND, "Directory not found"),
+        Err(_) => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({ "items": [], "base_path": subdir })),
+            )
+        }
     };
     if !target_canonical.starts_with(&base_canonical) {
         return err(StatusCode::FORBIDDEN, "Path traversal denied");
