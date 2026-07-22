@@ -52,20 +52,53 @@ pub async fn install_hub_template(
         }
     };
 
-    tracing::info!(template = %name, "Downloading from Hub for install");
+    tracing::info!(template = %name, "Installing from Hub");
 
-    let agx_bytes = match clone::hub::download_template_bytes(&hub_url, &hub_api_key, &name, None).await {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({"error": format!("Hub download failed: {e}")})),
-            );
-        }
-    };
+    // File-level install (dup manifest + per-file). Falls back to .agx blob if
+    // the Hub doesn't expose the dup endpoints yet (older deploy) or the fetch
+    // fails - .agx is the legacy authoritative path.
+    let install_result: Result<(String, String, usize), String> =
+        match clone::hub::fetch_dup_files(&hub_url, &hub_api_key, &name, None).await {
+            Ok((_manifest, files)) => {
+                let size: usize = files.values().map(|b| b.len()).sum();
+                tracing::info!(
+                    template = %name,
+                    file_count = files.len(),
+                    "Installing clone via dup file-level"
+                );
+                state
+                    .kernel
+                    .clone_install_files(&name, files)
+                    .await
+                    .map(|(id, n, _)| (id, n, size))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    template = %name,
+                    error = %e,
+                    "dup file-level fetch failed, falling back to .agx"
+                );
+                match clone::hub::download_template_bytes(&hub_url, &hub_api_key, &name, None).await {
+                    Ok(agx_bytes) => {
+                        let size = agx_bytes.len();
+                        state
+                            .kernel
+                            .clone_install(&name, &agx_bytes)
+                            .await
+                            .map(|(id, n, _)| (id, n, size))
+                    }
+                    Err(e) => {
+                        return (
+                            StatusCode::BAD_GATEWAY,
+                            Json(serde_json::json!({"error": format!("Hub download failed: {e}")})),
+                        );
+                    }
+                }
+            }
+        };
 
-    match state.kernel.clone_install(&name, &agx_bytes).await {
-        Ok((agent_id, agent_name, _display_name)) => {
+    match install_result {
+        Ok((agent_id, agent_name, size)) => {
             // Bind to sender if sender_id provided
             if let Some(ref sid) = sender_id {
                 if let Some(ref pm_arc) = state.channel_manager {
@@ -86,7 +119,7 @@ pub async fn install_hub_template(
                 Json(serde_json::json!({
                     "agent_id": agent_id,
                     "name": agent_name,
-                    "size": agx_bytes.len(),
+                    "size": size,
                     "serial_number": serial,
                     "share_url": share_url,
                 })),

@@ -32,22 +32,39 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<(Stri
 
     tracing::info!(template = %name, "Auto-installing Hub template for QR binding");
 
-    let agx_bytes = match clone::hub::download_template_bytes(&hub_url, &api_key, name, None).await {
-        Ok(b) => b,
+    // File-level (dup) install with .agx fallback. Returns agent_name (not UUID)
+    // so bind_agent stays consistent with the local-found path + set_sender_route.
+    let install = match clone::hub::fetch_dup_files(&hub_url, &api_key, name, None).await {
+        Ok((_manifest, files)) => {
+            tracing::info!(
+                template = %name,
+                file_count = files.len(),
+                "Auto-installing via dup file-level"
+            );
+            state.kernel.clone_install_files(name, files).await
+        }
         Err(e) => {
-            tracing::warn!(error = %e, "Hub download failed for auto-install");
-            return None;
+            tracing::warn!(
+                template = %name,
+                error = %e,
+                "dup file-level fetch failed, falling back to .agx"
+            );
+            match clone::hub::download_template_bytes(&hub_url, &api_key, name, None).await {
+                Ok(agx_bytes) => state.kernel.clone_install(name, &agx_bytes).await,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Hub download failed for auto-install");
+                    return None;
+                }
+            }
         }
     };
 
-    match state.kernel.clone_install(name, &agx_bytes).await {
+    match install {
         Ok((agent_id, agent_name, display_name)) => {
             tracing::info!(%agent_id, %agent_name, "Hub template auto-installed for QR binding");
             let share_url = state.kernel.config.external_url.as_ref().map(|url| {
                 format!("{}/share?clone={}", url.trim_end_matches('/'), agent_name)
             });
-            // Return the name (not agent_id) so bind_agent stays consistent
-            // with the local-found path and with set_sender_route.
             Some((agent_name, display_name, share_url))
         }
         Err(e) => {

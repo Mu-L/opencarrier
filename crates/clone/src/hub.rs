@@ -337,6 +337,97 @@ pub async fn download_template_bytes(
     Ok(bytes.to_vec())
 }
 
+/// Fetch a template's file-level manifest from Hub (dup file-level install).
+///
+/// Returns the same `{files, hash}` shape opencarrier uses locally, so the
+/// hash is directly comparable to a local `build_manifest`. `version=None`
+/// resolves to latest on the Hub side.
+pub async fn fetch_dup_manifest(
+    hub_url: &str,
+    api_key: &str,
+    name: &str,
+    version: Option<&str>,
+) -> Result<crate::manifest::Manifest> {
+    validate_hub_url(hub_url)?;
+    let base = hub_url.trim_end_matches('/');
+    let key = urlencoding::encode(name);
+    let mut url = format!("{}/api/templates/{}/dup/manifest", base, key);
+    if let Some(v) = version {
+        url.push_str("?version=");
+        url.push_str(&urlencoding::encode(v));
+    }
+    let resp = hub_get(&url, api_key)
+        .send()
+        .await
+        .context("无法连接 Hub")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        bail!("拉取 manifest 失败 {}: {} - {}", name, status, body);
+    }
+    let manifest: crate::manifest::Manifest =
+        resp.json().await.context("解析 manifest 失败")?;
+    Ok(manifest)
+}
+
+/// Fetch a single definition-layer file's raw bytes from Hub (dup file-level
+/// install). `path` is relative to the workspace root (e.g. `knowledge/x.md`).
+pub async fn fetch_dup_file(
+    hub_url: &str,
+    api_key: &str,
+    name: &str,
+    path: &str,
+    version: Option<&str>,
+) -> Result<Vec<u8>> {
+    validate_hub_url(hub_url)?;
+    let base = hub_url.trim_end_matches('/');
+    let key = urlencoding::encode(name);
+    // Encode each segment but keep `/` so the Hub's catch-all route matches.
+    let encoded_path = path
+        .split('/')
+        .map(urlencoding::encode)
+        .collect::<Vec<_>>()
+        .join("/");
+    let mut url = format!("{}/api/templates/{}/dup/file/{}", base, key, encoded_path);
+    if let Some(v) = version {
+        url.push_str("?version=");
+        url.push_str(&urlencoding::encode(v));
+    }
+    let resp = hub_get(&url, api_key)
+        .send()
+        .await
+        .context("无法连接 Hub")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        bail!("拉取文件失败 {} [{}]: {} - {}", name, path, status, body);
+    }
+    let bytes = resp.bytes().await.context("读取响应失败")?;
+    Ok(bytes.to_vec())
+}
+
+/// Fetch the manifest + every file for a template via the dup file-level
+/// endpoints. Convenience for the install path (replaces downloading one .agx
+/// blob). Returns `(manifest, path -> bytes)`.
+pub async fn fetch_dup_files(
+    hub_url: &str,
+    api_key: &str,
+    name: &str,
+    version: Option<&str>,
+) -> Result<(
+    crate::manifest::Manifest,
+    std::collections::BTreeMap<String, Vec<u8>>,
+)> {
+    let manifest = fetch_dup_manifest(hub_url, api_key, name, version).await?;
+    let mut files: std::collections::BTreeMap<String, Vec<u8>> =
+        std::collections::BTreeMap::new();
+    for path in manifest.files.keys() {
+        let bytes = fetch_dup_file(hub_url, api_key, name, path, version).await?;
+        files.insert(path.clone(), bytes);
+    }
+    Ok((manifest, files))
+}
+
 /// Definition-layer files replaced on upgrade (identity / config).
 const UPGRADE_TEMPLATE_FILES: &[&str] = &[
     "SOUL.md",

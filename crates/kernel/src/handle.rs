@@ -1135,6 +1135,96 @@ impl CarrierKernel {
 
         Ok((id.to_string(), agent_name, display_name))
     }
+
+    /// Install a clone from a file-level manifest + fetched files (dup
+    /// file-level path), bypassing the .agx blob. Mirrors `clone_install` but
+    /// writes files via `clone::write_files_to_workspace` instead of
+    /// `extract_agx`; everything after (build_manifest_from_workspace ->
+    /// agent.toml -> spawn -> plugins) is identical.
+    pub async fn clone_install_files(
+        &self,
+        name: &str,
+        files: std::collections::BTreeMap<String, Vec<u8>>,
+    ) -> Result<(String, String, String), String> {
+        use clone::{build_manifest_from_workspace, write_files_to_workspace};
+
+        if name.is_empty()
+            || name.len() > 64
+            || name.starts_with('-')
+            || name.ends_with('-')
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
+            return Err(format!(
+                "Invalid clone name '{}': must be 1-64 lowercase alphanumeric/hyphen characters",
+                name
+            ));
+        }
+
+        let workspace_dir = self.config.effective_workspaces_dir().join(name);
+        if !workspace_dir.starts_with(self.config.effective_workspaces_dir()) {
+            return Err("Path traversal denied".to_string());
+        }
+
+        let clone_name = name.to_string();
+
+        if self.registry.find_by_name(&clone_name).is_some() {
+            return Err(format!("Agent '{}' already exists", clone_name));
+        }
+        if workspace_dir.exists() {
+            return Err(format!(
+                "Workspace for '{}' already exists",
+                clone_name
+            ));
+        }
+
+        // File-level write (replaces extract_agx).
+        let security_warnings =
+            write_files_to_workspace(&files, &workspace_dir).map_err(|e| {
+                let _ = std::fs::remove_dir_all(&workspace_dir);
+                format!("Failed to write files: {e}")
+            })?;
+
+        let mut manifest = build_manifest_from_workspace(&workspace_dir, &clone_name, Some(clone_name.clone()))
+            .map_err(|e| {
+                let _ = std::fs::remove_dir_all(&workspace_dir);
+                format!("Failed to build manifest: {e}")
+            })?;
+        manifest.workspace = Some(workspace_dir.clone());
+
+        let toml_str = toml::to_string_pretty(&manifest)
+            .map_err(|e| format!("Failed to serialize agent.toml: {e}"))?;
+        std::fs::write(workspace_dir.join("agent.toml"), toml_str)
+            .map_err(|e| format!("Failed to write agent.toml: {e}"))?;
+
+        let agent_name = manifest.name.clone();
+        let display_name = manifest.display_name.clone();
+        let id = self
+            .spawn_agent(manifest)
+            .map_err(|e| format!("Spawn failed: {e}"))?;
+
+        let plugins = std::fs::read_to_string(workspace_dir.join("template.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str::<clone::TemplateManifest>(&s).ok())
+            .map(|t| t.plugins)
+            .unwrap_or_default();
+
+        if !plugins.is_empty() {
+            self.resolve_plugin_dependencies(&plugins).await;
+        }
+
+        tracing::info!(
+            name = %agent_name,
+            id = %id,
+            warnings = security_warnings.len(),
+            file_count = files.len(),
+            plugins = ?plugins,
+            "Clone installed (dup file-level flow)"
+        );
+
+        Ok((id.to_string(), agent_name, display_name))
+    }
 }
 
 // ── MemorySubstrateHandle — wraps MemorySubstrate to implement MemoryHandle ──

@@ -7,7 +7,7 @@
 //! `path:hash` serialization) used as a state id for fast-forward comparison.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
@@ -128,4 +128,68 @@ pub fn sha256_hex(data: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(data);
     format!("{:x}", h.finalize())
+}
+
+/// Write a set of files (`path -> bytes`) into `workspace`, enforcing the same
+/// definition-layer + traversal safety as the `dup` push endpoint. Creates
+/// parent dirs and writes atomically (`.duptmp` + rename). Files outside the
+/// definition layer (runtime dirs, `agent.toml`/`AGENT.json`, test dirs, `.bak`)
+/// are skipped with a warning rather than written.
+///
+/// This is the file-level counterpart of `extract_agx`: instead of unpacking a
+/// tar.gz blob, it writes individually-fetched files (e.g. pulled from a DupHub
+/// manifest). Returns security warnings (empty on clean).
+pub fn write_files_to_workspace(
+    files: &BTreeMap<String, Vec<u8>>,
+    workspace: &Path,
+) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    let ws_canonical = workspace
+        .canonicalize()
+        .with_context(|| format!("canonicalize {}", workspace.display()))?;
+    for (rel, content) in files {
+        let p = Path::new(rel);
+        if p
+            .components()
+            .any(|c| matches!(c, Component::ParentDir | Component::RootDir))
+        {
+            anyhow::bail!("path traversal denied: {rel}");
+        }
+        let top = rel.split('/').next().unwrap_or(rel);
+        if SKIP.contains(&top) || is_test_dir(top) || is_bak(top) {
+            warnings.push(format!("skipped non-definition-layer file: {rel}"));
+            continue;
+        }
+        let file_path = workspace.join(rel);
+        // For new files, validate via the parent dir; for existing, via the file.
+        let check = if file_path.exists() {
+            file_path
+                .canonicalize()
+                .unwrap_or_else(|_| file_path.clone())
+        } else {
+            file_path
+                .parent()
+                .and_then(|p| p.canonicalize().ok())
+                .map(|p| p.join(file_path.file_name().unwrap_or_default()))
+                .unwrap_or_else(|| file_path.clone())
+        };
+        if !check.starts_with(&ws_canonical) {
+            anyhow::bail!("path traversal denied: {rel}");
+        }
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| format!("mkdir {rel}"))?;
+        }
+        // Atomic write: sibling .duptmp then rename.
+        let filename = file_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let tmp = file_path.with_file_name(format!(".{filename}.duptmp"));
+        std::fs::write(&tmp, content).with_context(|| format!("write {rel}"))?;
+        if let Err(e) = std::fs::rename(&tmp, &file_path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e).with_context(|| format!("rename {rel}"));
+        }
+    }
+    Ok(warnings)
 }
