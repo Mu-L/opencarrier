@@ -11,6 +11,28 @@ use std::collections::HashSet;
 use std::path::Path;
 use tracing::warn;
 
+/// Resolve the `shell_exec`/`cli_exec` subprocess cwd.
+///
+/// When the turn is driven by a per-user channel (a sender is present), cd into
+/// the sender-scoped data dir — the same dir `file_write` writes to — so a shell
+/// pipeline can read files the agent just wrote this turn. Without a sender
+/// (CLI/system turns), fall back to the workspace root. The path uses the same
+/// `sender_data_dir` as the file API, so the two stay byte-aligned.
+fn resolve_shell_cwd(ctx: &ToolContext<'_>) -> Option<std::path::PathBuf> {
+    let workspace_root = ctx.workspace_root?;
+    match (ctx.home_dir, ctx.agent_name, ctx.sender_id) {
+        (Some(home), Some(agent), Some(sender)) => {
+            let owner = ctx.owner_id.unwrap_or(sender);
+            let dir = types::config::sender_data_dir(home, owner, agent, Some(sender));
+            // `file_write` may not have created it yet this turn; ensure it exists
+            // so `current_dir` (cd) doesn't fail.
+            let _ = std::fs::create_dir_all(&dir);
+            Some(dir)
+        }
+        _ => Some(workspace_root.to_path_buf()),
+    }
+}
+
 /// Shell execution tools.
 pub struct ShellTools;
 
@@ -44,7 +66,7 @@ impl ToolModule for ShellTools {
         let command = input["command"].as_str().unwrap_or("");
         let exec_policy = ctx.exec_policy;
         let allowed_env = ctx.allowed_env_vars.unwrap_or(&[]);
-        let workspace_root = ctx.workspace_root;
+        let workspace_root = resolve_shell_cwd(ctx);
 
         // SECURITY: Always check for shell metacharacters, even in Full mode.
         if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(command) {
@@ -101,7 +123,7 @@ impl ToolModule for ShellTools {
             }
         }
 
-        Some(exec_shell(input, allowed_env, workspace_root, exec_policy).await)
+        Some(exec_shell(input, allowed_env, workspace_root.as_deref(), exec_policy).await)
     }
 
     fn permission_level(&self, _tool_name: &str) -> types::tool::PermissionLevel {
@@ -319,14 +341,14 @@ impl ToolModule for CliExecTools {
 
         // 3. Execute directly — no shell wrapper
         let allowed_env = ctx.allowed_env_vars.unwrap_or(&[]);
-        let workspace_root = ctx.workspace_root;
+        let workspace_root = resolve_shell_cwd(ctx);
 
         let mut cmd = tokio::process::Command::new(&argv[0]);
         if argv.len() > 1 {
             cmd.args(&argv[1..]);
         }
 
-        if let Some(ws) = workspace_root {
+        if let Some(ws) = workspace_root.as_deref() {
             cmd.current_dir(ws);
         }
 
