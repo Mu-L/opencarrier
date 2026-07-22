@@ -203,6 +203,9 @@ async fn exec_shell(
     cmd.env("PYTHONIOENCODING", "utf-8");
 
     cmd.stdin(std::process::Stdio::null());
+    // Kill the child on drop (timeout / cancellation) — same orphan-prevention
+    // rationale as cli_exec: a timed-out command must not keep running.
+    cmd.kill_on_drop(true);
 
     let result =
         tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output()).await;
@@ -290,7 +293,8 @@ impl ToolModule for CliExecTools {
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "Command name (e.g. 'gh', 'todoist')" },
-                    "args": { "type": "string", "description": "Arguments as a single string (e.g. 'pr list --repo owner/repo')" }
+                    "args": { "type": "string", "description": "Arguments as a single string (e.g. 'pr list --repo owner/repo')" },
+                    "timeout_seconds": { "type": "integer", "description": "Max seconds to run (default: exec_policy timeout, ~60s). Set higher (e.g. 180) for long calls such as brain API image/video generation." }
                 },
                 "required": ["command"]
             }),
@@ -358,8 +362,14 @@ impl ToolModule for CliExecTools {
         cmd.env("PYTHONIOENCODING", "utf-8");
 
         cmd.stdin(std::process::Stdio::null());
+        // Kill the child if this future is dropped (e.g. on timeout). Without
+        // this, a timed-out subprocess (brain API scripts, batch runners)
+        // becomes an orphan that keeps running and consuming resources / API
+        // quota after the tool call has already returned "timed out".
+        cmd.kill_on_drop(true);
 
-        let timeout_secs = 30u64;
+        let policy_timeout = ctx.exec_policy.map(|p| p.timeout_secs).unwrap_or(30);
+        let timeout_secs = input["timeout_seconds"].as_u64().unwrap_or(policy_timeout);
         let result =
             tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output()).await;
 
