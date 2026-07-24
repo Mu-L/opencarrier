@@ -83,7 +83,7 @@ impl ToolModule for ShellTools {
         // shell_allow were already enforced in tool_runner; re-check allow here.
         let flow_shell_scoped = ctx
             .flow_shell_allow
-            .map(|p| !p.is_empty() && types::flow::command_matches_shell_allow(command, p))
+            .map(|p| !p.is_empty() && types::flow::command_matches_flow_shell_allow(command, p, ctx.workspace_root))
             .unwrap_or(false);
 
         // Exec policy enforcement (allowlist / deny / full) — unless flow-scoped.

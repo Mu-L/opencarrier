@@ -388,6 +388,35 @@ pub fn command_matches_shell_allow(command: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|p| shell_allow_glob_match(p.trim(), cmd))
 }
 
+/// Match a shell command against flow `shell_allow` patterns, also trying a
+/// workspace-relative-ized form of the command.
+///
+/// Flow authors write workspace-relative patterns (e.g. `python3 flows/foo/*`),
+/// but agents often discover and use absolute workspace paths
+/// (`python3 /home/.../ws/flows/foo/scripts/x.py`). Stripping the
+/// `workspace_root` prefix lets the same relative pattern match the absolute
+/// command pointing at the identical script. Security-neutral: the same glob
+/// match runs — the actual executed command is unchanged, and relative-pattern
+/// traversal risk (already present) is not widened.
+pub fn command_matches_flow_shell_allow(
+    command: &str,
+    patterns: &[String],
+    workspace_root: Option<&std::path::Path>,
+) -> bool {
+    if command_matches_shell_allow(command, patterns) {
+        return true;
+    }
+    if let Some(ws) = workspace_root.and_then(|p| p.to_str()) {
+        if !ws.is_empty() {
+            let rel = command.replace(&format!("{ws}/"), "");
+            if rel != command && command_matches_shell_allow(&rel, patterns) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn shell_allow_glob_match(pattern: &str, text: &str) -> bool {
     if pattern == "*" {
         return true;
@@ -1210,6 +1239,28 @@ b"#;
             "python3 output/scripts/a.py",
             &[]
         ));
+    }
+
+    #[test]
+    fn flow_shell_allow_matches_absolute_workspace_path() {
+        // Flow authors write workspace-relative patterns; agents often use the
+        // absolute workspace path they discovered. Stripping workspace_root lets
+        // the relative pattern match the absolute command at the same script.
+        let patterns = vec!["python3 flows/art-director/*".to_string()];
+        let ws = std::path::Path::new("/home/u/.opencarrier/workspaces/demo");
+        let abs = "python3 /home/u/.opencarrier/workspaces/demo/flows/art-director/scripts/build.py --x 1";
+        assert!(command_matches_flow_shell_allow(abs, &patterns, Some(ws)));
+        // Same command without workspace_root insight must NOT match a relative
+        // pattern (the original command_matches_shell_allow returns false here).
+        assert!(!command_matches_shell_allow(abs, &patterns));
+        // A path outside the workspace is still denied.
+        assert!(!command_matches_flow_shell_allow(
+            "python3 /tmp/evil.py",
+            &patterns,
+            Some(ws)
+        ));
+        // Empty workspace_root → falls back to literal match only.
+        assert!(!command_matches_flow_shell_allow(abs, &patterns, None));
     }
 
     #[test]

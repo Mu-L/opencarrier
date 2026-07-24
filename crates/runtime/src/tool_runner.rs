@@ -39,7 +39,7 @@ pub async fn execute_tool(
         mcp_connections,
         fetch_engine: _,
         allowed_env_vars: _,
-        workspace_root: _,
+        workspace_root,
         brain: _,
         exec_policy: _,
         process_manager: _,
@@ -104,7 +104,7 @@ pub async fn execute_tool(
         if let Some(patterns) = flow_shell_allow {
             if !patterns.is_empty() {
                 let command = input_ref["command"].as_str().unwrap_or("");
-                if !types::flow::command_matches_shell_allow(command, patterns) {
+                if !types::flow::command_matches_flow_shell_allow(command, patterns, workspace_root) {
                     warn!(
                         tool_name,
                         command = %crate::str_utils::safe_truncate_str(command, 80),
