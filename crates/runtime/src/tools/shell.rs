@@ -123,7 +123,16 @@ impl ToolModule for ShellTools {
             }
         }
 
-        Some(exec_shell(input, allowed_env, workspace_root.as_deref(), exec_policy).await)
+        // Flow-scoped shell_exec (shell_allow matched) runs vetted flow scripts that
+    // may make slow API calls (image/video gen, vision describe) — give them a
+    // longer default timeout than the 30s exec_policy default. The agent can
+    // still override per-call via the `timeout_seconds` input field.
+    let default_timeout_secs = if flow_shell_scoped {
+        FLOW_SHELL_DEFAULT_TIMEOUT_SECS
+    } else {
+        exec_policy.map(|p| p.timeout_secs).unwrap_or(30)
+    };
+    Some(exec_shell(input, allowed_env, workspace_root.as_deref(), exec_policy, default_timeout_secs).await)
     }
 
     fn permission_level(&self, _tool_name: &str) -> types::tool::PermissionLevel {
@@ -132,17 +141,23 @@ impl ToolModule for ShellTools {
     }
 }
 
+/// Default timeout for flow-scoped shell_exec (shell_allow matched). Flow
+/// scripts are vetted and routinely make slow calls (brain API image/video
+/// generation, vision describe) that exceed the 30s exec_policy default —
+/// failing occupancy/seedream generation mid-run.
+const FLOW_SHELL_DEFAULT_TIMEOUT_SECS: u64 = 300;
+
 async fn exec_shell(
     input: &Value,
     allowed_env: &[String],
     workspace_root: Option<&Path>,
     exec_policy: Option<&types::config::ExecPolicy>,
+    default_timeout_secs: u64,
 ) -> Result<String, String> {
     let command = input["command"]
         .as_str()
         .ok_or("Missing 'command' parameter")?;
-    let policy_timeout = exec_policy.map(|p| p.timeout_secs).unwrap_or(30);
-    let timeout_secs = input["timeout_seconds"].as_u64().unwrap_or(policy_timeout);
+    let timeout_secs = input["timeout_seconds"].as_u64().unwrap_or(default_timeout_secs);
 
     let use_direct_exec = exec_policy
         .map(|p| p.mode == ExecSecurityMode::Allowlist)

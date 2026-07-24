@@ -85,10 +85,13 @@ pub(in crate::agent_loop) const TOOL_SEARCH_RECALL_LIMIT: usize = 10;
 /// Raised from 60s to 120s for browser automation and long-running builds.
 pub const TOOL_TIMEOUT_SECS: u64 = 120;
 
-/// Tools that need a longer timeout (image generation, browser automation).
+/// Tools that need a longer timeout (image generation, browser automation, and
+/// shell_exec — flow scripts make slow brain API image/video/vision calls that
+/// exceed the default 120s; the inner shell.rs timeout also rises for
+/// flow-scoped shell_allow calls).
 pub const TOOL_TIMEOUT_LONG_SECS: u64 = 300;
 pub const TOOL_LONG_TIMEOUT_NAMES: &[&str] =
-    &["image_generate", "browser_navigate", "browser_execute"];
+    &["image_generate", "browser_navigate", "browser_execute", "shell_exec"];
 
 /// Maximum message history size before auto-trimming to prevent context overflow.
 pub const MAX_HISTORY_MESSAGES: usize = 30;
