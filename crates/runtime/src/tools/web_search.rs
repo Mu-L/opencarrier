@@ -157,6 +157,15 @@ async fn do_search(base_url: &str, input: &Value) -> Result<String, String> {
             output.push_str(&format!("{}\n", snippet));
         }
 
+        // Image direct link. AginxBrowser /search with categories=images returns
+        // image_url as a binary-downloadable link (distinct from the page `url`
+        // above) so the caller can `curl -o` it without scraping a page.
+        if let Some(img) = r["image_url"].as_str() {
+            if !img.is_empty() {
+                output.push_str(&format!("image_url: {}\n", img));
+            }
+        }
+
         // Full content (only present when fetch_top > 0 and index < fetch_top)
         if let Some(content) = r["content"].as_str() {
             if !content.is_empty() {
