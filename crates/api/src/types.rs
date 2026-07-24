@@ -44,6 +44,11 @@ pub struct MessageRequest {
     /// Sender display name.
     #[serde(default)]
     pub sender_name: Option<String>,
+    /// Explicitly pin the flow to run for this message, bypassing the LLM
+    /// flow classifier. When set, the named flow is loaded directly (like a
+    /// resume) — the classifier is skipped entirely. Empty/absent = classify.
+    #[serde(default)]
+    pub active_flow: Option<String>,
 }
 
 /// Response from sending a message.

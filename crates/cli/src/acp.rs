@@ -422,6 +422,7 @@ fn acp_session_prompt(
                 None,
                 None,
                 None,
+                None,
             ).await {
                 Ok(r) => r,
                 Err(e) => return Err(format!("Failed to start streaming: {e}")),

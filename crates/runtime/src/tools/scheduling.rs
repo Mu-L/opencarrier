@@ -350,7 +350,7 @@ impl ToolModule for SchedulingTools {
                         },
                         "action": {
                             "type": "object",
-                            "description": "Action: {\"kind\":\"system_event\",\"text\":\"...\"} or {\"kind\":\"agent_turn\",\"message\":\"...\",\"timeout_secs\":300}"
+                            "description": "Action: {\"kind\":\"system_event\",\"text\":\"...\"} or {\"kind\":\"agent_turn\",\"message\":\"...\",\"timeout_secs\":300,\"active_flow\":\"<flow_name>\"}. active_flow (optional) pins the flow to run, bypassing the LLM classifier."
                         },
                         "delivery": {
                             "type": "object",

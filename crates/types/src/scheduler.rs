@@ -121,6 +121,10 @@ pub enum CronAction {
         model_override: Option<String>,
         /// Timeout in seconds (10..=600).
         timeout_secs: Option<u64>,
+        /// Explicitly pin the flow to run for this turn, bypassing the LLM
+        /// flow classifier (loaded by name, like a resume). None = classify.
+        #[serde(default)]
+        active_flow: Option<String>,
     },
 }
 
@@ -628,6 +632,7 @@ mod tests {
             message: String::new(),
             model_override: None,
             timeout_secs: None,
+            active_flow: None,
         };
         let err = job.validate(0).unwrap_err();
         assert!(err.contains("empty"), "{err}");
@@ -640,6 +645,7 @@ mod tests {
             message: "x".repeat(16_385),
             model_override: None,
             timeout_secs: None,
+            active_flow: None,
         };
         let err = job.validate(0).unwrap_err();
         assert!(err.contains("too long"), "{err}");
@@ -652,6 +658,7 @@ mod tests {
             message: "hello".into(),
             model_override: None,
             timeout_secs: Some(9),
+            active_flow: None,
         };
         let err = job.validate(0).unwrap_err();
         assert!(err.contains("too small"), "{err}");
@@ -664,6 +671,7 @@ mod tests {
             message: "hello".into(),
             model_override: None,
             timeout_secs: Some(601),
+            active_flow: None,
         };
         let err = job.validate(0).unwrap_err();
         assert!(err.contains("too large"), "{err}");
@@ -676,6 +684,7 @@ mod tests {
             message: "hello".into(),
             model_override: Some("claude-haiku-4-5-20251001".into()),
             timeout_secs: Some(10),
+            active_flow: None,
         };
         assert!(job.validate(0).is_ok());
 
@@ -683,6 +692,7 @@ mod tests {
             message: "hello".into(),
             model_override: None,
             timeout_secs: Some(600),
+            active_flow: None,
         };
         assert!(job.validate(0).is_ok());
     }
@@ -694,6 +704,7 @@ mod tests {
             message: "hello".into(),
             model_override: None,
             timeout_secs: None,
+            active_flow: None,
         };
         assert!(job.validate(0).is_ok());
     }
@@ -781,6 +792,7 @@ mod tests {
             message: "hi".into(),
             model_override: None,
             timeout_secs: Some(30),
+            active_flow: None,
         };
         let json = serde_json::to_string(&action).unwrap();
         assert!(json.contains("\"kind\":\"agent_turn\""));

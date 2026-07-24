@@ -144,6 +144,7 @@ pub async fn send_message(
             None,
             None,
             None,
+            req.active_flow.as_deref(),
         )
         .await
     {
@@ -231,6 +232,7 @@ pub async fn send_message_stream(
         req.sender_name,
         None,
         None,
+        req.active_flow.as_deref(),
     ).await {
         Ok(pair) => pair,
         Err(e) => {

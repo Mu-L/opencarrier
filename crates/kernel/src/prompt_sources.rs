@@ -597,6 +597,7 @@ pub async fn classify_flow_with_llm(
     brain: &std::sync::Arc<dyn runtime::llm_driver::Brain>,
     declared_flows: &[String],
     recent_turns: &[(String, String)],
+    is_clone: bool,
 ) -> Option<FlowMatch> {
     // Collect flow summaries from two sources, private first so it wins
     // on name collisions with shared system flows:
@@ -624,10 +625,25 @@ pub async fn classify_flow_with_llm(
     // (e.g. an agent built around `product-short-drama` should never be
     // intercepted by the shared `short-video` flow.) Empty declared list
     // = consider all candidates (default, backward-compatible).
+    //
+    // Clone self-heal: a clone's `flows` list is auto-generated at install
+    // (scan_flows) and dup does not track agent.toml, so it goes stale when
+    // flows are added to workspace/flows/ (e.g. art-director added later but
+    // never in the stale list). For clones, don't let a stale list hide the
+    // clone's OWN workspace flows — only restrict shared system flows (the
+    // allowlist's actual purpose: avoid falling through to a generic flow).
     if !declared_flows.is_empty() {
         let allow: std::collections::HashSet<String> =
             declared_flows.iter().map(|f| f.to_lowercase()).collect();
-        flow_summaries.retain(|(name, _, _, _)| allow.contains(&name.to_lowercase()));
+        flow_summaries.retain(|(name, _, _, is_shared)| {
+            if *is_shared {
+                allow.contains(&name.to_lowercase())
+            } else if is_clone {
+                true
+            } else {
+                allow.contains(&name.to_lowercase())
+            }
+        });
     }
 
     if flow_summaries.is_empty() {

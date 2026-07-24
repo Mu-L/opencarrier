@@ -174,6 +174,45 @@ impl CarrierKernel {
     /// check, core tool set assembly, flow/subagent classification, and manifest
     /// mutation. Returns a `PreparedContext` that both streaming and non-streaming
     /// paths consume before diverging at the actual LLM invocation.
+    /// Load a named flow and prepare its turn injection: inject the flow's
+    /// tools into `tools`, build the flow prompt string, and read its
+    /// `max_iterations`. Shared by the resume path (user replying to a
+    /// suspended flow) and the explicit `active_flow` path — both bypass the
+    /// non-deterministic LLM classifier and load by name. Returns `None` when
+    /// no flow definition matches `flow_name`.
+    fn load_named_flow_for_turn(
+        &self,
+        entry: &AgentEntry,
+        tools: &mut Vec<types::tool::ToolDefinition>,
+        flow_name: &str,
+    ) -> Option<(String, Option<u32>, crate::prompt_sources::FlowMatch)> {
+        let ws = entry.manifest.workspace.as_ref()?;
+        let flow = crate::prompt_sources::load_flow_by_name(ws, flow_name)?;
+        let flow_name_owned = flow.name.clone();
+        let flow_body = flow.body.clone();
+        let flow_max_iter = flow.max_iterations;
+        let elevate = flow.elevates();
+        let flow_warnings = self.inject_flow_tools(
+            tools,
+            &flow,
+            entry.manifest.max_tool_level,
+            elevate,
+            entry.manifest.cli_exec.clone().unwrap_or_default(),
+        );
+        let mut flow_prompt = format!("**{}**\n{}", flow_name_owned, flow_body);
+        if !flow_warnings.is_empty() {
+            flow_prompt.push_str(&format!(
+                "\n\n⚠️ **Flow Tool Warnings:**\n{}",
+                flow_warnings
+                    .iter()
+                    .map(|w| format!("- {}", w))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+        Some((flow_prompt, flow_max_iter, flow))
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn prepare_agent_context(
         &self,
@@ -186,6 +225,7 @@ impl CarrierKernel {
         channel_type: &Option<String>,
         task_id: Option<&str>,
         resume_flow: Option<&memory::FlowRunRow>,
+        active_flow: Option<&str>,
     ) -> KernelResult<PreparedContext> {
         let agent_name = self
             .registry
@@ -326,12 +366,77 @@ impl CarrierKernel {
             }))
                 as Arc<dyn runtime::llm_driver::Brain>);
 
-        let (auto_matched_flow, flow_max_iterations, matched_flow) = if let Some(rf) = resume_flow {
-            // Resume: load the flow by name WITHOUT an LLM classify call -- the
-            // user's reply continues an already-matched flow, so re-classifying
-            // would be wrong (and might match a different flow).
-            match entry.manifest.workspace.as_ref() {
-                Some(ws) => match crate::prompt_sources::load_flow_by_name(ws, &rf.flow_name) {
+        // Flow resolution priority: resume > explicit active_flow > LLM classify.
+        // resume and active_flow both load a named flow directly (skipping the
+        // non-deterministic classifier); classify is the fallback. A silent
+        // classify-None previously left the agent with no flow prompt AND no
+        // max_iterations override (ad-occ3 root cause) — now logged.
+        let from_resume = if let Some(rf) = resume_flow {
+            // Resume: load by name WITHOUT an LLM classify call -- the user's
+            // reply continues an already-matched flow, so re-classifying would
+            // be wrong (and might match a different flow).
+            match self.load_named_flow_for_turn(entry, &mut tools, &rf.flow_name) {
+                Some(loaded) => {
+                    info!(
+                        agent = %entry.name,
+                        flow = %rf.flow_name,
+                        "Flow loaded for resume"
+                    );
+                    Some(loaded)
+                }
+                None => {
+                    warn!(agent = %entry.name, flow = %rf.flow_name, "resume: flow def not found, falling back to normal handling");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Explicit active_flow (HTTP/cron caller): also bypasses the
+        // classifier. If the named flow is missing, fall through to classify
+        // rather than giving up silently.
+        let from_active = if from_resume.is_none() {
+            if let Some(name) = active_flow {
+                match self.load_named_flow_for_turn(entry, &mut tools, name) {
+                    Some(loaded) => {
+                        info!(agent = %entry.name, flow = %name, "Flow loaded by active_flow (explicit)");
+                        Some(loaded)
+                    }
+                    None => {
+                        warn!(agent = %entry.name, flow = %name, "active_flow not found — falling back to classifier");
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let (auto_matched_flow, flow_max_iterations, matched_flow) =
+            if let Some((prompt, max_iter, flow)) = from_resume.or(from_active) {
+                (Some(prompt), max_iter, Some(flow))
+            } else if let (Some(ws), Some(brain)) =
+                (entry.manifest.workspace.as_ref(), brain_ref.as_ref())
+            {
+                // Give the classifier recent conversation context so it can
+                // match follow-up messages in multi-turn workflows (e.g.
+                // charter-quoter after the user sends their phone in turn 2).
+                let recent_turns: Vec<(String, String)> = session
+                    .turn_summaries
+                    .iter()
+                    .rev()
+                    .take(2)
+                    .rev()
+                    .map(|t| {
+                        let intent = if t.user_intent.is_empty() { "(no intent)".to_string() } else { t.user_intent.clone() };
+                        let outcome = if t.assistant_outcome.is_empty() { "(no outcome)".to_string() } else { t.assistant_outcome.clone() };
+                        (intent, outcome)
+                    })
+                    .collect();
+                match crate::prompt_sources::classify_flow_with_llm(message, ws, brain, &entry.manifest.flows, &recent_turns, entry.manifest.clone_source.is_some()).await {
                     Some(flow) => {
                         let flow_name = flow.name.clone();
                         let flow_body = flow.body.clone();
@@ -350,81 +455,33 @@ impl CarrierKernel {
                             flow = %flow_name,
                             elevate,
                             is_system_shared = flow.is_system_shared,
-                            "Flow loaded for resume"
+                            "Flow classified by LLM"
                         );
 
                         let mut flow_prompt = format!("**{}**\n{}", flow_name, flow_body);
                         if !flow_warnings.is_empty() {
                             flow_prompt.push_str(&format!("\n\n⚠️ **Flow Tool Warnings:**\n{}", flow_warnings.iter().map(|w| format!("- {}", w)).collect::<Vec<_>>().join("\n")));
                         }
-                        (Some(flow_prompt), flow_max_iter, Some(flow))
+
+                        // The flow body is injected into the base system prompt for
+                        // BOTH single- and multi-step flows. Multi-step execution
+                        // (run_flow) receives this base prompt and adds per-step
+                        // directives on top; the streaming path falls back to
+                        // guided single-step execution if run_flow isn't wired there.
+                        (
+                            Some(flow_prompt),
+                            flow_max_iter,
+                            Some(flow),
+                        )
                     }
                     None => {
-                        warn!(agent = %entry.name, flow = %rf.flow_name, "resume: flow def not found, falling back to normal handling");
+                        warn!(agent = %entry.name, "Flow classifier returned no match — proceeding without flow prompt");
                         (None, None, None)
                     }
-                },
-                None => (None, None, None),
-            }
-        } else if let (Some(ws), Some(brain)) = (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
-            // Give the classifier recent conversation context so it can
-            // match follow-up messages in multi-turn workflows (e.g.
-            // charter-quoter after the user sends their phone in turn 2).
-            let recent_turns: Vec<(String, String)> = session
-                .turn_summaries
-                .iter()
-                .rev()
-                .take(2)
-                .rev()
-                .map(|t| {
-                    let intent = if t.user_intent.is_empty() { "(no intent)".to_string() } else { t.user_intent.clone() };
-                    let outcome = if t.assistant_outcome.is_empty() { "(no outcome)".to_string() } else { t.assistant_outcome.clone() };
-                    (intent, outcome)
-                })
-                .collect();
-            match crate::prompt_sources::classify_flow_with_llm(message, ws, brain, &entry.manifest.flows, &recent_turns).await {
-                Some(flow) => {
-                    let flow_name = flow.name.clone();
-                    let flow_body = flow.body.clone();
-                    let flow_max_iter = flow.max_iterations;
-                    let elevate = flow.elevates();
-                    let flow_warnings = self.inject_flow_tools(
-                        &mut tools,
-                        &flow,
-                        entry.manifest.max_tool_level,
-                        elevate,
-                        entry.manifest.cli_exec.clone().unwrap_or_default(),
-                    );
-
-                    info!(
-                        agent = %entry.name,
-                        flow = %flow_name,
-                        elevate,
-                        is_system_shared = flow.is_system_shared,
-                        "Flow classified by LLM"
-                    );
-
-                    let mut flow_prompt = format!("**{}**\n{}", flow_name, flow_body);
-                    if !flow_warnings.is_empty() {
-                        flow_prompt.push_str(&format!("\n\n⚠️ **Flow Tool Warnings:**\n{}", flow_warnings.iter().map(|w| format!("- {}", w)).collect::<Vec<_>>().join("\n")));
-                    }
-
-                    // The flow body is injected into the base system prompt for
-                    // BOTH single- and multi-step flows. Multi-step execution
-                    // (run_flow) receives this base prompt and adds per-step
-                    // directives on top; the streaming path falls back to
-                    // guided single-step execution if run_flow isn't wired there.
-                    (
-                        Some(flow_prompt),
-                        flow_max_iter,
-                        Some(flow),
-                    )
                 }
-                None => (None, None, None)
-            }
-        } else {
-            (None, None, None)
-        };
+            } else {
+                (None, None, None)
+            };
 
         // Auto-match subagent trigger (only when no flow matched)
         let auto_matched_subagent = if auto_matched_flow.is_none() && !entry.manifest.subagents.is_empty() {
@@ -571,7 +628,7 @@ impl CarrierKernel {
             .get()
             .and_then(|w| w.upgrade())
             .map(|arc| arc as Arc<dyn KernelHandle>);
-        self.send_message_with_handle(agent_id, message, handle, None, None, None, None, None)
+        self.send_message_with_handle(agent_id, message, handle, None, None, None, None, None, None)
             .await
     }
 
@@ -589,6 +646,7 @@ impl CarrierKernel {
         owner_id: Option<String>,
         channel_type: Option<String>,
         task_id: Option<String>,
+        active_flow: Option<&str>,
     ) -> KernelResult<AgentLoopResult> {
         self.send_message_with_handle_and_blocks(
             agent_id,
@@ -600,6 +658,7 @@ impl CarrierKernel {
             owner_id,
             channel_type,
             task_id,
+            active_flow,
         )
         .await
     }
@@ -625,6 +684,7 @@ impl CarrierKernel {
         owner_id: Option<String>,
         channel_type: Option<String>,
         task_id: Option<String>,
+        active_flow: Option<&str>,
     ) -> KernelResult<AgentLoopResult> {
         // NOTE: The per-owner execution lock has been removed. Concurrent messages
         // for the same agent+owner now run in parallel (like nginx). Session
@@ -709,6 +769,7 @@ impl CarrierKernel {
                 channel_type.clone(),
                 task_id,
                 resume_row.as_ref(),
+                active_flow,
             )
             .await
         };
@@ -773,6 +834,7 @@ impl CarrierKernel {
         sender_name: Option<String>,
         owner_id: Option<String>,
         channel_type: Option<String>,
+        active_flow: Option<&str>,
     ) -> KernelResult<(
         tokio::sync::mpsc::Receiver<StreamEvent>,
         tokio::task::JoinHandle<KernelResult<AgentLoopResult>>,
@@ -847,7 +909,7 @@ impl CarrierKernel {
 
         // LLM agent: true streaming via agent loop
         let ctx = self.prepare_agent_context(
-            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type, None, None,
+            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type, None, None, active_flow,
         ).await?;
         let PreparedContext { mut session, needs_compact, tools, manifest, driver, ctx_window, .. } = ctx;
 
@@ -1218,10 +1280,11 @@ impl CarrierKernel {
         channel_type: Option<String>,
         task_id: Option<String>,
         resume: Option<&memory::FlowRunRow>,
+        active_flow: Option<&str>,
     ) -> KernelResult<AgentLoopResult> {
         // Prepare shared context (session, tools, flow/subagent matching, manifest)
         let ctx = self.prepare_agent_context(
-            agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type, task_id.as_deref(), resume,
+            agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type, task_id.as_deref(), resume, active_flow,
         ).await?;
         let PreparedContext { mut session, needs_compact, tools, manifest, flow, .. } = ctx;
 

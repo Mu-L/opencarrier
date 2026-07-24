@@ -110,6 +110,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
         types::scheduler::CronAction::AgentTurn {
             message,
             timeout_secs,
+            active_flow,
             ..
         } => {
             tracing::debug!(job = %job_name, agent = %agent_id, "Cron: firing agent turn");
@@ -140,6 +141,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
                     job.owner_id.clone(),
                     None,
                     Some(task_id),
+                    active_flow.as_deref(),
                 ),
             )
             .await
@@ -964,6 +966,7 @@ impl CarrierKernel {
                             None,
                             None,
                             Some("autonomous".to_string()),
+                            None,
                         )
                         .await
                     {

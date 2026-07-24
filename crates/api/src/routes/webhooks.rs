@@ -164,6 +164,7 @@ pub async fn webhook_agent(
             None,
             Some("webhook".to_string()),
             None,
+            None,
         )
         .await
     {
