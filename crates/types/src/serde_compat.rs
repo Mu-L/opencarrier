@@ -11,6 +11,35 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::sync::Mutex;
+
+/// Accumulated lenient-fallback diagnostics since the last [`take_lenient_diagnostics`].
+///
+/// Each entry records one field whose stored type didn't match the expected
+/// shape, so a lenient deserializer returned an empty default instead of
+/// failing. Capped to avoid unbounded growth under a pathological loop.
+static LENIENT_FALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn record_lenient_fallback(detail: &str) {
+    if let Ok(mut buf) = LENIENT_FALLBACKS.lock() {
+        if buf.len() < 256 {
+            buf.push(detail.to_string());
+        }
+    }
+}
+
+/// Drain the lenient-fallback diagnostics accumulated since the last call.
+///
+/// Loaders should call this right after deserializing a manifest and log/report
+/// non-empty results. Without it, schema drift silently empties fields —
+/// including security-sensitive ones like `tool_blocklist` / `tool_allowlist`,
+/// where an empty value means "no exclusions" / "all tools allowed".
+pub fn take_lenient_diagnostics() -> Vec<String> {
+    LENIENT_FALLBACKS
+        .lock()
+        .map(|mut b| std::mem::take(&mut *b))
+        .unwrap_or_default()
+}
 
 /// Deserialize a `Vec<T>` leniently: if the stored value is not a sequence
 /// (e.g., it's a map, integer, string, bool, or null), return an empty Vec
@@ -40,41 +69,61 @@ where
             Ok(vec)
         }
 
-        // All non-sequence types return empty Vec
+        // All non-sequence types return empty Vec and record a diagnostic, so
+        // the silent-empty (which can hit security fields like tool_blocklist)
+        // stays observable to the loader via take_lenient_diagnostics().
         fn visit_map<A>(self, mut _map: A) -> Result<Self::Value, A::Error>
         where
             A: MapAccess<'de>,
         {
             // Drain the map to keep the deserializer state consistent
             while let Some((_, _)) = _map.next_entry::<de::IgnoredAny, de::IgnoredAny>()? {}
+            record_lenient_fallback("vec_lenient: value was a map, expected a sequence");
             Ok(Vec::new())
         }
 
-        fn visit_i64<E: de::Error>(self, _v: i64) -> Result<Self::Value, E> {
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            record_lenient_fallback(&format!(
+                "vec_lenient: value was integer {v}, expected a sequence"
+            ));
             Ok(Vec::new())
         }
 
-        fn visit_u64<E: de::Error>(self, _v: u64) -> Result<Self::Value, E> {
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            record_lenient_fallback(&format!(
+                "vec_lenient: value was integer {v}, expected a sequence"
+            ));
             Ok(Vec::new())
         }
 
-        fn visit_f64<E: de::Error>(self, _v: f64) -> Result<Self::Value, E> {
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            record_lenient_fallback(&format!(
+                "vec_lenient: value was float {v}, expected a sequence"
+            ));
             Ok(Vec::new())
         }
 
-        fn visit_str<E: de::Error>(self, _v: &str) -> Result<Self::Value, E> {
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            record_lenient_fallback(&format!(
+                "vec_lenient: value was string {v:?}, expected a sequence"
+            ));
             Ok(Vec::new())
         }
 
-        fn visit_bool<E: de::Error>(self, _v: bool) -> Result<Self::Value, E> {
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
+            record_lenient_fallback(&format!(
+                "vec_lenient: value was bool {v}, expected a sequence"
+            ));
             Ok(Vec::new())
         }
 
         fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            record_lenient_fallback("vec_lenient: value was null, expected a sequence");
             Ok(Vec::new())
         }
 
         fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            record_lenient_fallback("vec_lenient: value was unit, expected a sequence");
             Ok(Vec::new())
         }
     }
@@ -115,41 +164,60 @@ where
             Ok(result)
         }
 
-        // All non-map types return empty HashMap
+        // All non-map types return empty HashMap and record a diagnostic, so the
+        // silent-empty stays observable to the loader via take_lenient_diagnostics().
         fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
         where
             A: SeqAccess<'de>,
         {
             // Drain the sequence to keep the deserializer state consistent
             while seq.next_element::<de::IgnoredAny>()?.is_some() {}
+            record_lenient_fallback("map_lenient: value was a sequence, expected a map");
             Ok(HashMap::new())
         }
 
-        fn visit_i64<E: de::Error>(self, _v: i64) -> Result<Self::Value, E> {
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            record_lenient_fallback(&format!(
+                "map_lenient: value was integer {v}, expected a map"
+            ));
             Ok(HashMap::new())
         }
 
-        fn visit_u64<E: de::Error>(self, _v: u64) -> Result<Self::Value, E> {
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            record_lenient_fallback(&format!(
+                "map_lenient: value was integer {v}, expected a map"
+            ));
             Ok(HashMap::new())
         }
 
-        fn visit_f64<E: de::Error>(self, _v: f64) -> Result<Self::Value, E> {
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
+            record_lenient_fallback(&format!(
+                "map_lenient: value was float {v}, expected a map"
+            ));
             Ok(HashMap::new())
         }
 
-        fn visit_str<E: de::Error>(self, _v: &str) -> Result<Self::Value, E> {
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            record_lenient_fallback(&format!(
+                "map_lenient: value was string {v:?}, expected a map"
+            ));
             Ok(HashMap::new())
         }
 
-        fn visit_bool<E: de::Error>(self, _v: bool) -> Result<Self::Value, E> {
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
+            record_lenient_fallback(&format!(
+                "map_lenient: value was bool {v}, expected a map"
+            ));
             Ok(HashMap::new())
         }
 
         fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            record_lenient_fallback("map_lenient: value was null, expected a map");
             Ok(HashMap::new())
         }
 
         fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            record_lenient_fallback("map_lenient: value was unit, expected a map");
             Ok(HashMap::new())
         }
     }
@@ -451,5 +519,33 @@ timeout_secs = 60
         let toml_str = r#"exec_policy = "banana""#;
         let result = toml::from_str::<TestExecPolicy>(toml_str);
         assert!(result.is_err());
+    }
+
+    // --- lenient diagnostics observability ---
+
+    #[test]
+    fn lenient_fallbacks_are_recorded_and_drainable() {
+        // Clear anything accumulated from other parallel tests first.
+        let _ = take_lenient_diagnostics();
+
+        // Type-mismatched values silently empty the field but now record a
+        // diagnostic so the drift is observable (notably for security fields
+        // like tool_blocklist/tool_allowlist).
+        let _: TestVec = serde_json::from_str(r#"{"items": "not a vec"}"#).unwrap();
+        let _: TestMap = serde_json::from_str(r#"{"items": 42}"#).unwrap();
+
+        let diags = take_lenient_diagnostics();
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("vec_lenient") && d.contains("string")),
+            "expected a vec_lenient string fallback diagnostic, got: {diags:?}"
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.contains("map_lenient") && d.contains("integer")),
+            "expected a map_lenient integer fallback diagnostic, got: {diags:?}"
+        );
     }
 }

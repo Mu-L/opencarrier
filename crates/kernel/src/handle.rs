@@ -216,6 +216,15 @@ impl KernelHandle for CarrierKernel {
                         Ok(toml_str) => {
                             match toml::from_str::<types::agent::AgentManifest>(&toml_str) {
                                 Ok(new_manifest) => {
+                                    // Surface type drift in agent.toml that would
+                                    // otherwise silently empty security fields
+                                    // (tool_blocklist/tool_allowlist). Runtime
+                                    // reload is the most likely place an operator
+                                    // typo lands, so drain + warn here too.
+                                    let _drift = types::serde_compat::take_lenient_diagnostics();
+                                    if !_drift.is_empty() {
+                                        tracing::warn!(agent = %entry.name, count = _drift.len(), details = ?_drift, "agent.toml fields fell back to empty defaults due to type drift — check tool_blocklist/tool_allowlist");
+                                    }
                                     let name = entry.name.clone();
                                     let mut new_manifest = new_manifest;
                                     // Preserve workspace path (not in agent.toml)

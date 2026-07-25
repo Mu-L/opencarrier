@@ -141,6 +141,10 @@ impl CarrierKernel {
         // Preserve auto_upgrade flag; re-read agent.toml into registry
         if let Ok(toml_str) = std::fs::read_to_string(workspace.join("agent.toml")) {
             if let Ok(mut m) = toml::from_str::<types::agent::AgentManifest>(&toml_str) {
+                let _drift = types::serde_compat::take_lenient_diagnostics();
+                if !_drift.is_empty() {
+                    tracing::warn!(agent = %m.name, count = _drift.len(), details = ?_drift, "agent.toml fields fell back to empty defaults due to type drift — check tool_blocklist/tool_allowlist");
+                }
                 if let Some(ref mut new_cs) = m.clone_source {
                     new_cs.auto_upgrade = auto_upgrade;
                 }

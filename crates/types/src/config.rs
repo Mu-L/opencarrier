@@ -619,7 +619,19 @@ pub struct KernelConfig {
     /// API listen address (e.g., "0.0.0.0:4200").
     #[serde(alias = "listen_addr")]
     pub api_listen: String,
-    /// Default LLM provider configuration (legacy — replaced by brain).
+    /// Default LLM provider/model — surfaced by the CLI/dashboard as "the
+    /// default" and watched by config hot-reload (a change triggers a brain
+    /// reload). Not legacy.
+    ///
+    /// NOTE: an overlay onto agents that defer their model choice has been
+    /// *described* in comments (e.g. kernel.rs spawn path) but is not actually
+    /// wired — `config.default_model` is never read into an agent manifest;
+    /// agents get their model from their own manifest / brain.json. Documented
+    /// honestly here to avoid the "legacy" trap (this field is live) without
+    /// overclaiming an overlay that doesn't exist.
+    ///
+    /// `brain` (a path to brain.json) holds the authoritative driver/endpoint
+    /// config that boots the LLM subsystem.
     #[serde(default)]
     pub default_model: DefaultModelConfig,
     /// Brain configuration — the carrier's independent LLM brain.

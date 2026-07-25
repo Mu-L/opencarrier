@@ -630,6 +630,20 @@ impl CarrierKernel {
                     if toml_path.exists() {
                         if let Ok(toml_str) = std::fs::read_to_string(&toml_path) {
                             if let Ok(disk_manifest) = toml::from_str::<AgentManifest>(&toml_str) {
+                                // Surface schema/type drift in agent.toml that the
+                                // lenient deserializers would otherwise silently
+                                // empty (notably tool_blocklist/tool_allowlist,
+                                // where empty means "no exclusions"). See
+                                // types::serde_compat::take_lenient_diagnostics.
+                                let drift = types::serde_compat::take_lenient_diagnostics();
+                                if !drift.is_empty() {
+                                    tracing::warn!(
+                                        agent = %name,
+                                        count = drift.len(),
+                                        details = ?drift,
+                                        "agent.toml fields fell back to empty defaults due to type drift — check tool_blocklist/tool_allowlist/etc."
+                                    );
+                                }
                                 let mut disk_manifest = disk_manifest;
                                 disk_manifest.workspace = Some(ws.clone());
                                 if disk_manifest.exec_policy.is_none() {
@@ -745,11 +759,13 @@ impl CarrierKernel {
         }
         info!(agent = %name, id = %agent_id, exec_mode = ?manifest.exec_policy.as_ref().map(|p| &p.mode), "Agent exec_policy resolved");
 
-        // Overlay kernel default_model onto agent if agent didn't explicitly choose.
-        // Treat empty or "default" as "use the kernel's configured default_model".
-        // This allows bundled agents to defer to the user's configured provider/model,
-        // even if the agent manifest specifies an api_key_env (which is just a hint
-        // about which env var to check, not a hard lock on provider/model).
+        // NOTE: an earlier comment here claimed default_model is "overlaid onto
+        // agents that don't explicitly choose", but no such overlay is wired —
+        // config.default_model is only surfaced by the CLI and watched by
+        // hot-reload. Agents get their model from their own manifest / brain.
+        // Bundled agents defer by leaving model unset; that deferral resolves
+        // via brain.json, not via this field. Kept honest to avoid chasing a
+        // non-existent code path.
         // Create workspace directory for the agent (name-based, so SOUL.md survives recreation)
         let workspace_dir = manifest
             .workspace

@@ -276,6 +276,10 @@ pub async fn restart_agent(
             if toml_path.exists() {
                 if let Ok(toml_str) = std::fs::read_to_string(&toml_path) {
                     if let Ok(new_manifest) = toml::from_str::<types::agent::AgentManifest>(&toml_str) {
+                        let _drift = types::serde_compat::take_lenient_diagnostics();
+                        if !_drift.is_empty() {
+                            tracing::warn!(agent = %entry.name, count = _drift.len(), details = ?_drift, "agent.toml fields fell back to empty defaults due to type drift — check tool_blocklist/tool_allowlist");
+                        }
                         let mut new_manifest = new_manifest;
                         new_manifest.workspace = Some(ws.clone());
                         if new_manifest.exec_policy.is_none() {

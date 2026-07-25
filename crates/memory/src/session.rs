@@ -68,8 +68,19 @@ impl SessionStore {
                 let messages: Vec<Message> = rmp_serde::from_slice(&messages_blob)
                     .map_err(|e| CarrierError::Serialization(e.to_string()))?;
                 let turn_summaries: Vec<TurnSummary> = match summaries_blob {
-                    Some(blob) => rmp_serde::from_slice(&blob)
-                        .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+                    Some(blob) => match rmp_serde::from_slice(&blob) {
+                        Ok(v) => v,
+                        // A corrupt/stale summaries blob must NOT break the main
+                        // turn path — degrade to empty (L0 summaries rebuild over
+                        // upcoming turns) rather than failing message sending.
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "turn_summaries blob could not be deserialized; using empty"
+                            );
+                            Vec::new()
+                        }
+                    },
                     None => Vec::new(),
                 };
                 Ok(Some(Session {
@@ -352,7 +363,7 @@ impl SessionStore {
                 // stored as rfc3339 ('2026-07-17T15:29:32+00:00') while
                 // datetime('now') uses a space separator — a naive string
                 // compare would mis-judge same-day rows (T > space).
-                "SELECT id, messages, context_window_tokens, label FROM sessions \
+                "SELECT id, messages, turn_summaries, context_window_tokens, label FROM sessions \
                  WHERE agent_id = ?1 AND label = ?2 \
                  AND julianday(updated_at) > julianday('now') - (?3 / 86400.0) \
                  ORDER BY updated_at DESC LIMIT 1",
@@ -363,23 +374,40 @@ impl SessionStore {
             |row| {
                 let id_str: String = row.get(0)?;
                 let messages_blob: Vec<u8> = row.get(1)?;
-                let tokens: i64 = row.get(2)?;
-                let lbl: Option<String> = row.get(3).unwrap_or(None);
-                Ok((id_str, messages_blob, tokens, lbl))
+                let summaries_blob: Option<Vec<u8>> = row.get(2)?;
+                let tokens: i64 = row.get(3)?;
+                let lbl: Option<String> = row.get(4).unwrap_or(None);
+                Ok((id_str, messages_blob, summaries_blob, tokens, lbl))
             },
         );
         match result {
-            Ok((id_str, messages_blob, tokens, lbl)) => {
+            Ok((id_str, messages_blob, summaries_blob, tokens, lbl)) => {
                 let session_id = uuid::Uuid::parse_str(&id_str)
                     .map(SessionId)
                     .map_err(|e| CarrierError::Memory(e.to_string()))?;
                 let messages: Vec<Message> = rmp_serde::from_slice(&messages_blob)
                     .map_err(|e| CarrierError::Serialization(e.to_string()))?;
+                let turn_summaries: Vec<TurnSummary> = match summaries_blob {
+                    Some(blob) => match rmp_serde::from_slice(&blob) {
+                        Ok(v) => v,
+                        // A corrupt/stale summaries blob must NOT break the main
+                        // turn path — degrade to empty (L0 summaries rebuild over
+                        // upcoming turns) rather than failing message sending.
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "turn_summaries blob could not be deserialized; using empty"
+                            );
+                            Vec::new()
+                        }
+                    },
+                    None => Vec::new(),
+                };
                 Ok(Some(Session {
                     id: session_id,
                     agent_name: agent_id.to_string(),
                     messages,
-                    turn_summaries: Vec::new(),
+                    turn_summaries,
                     context_window_tokens: tokens as u64,
                     label: lbl,
                 }))
@@ -400,7 +428,7 @@ impl SessionStore {
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, messages, context_window_tokens, label FROM sessions \
+                "SELECT id, messages, turn_summaries, context_window_tokens, label FROM sessions \
                  WHERE agent_id = ?1 AND label = ?2 LIMIT 1",
             )
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -408,25 +436,40 @@ impl SessionStore {
         let result = stmt.query_row(rusqlite::params![agent_id, label], |row| {
             let id_str: String = row.get(0)?;
             let messages_blob: Vec<u8> = row.get(1)?;
-            let tokens: i64 = row.get(2)?;
-            let lbl: Option<String> = row.get(3).unwrap_or(None);
-            Ok((id_str, messages_blob, tokens, lbl))
+            let summaries_blob: Option<Vec<u8>> = row.get(2)?;
+            let tokens: i64 = row.get(3)?;
+            let lbl: Option<String> = row.get(4).unwrap_or(None);
+            Ok((id_str, messages_blob, summaries_blob, tokens, lbl))
         });
 
         match result {
-            Ok((id_str, messages_blob, tokens, lbl)) => {
+            Ok((id_str, messages_blob, summaries_blob, tokens, lbl)) => {
                 let session_id = uuid::Uuid::parse_str(&id_str)
                     .map(SessionId)
                     .map_err(|e| CarrierError::Memory(e.to_string()))?;
                 let messages: Vec<Message> = rmp_serde::from_slice(&messages_blob)
                     .map_err(|e| CarrierError::Serialization(e.to_string()))?;
-                // find_session_by_label does not read turn_summaries (legacy path);
-                // summaries will be loaded on next full get_session if needed.
+                let turn_summaries: Vec<TurnSummary> = match summaries_blob {
+                    Some(blob) => match rmp_serde::from_slice(&blob) {
+                        Ok(v) => v,
+                        // A corrupt/stale summaries blob must NOT break the main
+                        // turn path — degrade to empty (L0 summaries rebuild over
+                        // upcoming turns) rather than failing message sending.
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "turn_summaries blob could not be deserialized; using empty"
+                            );
+                            Vec::new()
+                        }
+                    },
+                    None => Vec::new(),
+                };
                 Ok(Some(Session {
                     id: session_id,
                     agent_name: agent_id.to_string(),
                     messages,
-                    turn_summaries: Vec::new(),
+                    turn_summaries,
                     context_window_tokens: tokens as u64,
                     label: lbl,
                 }))
