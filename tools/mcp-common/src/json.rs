@@ -4,7 +4,11 @@ use serde_json::Value;
 
 /// Serialize a `Value` to JSON string, falling back to an error object on failure.
 pub fn json_to_string(v: &Value) -> String {
-    serde_json::to_string(v).unwrap_or_else(|e| format!("{{\"error\": \"serialize: {}\"}}", e))
+    serde_json::to_string(v).unwrap_or_else(|e| {
+        // Use json! (not format!) so a serialize error containing quotes/backslashes
+        // can't break the fallback JSON — same principle as error_response below.
+        serde_json::json!({ "error": format!("serialize: {e}") }).to_string()
+    })
 }
 
 /// Build a safe JSON error response string.

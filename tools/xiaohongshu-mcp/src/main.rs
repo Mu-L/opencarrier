@@ -172,7 +172,7 @@ impl XiaohongshuServer {
         let list_path = format!("/api/galaxy/creator/datacenter/note/analyze/list?{list_query}");
         let list_resp = match api::xhs_api(&cookie, &list_path, Method::GET).await {
             Ok(r) => r,
-            Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => return error_response(&e),
         };
 
         let notes = list_resp

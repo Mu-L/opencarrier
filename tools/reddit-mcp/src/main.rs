@@ -470,7 +470,7 @@ impl RedditServer {
         let username =
             match resolve_username(&make_cookie(&params), params.username.as_deref()).await {
                 Ok(u) => u,
-                Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+                Err(e) => return error_response(&e),
             };
         let path = format!("/user/{username}/saved.json");
         let limit = params.limit.unwrap_or(15);
@@ -496,7 +496,7 @@ impl RedditServer {
         let username =
             match resolve_username(&make_cookie(&params), params.username.as_deref()).await {
                 Ok(u) => u,
-                Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+                Err(e) => return error_response(&e),
             };
         let path = format!("/user/{username}/upvoted.json");
         let limit = params.limit.unwrap_or(15);
@@ -524,7 +524,7 @@ impl RedditServer {
         let cookie = make_cookie(&params);
         let modhash = match api::get_modhash(&cookie).await {
             Ok(m) => m,
-            Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => return error_response(&e),
         };
         let post_id = &params.post_id;
         let dir = match params.direction.as_deref().unwrap_or("up") {
@@ -546,7 +546,7 @@ impl RedditServer {
         let cookie = make_cookie(&params);
         let modhash = match api::get_modhash(&cookie).await {
             Ok(m) => m,
-            Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => return error_response(&e),
         };
         let post_id = &params.post_id;
         let encoded_text = url_encode(&params.text);
@@ -568,7 +568,7 @@ impl RedditServer {
         let cookie = make_cookie(&params);
         let modhash = match api::get_modhash(&cookie).await {
             Ok(m) => m,
-            Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => return error_response(&e),
         };
         let post_id = &params.post_id;
         let undo = params.undo.unwrap_or(false);
@@ -585,7 +585,7 @@ impl RedditServer {
         let cookie = make_cookie(&params);
         let modhash = match api::get_modhash(&cookie).await {
             Ok(m) => m,
-            Err(e) => return format!("{{\"error\": \"{}\"}}", e),
+            Err(e) => return error_response(&e),
         };
         let subreddit = &params.subreddit;
         let undo = params.undo.unwrap_or(false);
