@@ -159,6 +159,16 @@ fn host_fs_read(state: &GuestState, params: &serde_json::Value) -> serde_json::V
         Ok(c) => c,
         Err(e) => return e,
     };
+    // Re-check the capability on the *canonical* path. The first check used the
+    // raw guest-supplied path; canonicalization follows symlinks, so a path that
+    // matched the granted scope in raw form but resolves outside it (e.g. an
+    // in-scope symlink to /etc/passwd) must be denied here.
+    if let Err(e) = check_capability(
+        &state.capabilities,
+        &Capability::FileRead(canonical.to_string_lossy().to_string()),
+    ) {
+        return e;
+    }
     match std::fs::read_to_string(&canonical) {
         Ok(content) => json!({"ok": content}),
         Err(e) => json!({"error": format!("fs_read failed: {e}")}),
@@ -186,6 +196,14 @@ fn host_fs_write(state: &GuestState, params: &serde_json::Value) -> serde_json::
         Ok(p) => p,
         Err(e) => return e,
     };
+    // Re-check the capability on the resolved (canonical-parent) path — a symlink
+    // that matched the scope in raw form but resolves outside it must be denied.
+    if let Err(e) = check_capability(
+        &state.capabilities,
+        &Capability::FileWrite(write_path.to_string_lossy().to_string()),
+    ) {
+        return e;
+    }
     match std::fs::write(&write_path, content) {
         Ok(()) => json!({"ok": true}),
         Err(e) => json!({"error": format!("fs_write failed: {e}")}),
@@ -206,6 +224,13 @@ fn host_fs_list(state: &GuestState, params: &serde_json::Value) -> serde_json::V
         Ok(c) => c,
         Err(e) => return e,
     };
+    // Re-check capability on the canonical path (closes symlink-escape — see fs_read).
+    if let Err(e) = check_capability(
+        &state.capabilities,
+        &Capability::FileRead(canonical.to_string_lossy().to_string()),
+    ) {
+        return e;
+    }
     match std::fs::read_dir(&canonical) {
         Ok(entries) => {
             let names: Vec<String> = entries

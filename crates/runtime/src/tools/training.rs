@@ -19,11 +19,7 @@ async fn tool_train_read(
 ) -> Result<String, String> {
     let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    crate::tools::validate_path(path)?;
-    let full_path = target_root.join(path);
-    if !full_path.starts_with(&target_root) {
-        return Err("Path traversal denied".to_string());
-    }
+    let full_path = crate::workspace_sandbox::resolve_sandbox_path(path, &target_root)?;
     tokio::fs::read_to_string(&full_path)
         .await
         .map_err(|e| format!("Failed to read file: {e}"))
@@ -36,14 +32,10 @@ async fn tool_train_write(
 ) -> Result<String, String> {
     let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    crate::tools::validate_path(path)?;
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
-    let full_path = target_root.join(path);
-    if !full_path.starts_with(&target_root) {
-        return Err("Path traversal denied".to_string());
-    }
+    let full_path = crate::workspace_sandbox::resolve_sandbox_path(path, &target_root)?;
     if let Some(parent) = full_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -66,11 +58,7 @@ async fn tool_train_list(
 ) -> Result<String, String> {
     let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
     let sub_path = input["path"].as_str().unwrap_or(".");
-    crate::tools::validate_path(sub_path)?;
-    let full_path = target_root.join(sub_path);
-    if !full_path.starts_with(&target_root) {
-        return Err("Path traversal denied".to_string());
-    }
+    let full_path = crate::workspace_sandbox::resolve_sandbox_path(sub_path, &target_root)?;
     let mut entries = tokio::fs::read_dir(&full_path)
         .await
         .map_err(|e| format!("Failed to list directory: {e}"))?;
