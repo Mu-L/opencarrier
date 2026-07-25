@@ -33,8 +33,6 @@ pub enum HotAction {
     ReloadMcpServers,
     /// A2A config changed.
     ReloadA2aConfig,
-    /// Fallback provider chain changed.
-    ReloadFallbackProviders,
     /// Default model changed — update in-place without restart.
     UpdateDefaultModel,
 }
@@ -202,20 +200,6 @@ pub fn build_reload_plan(old: &KernelConfig, new: &KernelConfig) -> ReloadPlan {
         plan.hot_actions.push(HotAction::ReloadA2aConfig);
     }
 
-    if field_changed(&old.fallback_providers, &new.fallback_providers) {
-        plan.hot_actions.push(HotAction::ReloadFallbackProviders);
-    }
-
-    if field_changed(&old.provider_urls, &new.provider_urls) {
-        plan.noop_changes
-            .push("provider_urls changed (no longer used — aginxbrain handles routing)".to_string());
-    }
-
-    if field_changed(&old.provider_api_keys, &new.provider_api_keys) {
-        plan.noop_changes
-            .push("provider_api_keys changed (takes effect on next driver init)".to_string());
-    }
-
     // ----- No-op fields -----
 
     if old.log_level != new.log_level {
@@ -380,18 +364,6 @@ mod tests {
         let plan = build_reload_plan(&a, &b);
         assert!(!plan.restart_required);
         assert!(plan.hot_actions.contains(&HotAction::UpdateCronConfig));
-    }
-
-    #[test]
-    fn test_provider_urls_noop() {
-        let a = default_cfg();
-        let mut b = default_cfg();
-        b.provider_urls
-            .insert("ollama".to_string(), "http://10.0.0.5:11434/v1".to_string());
-        let plan = build_reload_plan(&a, &b);
-        assert!(!plan.restart_required);
-        // provider_urls is now a no-op change (aginxbrain handles routing)
-        assert!(plan.noop_changes.iter().any(|c| c.contains("provider_urls")));
     }
 
     // -----------------------------------------------------------------------

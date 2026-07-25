@@ -194,27 +194,6 @@ impl Default for WebhookTriggerConfig {
     }
 }
 
-/// Fallback provider chain — tried in order if the primary provider fails.
-///
-/// Configurable in `config.toml` under `[[fallback_providers]]`:
-/// ```toml
-/// [[fallback_providers]]
-/// provider = "ollama"
-/// model = "llama3.2:latest"
-/// ```
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct FallbackProviderConfig {
-    /// Provider name (e.g., "ollama", "groq").
-    pub provider: String,
-    /// Model to use from this provider.
-    pub model: String,
-    /// Environment variable for API key (empty for local providers).
-    #[serde(default)]
-    pub api_key_env: String,
-    /// Base URL override (uses catalog default if None).
-    #[serde(default)]
-    pub base_url: Option<String>,
-}
 
 /// Text-to-speech configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -509,36 +488,6 @@ pub enum TerminationReason {
 }
 
 // ---------------------------------------------------------------------------
-// Gap 3: Auth profile rotation — multi-key per provider
-// ---------------------------------------------------------------------------
-
-/// A named authentication profile for a provider.
-///
-/// Multiple profiles can be configured per provider to enable key rotation
-/// when one key gets rate-limited or has billing issues.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct AuthProfile {
-    /// Profile name (e.g., "primary", "secondary").
-    pub name: String,
-    /// Environment variable holding the API key.
-    pub api_key_env: String,
-    /// Priority (lower = preferred). Default: 0.
-    #[serde(default)]
-    pub priority: u32,
-}
-
-/// SECURITY: Custom Debug impl redacts env var name.
-impl std::fmt::Debug for AuthProfile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AuthProfile")
-            .field("name", &self.name)
-            .field("api_key_env", &"<redacted>")
-            .field("priority", &self.priority)
-            .finish()
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Gap 5: Docker sandbox maturity
 // ---------------------------------------------------------------------------
 
@@ -662,10 +611,6 @@ pub struct KernelConfig {
     /// Web tools configuration (search + fetch).
     #[serde(default)]
     pub web: WebConfig,
-    /// Fallback providers tried in order if the primary fails.
-    /// Configure in config.toml as `[[fallback_providers]]`.
-    #[serde(default)]
-    pub fallback_providers: Vec<FallbackProviderConfig>,
     /// Browser automation configuration.
     #[serde(default)]
     pub browser: BrowserConfig,
@@ -724,23 +669,9 @@ pub struct KernelConfig {
     /// Text-to-speech configuration.
     #[serde(default)]
     pub tts: TtsConfig,
-    /// Auth profiles for key rotation (provider name → profiles).
-    #[serde(default)]
-    pub auth_profiles: HashMap<String, Vec<AuthProfile>>,
     /// Extended thinking configuration.
     #[serde(default)]
     pub thinking: Option<ThinkingConfig>,
-    /// Provider base URL overrides (provider ID → custom base URL).
-    /// e.g. `ollama = "http://192.168.1.100:11434/v1"`
-    #[serde(default)]
-    pub provider_urls: HashMap<String, String>,
-    /// Provider API key env var overrides (provider ID → env var name).
-    /// For custom/unknown providers, maps the provider name to the environment
-    /// variable holding the API key. e.g. `nvidia = "NVIDIA_API_KEY"`.
-    /// If not set, the convention `{PROVIDER_UPPER}_API_KEY` is used automatically.
-    #[serde(default)]
-    #[serde(skip_serializing)]
-    pub provider_api_keys: HashMap<String, String>,
     /// OAuth client ID overrides for PKCE flows.
     #[serde(default)]
     pub oauth: OAuthConfig,
@@ -968,7 +899,6 @@ impl Default for KernelConfig {
             a2a: None,
             usage_footer: UsageFooterMode::default(),
             web: WebConfig::default(),
-            fallback_providers: Vec::new(),
             browser: BrowserConfig::default(),
             vault: VaultConfig::default(),
             workspaces_dir: None,
@@ -987,10 +917,7 @@ impl Default for KernelConfig {
             broadcast: BroadcastConfig::default(),
             canvas: CanvasConfig::default(),
             tts: TtsConfig::default(),
-            auth_profiles: HashMap::new(),
             thinking: None,
-            provider_urls: HashMap::new(),
-            provider_api_keys: HashMap::new(),
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
             clone_lifecycle: CloneLifecycleConfig::default(),
@@ -1010,27 +937,6 @@ impl KernelConfig {
         self.workspaces_dir
             .clone()
             .unwrap_or_else(|| self.home_dir.join("workspaces"))
-    }
-
-    /// Resolve the API key env var name for a provider.
-    ///
-    /// Checks: 1) explicit `provider_api_keys` mapping, 2) `auth_profiles` first entry,
-    /// 3) convention `{PROVIDER_UPPER}_API_KEY`.
-    pub fn resolve_api_key_env(&self, provider: &str) -> String {
-        // 1. Explicit mapping in [provider_api_keys]
-        if let Some(env_var) = self.provider_api_keys.get(provider) {
-            return env_var.clone();
-        }
-        // 2. Auth profiles (first profile by priority)
-        if let Some(profiles) = self.auth_profiles.get(provider) {
-            let mut sorted: Vec<_> = profiles.iter().collect();
-            sorted.sort_by_key(|p| p.priority);
-            if let Some(best) = sorted.first() {
-                return best.api_key_env.clone();
-            }
-        }
-        // 3. Convention: NVIDIA → NVIDIA_API_KEY
-        format!("{}_API_KEY", provider.to_uppercase().replace('-', "_"))
     }
 }
 
@@ -1061,10 +967,6 @@ impl std::fmt::Debug for KernelConfig {
             .field("a2a", &self.a2a.as_ref().map(|a| a.enabled))
             .field("usage_footer", &self.usage_footer)
             .field("web", &self.web)
-            .field(
-                "fallback_providers",
-                &format!("{} provider(s)", self.fallback_providers.len()),
-            )
             .field("browser", &self.browser)
             .field("vault", &format!("enabled={}", self.vault.enabled))
             .field("workspaces_dir", &self.workspaces_dir)
@@ -1094,15 +996,7 @@ impl std::fmt::Debug for KernelConfig {
             )
             .field("canvas", &format!("enabled={}", self.canvas.enabled))
             .field("tts", &format!("enabled={}", self.tts.enabled))
-            .field(
-                "auth_profiles",
-                &format!("{} provider(s)", self.auth_profiles.len()),
-            )
             .field("thinking", &self.thinking.is_some())
-            .field(
-                "provider_api_keys",
-                &format!("{} mapping(s)", self.provider_api_keys.len()),
-            )
             .field("auth", &format!("enabled={}", self.auth.enabled))
             .finish()
     }
@@ -1255,8 +1149,6 @@ pub struct SenderSessionHeader {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DefaultModelConfig {
-    /// Provider name (e.g., "anthropic", "openai").
-    pub provider: String,
     /// Model identifier.
     pub model: String,
     /// Environment variable name for the API key.
@@ -1268,7 +1160,6 @@ pub struct DefaultModelConfig {
 impl Default for DefaultModelConfig {
     fn default() -> Self {
         Self {
-            provider: "anthropic".to_string(),
             model: "claude-sonnet-4-20250514".to_string(),
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             base_url: None,
@@ -1547,46 +1438,6 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_config_serde_roundtrip() {
-        let fb = FallbackProviderConfig {
-            provider: "ollama".to_string(),
-            model: "llama3.2:latest".to_string(),
-            api_key_env: String::new(),
-            base_url: None,
-        };
-        let json = serde_json::to_string(&fb).unwrap();
-        let back: FallbackProviderConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.provider, "ollama");
-        assert_eq!(back.model, "llama3.2:latest");
-        assert!(back.api_key_env.is_empty());
-        assert!(back.base_url.is_none());
-    }
-
-    #[test]
-    fn test_fallback_config_default_empty() {
-        let config = KernelConfig::default();
-        assert!(config.fallback_providers.is_empty());
-    }
-
-    #[test]
-    fn test_fallback_config_in_toml() {
-        let toml_str = r#"
-            [[fallback_providers]]
-            provider = "ollama"
-            model = "llama3.2:latest"
-
-            [[fallback_providers]]
-            provider = "groq"
-            model = "llama-3.3-70b-versatile"
-            api_key_env = "GROQ_API_KEY"
-        "#;
-        let config: KernelConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.fallback_providers.len(), 2);
-        assert_eq!(config.fallback_providers[0].provider, "ollama");
-        assert_eq!(config.fallback_providers[1].provider, "groq");
-    }
-
-    #[test]
     fn test_clamp_bounds_zero_browser_timeout() {
         let mut config = KernelConfig::default();
         config.browser.timeout_secs = 0;
@@ -1630,75 +1481,5 @@ mod tests {
         assert_eq!(config.browser.max_sessions, browser_sessions);
         assert_eq!(config.web.fetch.max_response_bytes, fetch_bytes);
         assert_eq!(config.web.fetch.timeout_secs, fetch_timeout);
-    }
-
-    #[test]
-    fn test_resolve_api_key_env_convention() {
-        let config = KernelConfig::default();
-        // Unknown provider falls back to convention
-        assert_eq!(config.resolve_api_key_env("nvidia"), "NVIDIA_API_KEY");
-        assert_eq!(config.resolve_api_key_env("my-custom"), "MY_CUSTOM_API_KEY");
-    }
-
-    #[test]
-    fn test_resolve_api_key_env_explicit_mapping() {
-        let mut config = KernelConfig::default();
-        config
-            .provider_api_keys
-            .insert("nvidia".to_string(), "NIM_KEY".to_string());
-        // Explicit mapping takes precedence over convention
-        assert_eq!(config.resolve_api_key_env("nvidia"), "NIM_KEY");
-    }
-
-    #[test]
-    fn test_resolve_api_key_env_auth_profiles() {
-        let mut config = KernelConfig::default();
-        config.auth_profiles.insert(
-            "nvidia".to_string(),
-            vec![AuthProfile {
-                name: "primary".to_string(),
-                api_key_env: "NVIDIA_PRIMARY_KEY".to_string(),
-                priority: 0,
-            }],
-        );
-        // Auth profiles take precedence over convention (but not explicit mapping)
-        assert_eq!(config.resolve_api_key_env("nvidia"), "NVIDIA_PRIMARY_KEY");
-    }
-
-    #[test]
-    fn test_resolve_api_key_env_explicit_over_auth_profile() {
-        let mut config = KernelConfig::default();
-        config
-            .provider_api_keys
-            .insert("nvidia".to_string(), "NIM_KEY".to_string());
-        config.auth_profiles.insert(
-            "nvidia".to_string(),
-            vec![AuthProfile {
-                name: "primary".to_string(),
-                api_key_env: "NVIDIA_PRIMARY_KEY".to_string(),
-                priority: 0,
-            }],
-        );
-        // Explicit mapping wins over auth profiles
-        assert_eq!(config.resolve_api_key_env("nvidia"), "NIM_KEY");
-    }
-
-    #[test]
-    fn test_provider_api_keys_toml_roundtrip() {
-        let toml_str = r#"
-            [provider_api_keys]
-            nvidia = "NVIDIA_NIM_KEY"
-            azure = "AZURE_OPENAI_KEY"
-        "#;
-        let config: KernelConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.provider_api_keys.len(), 2);
-        assert_eq!(
-            config.provider_api_keys.get("nvidia").unwrap(),
-            "NVIDIA_NIM_KEY"
-        );
-        assert_eq!(
-            config.provider_api_keys.get("azure").unwrap(),
-            "AZURE_OPENAI_KEY"
-        );
     }
 }

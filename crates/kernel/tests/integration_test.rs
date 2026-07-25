@@ -42,7 +42,6 @@ fn test_config() -> KernelConfig {
         home_dir: tmp.clone(),
         data_dir: tmp.join("data"),
         default_model: DefaultModelConfig {
-            provider: "groq".to_string(),
             model: "llama-3.3-70b-versatile".to_string(),
             api_key_env: "GROQ_API_KEY".to_string(),
             base_url: None,

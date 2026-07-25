@@ -149,10 +149,8 @@ impl Brain {
         };
 
         let driver_config = DriverConfig {
-            provider: PROVIDER_NAME.to_string(),
             api_key,
             base_url: Some(config.base_url.clone()),
-            skip_permissions: true,
         };
 
         let driver = match drivers::create_driver(&driver_config) {

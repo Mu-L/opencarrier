@@ -341,9 +341,9 @@ enum ConfigCommands {
     Show,
     /// Open the configuration file in your editor.
     Edit,
-    /// Get a config value by dotted key path (e.g. "default_model.provider").
+    /// Get a config value by dotted key path (e.g. "default_model.model").
     Get {
-        /// Dotted key path (e.g. "default_model.provider", "api_listen").
+        /// Dotted key path (e.g. "default_model.model", "api_listen").
         key: String,
     },
     /// Set a config value (warning: strips TOML comments).
@@ -1475,7 +1475,6 @@ fn cmd_status(config: Option<PathBuf>, json: bool) {
                 "status": "in-process",
                 "agent_count": agent_count,
                 "data_dir": kernel.config.data_dir.display().to_string(),
-                "default_provider": kernel.config.default_model.provider,
                 "default_model": kernel.config.default_model.model,
                 "daemon": false,
             });
@@ -1486,7 +1485,6 @@ fn cmd_status(config: Option<PathBuf>, json: bool) {
         ui::section("OpenCarrier Status (in-process)");
         ui::blank();
         ui::kv("Agents", &agent_count.to_string());
-        ui::kv("Modality", &kernel.config.default_model.provider);
         ui::kv("Model", &kernel.config.default_model.model);
         ui::kv("Data dir", &kernel.config.data_dir.display().to_string());
         ui::kv_warn("Daemon", "NOT RUNNING");

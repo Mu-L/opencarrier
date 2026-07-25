@@ -329,71 +329,28 @@ pub trait Brain: Send + Sync {
 /// Configuration for creating an LLM driver.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DriverConfig {
-    /// Provider name (used for logging and CLI subprocess drivers).
-    pub provider: String,
     /// API key.
     pub api_key: Option<String>,
     /// Base URL — the complete API endpoint URL (no path suffix appended by drivers).
     pub base_url: Option<String>,
-    /// Skip interactive permission prompts (Claude Code provider only).
-    ///
-    /// When `true`, adds `--dangerously-skip-permissions` to the spawned
-    /// `claude` CLI.  Defaults to `true` because Carrier runs as a daemon
-    /// with no interactive terminal, so permission prompts would block
-    /// indefinitely.  Carrier's own capability / RBAC layer already
-    /// restricts what agents can do, making this safe.
-    #[serde(default = "default_skip_permissions")]
-    pub skip_permissions: bool,
-}
-
-fn default_skip_permissions() -> bool {
-    true
-}
-
-impl Default for DriverConfig {
-    fn default() -> Self {
-        Self {
-            provider: String::new(),
-            api_key: None,
-            base_url: None,
-            skip_permissions: true,
-        }
-    }
 }
 
 /// SECURITY: Custom Debug impl redacts the API key.
 impl std::fmt::Debug for DriverConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DriverConfig")
-            .field("provider", &self.provider)
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("base_url", &self.base_url)
-            .field("skip_permissions", &self.skip_permissions)
             .finish()
     }
 }
 
 /// Create an LLM driver based on configuration.
 ///
-/// - CLI subprocess drivers (claude-code, qwen-code) dispatched by provider name
-/// - HTTP API driver — UnifiedHttpDriver (OpenAI format via aginxbrain)
+/// All drivers are HTTP API drivers — `UnifiedHttpDriver` (OpenAI format via
+/// aginxbrain). The CLI subprocess drivers (claude-code, qwen-code) were removed
+/// once aginxbrain began proxying every LLM call.
 pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmError> {
-    let provider = config.provider.as_str();
-
-    // CLI subprocess drivers
-    if provider == "claude-code" {
-        return Ok(Arc::new(crate::drivers::claude_code::ClaudeCodeDriver::new(
-            config.base_url.clone(),
-            config.skip_permissions,
-        )));
-    }
-    if provider == "qwen-code" {
-        return Ok(Arc::new(crate::drivers::qwen_code::QwenCodeDriver::new(
-            config.base_url.clone(),
-            config.skip_permissions,
-        )));
-    }
-
     // All HTTP API drivers — UnifiedHttpDriver (OpenAI format)
     // Validate base_url for HTTP drivers
     let base_url = config.base_url.clone().ok_or_else(|| LlmError::Config(

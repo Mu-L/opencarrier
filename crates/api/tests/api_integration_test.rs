@@ -38,16 +38,15 @@ impl Drop for TestServer {
 /// This lets the kernel boot without any real LLM credentials.
 /// Tests that need actual LLM calls should use `start_test_server_with_llm()`.
 async fn start_test_server() -> TestServer {
-    start_test_server_with_provider("ollama", "test-model", "OLLAMA_API_KEY").await
+    start_test_server_with_provider("test-model", "OLLAMA_API_KEY").await
 }
 
 /// Start a test server with Groq as the LLM provider (requires GROQ_API_KEY).
 async fn start_test_server_with_llm() -> TestServer {
-    start_test_server_with_provider("groq", "llama-3.3-70b-versatile", "GROQ_API_KEY").await
+    start_test_server_with_provider("llama-3.3-70b-versatile", "GROQ_API_KEY").await
 }
 
 async fn start_test_server_with_provider(
-    provider: &str,
     model: &str,
     api_key_env: &str,
 ) -> TestServer {
@@ -72,7 +71,6 @@ async fn start_test_server_with_provider(
         home_dir: tmp.path().to_path_buf(),
         data_dir: tmp.path().join("data"),
         default_model: DefaultModelConfig {
-            provider: provider.to_string(),
             model: model.to_string(),
             api_key_env: api_key_env.to_string(),
             base_url: None,
@@ -560,7 +558,6 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
         data_dir: tmp.path().join("data"),
         api_key: api_key.to_string(),
         default_model: DefaultModelConfig {
-            provider: "ollama".to_string(),
             model: "test-model".to_string(),
             api_key_env: "OLLAMA_API_KEY".to_string(),
             base_url: None,
