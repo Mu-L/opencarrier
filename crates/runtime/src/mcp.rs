@@ -7,6 +7,7 @@
 //! All MCP tools are namespaced with `mcp_{server}_{tool}` to prevent collisions.
 
 use types::tool::ToolDefinition;
+use types::error::{CarrierError, CarrierResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -138,7 +139,7 @@ impl McpConnection {
             }
             McpTransport::Sse { url } => {
                 // SSRF check: reject private/localhost URLs unless explicitly configured
-                Self::connect_sse(url).await?
+                Self::connect_sse(url).await.map_err(|e| e.to_string())?
             }
         };
 
@@ -624,14 +625,14 @@ impl McpConnection {
         })
     }
 
-    async fn connect_sse(url: &str) -> Result<McpTransportHandle, String> {
+    async fn connect_sse(url: &str) -> CarrierResult<McpTransportHandle> {
         // Full SSRF protection using shared module
         types::ssrf::check_ssrf(url)?;
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+            .map_err(|e| CarrierError::Network(format!("Failed to create HTTP client: {e}")))?;
 
         Ok(McpTransportHandle::Sse {
             client,

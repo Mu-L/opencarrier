@@ -11,6 +11,7 @@
 use dashmap::DashMap;
 use reqwest::{Client, redirect::Policy};
 use serde::{Deserialize, Serialize};
+use types::error::{CarrierError, CarrierResult};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -505,7 +506,7 @@ pub async fn send_smartbot_response_async(
     http: &Client,
     response_url: &str,
     content: &str,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     // SECURITY: Validate response_url before making request
     types::ssrf::check_ssrf(response_url)?;
 
@@ -520,15 +521,15 @@ pub async fn send_smartbot_response_async(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("smartbot response failed: {e}"))?
+        .map_err(|e| CarrierError::Network(format!("smartbot response failed: {e}")))?
         .json()
         .await
-        .map_err(|e| format!("smartbot response parse error: {e}"))?;
+        .map_err(|e| CarrierError::Serialization(format!("smartbot response parse error: {e}")))?;
 
     let errcode = resp["errcode"].as_i64().unwrap_or(-1);
     if errcode != 0 {
         let errmsg = resp["errmsg"].as_str().unwrap_or("unknown");
-        return Err(format!("smartbot response error {errcode}: {errmsg}"));
+        return Err(CarrierError::Network(format!("smartbot response error {errcode}: {errmsg}")));
     }
 
     Ok(())

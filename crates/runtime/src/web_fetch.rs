@@ -9,6 +9,7 @@ use crate::web_cache::WebCache;
 use crate::web_content::{html_to_markdown, wrap_external_content};
 use types::config::WebFetchConfig;
 use types::ssrf;
+use types::error::{CarrierError, CarrierResult};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -61,7 +62,7 @@ impl WebFetchEngine {
 
     /// Fetch a URL with full security pipeline (GET only, for backwards compat).
     pub async fn fetch(&self, url: &str) -> Result<String, String> {
-        self.fetch_with_options(url, "GET", None, None).await
+        self.fetch_with_options(url, "GET", None, None).await.map_err(|e| e.to_string())
     }
 
     /// Fetch a URL with configurable HTTP method, headers, and body.
@@ -71,7 +72,7 @@ impl WebFetchEngine {
         method: &str,
         headers: Option<&serde_json::Map<String, serde_json::Value>>,
         body: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> CarrierResult<String> {
         let method_upper = method.to_uppercase();
 
         // Step 1: SSRF protection — BEFORE any network I/O
@@ -144,7 +145,7 @@ impl WebFetchEngine {
         let resp = req
             .send()
             .await
-            .map_err(|e| format!("HTTP request failed: {e}"))?;
+            .map_err(|e| CarrierError::Network(format!("HTTP request failed: {e}")))?;
 
         // Step 3b: Handle redirects manually with SSRF validation on each hop
         let (final_resp, final_url) = self.follow_redirects(resp, url).await?;
@@ -153,10 +154,10 @@ impl WebFetchEngine {
         // Check response size
         if let Some(len) = final_resp.content_length() {
             if len > self.config.max_response_bytes as u64 {
-                return Err(format!(
+                return Err(CarrierError::Network(format!(
                     "Response too large: {} bytes (max {})",
                     len, self.config.max_response_bytes
-                ));
+                )));
             }
         }
 
@@ -170,7 +171,7 @@ impl WebFetchEngine {
         let resp_body = final_resp
             .text()
             .await
-            .map_err(|e| format!("Failed to read response body: {e}"))?;
+            .map_err(|e| CarrierError::Network(format!("Failed to read response body: {e}")))?;
 
         // Step 4: For GET requests, detect HTML and convert to Markdown.
         // For non-GET (API calls), return raw body — don't mangle JSON/XML responses.
@@ -257,7 +258,7 @@ impl WebFetchEngine {
         &self,
         mut resp: reqwest::Response,
         original_url: &str,
-    ) -> Result<(reqwest::Response, String), String> {
+    ) -> CarrierResult<(reqwest::Response, String)> {
         let mut current_url = original_url.to_string();
         let max_hops = 5;
 
@@ -290,11 +291,11 @@ impl WebFetchEngine {
             let req = self.client.get(&next_url)
                 .header("User-Agent", format!("Mozilla/5.0 (compatible; {})", crate::USER_AGENT));
 
-            resp = req.send().await.map_err(|e| format!("Redirect request failed: {e}"))?;
+            resp = req.send().await.map_err(|e| CarrierError::Network(format!("Redirect request failed: {e}")))?;
             current_url = next_url;
         }
 
-        Err("Too many redirects (max 5)".to_string())
+        Err(CarrierError::Network("Too many redirects (max 5)".to_string()))
     }
 }
 

@@ -199,7 +199,7 @@ impl Channel for SmartBotChannel {
             &response_url,
             text,
         ))
-        .map_err(ChannelError::SendFailed)
+        .map_err(|e| ChannelError::SendFailed(e.to_string()))
     }
 
     fn stop(&mut self) {

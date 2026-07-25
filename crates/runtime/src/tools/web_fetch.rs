@@ -62,7 +62,7 @@ impl ToolModule for WebFetchModule {
         let headers = input.get("headers").and_then(|v| v.as_object());
         let body = input["body"].as_str();
 
-        Some(engine.fetch_with_options(url, method, headers, body).await)
+        Some(engine.fetch_with_options(url, method, headers, body).await.map_err(|e| e.to_string()))
     }
 
     fn permission_level(&self, _tool_name: &str) -> PermissionLevel {

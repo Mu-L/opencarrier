@@ -121,7 +121,7 @@ fn safe_resolve_parent(path: &str) -> Result<std::path::PathBuf, serde_json::Val
 
 /// SSRF protection using the shared types::ssrf module.
 fn is_ssrf_target(url: &str) -> Result<(), serde_json::Value> {
-    types::ssrf::check_ssrf(url).map_err(|e| json!({"error": e}))
+    types::ssrf::check_ssrf(url).map_err(|e| json!({"error": e.to_string()}))
 }
 
 /// Extract host from URL for capability checking.

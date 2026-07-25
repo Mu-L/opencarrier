@@ -251,7 +251,7 @@ impl Channel for SessionWatcher {
                         .build();
                     let result = match rt {
                         Ok(rt) => rt.block_on(token::send_smartbot_response_async(&http, &response_url, &text))
-                            .map_err(ChannelError::SendFailed),
+                            .map_err(|e| ChannelError::SendFailed(e.to_string())),
                         Err(e) => Err(ChannelError::Other(format!("Runtime creation failed: {e}"))),
                     };
                     let _ = tx.send(result);

@@ -3,6 +3,7 @@
 //! All methods live on `CarrierKernel` but are organized here for clarity.
 
 use types::agent::{AgentId, AgentState, ScheduleMode};
+use types::error::{CarrierError, CarrierResult};
 use futures::stream::{FuturesUnordered, StreamExt};
 
 use super::handle::SYSTEM_AGENT_ID;
@@ -162,7 +163,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
                         }
                         Err(e) => {
                             tracing::warn!(job = %job_name, error = %e, "Cron job delivery failed");
-                            kernel.cron_scheduler.record_failure(job_id, &e);
+                            kernel.cron_scheduler.record_failure(job_id, &e.to_string());
                         }
                     }
                 }
@@ -226,7 +227,7 @@ pub(super) async fn cron_deliver_response(
     owner_id: Option<&str>,
     response: &str,
     delivery: &types::scheduler::CronDelivery,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     use types::scheduler::CronDelivery;
 
     // Empty before markers: keep historical cron behaviour (skip all processing).
@@ -281,9 +282,9 @@ pub(super) async fn cron_deliver_response(
         CronDelivery::None => Ok(()),
         CronDelivery::LastChannel => {
             let sender_id = owner_id.ok_or_else(|| {
-                "LastChannel delivery requires owner_id on the cron job".to_string()
+                CarrierError::Config("LastChannel delivery requires owner_id on the cron job".to_string())
             })?;
-            deliver_via_last_channel(kernel, agent_id, sender_id, response).await
+            deliver_via_last_channel(kernel, agent_id, sender_id, response).await.map_err(CarrierError::Network)
         }
         CronDelivery::Webhook { url } => {
             tracing::debug!(url = %url, "Cron: delivering via webhook");
@@ -291,7 +292,7 @@ pub(super) async fn cron_deliver_response(
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .map_err(|e| format!("webhook client init failed: {e}"))?;
+                .map_err(|e| CarrierError::Network(format!("webhook client init failed: {e}")))?;
             let payload = serde_json::json!({
                 "agent_id": agent_id.to_string(),
                 "response": response,
@@ -299,7 +300,7 @@ pub(super) async fn cron_deliver_response(
             });
             let resp = client.post(url).json(&payload).send().await.map_err(|e| {
                 tracing::warn!(error = %e, "Cron webhook delivery failed");
-                format!("webhook delivery failed: {e}")
+                CarrierError::Network(format!("webhook delivery failed: {e}"))
             })?;
             tracing::debug!(status = %resp.status(), "Cron webhook delivered");
             Ok(())

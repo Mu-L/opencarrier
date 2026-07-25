@@ -6,6 +6,8 @@
 
 use std::net::{IpAddr, ToSocketAddrs};
 
+use crate::error::{CarrierError, CarrierResult};
+
 /// Comma-separated hostnames that are allowed to resolve to private IPs.
 /// Set via the `OPENCARRIER_SSRF_ALLOWLIST` environment variable.
 /// Example: `github.com,api.github.com`.
@@ -21,16 +23,16 @@ fn ssrf_allowlist() -> Vec<String> {
 /// Check if a URL targets a private/internal network resource.
 /// Blocks localhost, cloud metadata endpoints, and private IPs.
 /// Must run BEFORE any network I/O.
-pub fn check_ssrf(url: &str) -> Result<(), String> {
+pub fn check_ssrf(url: &str) -> CarrierResult<()> {
     check_ssrf_with_ip(url).map(|_| ())
 }
 
 /// Check SSRF and return the resolved IP address.
 /// Callers should use reqwest's `.resolve()` to pin this IP,
 /// preventing DNS rebinding (TOCTOU) attacks.
-pub fn check_ssrf_with_ip(url: &str) -> Result<IpAddr, String> {
+pub fn check_ssrf_with_ip(url: &str) -> CarrierResult<IpAddr> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err("Only http:// and https:// URLs are allowed".to_string());
+        return Err(CarrierError::Network("Only http:// and https:// URLs are allowed".to_string()));
     }
 
     let host = extract_host(url);
@@ -54,7 +56,7 @@ pub fn check_ssrf_with_ip(url: &str) -> Result<IpAddr, String> {
         "[::1]",
     ];
     if blocked.contains(&hostname) {
-        return Err(format!("SSRF blocked: {hostname} is a restricted hostname"));
+        return Err(CarrierError::Network(format!("SSRF blocked: {hostname} is a restricted hostname")));
     }
 
     // Allowlisted hostnames bypass private-IP checks. Still must resolve.
@@ -64,20 +66,20 @@ pub fn check_ssrf_with_ip(url: &str) -> Result<IpAddr, String> {
     let socket_addr = format!("{hostname}:{port}");
     let addrs: Vec<std::net::SocketAddr> = socket_addr
         .to_socket_addrs()
-        .map_err(|e| format!("SSRF blocked: cannot resolve {hostname}: {e}"))?
+        .map_err(|e| CarrierError::Network(format!("SSRF blocked: cannot resolve {hostname}: {e}")))?
         .collect();
 
     if addrs.is_empty() {
-        return Err(format!("SSRF: no DNS results for {hostname}"));
+        return Err(CarrierError::Network(format!("SSRF: no DNS results for {hostname}")));
     }
 
     if !allowlisted {
         for addr in &addrs {
             let ip = addr.ip();
             if ip.is_loopback() || ip.is_unspecified() || is_private_ip(&ip) {
-                return Err(format!(
+                return Err(CarrierError::Network(format!(
                     "SSRF blocked: {hostname} resolves to private IP {ip}"
-                ));
+                )));
             }
         }
     }
