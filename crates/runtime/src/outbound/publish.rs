@@ -225,21 +225,6 @@ fn resolve_article_title(html_path: &str) -> String {
         .to_string()
 }
 
-/// Resolve META_AUTHOR and META_DIGEST from the sibling `.md`'s leading META
-/// header block. article-writer writes these specifically for the OA draft's
-/// author/digest fields (its flow.md: "META_DIGEST … 用于公众号草稿摘要字段").
-/// Returns (None, None) if there is no sibling .md or no META block.
-fn resolve_meta_author_digest(html_path: &str) -> (Option<String>, Option<String>) {
-    let md = std::path::Path::new(html_path).with_extension("md");
-    let Ok(content) = std::fs::read_to_string(&md) else {
-        return (None, None);
-    };
-    (
-        extract_meta_field(&content, "AUTHOR"),
-        extract_meta_field(&content, "DIGEST"),
-    )
-}
-
 /// Handle a `[PUBLISH:app_id]html_path|digest[/PUBLISH]` marker: generate a
 /// cover, create a WeChat OA draft, and publish it — all via in-process API
 /// (no MCP, no agent tool-chain; the "AI + API" pattern). The `|digest` part
@@ -300,8 +285,13 @@ async fn handle_publish_marker(
     // OA draft author + digest. article-writer writes META_AUTHOR/META_DIGEST
     // precisely for these fields. An explicit digest in the PUBLISH marker
     // wins; otherwise fall back to META_DIGEST. Author has no marker source —
-    // only META_AUTHOR.
-    let (meta_author, meta_digest) = resolve_meta_author_digest(&abs_html);
+    // only META_AUTHOR. Read the sibling .md once and share across both
+    // META extractions (resolve_article_title already reads it for META_TITLE;
+    // this avoids a second read for author/digest).
+    let md_content =
+        std::fs::read_to_string(std::path::Path::new(&abs_html).with_extension("md")).ok();
+    let meta_author = md_content.as_deref().and_then(|c| extract_meta_field(c, "AUTHOR"));
+    let meta_digest = md_content.as_deref().and_then(|c| extract_meta_field(c, "DIGEST"));
     let author = meta_author;
     let digest = digest
         .filter(|d| !d.is_empty())
@@ -423,7 +413,7 @@ async fn handle_publish_marker(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_meta_field, extract_meta_title, resolve_article_title, resolve_meta_author_digest};
+    use super::{extract_meta_field, extract_meta_title, resolve_article_title};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -466,23 +456,6 @@ mod tests {
         assert_eq!(extract_meta_field(content, "AUTHOR").unwrap(), "张三");
         assert_eq!(extract_meta_field(content, "DIGEST").unwrap(), "这是一段摘要");
         assert!(extract_meta_field(content, "NOPE").is_none());
-    }
-
-    #[test]
-    fn resolve_meta_author_digest_from_sibling_md() {
-        let md = tmp_md("<!--\nMETA_AUTHOR: 李四\nMETA_DIGEST: 摘要内容\nMETA_PIPELINE: pipeline-20260721-x\n-->\n\n# t\n正文");
-        let html = md.with_extension("html");
-        let (author, digest) = resolve_meta_author_digest(html.to_str().unwrap());
-        assert_eq!(author.as_deref(), Some("李四"));
-        assert_eq!(digest.as_deref(), Some("摘要内容"));
-    }
-
-    #[test]
-    fn resolve_meta_author_digest_none_without_sibling_md() {
-        // html path with no sibling .md → (None, None), no panic.
-        let (author, digest) = resolve_meta_author_digest("/nonexistent/path/article.html");
-        assert!(author.is_none());
-        assert!(digest.is_none());
     }
 
     #[test]

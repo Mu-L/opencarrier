@@ -244,7 +244,10 @@ impl CarrierKernel {
                 let owner = owner_id.as_deref().unwrap_or(sender);
                 Some(types::config::sender_data_dir(home, owner, agent_name, Some(sender)))
             }
-            None => workspace.map(PathBuf::from),
+            None => {
+                let Some(ws) = workspace else { return };
+                Some(types::config::resolve_turn_cwd(home, ws, agent_name, None, None))
+            },
         };
         let Some(cwd) = cwd else {
             return;
@@ -259,7 +262,11 @@ impl CarrierKernel {
         }
         #[cfg(not(unix))]
         {
-            let _ = std::fs::create_dir_all(&link);
+            tracing::warn!(
+                agent = agent_name,
+                flow = %flow.name,
+                "symlink not supported on this platform; .flows/ scripts unavailable"
+            );
         }
         tracing::debug!(
             agent = agent_name,
@@ -450,13 +457,34 @@ impl CarrierKernel {
 
         // Explicit active_flow (HTTP/cron caller): also bypasses the
         // classifier. If the named flow is missing, fall through to classify
-        // rather than giving up silently.
+        // rather than giving up silently. SHARED system flows must be in the
+        // agent's declared allowlist (manifest.flows) to prevent privilege
+        // escalation via unvetted flows — workspace private flows are always
+        // allowed since they belong to the agent.
         let from_active = if from_resume.is_none() {
             if let Some(name) = active_flow {
                 match self.load_named_flow_for_turn(entry, &mut tools, name) {
-                    Some(loaded) => {
-                        info!(agent = %entry.name, flow = %name, "Flow loaded by active_flow (explicit)");
-                        Some(loaded)
+                    Some((prompt, max_iter, flow)) => {
+                        let allowed = || -> bool {
+                            if !flow.is_system_shared {
+                                return true; // workspace flow: always allowed
+                            }
+                            let allow = &entry.manifest.flows;
+                            allow.is_empty() // empty allowlist = no restriction
+                                || allow.iter().any(|f| f.eq_ignore_ascii_case(name))
+                        };
+                        if !allowed() {
+                            warn!(
+                                agent = %entry.name,
+                                flow = %name,
+                                "active_flow: system flow '{}' not in manifest.flows allowlist",
+                                name,
+                            );
+                            None
+                        } else {
+                            info!(agent = %entry.name, flow = %name, "Flow loaded by active_flow (explicit)");
+                            Some((prompt, max_iter, flow))
+                        }
                     }
                     None => {
                         warn!(agent = %entry.name, flow = %name, "active_flow not found — falling back to classifier");

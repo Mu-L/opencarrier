@@ -408,9 +408,29 @@ pub fn command_matches_flow_shell_allow(
     }
     if let Some(ws) = workspace_root.and_then(|p| p.to_str()) {
         if !ws.is_empty() {
-            let rel = command.replace(&format!("{ws}/"), "");
+            let prefix = format!("{ws}/");
+            // Remove the workspace_root prefix so a relative pattern
+            // (e.g. `python3 flows/foo/*`) matches the absolute command
+            // (e.g. `python3 {ws}/flows/foo/scripts/x.py`). Only the first
+            // occurrence is replaced — the command text before and after the
+            // path is preserved.
+            let rel = command.replacen(&prefix, "", 1);
             if rel != command && command_matches_shell_allow(&rel, patterns) {
                 return true;
+            }
+            // Agent may be running from sender_data_dir cwd
+            // (workspace_root/senders/{owner}/). After stripping workspace_root/,
+            // the rel looks like `python3 senders/{owner}/.flows/foo/scripts/x.py`.
+            // Strip senders/{owner}/ too so `.flows/foo/*` matches.
+            if let Some(sender_idx) = rel.find("/senders/") {
+                let before = &rel[..sender_idx + 1]; // text before /senders/ (e.g. "python3 ")
+                let after_sender = &rel[sender_idx + 9..]; // after /senders/
+                if let Some(rest) = after_sender.split_once('/').map(|x| x.1) {
+                    let without_sender = format!("{before}{rest}");
+                    if command_matches_shell_allow(&without_sender, patterns) {
+                        return true;
+                    }
+                }
             }
         }
     }

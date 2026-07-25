@@ -1128,6 +1128,33 @@ pub fn sender_data_dir(home_dir: &std::path::Path, owner_id: &str, agent_name: &
     }
 }
 
+/// Compute the shell working directory for an agent turn.
+///
+/// When a sender is present (per-user channel), returns the sender-scoped data
+/// directory so `shell_exec` and `file_write` land in the same directory
+/// (byte-aligned). Without a sender (CLI/system turns), falls back to the
+/// workspace root. This eliminates duplicated cwd resolution in the kernel
+/// and runtime layers — both call this single function.
+///
+/// The returned path is a subdirectory of the workspace:
+/// `workspaces/{agent}/senders/{owner}/` (sender-driven) or
+/// `workspace_root/` (CLI/system).
+pub fn resolve_turn_cwd(
+    home_dir: &std::path::Path,
+    workspace_root: &std::path::Path,
+    agent_name: &str,
+    sender_id: Option<&str>,
+    owner_id: Option<&str>,
+) -> std::path::PathBuf {
+    match sender_id {
+        Some(s) => {
+            let owner = owner_id.unwrap_or(s);
+            sender_data_dir(home_dir, owner, agent_name, Some(s))
+        }
+        None => workspace_root.to_path_buf(),
+    }
+}
+
 /// Compute a home-relative path under `workspaces/` for a given subdir (input/output/memory).
 ///
 /// Returns a string like `workspaces/{agent_name}/senders/{owner_id}/{subdir}` or

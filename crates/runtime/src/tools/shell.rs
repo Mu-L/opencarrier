@@ -20,17 +20,19 @@ use tracing::warn;
 /// `sender_data_dir` as the file API, so the two stay byte-aligned.
 fn resolve_shell_cwd(ctx: &ToolContext<'_>) -> Option<std::path::PathBuf> {
     let workspace_root = ctx.workspace_root?;
-    match (ctx.home_dir, ctx.agent_name, ctx.sender_id) {
-        (Some(home), Some(agent), Some(sender)) => {
-            let owner = ctx.owner_id.unwrap_or(sender);
-            let dir = types::config::sender_data_dir(home, owner, agent, Some(sender));
-            // `file_write` may not have created it yet this turn; ensure it exists
-            // so `current_dir` (cd) doesn't fail.
-            let _ = std::fs::create_dir_all(&dir);
-            Some(dir)
-        }
-        _ => Some(workspace_root.to_path_buf()),
-    }
+    let home_dir = ctx.home_dir?;
+    let agent_name = ctx.agent_name?;
+    let dir = types::config::resolve_turn_cwd(
+        home_dir,
+        workspace_root,
+        agent_name,
+        ctx.sender_id,
+        ctx.owner_id,
+    );
+    // `file_write` may not have created it yet this turn; ensure it exists
+    // so `current_dir` (cd) doesn't fail.
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir)
 }
 
 /// Shell execution tools.
@@ -384,7 +386,10 @@ impl ToolModule for CliExecTools {
         cmd.kill_on_drop(true);
 
         let policy_timeout = ctx.exec_policy.map(|p| p.timeout_secs).unwrap_or(30);
-        let timeout_secs = input["timeout_seconds"].as_u64().unwrap_or(policy_timeout);
+        let timeout_secs = input["timeout_seconds"]
+            .as_u64()
+            .unwrap_or(policy_timeout)
+            .min(300); // hard ceiling: no single CLI call runs longer than 5 min
         let result =
             tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output()).await;
 
