@@ -443,6 +443,14 @@ impl CarrierKernel {
         // Also update the regular session with the repaired messages
         let mut updated_session = session;
         updated_session.messages = final_messages;
+        // The compaction summary message (final_messages[0]) now captures the
+        // old turns, so the per-turn L0 summaries for those turns are orphaned —
+        // keeping them would inject stale intent/outcome labels that reference
+        // messages which no longer exist. Reset the L0 layer; it rebuilds over
+        // the upcoming turns. (Kept recent messages are still in the prompt
+        // directly, so no context is lost.)
+        let cleared_summaries = updated_session.turn_summaries.len();
+        updated_session.turn_summaries.clear();
         self.memory
             .save_session(&updated_session)
             .map_err(KernelError::Carrier)?;
@@ -454,6 +462,9 @@ impl CarrierKernel {
             result.summary.len(),
             updated_session.messages.len()
         );
+        if cleared_summaries > 0 {
+            msg.push_str(&format!(" Cleared {cleared_summaries} stale turn summaries (L0 rebuilds)."));
+        }
 
         let repairs = repair_stats.orphaned_results_removed
             + repair_stats.synthetic_results_inserted
