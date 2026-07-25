@@ -266,6 +266,20 @@ fn resolve_user_data_path(
     Some(Ok(target))
 }
 
+/// Actionable error when file_read is asked to read a directory. A directory
+/// path is the #1 trigger of file_read tool loops: the agent retries on
+/// *different* dir paths, each producing a cryptic OS error and evading the
+/// exact-match loop guard. Steer it to file_list — mirroring file_list's
+/// reverse hint when it is given a file.
+fn directory_read_hint(raw_path: &str) -> String {
+    format!(
+        "路径 '{raw_path}' 是一个目录，不是文件。file_read 只能读取文件内容，不能读目录。\n\
+         修正方法：\n\
+         - 想列出该目录下的文件 → 用 file_list(path=\"{raw_path}\")\n\
+         - 想读取目录里的某个文件 → 用 file_read 并补上文件名（例如 {raw_path}/正文.md）"
+    )
+}
+
 async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> Result<String, String> {
     let raw_path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
 
@@ -308,6 +322,11 @@ async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> Result<String, 
                     ));
                 }
             }
+        } else if metadata.is_dir() {
+            // Reading a directory is the #1 file_read loop trigger (see
+            // directory_read_hint): without an actionable hint the agent retries
+            // on different dir paths and evades the exact-match loop guard.
+            return Err(directory_read_hint(raw_path));
         }
     }
 
@@ -638,5 +657,19 @@ mod tests {
         assert_eq!(document_extension(Path::new("notes.md")), None);
         assert_eq!(document_extension(Path::new("data.csv")), None);
         assert_eq!(document_extension(Path::new("noext")), None);
+    }
+
+    #[test]
+    fn directory_read_hint_steer_to_file_list() {
+        let msg = directory_read_hint("output/pipeline-20260725-x");
+        // The hint must name the corrective tool AND echo the path so the agent
+        // can copy it — this is exactly what breaks the file_read-on-directory
+        // loop. If a future cleanup makes the error generic again, this fires.
+        assert!(msg.contains("file_list"), "hint must mention file_list: {msg}");
+        assert!(msg.contains("file_read"), "hint must mention file_read: {msg}");
+        assert!(
+            msg.contains("output/pipeline-20260725-x"),
+            "hint must echo the path: {msg}"
+        );
     }
 }
