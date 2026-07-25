@@ -1,12 +1,17 @@
 ---
 name: outline-writer
 description: 根据素材撰写文章大纲
-version: 3
+version: 4
+privilege: system
 tools:
   - file_read
   - file_write
   - web_search
   - web_fetch
+  - shell_exec
+shell_allow:
+  - "python3 .flows/outline-writer/scripts/*"
+  - "python .flows/outline-writer/scripts/*"
 ---
 
 # Outline Writer
@@ -113,7 +118,18 @@ META_PIPELINE: <pipeline_id>
 )
 ```
 
-### 5. 输出结果
+### 5. 验证（宣布完成前必跑）
+
+写完 `大纲.md` 后立即跑校验器，按报错修，重跑直到 OK：
+
+```
+shell_exec(command="python3 .flows/outline-writer/scripts/validate_outline.py output/<pipeline_id>/大纲.md")
+```
+
+- 看到 `OUTLINE_OK` 才算完成；看到 `OUTLINE_INVALID:N` 就按列出的 `ERROR:` 逐条修再重跑（常见：漏 META 头 / META_DIGEST 不在 30-60 字 / 标题备选不足 3 个 / 正文写了 `流水线ID:`）。
+- 校验只查结构，不判大纲质量——质量靠遵循 writing-style + 人审。
+
+### 6. 输出结果
 
 完成后输出以下信息，由主控 agent 手动推进下一步：
 - 流水线 ID

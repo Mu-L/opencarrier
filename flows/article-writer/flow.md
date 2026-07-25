@@ -1,12 +1,17 @@
 ---
 name: article-writer
 description: 根据大纲撰写完整 Markdown 文章正文
-version: 8
+version: 9
+privilege: system
 tools:
   - file_read
   - file_write
   - web_search
   - web_fetch
+  - shell_exec
+shell_allow:
+  - "python3 .flows/article-writer/scripts/*"
+  - "python .flows/article-writer/scripts/*"
 ---
 
 # Article Writer
@@ -125,7 +130,18 @@ META_PIPELINE: <pipeline_id>
 )
 ```
 
-### 4. 输出结果
+### 4. 验证（宣布完成前必跑）
+
+写完 `正文.md` 后立即跑校验器，按报错修，重跑直到 OK：
+
+```
+shell_exec(command="python3 .flows/article-writer/scripts/validate_article.py output/<pipeline_id>/正文.md")
+```
+
+- 看到 `ARTICLE_OK` 才算完成；看到 `ARTICLE_INVALID:N` 就按列出的 `ERROR:` 逐条修再重跑（常见：漏 META 头 / 无 `## ` 章节 / 字数低于该类型下限 / 正文写了 `流水线ID:` / 残留占位符）。
+- 校验只查结构（META/章节/字数/占位），不判写作质量——质量靠遵循 writing-style + 人审。
+
+### 5. 输出结果
 
 完成后输出以下信息，由主控 agent 手动推进下一步：
 - 流水线 ID

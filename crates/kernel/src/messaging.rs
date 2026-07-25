@@ -213,6 +213,61 @@ impl CarrierKernel {
         Some((flow_prompt, flow_max_iter, flow))
     }
 
+    /// Expose a matched system-shared flow's bundled `scripts/` into the turn's
+    /// shell cwd, so the agent can run deterministic helpers shipped with the
+    /// flow (e.g. `validate_*.py` for the writing pipeline). System flows live
+    /// under `~/.opencarrier/flows/<name>/` — outside the agent's cwd and out of
+    /// reach of workspace-relative `shell_allow` patterns — so we symlink the
+    /// flow dir to `<cwd>/.flows/<name>`; flows then reference scripts as
+    /// `python3 .flows/<name>/scripts/...`. Workspace (clone) flows already
+    /// reach their scripts via workspace paths and are skipped. Idempotent:
+    /// re-created every turn (self-heals if the agent overwrote the link).
+    fn expose_flow_scripts(
+        home: &Path,
+        flow: &crate::prompt_sources::FlowMatch,
+        agent_name: &str,
+        sender_id: &Option<String>,
+        owner_id: &Option<String>,
+        workspace: Option<&Path>,
+    ) {
+        if !flow.is_system_shared {
+            return;
+        }
+        let flow_dir = home.join("flows").join(&flow.name);
+        if !flow_dir.join("scripts").is_dir() {
+            return;
+        }
+        // Mirror runtime::tools::shell::resolve_shell_cwd so the symlink lands
+        // exactly where shell_exec will cd for the turn.
+        let cwd: Option<PathBuf> = match sender_id.as_deref() {
+            Some(sender) => {
+                let owner = owner_id.as_deref().unwrap_or(sender);
+                Some(types::config::sender_data_dir(home, owner, agent_name, Some(sender)))
+            }
+            None => workspace.map(PathBuf::from),
+        };
+        let Some(cwd) = cwd else {
+            return;
+        };
+        let link_dir = cwd.join(".flows");
+        let _ = std::fs::create_dir_all(&link_dir);
+        let link = link_dir.join(&flow.name);
+        let _ = std::fs::remove_file(&link);
+        #[cfg(unix)]
+        {
+            let _ = std::os::unix::fs::symlink(&flow_dir, &link);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = std::fs::create_dir_all(&link);
+        }
+        tracing::debug!(
+            agent = agent_name,
+            flow = %flow.name,
+            "Exposed system flow scripts via .flows/ symlink"
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn prepare_agent_context(
         &self,
@@ -482,6 +537,20 @@ impl CarrierKernel {
             } else {
                 (None, None, None)
             };
+
+        // Expose a system-shared flow's bundled scripts/ (deterministic
+        // validators/helpers) into the turn cwd as .flows/<name>, so the agent
+        // can invoke them via workspace-relative shell_allow patterns.
+        if let Some(ref flow) = matched_flow {
+            Self::expose_flow_scripts(
+                &types::config::home_dir(),
+                flow,
+                &agent_name,
+                sender_id,
+                owner_id,
+                entry.manifest.workspace.as_deref(),
+            );
+        }
 
         // Auto-match subagent trigger (only when no flow matched)
         let auto_matched_subagent = if auto_matched_flow.is_none() && !entry.manifest.subagents.is_empty() {
@@ -1859,4 +1928,92 @@ fn partition_steps_by_layers(steps: &[runtime::agent_loop::TaskStep]) -> Vec<Vec
     }
 
     layers
+}
+
+#[cfg(test)]
+mod expose_flow_scripts_tests {
+    use super::*;
+    use crate::prompt_sources::FlowMatch;
+
+    fn mk_flow(name: &str, is_system_shared: bool) -> FlowMatch {
+        FlowMatch {
+            name: name.to_string(),
+            body: String::new(),
+            max_iterations: None,
+            tools: vec![],
+            flow_def: types::flow::FlowDef::default(),
+            is_system_shared,
+        }
+    }
+
+    #[test]
+    fn system_flow_with_scripts_is_symlinked_into_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        // Deployed system flow ships a scripts/ dir.
+        let flow_dir = home.join("flows").join("myflow");
+        std::fs::create_dir_all(flow_dir.join("scripts")).unwrap();
+        std::fs::write(flow_dir.join("scripts").join("validate.py"), "# ok").unwrap();
+
+        let flow = mk_flow("myflow", true);
+        CarrierKernel::expose_flow_scripts(
+            home,
+            &flow,
+            "agent-x",
+            &Some("user-1".to_string()),
+            &Some("owner-1".to_string()),
+            None,
+        );
+
+        // cwd mirrors resolve_shell_cwd: sender present -> sender_data_dir.
+        let cwd = types::config::sender_data_dir(home, "owner-1", "agent-x", Some("user-1"));
+        let link = cwd.join(".flows").join("myflow");
+        assert!(
+            link.is_symlink(),
+            ".flows/<name> symlink should be created under sender cwd"
+        );
+        #[cfg(unix)]
+        assert_eq!(std::fs::read_link(&link).unwrap(), flow_dir);
+    }
+
+    #[test]
+    fn no_op_for_missing_scripts_or_workspace_flows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let sender = Some("user-1".to_string());
+        let owner = Some("owner-1".to_string());
+
+        // System flow but NO scripts/ shipped -> no link.
+        std::fs::create_dir_all(home.join("flows").join("bareflow")).unwrap();
+        let bare = mk_flow("bareflow", true);
+        CarrierKernel::expose_flow_scripts(home, &bare, "agent-x", &sender, &owner, None);
+        let cwd = types::config::sender_data_dir(home, "owner-1", "agent-x", Some("user-1"));
+        assert!(!cwd.join(".flows").join("bareflow").exists());
+
+        // Workspace (clone) flow with scripts -> still skipped (not system-shared).
+        let clone = mk_flow("cloneflow", false);
+        CarrierKernel::expose_flow_scripts(home, &clone, "agent-x", &sender, &owner, None);
+        assert!(!cwd.join(".flows").join("cloneflow").exists());
+    }
+
+    #[test]
+    fn no_sender_falls_back_to_workspace_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let flow_dir = home.join("flows").join("wsflow");
+        std::fs::create_dir_all(flow_dir.join("scripts")).unwrap();
+        std::fs::write(flow_dir.join("scripts").join("v.py"), "# ok").unwrap();
+
+        let ws = tmp.path().join("workspace_root");
+        std::fs::create_dir_all(&ws).unwrap();
+        let flow = mk_flow("wsflow", true);
+        // No sender -> cwd falls back to workspace_root.
+        CarrierKernel::expose_flow_scripts(home, &flow, "agent-x", &None, &None, Some(ws.as_path()));
+
+        let link = ws.join(".flows").join("wsflow");
+        assert!(
+            link.is_symlink(),
+            "without sender, symlink should land under workspace_root"
+        );
+    }
 }

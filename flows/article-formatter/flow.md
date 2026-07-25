@@ -1,10 +1,15 @@
 ---
 name: article-formatter
 description: 将 Markdown 文章转换为微信公众号兼容的内联样式 HTML
-version: 6
+version: 7
+privilege: system
 tools:
   - file_read
   - file_write
+  - shell_exec
+shell_allow:
+  - "python3 .flows/article-formatter/scripts/*"
+  - "python .flows/article-formatter/scripts/*"
 ---
 
 # Article Formatter
@@ -86,9 +91,18 @@ file_read(path="output/<pipeline_id>/正文.md")
 - 不使用 `<h1>`（公众号有自己的标题系统）
 - **确认 HTML 中不包含 `<!-- META -->` 注释头**——已剥离
 
-### 7. 输出
+### 7. 保存并验证（宣布完成前必跑）
 
-保存到 `output/<pipeline_id>/正文.html`，告知主控 agent 排版完成（流水线 ID + HTML 路径），由主控 agent 调用 draft-publisher 发布。
+排版后先保存到 `output/<pipeline_id>/正文.html`，再立即跑校验器，按报错修，重跑直到 OK：
+
+```
+shell_exec(command="python3 .flows/article-formatter/scripts/validate_formatted_html.py output/<pipeline_id>/正文.html")
+```
+
+- 看到 `HTML_OK` 才算完成；看到 `HTML_INVALID:N` 就按列出的 `ERROR:` 逐条修再重跑（常见：`<div>`→改 `<section>`、漏剥 `<!-- META -->` 头、未转换的 markdown 残留、`<img>` 缺 src、`<section>` 标签不配平）。
+- 校验只查 HTML 结构规范，不判排版美感——美感靠 writing-style + 人审。
+
+通过后告知主控 agent 排版完成（流水线 ID + HTML 路径），由主控 agent 调用 draft-publisher 发布。
 
 ## Important Principles
 

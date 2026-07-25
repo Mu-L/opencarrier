@@ -1,11 +1,16 @@
 ---
 name: topic-researcher
 description: 搜索热点话题与选题研究，帮助用户选题
-version: 3
+version: 4
+privilege: system
 tools:
   - web_search
   - web_fetch
   - file_write
+  - shell_exec
+shell_allow:
+  - "python3 .flows/topic-researcher/scripts/*"
+  - "python .flows/topic-researcher/scripts/*"
 ---
 # Topic Researcher
 
@@ -61,7 +66,18 @@ web_search(q="关键词", engines=["sogou_wechat"], fetch_top=3)
 file_write(path="output/<流水线ID>/素材.md", content="流水线ID: <流水线ID>\n\n整理后的素材")
 ```
 
-### 5. 输出
+### 5. 验证（宣布完成前必跑）
+
+写完 `素材.md` 后立即跑校验器，按报错修，重跑直到 OK：
+
+```
+shell_exec(command="python3 .flows/topic-researcher/scripts/validate_topic_research.py output/<流水线ID>/素材.md")
+```
+
+- 看到 `TOPIC_OK` 才算完成；看到 `TOPIC_INVALID:N` 就按列出的 `ERROR:` 逐条修再重跑。
+- 校验只查结构（流水线ID 行 + ≥3 条研究条目/链接），不判研究质量——质量靠遵循 writing-style + 人审。
+
+### 6. 输出
 
 **流水线模式**：告知用户流水线已启动（流水线 ID + 素材路径 + 选定话题），由主控 agent 手动推进到 outline-writer。
 
