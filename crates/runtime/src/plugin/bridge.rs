@@ -387,10 +387,10 @@ impl PluginBridgeManager {
                     Ok(()) => {
                         self.send_response(&msg, "已收到您的管理权限申请，请等待管理员审批。").await;
                     }
-                    Err(e) if e.contains("already_admin") => {
+                    Err(crate::plugin::admin_store::AdminError::AlreadyAdmin) => {
                         self.send_response(&msg, "您已经是管理员了。").await;
                     }
-                    Err(e) if e.contains("already_pending") => {
+                    Err(crate::plugin::admin_store::AdminError::AlreadyPending) => {
                         self.send_response(&msg, "您已提交过申请，请耐心等待审批。").await;
                     }
                     Err(_) => {

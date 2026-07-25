@@ -39,6 +39,42 @@ pub struct PendingEntry {
     pub requested_at: String,
 }
 
+/// Typed errors for admin-store mutations.
+///
+/// Replaces ad-hoc `Result<_, String>` so callers match on variants instead of
+/// substring-matching error messages (which silently breaks when the message
+/// wording changes). `Display` strings are kept stable for log compatibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdminError {
+    /// `add_pending`: sender is already an admin.
+    AlreadyAdmin,
+    /// `add_pending`: a pending request already exists for this sender.
+    AlreadyPending,
+    /// `approve`: sender not found in the pending list.
+    NotFoundInPending,
+    /// `revoke`: sender not found in the admins list.
+    NotFoundInAdmins,
+    /// `revoke`: target is the creator and cannot be revoked.
+    IsCreator,
+    /// Serialization or filesystem failure.
+    Io(String),
+}
+
+impl std::fmt::Display for AdminError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AdminError::AlreadyAdmin => write!(f, "already_admin"),
+            AdminError::AlreadyPending => write!(f, "already_pending"),
+            AdminError::NotFoundInPending => write!(f, "not_found_in_pending"),
+            AdminError::NotFoundInAdmins => write!(f, "not_found_in_admins"),
+            AdminError::IsCreator => write!(f, "cannot_revoke_creator"),
+            AdminError::Io(e) => write!(f, "I/O error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for AdminError {}
+
 pub fn read_admins(workspace: &Path) -> AdminsFile {
     let path = workspace.join(ADMINS_FILE);
     match std::fs::read_to_string(&path) {
@@ -48,12 +84,13 @@ pub fn read_admins(workspace: &Path) -> AdminsFile {
 }
 
 /// Atomic write: write to temp file then rename (crash-safe on POSIX).
-fn write_admins_atomic(workspace: &Path, admins: &AdminsFile) -> Result<(), String> {
+fn write_admins_atomic(workspace: &Path, admins: &AdminsFile) -> Result<(), AdminError> {
     let path = workspace.join(ADMINS_FILE);
-    let content = serde_json::to_string_pretty(admins).map_err(|e| format!("Serialize error: {e}"))?;
+    let content =
+        serde_json::to_string_pretty(admins).map_err(|e| AdminError::Io(format!("Serialize error: {e}")))?;
     let tmp_path = path.with_extension("tmp");
-    std::fs::write(&tmp_path, &content).map_err(|e| format!("Write error: {e}"))?;
-    std::fs::rename(&tmp_path, &path).map_err(|e| format!("Rename error: {e}"))
+    std::fs::write(&tmp_path, &content).map_err(|e| AdminError::Io(format!("Write error: {e}")))?;
+    std::fs::rename(&tmp_path, &path).map_err(|e| AdminError::Io(format!("Rename error: {e}")))
 }
 
 pub fn is_admin(workspace: &Path, sender_id: &str) -> bool {
@@ -62,15 +99,15 @@ pub fn is_admin(workspace: &Path, sender_id: &str) -> bool {
     admins.admins.iter().any(|a| a.sender_id == sender_id)
 }
 
-pub fn add_pending(workspace: &Path, sender_id: &str, sender_name: &str) -> Result<(), String> {
+pub fn add_pending(workspace: &Path, sender_id: &str, sender_name: &str) -> Result<(), AdminError> {
     let _lock = get_lock();
     let mut admins = read_admins(workspace);
 
     if admins.admins.iter().any(|a| a.sender_id == sender_id) {
-        return Err("already_admin".to_string());
+        return Err(AdminError::AlreadyAdmin);
     }
     if admins.pending.iter().any(|p| p.sender_id == sender_id) {
-        return Err("already_pending".to_string());
+        return Err(AdminError::AlreadyPending);
     }
 
     admins.pending.push(PendingEntry {
@@ -82,7 +119,7 @@ pub fn add_pending(workspace: &Path, sender_id: &str, sender_name: &str) -> Resu
     write_admins_atomic(workspace, &admins)
 }
 
-pub fn approve(workspace: &Path, sender_id: &str) -> Result<(), String> {
+pub fn approve(workspace: &Path, sender_id: &str) -> Result<(), AdminError> {
     let _lock = get_lock();
     let mut admins = read_admins(workspace);
 
@@ -90,7 +127,7 @@ pub fn approve(workspace: &Path, sender_id: &str) -> Result<(), String> {
         .pending
         .iter()
         .position(|p| p.sender_id == sender_id)
-        .ok_or("not_found_in_pending".to_string())?;
+        .ok_or(AdminError::NotFoundInPending)?;
 
     let entry = admins.pending.remove(idx);
     admins.admins.push(AdminEntry {
@@ -103,7 +140,7 @@ pub fn approve(workspace: &Path, sender_id: &str) -> Result<(), String> {
     write_admins_atomic(workspace, &admins)
 }
 
-pub fn revoke(workspace: &Path, sender_id: &str) -> Result<(), String> {
+pub fn revoke(workspace: &Path, sender_id: &str) -> Result<(), AdminError> {
     let _lock = get_lock();
     let mut admins = read_admins(workspace);
 
@@ -111,10 +148,10 @@ pub fn revoke(workspace: &Path, sender_id: &str) -> Result<(), String> {
         .admins
         .iter()
         .find(|a| a.sender_id == sender_id)
-        .ok_or("not_found_in_admins".to_string())?;
+        .ok_or(AdminError::NotFoundInAdmins)?;
 
     if entry.role == "creator" {
-        return Err("cannot_revoke_creator".to_string());
+        return Err(AdminError::IsCreator);
     }
 
     admins.admins.retain(|a| a.sender_id != sender_id);
@@ -122,7 +159,11 @@ pub fn revoke(workspace: &Path, sender_id: &str) -> Result<(), String> {
 }
 
 /// Auto-assign the first bound sender as creator. Only writes if admins is empty.
-pub fn auto_assign_creator(workspace: &Path, sender_id: &str, sender_name: &str) -> Result<bool, String> {
+pub fn auto_assign_creator(
+    workspace: &Path,
+    sender_id: &str,
+    sender_name: &str,
+) -> Result<bool, AdminError> {
     let _lock = get_lock();
     let admins = read_admins(workspace);
     if !admins.admins.is_empty() {
@@ -199,12 +240,10 @@ mod tests {
 
         add_pending(dir.path(), "user2", "Bob").unwrap();
         let result = add_pending(dir.path(), "user2", "Bob");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("already_pending"));
+        assert!(matches!(result, Err(AdminError::AlreadyPending)));
 
         let result = add_pending(dir.path(), "user1", "Alice");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("already_admin"));
+        assert!(matches!(result, Err(AdminError::AlreadyAdmin)));
     }
 
     #[test]
@@ -224,7 +263,6 @@ mod tests {
         auto_assign_creator(dir.path(), "user1", "Alice").unwrap();
 
         let result = revoke(dir.path(), "user1");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot_revoke_creator"));
+        assert!(matches!(result, Err(AdminError::IsCreator)));
     }
 }

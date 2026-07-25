@@ -822,6 +822,10 @@ pub struct ViewQuery {
     pub sender_id: String,
     pub owner_id: Option<String>,
     pub render: Option<String>,
+    /// Optional `?token=` for clients that cannot set headers (same convention
+    /// as the auth middleware / WebSocket auth). Only consulted for non-output
+    /// paths, which require authentication.
+    pub token: Option<String>,
 }
 
 /// Map a file extension to a MIME type string.
@@ -862,6 +866,19 @@ fn mime_for_path(path: &str) -> &'static str {
     "application/octet-stream"
 }
 
+/// Whether a `view` path is public (no auth required).
+///
+/// Only the `output/` subtree holds published content meant for direct links
+/// (WeChat article images, rendered articles). Everything else under the sender
+/// dir — `profile.json` (OA secrets), `session.json`, `memory/`, `input/`, ... —
+/// requires authentication. Backslashes are normalized so Windows-style paths
+/// can't sneak past the prefix check.
+fn is_public_output_path(file_path: &str) -> bool {
+    let normalized = file_path.replace('\\', "/");
+    let rel = normalized.strip_prefix('/').unwrap_or(&normalized);
+    rel == "output" || rel.starts_with("output/")
+}
+
 /// GET /api/files/view/{agent}/{*path}?sender_id=xxx — Serve file for browser viewing.
 ///
 /// Unlike serve_output_file, this endpoint:
@@ -874,6 +891,7 @@ pub async fn view_file(
     State(state): State<Arc<AppState>>,
     Path((agent, file_path)): Path<(String, String)>,
     Query(params): Query<ViewQuery>,
+    headers: axum::http::HeaderMap,
 ) -> axum::response::Response {
     let err = |status: StatusCode, msg: &str| -> axum::response::Response {
         (
@@ -886,6 +904,26 @@ pub async fn view_file(
         )
             .into_response()
     };
+
+    // Per-path access control. `output/` holds published content fetched by
+    // direct link (e.g. WeChat article images), so it stays public. Everything
+    // else under the sender dir (profile.json with OA secrets, session.json,
+    // memory/, input/, ...) requires authentication — without this, anyone who
+    // learns a sender_id could read another user's secrets via this endpoint,
+    // which the middleware whitelists as public for the output/ use case.
+    let is_public_output = is_public_output_path(&file_path);
+    if !is_public_output {
+        let cfg = &state.kernel.config;
+        let authed = crate::middleware::request_is_authenticated(
+            &headers,
+            params.token.as_deref(),
+            cfg.api_key.trim(),
+            cfg.auth.enabled,
+        );
+        if !authed {
+            return err(StatusCode::UNAUTHORIZED, "Authentication required");
+        }
+    }
 
     let (_agent_id, entry) = match parse_and_get_agent(&agent, &state.kernel.registry) {
         Ok(pair) => pair,
@@ -917,6 +955,22 @@ pub async fn view_file(
     };
     if !target_canonical.starts_with(&base_canonical) {
         return err(StatusCode::FORBIDDEN, "Path traversal denied");
+    }
+
+    // Public (output/) requests must stay within the output/ subtree specifically.
+    // Without this, a symlink created inside output/ pointing at a sibling file
+    // (e.g. ../profile.json, which holds OA secrets) would resolve back under
+    // safe_base and be served without auth — defeating the per-path gate above.
+    // Authed requests may reach anywhere within the sender dir.
+    if is_public_output {
+        let inside_output = safe_base
+            .join("output")
+            .canonicalize()
+            .map(|out| target_canonical.starts_with(&out))
+            .unwrap_or(false);
+        if !inside_output {
+            return err(StatusCode::FORBIDDEN, "Path traversal denied");
+        }
     }
 
     let data = match std::fs::read(&target_canonical) {
@@ -981,4 +1035,40 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         // File explorer endpoints
         .route("/api/files/tree/{agent}", routing::get(list_files_tree))
         .route("/api/files/view/{agent}/{*path}", routing::get(view_file))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_public_output_path;
+
+    #[test]
+    fn output_subtree_is_public() {
+        assert!(is_public_output_path("output"));
+        assert!(is_public_output_path("output/"));
+        assert!(is_public_output_path("output/article.html"));
+        assert!(is_public_output_path("output/sub/cover.png"));
+        // leading slash + backslash normalization
+        assert!(is_public_output_path("/output/x.md"));
+        assert!(is_public_output_path("output\\x.md"));
+    }
+
+    #[test]
+    fn non_output_paths_require_auth() {
+        // The whole point: profile.json (OA secrets), session.json, memory/, input/
+        assert!(!is_public_output_path("profile.json"));
+        assert!(!is_public_output_path("session.json"));
+        assert!(!is_public_output_path("memory/note.md"));
+        assert!(!is_public_output_path("input/upload.jpg"));
+        // look-alikes that must NOT be treated as output
+        assert!(!is_public_output_path("Output/x.md")); // case-sensitive
+        assert!(!is_public_output_path("outputfile.txt"));
+        assert!(!is_public_output_path("output.bin"));
+        // traversal that escapes upward is not "public output" by prefix.
+        // (Note: "output/../profile.json" *does* match the output/ prefix and is
+        // treated as public by this gate — that's fine, because the downstream
+        // `..` reject + canonicalize-into-output/ confinement block it from ever
+        // being served. Two layers: this gate decides auth, the resolver decides
+        // containment.)
+        assert!(!is_public_output_path("../output/x.md"));
+    }
 }

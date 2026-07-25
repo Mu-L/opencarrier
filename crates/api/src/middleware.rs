@@ -51,6 +51,79 @@ pub struct AuthState {
     pub auth_enabled: bool,
 }
 
+/// Constant-time string comparison to mitigate timing attacks.
+fn constant_time_eq_str(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    if a.len() != b.len() {
+        return false;
+    }
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
+/// Check whether a request is authenticated against the configured API key.
+///
+/// Returns `true` when any of these hold:
+/// - **Open mode**: no API key configured and dashboard auth disabled (everything open).
+/// - A valid `Authorization: Bearer <key>` or `X-API-Key` header.
+/// - A valid `?token=<key>` query parameter (for SSE/EventSource clients that
+///   cannot set headers).
+/// - A valid `opencarrier_session=` cookie (dashboard login).
+///
+/// `api_key` should already be trimmed. This is the single source of truth for
+/// the accept/reject decision — shared by the [`auth`] middleware and by handlers
+/// that gate sub-paths of an otherwise-public endpoint (e.g. file `view`:
+/// `output/` is public for WeChat direct links, other paths require auth).
+pub fn request_is_authenticated(
+    headers: &axum::http::HeaderMap,
+    query_token: Option<&str>,
+    api_key: &str,
+    auth_enabled: bool,
+) -> bool {
+    // Open mode: no key and auth disabled → everything is open.
+    if api_key.is_empty() && !auth_enabled {
+        return true;
+    }
+
+    // Bearer token or X-API-Key header (constant-time compare).
+    let header_token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .or_else(|| headers.get("x-api-key").and_then(|v| v.to_str().ok()));
+    if header_token
+        .map(|t| constant_time_eq_str(t, api_key))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    // ?token= query parameter (constant-time compare).
+    if query_token
+        .map(|t| constant_time_eq_str(t, api_key))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    // Dashboard session cookie (only meaningful when auth is enabled).
+    if auth_enabled {
+        if let Some(token) = headers
+            .get("cookie")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|c| {
+                c.split(';')
+                    .find_map(|p| p.trim().strip_prefix("opencarrier_session="))
+            })
+        {
+            if crate::session_auth::verify_session_token(token, api_key).is_some() {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Bearer token authentication middleware.
 ///
 /// When `api_key` is non-empty (after trimming), requests to non-public
@@ -119,79 +192,36 @@ pub async fn auth(
         return next.run(request).await;
     }
 
-    // If no API key configured (empty, whitespace-only, or missing), skip auth
-    // entirely. Users who don't set api_key accept that all endpoints are open.
-    let api_key_trimmed = auth_state.api_key.trim().to_string();
-
-    if api_key_trimmed.is_empty() && !auth_state.auth_enabled {
-        return next.run(request).await;
-    }
-    let api_key = api_key_trimmed.as_str();
-
-    // Check Authorization: Bearer <token> header, then fallback to X-API-Key
-    let bearer_token = request
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-
-    let api_token = bearer_token.or_else(|| {
-        request
-            .headers()
-            .get("x-api-key")
-            .and_then(|v| v.to_str().ok())
-    });
-
-    // SECURITY: Use constant-time comparison to prevent timing attacks.
-    let header_auth = api_token.map(|token| {
-        use subtle::ConstantTimeEq;
-        if token.len() != api_key.len() {
-            return false;
-        }
-        token.as_bytes().ct_eq(api_key.as_bytes()).into()
-    });
-
-    // Also check ?token= query parameter (for EventSource/SSE clients that
-    // cannot set custom headers, same approach as WebSocket auth).
+    // Resolve the ?token= query parameter up front (owned, so it doesn't borrow
+    // `request` past the move into `next`). Used by the helper for SSE/EventSource
+    // clients that cannot set headers.
     let query_token = request
         .uri()
         .query()
-        .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")));
+        .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
+        .map(str::to_owned);
 
-    // SECURITY: Use constant-time comparison to prevent timing attacks.
-    let query_auth = query_token.map(|token| {
-        use subtle::ConstantTimeEq;
-        if token.len() != api_key.len() {
-            return false;
-        }
-        token.as_bytes().ct_eq(api_key.as_bytes()).into()
-    });
+    let api_key = auth_state.api_key.trim();
 
-    // Accept if either auth method matches
-    if header_auth == Some(true) || query_auth == Some(true) {
+    // Was any credential (header or ?token=) provided? Used only to choose the
+    // error message — the accept/reject decision itself lives in the helper.
+    let credential_provided = request
+        .headers()
+        .get("authorization")
+        .or_else(|| request.headers().get("x-api-key"))
+        .is_some()
+        || query_token.is_some();
+
+    if request_is_authenticated(
+        request.headers(),
+        query_token.as_deref(),
+        api_key,
+        auth_state.auth_enabled,
+    ) {
         return next.run(request).await;
     }
 
-    // Check session cookie (dashboard login)
-    if auth_state.auth_enabled {
-        let session_token = request
-            .headers()
-            .get("cookie")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|cookie_str| {
-                cookie_str
-                    .split(';')
-                    .find_map(|part| part.trim().strip_prefix("opencarrier_session="))
-            });
-        if let Some(token) = session_token {
-            if crate::session_auth::verify_session_token(token, api_key).is_some() {
-                return next.run(request).await;
-            }
-        }
-    }
-
     // Determine error message: was a credential provided but wrong, or missing entirely?
-    let credential_provided = header_auth.is_some() || query_auth.is_some();
     let error_msg = if credential_provided {
         "Invalid API key"
     } else {
@@ -242,5 +272,77 @@ mod tests {
     #[test]
     fn test_request_id_header_constant() {
         assert_eq!(REQUEST_ID_HEADER, "x-request-id");
+    }
+
+    fn hdrs(pairs: &[(&str, &str)]) -> axum::http::HeaderMap {
+        let mut h = axum::http::HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(
+                k.parse::<axum::http::HeaderName>().unwrap(),
+                v.parse().unwrap(),
+            );
+        }
+        h
+    }
+
+    #[test]
+    fn open_mode_accepts_everything() {
+        // No API key + auth disabled ⇒ server is intentionally open.
+        let h = hdrs(&[]);
+        assert!(request_is_authenticated(&h, None, "", false));
+    }
+
+    #[test]
+    fn valid_bearer_or_xapikey_or_token_accepted() {
+        let key = "secret-key";
+        assert!(request_is_authenticated(
+            &hdrs(&[("authorization", "Bearer secret-key")]),
+            None,
+            key,
+            true,
+        ));
+        assert!(request_is_authenticated(
+            &hdrs(&[("x-api-key", "secret-key")]),
+            None,
+            key,
+            true,
+        ));
+        assert!(request_is_authenticated(&hdrs(&[]), Some("secret-key"), key, true));
+    }
+
+    #[test]
+    fn wrong_credential_rejected() {
+        let h = hdrs(&[("authorization", "Bearer wrong")]);
+        assert!(!request_is_authenticated(&h, None, "secret-key", true));
+    }
+
+    #[test]
+    fn missing_credential_rejected_when_auth_enabled() {
+        assert!(!request_is_authenticated(&hdrs(&[]), None, "secret-key", true));
+    }
+
+    #[test]
+    fn nonempty_key_keeps_auth_on_even_if_auth_disabled() {
+        // Open mode requires BOTH empty key and auth disabled. A configured key
+        // always gates, regardless of the dashboard-auth toggle.
+        assert!(!request_is_authenticated(&hdrs(&[]), None, "secret-key", false));
+    }
+
+    #[test]
+    fn valid_session_cookie_accepted() {
+        let token = crate::session_auth::create_session_token(None, "admin", "admin", "secret-key", 1)
+            .unwrap();
+        let h = hdrs(&[("cookie", &format!("opencarrier_session={token}"))]);
+        assert!(request_is_authenticated(&h, None, "secret-key", true));
+    }
+
+    #[test]
+    fn session_cookie_ignored_when_auth_disabled() {
+        // Cookie path only runs when auth_enabled. A valid-looking cookie must
+        // NOT bypass a key that the operator hasn't enabled dashboard auth for.
+        let token = crate::session_auth::create_session_token(None, "admin", "admin", "secret-key", 1)
+            .unwrap();
+        let h = hdrs(&[("cookie", &format!("opencarrier_session={token}"))]);
+        assert!(!request_is_authenticated(&h, None, "secret-key", false));
     }
 }
