@@ -34,7 +34,7 @@ use crate::llm_driver::{
 };
 
 use crate::mcp::McpConnection;
-use crate::text_tool_recovery::{recover_text_tool_calls, ToolSearchFn};
+use crate::text_tool_recovery::detect_text_tool_mentions;
 use crate::web_fetch::WebFetchEngine;
 use memory::session::Session;
 use memory::MemorySubstrate;
@@ -681,7 +681,7 @@ enum TextRecoveryOutcome {
 
 async fn handle_text_recovery(
     ctx: &mut LoopContext<'_>,
-    mut response: CompletionResponse,
+    response: CompletionResponse,
     modality: &str,
 ) -> TextRecoveryOutcome {
     if !matches!(
@@ -692,14 +692,16 @@ async fn handle_text_recovery(
         return TextRecoveryOutcome::Proceed(response);
     }
 
-    let tool_search_fn: Option<ToolSearchFn> = ctx.kernel.as_ref().map(|k| {
-        let k = k.clone();
-        let max_level = ctx.manifest.max_tool_level;
-        Box::new(move |name: &str| -> Option<ToolDefinition> {
-            k.search_tools(name, 1, max_level).into_iter().next().map(|(_, def)| def)
-        }) as ToolSearchFn
-    });
-    let result = recover_text_tool_calls(&response.text(), ctx.tools(), tool_search_fn);
+    // Detect whether the model narrated tool calls as `[Called name]` text
+    // instead of emitting structured tool_use. aginxbrain normalizes raw
+    // provider dialects to OpenAI tool_calls upstream, so we no longer scrape
+    // provider-specific text formats — we only catch this provider-independent
+    // narration and nudge the model to retry with structured tool_use (we do
+    // NOT scrape arguments or execute text-described calls).
+    let mentions = detect_text_tool_mentions(&response.text());
+    if mentions.is_empty() {
+        return TextRecoveryOutcome::Proceed(response);
+    }
 
     // Flow deny_tools: never re-introduce blocked tools via text recovery.
     let deny: Vec<String> = ctx
@@ -715,109 +717,74 @@ async fn handle_text_recovery(
         })
         .unwrap_or_default();
 
-    let has_discovered = !result.discovered_tools.is_empty();
-    if has_discovered {
-        // Dedup against tools already present (flow inject / prior tool_search).
-        // Without this, text recovery can re-add `web_fetch` etc. and the LLM
-        // API rejects the request: "function name web_fetch is duplicated".
-        let mut added = 0usize;
-        for def in result.discovered_tools {
-            if deny.iter().any(|d| d == &def.name) {
-                info!(tool = %def.name, "Skipping text-recovered tool (flow deny_tools)");
+    // Discovery: resolve narrated tool names via the kernel and add any new
+    // ones to the toolset so the retry can actually call them with tool_use.
+    // Clone the handle out of `ctx` so we can freely mutate ctx.tools_owned.
+    let kernel = ctx.kernel.clone();
+    if let Some(k) = kernel.as_ref() {
+        let max_level = ctx.manifest.max_tool_level;
+        for name in &mentions {
+            if deny.iter().any(|d| d == name) {
+                info!(tool = %name, "Skipping text-narrated tool (flow deny_tools)");
                 continue;
             }
-            if ctx.tools_owned.iter().any(|t| t.name == def.name) {
+            // Dedup against tools already present (flow inject / prior tool_search).
+            // Without this, recovery can re-add `web_fetch` etc. and the LLM API
+            // rejects the request: "function name web_fetch is duplicated".
+            if ctx.tools_owned.iter().any(|t| &t.name == name) {
                 continue;
             }
-            info!(tool = %def.name, schema = %def.input_schema, "Discovered tool schema");
-            ctx.discovered_tool_names.insert(def.name.clone());
-            ctx.tools_owned.push(def);
-            added += 1;
-        }
-        if added > 0 {
-            info!(
-                found = added,
-                total = ctx.tools_owned.len(),
-                "Auto-discovered tools from text-based tool call recovery"
-            );
+            if let Some(def) = k
+                .search_tools(name, 1, max_level)
+                .into_iter()
+                .next()
+                .map(|(_, def)| def)
+            {
+                info!(tool = %def.name, schema = %def.input_schema, "Discovered tool schema");
+                ctx.discovered_tool_names.insert(def.name.clone());
+                ctx.tools_owned.push(def);
+            }
         }
     }
 
-    if !result.calls.is_empty() {
-        info!(count = result.calls.len(), "Recovered text-based tool calls → promoting to ToolUse");
-        // Normalize names so trailing punctuation from free-text recovery
-        // (`web_search,`) does not reach execute_tool / permission checks.
-        // Drop calls that the active flow explicitly denies.
-        response.tool_calls = result
-            .calls
-            .into_iter()
-            .filter_map(|mut tc| {
-                tc.name = types::tool_compat::normalize_tool_name(&tc.name).to_string();
-                if deny.iter().any(|d| d == &tc.name) {
-                    info!(tool = %tc.name, "Dropping text-recovered call (flow deny_tools)");
-                    return None;
-                }
-                Some(tc)
-            })
-            .collect();
-        if response.tool_calls.is_empty() {
-            // All recovered calls were denied — fall through as normal end turn.
-            return TextRecoveryOutcome::Proceed(response);
-        }
-        response.stop_reason = StopReason::ToolUse;
-        let mut new_blocks: Vec<ContentBlock> = Vec::new();
-        for block in &response.content {
-            if let ContentBlock::Text { .. } = block {
-                new_blocks.push(block.clone());
-            }
-        }
-        for tc in &response.tool_calls {
-            new_blocks.push(ContentBlock::ToolUse {
-                id: tc.id.clone(),
-                name: tc.name.clone(),
-                input: tc.input.clone(),
-                provider_metadata: None,
-            });
-        }
-        response.content = new_blocks;
-    } else if has_discovered || !result.needs_retry.is_empty() {
-        if ctx.state.text_recovery_retries >= MAX_TEXT_RECOVERY_RETRIES {
-            warn!(
-                agent = %ctx.manifest.name,
-                retries = ctx.state.text_recovery_retries,
-                ctx.state.iteration,
-                "Giving up text-based tool recovery — LLM keeps outputting text instead of tool_use"
-            );
-            // O10: Inject guidance so the LLM cleans up raw tool-call text
-            ctx.messages.push(Message::system(
-                "你刚才用文本描述了工具调用，但多次重试后仍无法转为结构化调用。\
-                 请不要再尝试工具调用，直接用自然语言回复用户。\
-                 不要在回复中包含 [Called ...] 或工具调用的原始文本。"
-            ));
-        } else {
-            ctx.state.text_recovery_retries += 1;
-            warn!(
-                agent = %ctx.manifest.name,
-                tools = ?result.needs_retry,
-                ctx.state.iteration,
-                retry = ctx.state.text_recovery_retries,
-                "LLM described tool calls as text — retrying with discovered tools"
-            );
-            let tool_names = result.needs_retry.join("、");
-            ctx.messages.push(Message::assistant(format!("我需要调用工具：{tool_names}。")));
-            ctx.messages.push(Message::system(
-                "你刚才用文本描述了工具调用，但用户看到的是原始文本。这些工具已添加到你的可用工具列表中，请直接用 tool_use 功能调用，带上完整的参数。不要再输出 [Called ...] 格式的文本。"
-            ));
-            ctx.state.log_turn(
-                modality,
-                "text_recovery_retry",
-                response.usage.input_tokens as u32,
-                response.usage.output_tokens as u32,
-                response.tool_calls.iter().map(|tc| tc.name.clone()).collect(),
-                0,
-            );
-            return TextRecoveryOutcome::Continue;
-        }
+    // Nudge the model to retry with structured tool_use (capped) instead of
+    // executing text-described calls.
+    if ctx.state.text_recovery_retries >= MAX_TEXT_RECOVERY_RETRIES {
+        warn!(
+            agent = %ctx.manifest.name,
+            retries = ctx.state.text_recovery_retries,
+            ctx.state.iteration,
+            "Giving up text-based tool recovery — LLM keeps outputting text instead of tool_use"
+        );
+        // O10: Inject guidance so the LLM cleans up raw tool-call text
+        ctx.messages.push(Message::system(
+            "你刚才用文本描述了工具调用，但多次重试后仍无法转为结构化调用。\
+             请不要再尝试工具调用，直接用自然语言回复用户。\
+             不要在回复中包含 [Called ...] 或工具调用的原始文本。"
+        ));
+    } else {
+        ctx.state.text_recovery_retries += 1;
+        warn!(
+            agent = %ctx.manifest.name,
+            tools = ?mentions,
+            ctx.state.iteration,
+            retry = ctx.state.text_recovery_retries,
+            "LLM described tool calls as text — retrying with structured tool_use"
+        );
+        let tool_names = mentions.join("、");
+        ctx.messages.push(Message::assistant(format!("我需要调用工具：{tool_names}。")));
+        ctx.messages.push(Message::system(
+            "你刚才用文本描述了工具调用，但用户看到的是原始文本。这些工具已添加到你的可用工具列表中，请直接用 tool_use 功能调用，带上完整的参数。不要再输出 [Called ...] 格式的文本。"
+        ));
+        ctx.state.log_turn(
+            modality,
+            "text_recovery_retry",
+            response.usage.input_tokens as u32,
+            response.usage.output_tokens as u32,
+            response.tool_calls.iter().map(|tc| tc.name.clone()).collect(),
+            0,
+        );
+        return TextRecoveryOutcome::Continue;
     }
 
     TextRecoveryOutcome::Proceed(response)
