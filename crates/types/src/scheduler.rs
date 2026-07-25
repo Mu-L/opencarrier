@@ -4,6 +4,7 @@
 //! trigger agent turns, system events, or webhook deliveries.
 
 use crate::agent::AgentId;
+use crate::error::{CarrierError, CarrierResult};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -188,23 +189,23 @@ impl CronJob {
     /// `existing_count` is the number of jobs the owning agent already has
     /// (excluding this job if it already exists). Returns `Ok(())` or an
     /// error message describing the first validation failure.
-    pub fn validate(&self, existing_count: usize) -> Result<(), String> {
+    pub fn validate(&self, existing_count: usize) -> CarrierResult<()> {
         // -- job count cap --
         if existing_count >= MAX_JOBS_PER_AGENT {
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "agent already has {existing_count} jobs (max {MAX_JOBS_PER_AGENT})"
-            ));
+            )));
         }
 
         // -- name --
         if self.name.is_empty() {
-            return Err("name must not be empty".into());
+            return Err(CarrierError::InvalidInput("name must not be empty".into()));
         }
         if self.name.len() > MAX_NAME_LEN {
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "name too long ({} chars, max {MAX_NAME_LEN})",
                 self.name.len()
-            ));
+            )));
         }
         // Names are free-form labels (stored parameterized in SQLite, never used
         // as a filename/path/shell arg). Reject only control characters (which
@@ -212,7 +213,7 @@ impl CronJob {
         // and emoji — including CJK and Chinese punctuation — so agents can name
         // jobs naturally (e.g. "发布第二篇：OpenAI 硬件").
         if self.name.chars().any(|c| c.is_control()) {
-            return Err("name may not contain control characters".into());
+            return Err(CarrierError::InvalidInput("name may not contain control characters".into()));
         }
 
         // -- schedule --
@@ -227,30 +228,30 @@ impl CronJob {
         Ok(())
     }
 
-    fn validate_schedule(&self) -> Result<(), String> {
+    fn validate_schedule(&self) -> CarrierResult<()> {
         match &self.schedule {
             CronSchedule::Every { every_secs } => {
                 if *every_secs < MIN_EVERY_SECS {
-                    return Err(format!(
+                    return Err(CarrierError::InvalidInput(format!(
                         "every_secs too small ({every_secs}, min {MIN_EVERY_SECS})"
-                    ));
+                    )));
                 }
                 if *every_secs > MAX_EVERY_SECS {
-                    return Err(format!(
+                    return Err(CarrierError::InvalidInput(format!(
                         "every_secs too large ({every_secs}, max {MAX_EVERY_SECS})"
-                    ));
+                    )));
                 }
             }
             CronSchedule::At { at } => {
                 let now = Utc::now();
                 if *at <= now {
-                    return Err("scheduled time must be in the future".into());
+                    return Err(CarrierError::InvalidInput("scheduled time must be in the future".into()));
                 }
                 let delta = (*at - now).num_seconds();
                 if delta > MAX_AT_HORIZON_SECS {
-                    return Err(format!(
+                    return Err(CarrierError::InvalidInput(format!(
                         "scheduled time too far in the future (max {MAX_AT_HORIZON_SECS}s / ~1 year)"
-                    ));
+                    )));
                 }
             }
             CronSchedule::Cron { expr, .. } => {
@@ -260,17 +261,17 @@ impl CronJob {
         Ok(())
     }
 
-    fn validate_action(&self) -> Result<(), String> {
+    fn validate_action(&self) -> CarrierResult<()> {
         match &self.action {
             CronAction::SystemEvent { text } => {
                 if text.is_empty() {
-                    return Err("system event text must not be empty".into());
+                    return Err(CarrierError::InvalidInput("system event text must not be empty".into()));
                 }
                 if text.len() > MAX_EVENT_TEXT_LEN {
-                    return Err(format!(
+                    return Err(CarrierError::InvalidInput(format!(
                         "system event text too long ({} chars, max {MAX_EVENT_TEXT_LEN})",
                         text.len()
-                    ));
+                    )));
                 }
             }
             CronAction::AgentTurn {
@@ -279,24 +280,24 @@ impl CronJob {
                 ..
             } => {
                 if message.is_empty() {
-                    return Err("agent turn message must not be empty".into());
+                    return Err(CarrierError::InvalidInput("agent turn message must not be empty".into()));
                 }
                 if message.len() > MAX_TURN_MESSAGE_LEN {
-                    return Err(format!(
+                    return Err(CarrierError::InvalidInput(format!(
                         "agent turn message too long ({} chars, max {MAX_TURN_MESSAGE_LEN})",
                         message.len()
-                    ));
+                    )));
                 }
                 if let Some(t) = timeout_secs {
                     if *t < MIN_TIMEOUT_SECS {
-                        return Err(format!(
+                        return Err(CarrierError::InvalidInput(format!(
                             "timeout_secs too small ({t}, min {MIN_TIMEOUT_SECS})"
-                        ));
+                        )));
                     }
                     if *t > MAX_TIMEOUT_SECS {
-                        return Err(format!(
+                        return Err(CarrierError::InvalidInput(format!(
                             "timeout_secs too large ({t}, max {MAX_TIMEOUT_SECS})"
-                        ));
+                        )));
                     }
                 }
             }
@@ -304,17 +305,17 @@ impl CronJob {
         Ok(())
     }
 
-    fn validate_delivery(&self) -> Result<(), String> {
+    fn validate_delivery(&self) -> CarrierResult<()> {
         match &self.delivery {
             CronDelivery::Webhook { url } => {
                 if !url.starts_with("http://") && !url.starts_with("https://") {
-                    return Err("webhook URL must start with http:// or https://".into());
+                    return Err(CarrierError::InvalidInput("webhook URL must start with http:// or https://".into()));
                 }
                 if url.len() > MAX_WEBHOOK_URL_LEN {
-                    return Err(format!(
+                    return Err(CarrierError::InvalidInput(format!(
                         "webhook URL too long ({} chars, max {MAX_WEBHOOK_URL_LEN})",
                         url.len()
-                    ));
+                    )));
                 }
             }
             CronDelivery::None => {}
@@ -330,31 +331,31 @@ impl CronJob {
 
 /// Basic cron expression format validation: must have exactly 5 whitespace-separated fields.
 /// Actual parsing and scheduling is done in the kernel crate.
-fn validate_cron_expr(expr: &str) -> Result<(), String> {
+fn validate_cron_expr(expr: &str) -> CarrierResult<()> {
     let trimmed = expr.trim();
     if trimmed.is_empty() {
-        return Err("cron expression must not be empty".into());
+        return Err(CarrierError::InvalidInput("cron expression must not be empty".into()));
     }
     let fields: Vec<&str> = trimmed.split_whitespace().collect();
     if fields.len() != 5 {
-        return Err(format!(
+        return Err(CarrierError::InvalidInput(format!(
             "cron expression must have exactly 5 fields (got {}): \"{}\"",
             fields.len(),
             trimmed
-        ));
+        )));
     }
     // Basic character validation per field — allow digits, *, /, -, and ,.
     for (i, field) in fields.iter().enumerate() {
         if field.is_empty() {
-            return Err(format!("cron field {i} is empty"));
+            return Err(CarrierError::InvalidInput(format!("cron field {i} is empty")));
         }
         if !field
             .chars()
             .all(|c| c.is_ascii_digit() || matches!(c, '*' | '/' | '-' | ',' | '?'))
         {
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "cron field {i} contains invalid characters: \"{field}\""
-            ));
+            )));
         }
     }
     Ok(())
@@ -419,7 +420,7 @@ mod tests {
     fn empty_name_rejected() {
         let mut job = valid_job();
         job.name = String::new();
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("empty"), "{err}");
     }
 
@@ -427,7 +428,7 @@ mod tests {
     fn long_name_rejected() {
         let mut job = valid_job();
         job.name = "a".repeat(129);
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("too long"), "{err}");
     }
 
@@ -455,10 +456,10 @@ mod tests {
     fn name_control_chars_rejected() {
         let mut job = valid_job();
         job.name = "job\nwith newline".into();
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("control characters"), "{err}");
         job.name = "bad\0null".into();
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("control characters"), "{err}");
     }
 
@@ -474,7 +475,7 @@ mod tests {
     #[test]
     fn max_jobs_rejected() {
         let job = valid_job();
-        let err = job.validate(50).unwrap_err();
+        let err = job.validate(50).unwrap_err().to_string();
         assert!(err.contains("50"), "{err}");
     }
 
@@ -490,7 +491,7 @@ mod tests {
     fn every_too_small() {
         let mut job = valid_job();
         job.schedule = CronSchedule::Every { every_secs: 59 };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("too small"), "{err}");
     }
 
@@ -498,7 +499,7 @@ mod tests {
     fn every_too_large() {
         let mut job = valid_job();
         job.schedule = CronSchedule::Every { every_secs: 86_401 };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("too large"), "{err}");
     }
 
@@ -524,7 +525,7 @@ mod tests {
         job.schedule = CronSchedule::At {
             at: Utc::now() - Duration::seconds(10),
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("future"), "{err}");
     }
 
@@ -534,7 +535,7 @@ mod tests {
         job.schedule = CronSchedule::At {
             at: Utc::now() + Duration::days(366),
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("too far"), "{err}");
     }
 
@@ -566,7 +567,7 @@ mod tests {
             expr: String::new(),
             tz: None,
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("empty"), "{err}");
     }
 
@@ -577,7 +578,7 @@ mod tests {
             expr: "0 9 * *".into(),
             tz: None,
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("5 fields"), "{err}");
     }
 
@@ -588,7 +589,7 @@ mod tests {
             expr: "0 9 * * MON".into(),
             tz: None,
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("invalid characters"), "{err}");
     }
 
@@ -600,7 +601,7 @@ mod tests {
         job.action = CronAction::SystemEvent {
             text: String::new(),
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("empty"), "{err}");
     }
 
@@ -610,7 +611,7 @@ mod tests {
         job.action = CronAction::SystemEvent {
             text: "x".repeat(4097),
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("too long"), "{err}");
     }
 
@@ -634,7 +635,7 @@ mod tests {
             timeout_secs: None,
             active_flow: None,
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("empty"), "{err}");
     }
 
@@ -647,7 +648,7 @@ mod tests {
             timeout_secs: None,
             active_flow: None,
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("too long"), "{err}");
     }
 
@@ -660,7 +661,7 @@ mod tests {
             timeout_secs: Some(9),
             active_flow: None,
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("too small"), "{err}");
     }
 
@@ -673,7 +674,7 @@ mod tests {
             timeout_secs: Some(601),
             active_flow: None,
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("too large"), "{err}");
     }
 
@@ -717,7 +718,7 @@ mod tests {
         job.delivery = CronDelivery::Webhook {
             url: "ftp://example.com/hook".into(),
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("http://"), "{err}");
     }
 
@@ -727,7 +728,7 @@ mod tests {
         job.delivery = CronDelivery::Webhook {
             url: format!("https://example.com/{}", "a".repeat(2048)),
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("too long"), "{err}");
     }
 
@@ -830,7 +831,7 @@ mod tests {
             expr: "0 0 9 * * 1".into(),
             tz: None,
         };
-        let err = job.validate(0).unwrap_err();
+        let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("5 fields"), "{err}");
     }
 

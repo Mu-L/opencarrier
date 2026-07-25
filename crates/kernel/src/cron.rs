@@ -143,9 +143,8 @@ impl CronScheduler {
             .filter(|r| r.value().job.agent_id == job.agent_id)
             .count();
 
-        // CronJob.validate returns Result<(), String>
-        job.validate(agent_count)
-            .map_err(CarrierError::InvalidInput)?;
+        // CronJob.validate returns CarrierResult<()> (CarrierError::InvalidInput)
+        job.validate(agent_count)?;
 
         // Compute initial next_run (a past-due `At` job fires immediately once)
         job.next_run = Some(initial_next_run(&job.schedule));

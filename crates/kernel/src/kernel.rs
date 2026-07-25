@@ -853,19 +853,11 @@ impl CarrierKernel {
             })
             .collect();
         if !trusted_keys.is_empty() {
-            signed.verify_with_trust_store(&trusted_keys).map_err(|e| {
-                KernelError::Carrier(types::error::CarrierError::Config(format!(
-                    "Manifest signature verification failed: {e}"
-                )))
-            })?;
+            signed.verify_with_trust_store(&trusted_keys).map_err(KernelError::Carrier)?;
         } else {
             // Fallback: verify with embedded key + warn
             warn!("No trusted_signing_keys configured — verifying with embedded key (less secure)");
-            signed.verify().map_err(|e| {
-                KernelError::Carrier(types::error::CarrierError::Config(format!(
-                    "Manifest signature verification failed: {e}"
-                )))
-            })?;
+            signed.verify().map_err(KernelError::Carrier)?;
         }
 
         info!(signer = %signed.signer_id, hash = %signed.content_hash, "Signed manifest verified");

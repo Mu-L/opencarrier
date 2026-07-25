@@ -44,7 +44,7 @@ pub async fn webhook_wake(
     if let Err(e) = body.validate() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
+            Json(serde_json::json!({"error": e.to_string()})),
         );
     }
 
@@ -102,7 +102,7 @@ pub async fn webhook_agent(
     if let Err(e) = body.validate() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
+            Json(serde_json::json!({"error": e.to_string()})),
         );
     }
 

@@ -14,6 +14,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::{CarrierError, CarrierResult};
+
 /// A media reference, resolved from any of: a public `url`, a local `file_path`,
 /// or a pre-uploaded platform `media_id`. Channels use whichever they can -
 /// `media_id` is only valid on the platform that issued it.
@@ -111,7 +113,7 @@ impl ContentDescriptor {
     /// `miniprogram.appid`. Returns an error for unknown fields so callers can
     /// surface typos (e.g. `miniprogram.app_id` vs `miniprogram.appid`) instead
     /// of silently dropping the override and sending the wrong content.
-    pub fn apply_override(&mut self, field: &str, value: &str) -> Result<(), String> {
+    pub fn apply_override(&mut self, field: &str, value: &str) -> CarrierResult<()> {
         match field {
             "text" => self.text = Some(value.to_string()),
             "link.title" => {
@@ -193,7 +195,7 @@ impl ContentDescriptor {
                     .thumb_file = Some(value.to_string());
             }
             _ => {
-                return Err(format!("unknown override field: {field}"));
+                return Err(CarrierError::InvalidInput(format!("unknown override field: {field}")));
             }
         }
         Ok(())

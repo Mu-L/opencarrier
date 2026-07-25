@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::{CarrierError, CarrierResult};
+
 /// Detect image MIME type from magic bytes.
 /// Falls back to "image/jpeg" if the format is unrecognized.
 pub fn detect_image_mime(data: &[u8]) -> &'static str {
@@ -256,17 +258,17 @@ impl ImageGenRequest {
     pub const MAX_PROMPT_LEN: usize = 4000;
 
     /// Validate the request against model-specific constraints.
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> CarrierResult<()> {
         // Prompt length
         if self.prompt.is_empty() {
-            return Err("Image generation prompt cannot be empty".into());
+            return Err(CarrierError::InvalidInput("Image generation prompt cannot be empty".into()));
         }
         if self.prompt.len() > Self::MAX_PROMPT_LEN {
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "Prompt too long: {} chars (max {})",
                 self.prompt.len(),
                 Self::MAX_PROMPT_LEN
-            ));
+            )));
         }
         // Strip control chars check
         if self
@@ -274,7 +276,7 @@ impl ImageGenRequest {
             .chars()
             .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t')
         {
-            return Err("Prompt contains invalid control characters".into());
+            return Err(CarrierError::InvalidInput("Prompt contains invalid control characters".into()));
         }
 
         // Model-specific size validation
@@ -284,25 +286,25 @@ impl ImageGenRequest {
             ImageGenModel::GptImage1 => GPT_IMAGE1_SIZES,
         };
         if !allowed_sizes.contains(&self.size.as_str()) {
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "Invalid size '{}' for {}. Allowed: {:?}",
                 self.size, self.model, allowed_sizes
-            ));
+            )));
         }
 
         // Count validation
         match self.model {
             ImageGenModel::DallE3 => {
                 if self.count != 1 {
-                    return Err("DALL-E 3 only supports count=1".into());
+                    return Err(CarrierError::InvalidInput("DALL-E 3 only supports count=1".into()));
                 }
             }
             ImageGenModel::DallE2 | ImageGenModel::GptImage1 => {
                 if self.count == 0 || self.count > 4 {
-                    return Err(format!(
+                    return Err(CarrierError::InvalidInput(format!(
                         "Invalid count {} for {}. Must be 1-4",
                         self.count, self.model
-                    ));
+                    )));
                 }
             }
         }
@@ -311,10 +313,10 @@ impl ImageGenRequest {
         match self.model {
             ImageGenModel::DallE3 => {
                 if self.quality != "standard" && self.quality != "hd" {
-                    return Err(format!(
+                    return Err(CarrierError::InvalidInput(format!(
                         "Invalid quality '{}' for DALL-E 3. Must be 'standard' or 'hd'",
                         self.quality
-                    ));
+                    )));
                 }
             }
             _ => {
@@ -324,10 +326,10 @@ impl ImageGenRequest {
                     && self.quality != "medium"
                     && self.quality != "low"
                 {
-                    return Err(format!(
+                    return Err(CarrierError::InvalidInput(format!(
                         "Invalid quality '{}'. Must be 'standard', 'auto', 'high', 'medium', or 'low'",
                         self.quality
-                    ));
+                    )));
                 }
             }
         }

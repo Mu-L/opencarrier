@@ -19,6 +19,8 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::error::{CarrierError, CarrierResult};
+
 /// A signed manifest envelope containing the original manifest text,
 /// its content hash, the Ed25519 signature, and the signer's public key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,14 +72,14 @@ impl SignedManifest {
     ///
     /// This is the same verification logic as `verify`, but accepts an
     /// explicit `VerifyingKey` instead of using the embedded one.
-    pub fn verify_with_key(&self, key: &VerifyingKey) -> Result<(), String> {
+    pub fn verify_with_key(&self, key: &VerifyingKey) -> CarrierResult<()> {
         // Re-compute the hash and compare.
         let recomputed = hash_manifest(&self.manifest);
         if recomputed != self.content_hash {
-            return Err(format!(
+            return Err(CarrierError::ManifestParse(format!(
                 "content hash mismatch: expected {} but manifest hashes to {}",
                 self.content_hash, recomputed
-            ));
+            )));
         }
 
         // Reconstruct the signature.
@@ -85,12 +87,16 @@ impl SignedManifest {
             .signature
             .as_slice()
             .try_into()
-            .map_err(|_| "invalid signature length (expected 64 bytes)".to_string())?;
+            .map_err(|_| {
+                CarrierError::ManifestParse(
+                    "invalid signature length (expected 64 bytes)".to_string(),
+                )
+            })?;
         let signature = Signature::from_bytes(&sig_bytes);
 
         // Verify against the provided key.
         key.verify(self.content_hash.as_bytes(), &signature)
-            .map_err(|e| format!("signature verification failed: {}", e))
+            .map_err(|e| CarrierError::ManifestParse(format!("signature verification failed: {}", e)))
     }
 
     /// Verify the manifest signature against a set of trusted public keys.
@@ -98,15 +104,17 @@ impl SignedManifest {
     pub fn verify_with_trust_store(
         &self,
         trusted_keys: &[ed25519_dalek::VerifyingKey],
-    ) -> Result<(), String> {
-        let mut last_err = "No trusted keys provided".to_string();
+    ) -> CarrierResult<()> {
+        let mut last_err: Option<CarrierError> = None;
         for key in trusted_keys {
             match self.verify_with_key(key) {
                 Ok(()) => return Ok(()),
-                Err(e) => last_err = e,
+                Err(e) => last_err = Some(e),
             }
         }
-        Err(format!("Signature not verified by any trusted key: {last_err}"))
+        Err(last_err.unwrap_or_else(|| {
+            CarrierError::Config("No trusted keys provided".to_string())
+        }))
     }
 
     /// Verifies the integrity and authenticity of this signed manifest.
@@ -120,15 +128,15 @@ impl SignedManifest {
     /// 1. The `content_hash` matches a fresh SHA-256 of `manifest`.
     /// 2. The `signature` is valid for `content_hash` under `signer_public_key`.
     ///
-    /// Returns `Ok(())` on success, or `Err(description)` on failure.
-    pub fn verify(&self) -> Result<(), String> {
+    /// Returns `Ok(())` on success, or `Err(CarrierError)` on failure.
+    pub fn verify(&self) -> CarrierResult<()> {
         // Re-compute the hash and compare.
         let recomputed = hash_manifest(&self.manifest);
         if recomputed != self.content_hash {
-            return Err(format!(
+            return Err(CarrierError::ManifestParse(format!(
                 "content hash mismatch: expected {} but manifest hashes to {}",
                 self.content_hash, recomputed
-            ));
+            )));
         }
 
         // Reconstruct the public key.
@@ -136,22 +144,30 @@ impl SignedManifest {
             .signer_public_key
             .as_slice()
             .try_into()
-            .map_err(|_| "invalid public key length (expected 32 bytes)".to_string())?;
+            .map_err(|_| {
+                CarrierError::ManifestParse(
+                    "invalid public key length (expected 32 bytes)".to_string(),
+                )
+            })?;
         let verifying_key = VerifyingKey::from_bytes(&pk_bytes)
-            .map_err(|e| format!("invalid public key: {}", e))?;
+            .map_err(|e| CarrierError::ManifestParse(format!("invalid public key: {}", e)))?;
 
         // Reconstruct the signature.
         let sig_bytes: [u8; 64] = self
             .signature
             .as_slice()
             .try_into()
-            .map_err(|_| "invalid signature length (expected 64 bytes)".to_string())?;
+            .map_err(|_| {
+                CarrierError::ManifestParse(
+                    "invalid signature length (expected 64 bytes)".to_string(),
+                )
+            })?;
         let signature = Signature::from_bytes(&sig_bytes);
 
         // Verify.
         verifying_key
             .verify(self.content_hash.as_bytes(), &signature)
-            .map_err(|e| format!("signature verification failed: {}", e))
+            .map_err(|e| CarrierError::ManifestParse(format!("signature verification failed: {}", e)))
     }
 }
 
@@ -191,7 +207,7 @@ network = false
 
         let result = signed.verify();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("content hash mismatch"));
+        assert!(result.unwrap_err().to_string().contains("content hash mismatch"));
     }
 
     #[test]
@@ -209,6 +225,7 @@ network = false
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
+            .to_string()
             .contains("signature verification failed"));
     }
 }

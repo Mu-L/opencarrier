@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::{CarrierError, CarrierResult};
+
 /// Wake mode for system event injection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -71,23 +73,23 @@ impl WakePayload {
     /// - `text` must be non-empty.
     /// - `text` must not exceed 4096 characters.
     /// - `text` must not contain control characters other than newline.
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> CarrierResult<()> {
         if self.text.is_empty() {
-            return Err("text must not be empty".to_string());
+            return Err(CarrierError::InvalidInput("text must not be empty".to_string()));
         }
         if self.text.len() > MAX_WAKE_TEXT {
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "text exceeds maximum length of {} chars (got {})",
                 MAX_WAKE_TEXT,
                 self.text.len()
-            ));
+            )));
         }
         if let Some(pos) = self.text.find(is_forbidden_control) {
             let c = self.text[pos..].chars().next().unwrap();
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "text contains forbidden control character U+{:04X} at byte offset {}",
                 c as u32, pos
-            ));
+            )));
         }
         Ok(())
     }
@@ -100,30 +102,30 @@ impl AgentHookPayload {
     /// - `message` must not exceed 16384 characters.
     /// - `timeout_secs` must be between 10 and 600 inclusive.
     /// - `channel`, if present, must not exceed 64 characters.
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> CarrierResult<()> {
         if self.message.is_empty() {
-            return Err("message must not be empty".to_string());
+            return Err(CarrierError::InvalidInput("message must not be empty".to_string()));
         }
         if self.message.len() > MAX_AGENT_MESSAGE {
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "message exceeds maximum length of {} chars (got {})",
                 MAX_AGENT_MESSAGE,
                 self.message.len()
-            ));
+            )));
         }
         if self.timeout_secs < MIN_TIMEOUT_SECS || self.timeout_secs > MAX_TIMEOUT_SECS {
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "timeout_secs must be between {} and {} (got {})",
                 MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS, self.timeout_secs
-            ));
+            )));
         }
         if let Some(ref ch) = self.channel {
             if ch.len() > MAX_CHANNEL_NAME {
-                return Err(format!(
+                return Err(CarrierError::InvalidInput(format!(
                     "channel name exceeds maximum length of {} chars (got {})",
                     MAX_CHANNEL_NAME,
                     ch.len()
-                ));
+                )));
             }
         }
         Ok(())
@@ -160,7 +162,7 @@ mod tests {
             text: String::new(),
             mode: WakeMode::Now,
         };
-        let err = p.validate().unwrap_err();
+        let err = p.validate().unwrap_err().to_string();
         assert!(err.contains("must not be empty"), "got: {err}");
     }
 
@@ -170,7 +172,7 @@ mod tests {
             text: "x".repeat(4097),
             mode: WakeMode::Now,
         };
-        let err = p.validate().unwrap_err();
+        let err = p.validate().unwrap_err().to_string();
         assert!(err.contains("exceeds maximum length"), "got: {err}");
     }
 
@@ -189,7 +191,7 @@ mod tests {
             text: "hello\x00world".to_string(),
             mode: WakeMode::Now,
         };
-        let err = p.validate().unwrap_err();
+        let err = p.validate().unwrap_err().to_string();
         assert!(err.contains("control character"), "got: {err}");
     }
 
@@ -199,7 +201,7 @@ mod tests {
             text: "col1\tcol2".to_string(),
             mode: WakeMode::Now,
         };
-        let err = p.validate().unwrap_err();
+        let err = p.validate().unwrap_err().to_string();
         assert!(err.contains("control character"), "got: {err}");
     }
 
@@ -241,7 +243,7 @@ mod tests {
             model: None,
             timeout_secs: 120,
         };
-        let err = p.validate().unwrap_err();
+        let err = p.validate().unwrap_err().to_string();
         assert!(err.contains("must not be empty"), "got: {err}");
     }
 
@@ -255,7 +257,7 @@ mod tests {
             model: None,
             timeout_secs: 120,
         };
-        let err = p.validate().unwrap_err();
+        let err = p.validate().unwrap_err().to_string();
         assert!(err.contains("exceeds maximum length"), "got: {err}");
     }
 
@@ -282,7 +284,7 @@ mod tests {
             model: None,
             timeout_secs: 5,
         };
-        let err = p.validate().unwrap_err();
+        let err = p.validate().unwrap_err().to_string();
         assert!(err.contains("timeout_secs must be between"), "got: {err}");
     }
 
@@ -296,7 +298,7 @@ mod tests {
             model: None,
             timeout_secs: 601,
         };
-        let err = p.validate().unwrap_err();
+        let err = p.validate().unwrap_err().to_string();
         assert!(err.contains("timeout_secs must be between"), "got: {err}");
     }
 
@@ -336,7 +338,7 @@ mod tests {
             model: None,
             timeout_secs: 120,
         };
-        let err = p.validate().unwrap_err();
+        let err = p.validate().unwrap_err().to_string();
         assert!(err.contains("channel name exceeds"), "got: {err}");
     }
 
