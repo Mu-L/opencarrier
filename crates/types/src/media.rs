@@ -165,7 +165,7 @@ pub const ALLOWED_VIDEO_TYPES: &[&str] = &["video/mp4", "video/quicktime", "vide
 
 impl MediaAttachment {
     /// Validate the attachment against security constraints.
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> CarrierResult<()> {
         // Check MIME type allowlist
         let allowed = match self.media_type {
             MediaType::Image => ALLOWED_IMAGE_TYPES.contains(&self.mime_type.as_str()),
@@ -173,10 +173,10 @@ impl MediaAttachment {
             MediaType::Video => ALLOWED_VIDEO_TYPES.contains(&self.mime_type.as_str()),
         };
         if !allowed {
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "Unsupported MIME type '{}' for {:?} media",
                 self.mime_type, self.media_type
-            ));
+            )));
         }
 
         // Check size limits
@@ -186,10 +186,10 @@ impl MediaAttachment {
             MediaType::Video => MAX_VIDEO_BYTES,
         };
         if self.size_bytes > max_bytes {
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "{} file too large: {} bytes (max {} bytes)",
                 self.media_type, self.size_bytes, max_bytes
-            ));
+            )));
         }
 
         Ok(())

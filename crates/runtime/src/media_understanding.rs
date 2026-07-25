@@ -5,6 +5,7 @@
 use types::media::{
     MediaAttachment, MediaConfig, MediaSource, MediaType, MediaUnderstanding,
 };
+use types::error::{CarrierError, CarrierResult};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::info;
@@ -29,16 +30,16 @@ impl MediaEngine {
     pub async fn describe_image(
         &self,
         attachment: &MediaAttachment,
-    ) -> Result<MediaUnderstanding, String> {
+    ) -> CarrierResult<MediaUnderstanding> {
         attachment.validate()?;
         if attachment.media_type != MediaType::Image {
-            return Err("Expected image attachment".into());
+            return Err(CarrierError::InvalidInput("Expected image attachment".into()));
         }
 
         // Determine which provider to use
         let provider = self.config.image_provider.as_deref()
             .or_else(|| detect_vision_provider())
-            .ok_or("No vision-capable LLM provider configured. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY")?;
+            .ok_or_else(|| CarrierError::Config("No vision-capable LLM provider configured. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY".to_string()))?;
 
         // For now, return a structured result indicating the provider.
         // Actual API call would go here using reqwest.
@@ -58,10 +59,10 @@ impl MediaEngine {
     pub async fn transcribe_audio(
         &self,
         attachment: &MediaAttachment,
-    ) -> Result<MediaUnderstanding, String> {
+    ) -> CarrierResult<MediaUnderstanding> {
         attachment.validate()?;
         if attachment.media_type != MediaType::Audio {
-            return Err("Expected audio attachment".into());
+            return Err(CarrierError::InvalidInput("Expected audio attachment".into()));
         }
 
         let provider = self
@@ -69,11 +70,9 @@ impl MediaEngine {
             .audio_provider
             .as_deref()
             .or_else(|| detect_audio_provider())
-            .ok_or(
-                "No audio transcription provider configured. Set GROQ_API_KEY or OPENAI_API_KEY",
-            )?;
+            .ok_or_else(|| CarrierError::Config("No audio transcription provider configured. Set GROQ_API_KEY or OPENAI_API_KEY".to_string()))?;
 
-        let _permit = self.semaphore.acquire().await.map_err(|e| e.to_string())?;
+        let _permit = self.semaphore.acquire().await.map_err(|e| CarrierError::Internal(e.to_string()))?;
 
         // Parakeet MLX — local transcription via uv + Python
         if provider == "parakeet-mlx" {
@@ -96,18 +95,18 @@ impl MediaEngine {
         let audio_bytes = match &attachment.source {
             MediaSource::FilePath { path } => tokio::fs::read(path)
                 .await
-                .map_err(|e| format!("Failed to read audio file '{}': {}", path, e))?,
+                .map_err(|e| CarrierError::Internal(format!("Failed to read audio file '{}': {}", path, e)))?,
             MediaSource::Base64 { data, .. } => {
                 use base64::Engine;
                 base64::engine::general_purpose::STANDARD
                     .decode(data)
-                    .map_err(|e| format!("Failed to decode base64 audio: {}", e))?
+                    .map_err(|e| CarrierError::Serialization(format!("Failed to decode base64 audio: {}", e)))?
             }
             MediaSource::Url { url } => {
-                return Err(format!(
+                return Err(CarrierError::InvalidInput(format!(
                     "URL-based audio source not supported for transcription: {}",
                     url
-                ));
+                )));
             }
         };
         let filename = format!("audio.{}", ext);
@@ -118,13 +117,13 @@ impl MediaEngine {
         let (api_url, api_key) = match provider {
             "groq" => (
                 "https://api.groq.com/openai/v1/audio/transcriptions",
-                std::env::var("GROQ_API_KEY").map_err(|_| "GROQ_API_KEY not set")?,
+                std::env::var("GROQ_API_KEY").map_err(|_| CarrierError::Config("GROQ_API_KEY not set".to_string()))?,
             ),
             "openai" => (
                 "https://api.openai.com/v1/audio/transcriptions",
-                std::env::var("OPENAI_API_KEY").map_err(|_| "OPENAI_API_KEY not set")?,
+                std::env::var("OPENAI_API_KEY").map_err(|_| CarrierError::Config("OPENAI_API_KEY not set".to_string()))?,
             ),
-            other => return Err(format!("Unsupported audio provider: {}", other)),
+            other => return Err(CarrierError::Config(format!("Unsupported audio provider: {}", other))),
         };
 
         info!(provider, model, filename = %filename, size = audio_bytes.len(), "Sending audio for transcription");
@@ -132,7 +131,7 @@ impl MediaEngine {
         let file_part = reqwest::multipart::Part::bytes(audio_bytes)
             .file_name(filename)
             .mime_str(&attachment.mime_type)
-            .map_err(|e| format!("Failed to set MIME type: {}", e))?;
+            .map_err(|e| CarrierError::Internal(format!("Failed to set MIME type: {}", e)))?;
 
         let form = reqwest::multipart::Form::new()
             .part("file", file_part)
@@ -147,22 +146,22 @@ impl MediaEngine {
             .timeout(std::time::Duration::from_secs(60))
             .send()
             .await
-            .map_err(|e| format!("Transcription request failed: {}", e))?;
+            .map_err(|e| CarrierError::Network(format!("Transcription request failed: {}", e)))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Transcription API error ({}): {}", status, body));
+            return Err(CarrierError::Network(format!("Transcription API error ({}): {}", status, body)));
         }
 
         let transcription = resp
             .text()
             .await
-            .map_err(|e| format!("Failed to read transcription response: {}", e))?;
+            .map_err(|e| CarrierError::Network(format!("Failed to read transcription response: {}", e)))?;
 
         let transcription = transcription.trim().to_string();
         if transcription.is_empty() {
-            return Err("Transcription returned empty text".into());
+            return Err(CarrierError::LlmDriver("Transcription returned empty text".into()));
         }
 
         info!(
@@ -184,18 +183,18 @@ impl MediaEngine {
     pub async fn describe_video(
         &self,
         attachment: &MediaAttachment,
-    ) -> Result<MediaUnderstanding, String> {
+    ) -> CarrierResult<MediaUnderstanding> {
         attachment.validate()?;
         if attachment.media_type != MediaType::Video {
-            return Err("Expected video attachment".into());
+            return Err(CarrierError::InvalidInput("Expected video attachment".into()));
         }
 
         if !self.config.video_description {
-            return Err("Video description is disabled in configuration".into());
+            return Err(CarrierError::Config("Video description is disabled in configuration".into()));
         }
 
         if std::env::var("GEMINI_API_KEY").is_err() && std::env::var("GOOGLE_API_KEY").is_err() {
-            return Err("Video description requires GEMINI_API_KEY or GOOGLE_API_KEY".into());
+            return Err(CarrierError::Config("Video description requires GEMINI_API_KEY or GOOGLE_API_KEY".into()));
         }
 
         Ok(MediaUnderstanding {
@@ -210,14 +209,14 @@ impl MediaEngine {
     pub async fn process_attachments(
         &self,
         attachments: Vec<MediaAttachment>,
-    ) -> Vec<Result<MediaUnderstanding, String>> {
+    ) -> Vec<CarrierResult<MediaUnderstanding>> {
         let mut handles = Vec::new();
 
         for attachment in attachments {
             let sem = self.semaphore.clone();
             let config = self.config.clone();
             let handle = tokio::spawn(async move {
-                let _permit = sem.acquire().await.map_err(|e| e.to_string())?;
+                let _permit = sem.acquire().await.map_err(|e| CarrierError::Internal(e.to_string()))?;
                 let engine = MediaEngine {
                     config,
                     semaphore: Arc::new(Semaphore::new(1)), // inner engine, no extra semaphore
@@ -235,7 +234,7 @@ impl MediaEngine {
         for handle in handles {
             match handle.await {
                 Ok(result) => results.push(result),
-                Err(e) => results.push(Err(format!("Task failed: {e}"))),
+                Err(e) => results.push(Err(CarrierError::Internal(format!("Task failed: {e}")))),
             }
         }
         results
@@ -259,7 +258,7 @@ fn detect_vision_provider() -> Option<&'static str> {
 /// Transcribe audio using Parakeet MLX (local, via uv + Python).
 async fn transcribe_with_parakeet_mlx(
     attachment: &MediaAttachment,
-) -> Result<MediaUnderstanding, String> {
+) -> CarrierResult<MediaUnderstanding> {
     use tokio::time::{timeout, Duration};
 
     // Materialize audio to a temp file if needed
@@ -269,7 +268,7 @@ async fn transcribe_with_parakeet_mlx(
             use base64::Engine;
             let decoded = base64::engine::general_purpose::STANDARD
                 .decode(data)
-                .map_err(|e| format!("Failed to decode base64 audio: {e}"))?;
+                .map_err(|e| CarrierError::Serialization(format!("Failed to decode base64 audio: {e}")))?;
             let ext = match mime_type.as_str() {
                 "audio/wav" | "audio/x-wav" => "wav",
                 "audio/mpeg" | "audio/mp3" => "mp3",
@@ -286,11 +285,11 @@ async fn transcribe_with_parakeet_mlx(
             ));
             tokio::fs::write(&path, decoded)
                 .await
-                .map_err(|e| format!("Failed to write temp audio: {e}"))?;
+                .map_err(|e| CarrierError::Internal(format!("Failed to write temp audio: {e}")))?;
             (path, true)
         }
         MediaSource::Url { url } => {
-            return Err(format!("URL audio not supported for parakeet-mlx: {url}"));
+            return Err(CarrierError::InvalidInput(format!("URL audio not supported for parakeet-mlx: {url}")));
         }
     };
 
@@ -317,8 +316,8 @@ print(json.dumps({"text": result.text, "model": "mlx-community/parakeet-tdt-0.6b
 
     let output = timeout(Duration::from_secs(900), cmd.output())
         .await
-        .map_err(|_| "parakeet-mlx timed out after 15 minutes".to_string())?
-        .map_err(|e| format!("Failed to launch parakeet-mlx: {e}"))?;
+        .map_err(|_| CarrierError::Internal("parakeet-mlx timed out after 15 minutes".to_string()))?
+        .map_err(|e| CarrierError::Internal(format!("Failed to launch parakeet-mlx: {e}")))?;
 
     if is_temp {
         let _ = tokio::fs::remove_file(&audio_path).await;
@@ -326,21 +325,21 @@ print(json.dumps({"text": result.text, "model": "mlx-community/parakeet-tdt-0.6b
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("parakeet-mlx failed: {}", stderr.trim()));
+        return Err(CarrierError::LlmDriver(format!("parakeet-mlx failed: {}", stderr.trim())));
     }
 
     let stdout =
-        String::from_utf8(output.stdout).map_err(|e| format!("parakeet-mlx non-UTF8: {e}"))?;
+        String::from_utf8(output.stdout).map_err(|e| CarrierError::Internal(format!("parakeet-mlx non-UTF8: {e}")))?;
     let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
-        .map_err(|e| format!("parakeet-mlx parse failed: {e}"))?;
+        .map_err(|e| CarrierError::LlmDriver(format!("parakeet-mlx parse failed: {e}")))?;
 
     let text = parsed["text"]
         .as_str()
-        .ok_or("missing text field")?
+        .ok_or_else(|| CarrierError::LlmDriver("missing text field".to_string()))?
         .trim()
         .to_string();
     if text.is_empty() {
-        return Err("parakeet-mlx returned empty transcription".into());
+        return Err(CarrierError::LlmDriver("parakeet-mlx returned empty transcription".into()));
     }
 
     Ok(MediaUnderstanding {
@@ -425,7 +424,7 @@ mod tests {
         };
         let result = engine.describe_image(&attachment).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Expected image"));
+        assert!(result.unwrap_err().to_string().contains("Expected image"));
     }
 
     #[tokio::test]
@@ -490,7 +489,7 @@ mod tests {
         };
         let result = engine.describe_video(&attachment).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("disabled"));
+        assert!(result.unwrap_err().to_string().contains("disabled"));
     }
 
     #[test]
@@ -530,7 +529,7 @@ mod tests {
         };
         let result = engine.transcribe_audio(&attachment).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Expected audio"));
+        assert!(result.unwrap_err().to_string().contains("Expected audio"));
     }
 
     #[tokio::test]
@@ -570,6 +569,7 @@ mod tests {
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
+            .to_string()
             .contains("URL-based audio source not supported"));
     }
 
@@ -590,6 +590,6 @@ mod tests {
         };
         let result = engine.transcribe_audio(&attachment).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Failed to read audio file"));
+        assert!(result.unwrap_err().to_string().contains("Failed to read audio file"));
     }
 }
