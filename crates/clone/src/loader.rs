@@ -1,8 +1,9 @@
-//! .agx archive helpers — shared parsing utilities for YAML frontmatter.
+//! Shared parsing utilities for clone definition files.
 //!
-//! The v2 `CloneData` / `load_agx` / `pack_agx` pipeline has been replaced
-//! by the v3 "extract directly" flow in `extractor.rs`. This module retains
-//! only the shared parsing utilities.
+//! `TemplateManifest` parses a clone's `template.json` (name, author, plugins,
+//! mcp_servers, ...); the `parse_*` helpers handle YAML frontmatter and simple
+//! TOML/JSON-array extraction. Used by the hub install/upgrade flow and the
+//! manifest builder.
 
 use std::collections::HashMap;
 

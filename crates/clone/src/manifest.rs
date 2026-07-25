@@ -12,8 +12,9 @@ use std::path::{Component, Path};
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
-/// Runtime dirs/files excluded from the manifest (mirror `extractor::SKIP_PACK`
-/// plus `.dup/` VCS state dir + `admins.json` deployment-specific admin list).
+/// Runtime dirs/files excluded from the definition-layer manifest: agent
+/// runtime state (output/sessions/history/logs/...), the `.dup/` VCS state dir,
+/// and `admins.json` (deployment-specific admin list).
 const SKIP: &[&str] = &[
     "agent.toml",
     "AGENT.json",
