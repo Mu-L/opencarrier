@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 25;
+const SCHEMA_VERSION: u32 = 26;
 
 /// Run all migrations to bring the database up to date.
 ///
@@ -41,6 +41,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         (23, migrate_v23),
         (24, migrate_v24),
         (25, migrate_v25),
+        (26, migrate_v26),
     ];
 
     for (version, migrate_fn) in &migrations {
@@ -1117,6 +1118,28 @@ fn migrate_v25(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Drop dead tables that have no readers/writers anywhere in the codebase.
+///
+/// `memories`, `entities`, `relations` (v1), `canonical_sessions` (v5), and
+/// `paired_devices` (v7) were created by early experiments but nothing reads or
+/// writes them today (verified: zero references outside migration.rs). They only
+/// occupy space and PRAGMA scan cost. `IF EXISTS` makes this safe for fresh
+/// installs that never had them and idempotent for re-runs.
+fn migrate_v26(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS memories;
+         DROP TABLE IF EXISTS entities;
+         DROP TABLE IF EXISTS relations;
+         DROP TABLE IF EXISTS canonical_sessions;
+         DROP TABLE IF EXISTS paired_devices;",
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![26, "drop dead tables (memories/entities/relations/canonical_sessions/paired_devices)"],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1139,9 +1162,22 @@ mod tests {
         assert!(tables.contains(&"sessions".to_string()));
         assert!(tables.contains(&"kv_store".to_string()));
         assert!(tables.contains(&"kv_history".to_string()));
-        assert!(tables.contains(&"memories".to_string()));
-        assert!(tables.contains(&"entities".to_string()));
-        assert!(tables.contains(&"relations".to_string()));
+
+        // v26 dropped these dead tables — they have no readers/writers anywhere
+        // in the codebase. Asserting their absence also guards against accidental
+        // re-introduction.
+        for dead in &[
+            "memories",
+            "entities",
+            "relations",
+            "canonical_sessions",
+            "paired_devices",
+        ] {
+            assert!(
+                !tables.contains(&dead.to_string()),
+                "dead table {dead} should have been dropped by migrate_v26"
+            );
+        }
     }
 
     #[test]

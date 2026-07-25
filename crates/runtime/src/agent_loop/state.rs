@@ -18,17 +18,7 @@ pub enum BudgetState {
     Critical,
 }
 
-#[allow(dead_code)]
 impl BudgetState {
-    pub fn as_label(&self) -> &'static str {
-        match self {
-            BudgetState::Comfortable => "comfortable",
-            BudgetState::Moderate => "moderate",
-            BudgetState::Tight => "tight",
-            BudgetState::Critical => "critical",
-        }
-    }
-
     pub fn from_remaining_secs(secs: u64) -> Self {
         if secs > 300 {
             BudgetState::Comfortable
@@ -50,7 +40,6 @@ pub enum ContextPressure {
     Critical,
 }
 
-#[allow(dead_code)]
 impl ContextPressure {
     pub fn as_label(&self) -> &'static str {
         match self {
@@ -60,40 +49,18 @@ impl ContextPressure {
             ContextPressure::Critical => "critical",
         }
     }
-
-    pub fn from_usage_pct(pct: f64) -> Self {
-        if pct > 0.95 {
-            ContextPressure::Critical
-        } else if pct > 0.80 {
-            ContextPressure::High
-        } else if pct > 0.60 {
-            ContextPressure::Elevated
-        } else {
-            ContextPressure::Normal
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Tool tracking
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
-pub struct ToolCallRecord {
-    pub tool_name: String,
-    pub input_hash: u64,
-    pub is_error: bool,
-}
-
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ToolErrorTracker {
     window_size: usize,
     history: HashMap<String, Vec<bool>>,
 }
 
-#[allow(dead_code)]
 impl ToolErrorTracker {
     pub fn new(window_size: usize) -> Self {
         Self {
@@ -142,7 +109,6 @@ impl ToolErrorTracker {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
 pub struct TurnLogEntry {
     pub iteration: u32,
     pub modality: String,
@@ -159,7 +125,6 @@ pub struct TurnLogEntry {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
 pub enum RunOutcome {
     Complete,
     BudgetExhausted,
@@ -169,7 +134,6 @@ pub enum RunOutcome {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
 pub struct LastRunSummary {
     pub timestamp: String,
     pub iterations: u32,
@@ -183,7 +147,6 @@ pub struct LastRunSummary {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct LoopState {
     pub iteration: u32,
     pub max_iterations: u32,
@@ -203,7 +166,6 @@ pub struct LoopState {
     pub turn_log: Vec<TurnLogEntry>,
 }
 
-#[allow(dead_code)]
 impl LoopState {
     pub fn new(
         max_iterations: u32,
@@ -245,11 +207,6 @@ impl LoopState {
 
     pub fn refresh_budget(&mut self) {
         self.budget_state = BudgetState::from_remaining_secs(self.remaining_secs());
-    }
-
-    pub fn update_context_pressure(&mut self, estimated_tokens: usize) {
-        self.context_tokens_used_estimate = estimated_tokens;
-        self.context_pressure = ContextPressure::from_usage_pct(self.context_usage_pct());
     }
 
     pub fn log_turn(
