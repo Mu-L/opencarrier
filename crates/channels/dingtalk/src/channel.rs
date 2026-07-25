@@ -86,37 +86,18 @@ impl Channel for DingTalkChannel {
         let user_id = user_id.to_string();
         let text = text.to_string();
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(e) => {
-                    let _ = tx.send(Err(ChannelError::Other(format!("Runtime creation failed: {e}"))));
-                    return;
-                }
-            };
+        types::channel::block_on_detached(async move {
+            let token = token_cache
+                .get_token()
+                .await
+                .map_err(|e| ChannelError::TokenFailed(e.to_string()))?;
+            let http = token_cache.http().clone();
+            let robot_code = token_cache.app_key().to_string();
 
-            let result = rt.block_on(async {
-                let token = token_cache
-                    .get_token()
-                    .await
-                    .map_err(|e| ChannelError::TokenFailed(e.to_string()))?;
-                let http = token_cache.http().clone();
-                let robot_code = token_cache.app_key().to_string();
-
-                api::send_direct_message(&http, &token, &robot_code, &user_id, &text)
-                    .await
-                    .map_err(ChannelError::SendFailed)
-            });
-
-            let _ = tx.send(result);
-        });
-
-        rx.recv()
-            .map_err(|e| ChannelError::Other(format!("Send thread disconnected: {e}")))?
+            api::send_direct_message(&http, &token, &robot_code, &user_id, &text)
+                .await
+                .map_err(ChannelError::SendFailed)
+        })
     }
 
     fn stop(&mut self) {

@@ -7,11 +7,11 @@ use crate::api;
 use crate::token::AccessTokenCache;
 use crate::models::*;
 use types::plugin::{PluginContent, PluginMessage};
-use dashmap::DashMap;
+use channels_common::InboundDedup;
 use futures::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
@@ -24,7 +24,7 @@ pub struct DingTalkWsClient {
     bot_id: String,  // app_key (used as route key in PluginMessage)
     token_cache: Arc<AccessTokenCache>,
     shutdown: Arc<AtomicBool>,
-    dedup: DashMap<String, Instant>,
+    dedup: InboundDedup,
 }
 
 impl DingTalkWsClient {
@@ -37,7 +37,7 @@ impl DingTalkWsClient {
             bot_id,
             token_cache,
             shutdown,
-            dedup: DashMap::new(),
+            dedup: InboundDedup::new(DEDUP_TTL, DEDUP_MAX_ENTRIES),
         }
     }
 
@@ -359,12 +359,8 @@ impl DingTalkWsClient {
         };
 
         // Dedup by message_id
-        if !message_id.is_empty() {
-            if self.dedup.contains_key(message_id) {
-                return;
-            }
-            self.evict_old_entries();
-            self.dedup.insert(message_id.to_string(), Instant::now());
+        if !message_id.is_empty() && !self.dedup.check(message_id) {
+            return;
         }
 
         // sender_staff_id is the plaintext userId (needed for send API);
@@ -421,23 +417,5 @@ impl DingTalkWsClient {
         let http = self.token_cache.http().clone();
 
         api::download_media(&http, &token, download_code).await
-    }
-
-    fn evict_old_entries(&self) {
-        let now = Instant::now();
-        self.dedup
-            .retain(|_, received_at| now.duration_since(*received_at) < DEDUP_TTL);
-
-        if self.dedup.len() > DEDUP_MAX_ENTRIES {
-            let to_remove: Vec<String> = self
-                .dedup
-                .iter()
-                .take(self.dedup.len() - DEDUP_MAX_ENTRIES)
-                .map(|r| r.key().clone())
-                .collect();
-            for key in to_remove {
-                self.dedup.remove(&key);
-            }
-        }
     }
 }

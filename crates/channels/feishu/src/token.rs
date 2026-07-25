@@ -2,19 +2,18 @@
 //!
 //! Fetches and caches the tenant_access_token (2h validity, auto-refresh).
 //! Uses POST `/open-apis/auth/v3/tenant_access_token/internal`.
+//!
+//! Caching/refresh mechanics live in `channels_common::get_cached_token`; this
+//! struct only holds the Feishu credentials + HTTP client and supplies the
+//! platform-specific fetch call.
 
 use crate::api;
 use crate::models::*;
+use channels_common::{get_cached_token, CachedToken};
 use reqwest::Client;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::Duration;
 use tracing::info;
-
-/// Cached tenant_access_token with expiry time.
-struct CachedToken {
-    access_token: String,
-    expires_at: Instant,
-}
 
 /// Thread-safe cache for a single tenant's access token.
 pub struct BotTokenCache {
@@ -38,51 +37,27 @@ impl BotTokenCache {
 
     /// Get a valid tenant_access_token, refreshing if necessary.
     pub async fn get_token(&self) -> Result<String, String> {
-        // Check cached token
-        {
-            let guard = self.token.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(ref cached) = *guard {
-                if cached.expires_at > Instant::now() {
-                    return Ok(cached.access_token.clone());
-                }
+        let http = self.http.clone();
+        let api_base = self.api_base.clone();
+        let app_id = self.app_id.clone();
+        let app_secret = self.app_secret.clone();
+        get_cached_token(&self.token, Duration::from_secs(TOKEN_REFRESH_AHEAD_SECS), move || async move {
+            let resp =
+                api::get_tenant_token(&http, &api_base, &app_id, &app_secret).await?;
+            if resp.code != 0 {
+                return Err(format!(
+                    "Feishu token API error: code={} msg={}",
+                    resp.code, resp.msg
+                ));
             }
-        }
-
-        self.refresh().await
-    }
-
-    /// Fetch a new tenant_access_token from Feishu API.
-    async fn refresh(&self) -> Result<String, String> {
-        let resp =
-            api::get_tenant_token(&self.http, &self.api_base, &self.app_id, &self.app_secret)
-                .await?;
-
-        if resp.code != 0 {
-            return Err(format!(
-                "Feishu token API error: code={} msg={}",
-                resp.code, resp.msg
-            ));
-        }
-
-        let token = resp
-            .tenant_access_token
-            .ok_or("Missing tenant_access_token in response")?;
-        let expire_secs = resp.expire.unwrap_or(7200);
-
-        // Refresh 5 minutes early
-        let expires_at = Instant::now()
-            + std::time::Duration::from_secs(expire_secs.saturating_sub(TOKEN_REFRESH_AHEAD_SECS));
-
-        {
-            let mut guard = self.token.lock().unwrap_or_else(|e| e.into_inner());
-            *guard = Some(CachedToken {
-                access_token: token.clone(),
-                expires_at,
-            });
-        }
-
-        info!(app_id = %self.app_id, expire_secs, "Refreshed Feishu tenant_access_token");
-        Ok(token)
+            let token = resp
+                .tenant_access_token
+                .ok_or("Missing tenant_access_token in response")?;
+            let expire_secs = resp.expire.unwrap_or(7200);
+            info!(app_id = %app_id, expire_secs, "Refreshed Feishu tenant_access_token");
+            Ok((token, expire_secs))
+        })
+        .await
     }
 
     /// Get the HTTP client (for use by api functions).

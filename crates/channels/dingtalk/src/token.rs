@@ -1,20 +1,19 @@
 //! DingTalk OAuth access token management.
 //!
-//! Fetches and caches the accessToken (with 5-minute early refresh).
+//! Fetches and caches the accessToken (with early refresh).
 //! Uses POST `/v1.0/oauth2/accessToken`.
+//!
+//! Caching/refresh mechanics live in `channels_common::get_cached_token`; this
+//! struct only holds the DingTalk credentials + HTTP client and supplies the
+//! platform-specific fetch call.
 
 use crate::api;
 use crate::models::*;
+use channels_common::{get_cached_token, CachedToken};
 use reqwest::Client;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::Duration;
 use tracing::info;
-
-/// Cached access token with expiry time.
-struct CachedToken {
-    access_token: String,
-    expires_at: Instant,
-}
 
 /// Thread-safe cache for a DingTalk app's access token.
 pub struct AccessTokenCache {
@@ -36,40 +35,19 @@ impl AccessTokenCache {
 
     /// Get a valid access token, refreshing if necessary.
     pub async fn get_token(&self) -> Result<String, String> {
-        {
-            let guard = self.token.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(ref cached) = *guard {
-                if cached.expires_at > Instant::now() {
-                    return Ok(cached.access_token.clone());
-                }
-            }
-        }
-
-        self.refresh().await
-    }
-
-    /// Fetch a new access token from DingTalk OAuth API.
-    async fn refresh(&self) -> Result<String, String> {
-        let resp = api::get_access_token(&self.http, &self.app_key, &self.app_secret).await?;
-
-        let token = resp
-            .access_token
-            .ok_or("Missing accessToken in DingTalk OAuth response")?;
-        let expire_secs = resp.expire_in.unwrap_or(7200);
-
-        let expires_at = Instant::now()
-            + std::time::Duration::from_secs(expire_secs.saturating_sub(TOKEN_REFRESH_AHEAD_SECS));
-
-        {
-            let mut guard = self.token.lock().unwrap_or_else(|e| e.into_inner());
-            *guard = Some(CachedToken {
-                access_token: token.clone(),
-                expires_at,
-            });
-        }
-
-        info!(app_key = %self.app_key, expire_secs, "Refreshed DingTalk access token");
-        Ok(token)
+        let http = self.http.clone();
+        let app_key = self.app_key.clone();
+        let app_secret = self.app_secret.clone();
+        get_cached_token(&self.token, Duration::from_secs(TOKEN_REFRESH_AHEAD_SECS), move || async move {
+            let resp = api::get_access_token(&http, &app_key, &app_secret).await?;
+            let token = resp
+                .access_token
+                .ok_or("Missing accessToken in DingTalk OAuth response")?;
+            let expire_secs = resp.expire_in.unwrap_or(7200);
+            info!(app_key = %app_key, expire_secs, "Refreshed DingTalk access token");
+            Ok((token, expire_secs))
+        })
+        .await
     }
 
     pub fn http(&self) -> &Client {

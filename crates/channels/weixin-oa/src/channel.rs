@@ -472,16 +472,25 @@ impl Channel for SessionWatcher {
 
         let http = account.http.clone();
         let app_id = account.app_id.clone();
-        let app_secret = account.app_secret.clone();
+        let account = account.clone(); // Arc — used for the cached get_token() below
         let user_id = user_id.to_string();
         let text = text.to_string();
 
         // Spawn a thread for the async send (channel.send() is synchronous)
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    warn!(%app_id, error=%e, "weixin-oa: failed to create send runtime");
+                    return;
+                }
+            };
             rt.block_on(async move {
-                let token = match api::get_access_token(&http, &app_id, &app_secret).await {
-                    Ok(t) => t.access_token.unwrap_or_default(),
+                // Use the cached token (300s margin + 40001 invalidate) instead of
+                // hitting the token endpoint on every send — the previous direct
+                // api::get_access_token() call re-fetched each message.
+                let token = match account.get_token().await {
+                    Ok(t) => t,
                     Err(e) => {
                         warn!(%app_id, error=%e, "weixin-oa: send failed to get token");
                         return;

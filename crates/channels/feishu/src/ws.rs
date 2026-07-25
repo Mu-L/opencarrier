@@ -13,11 +13,11 @@ use crate::api;
 use crate::pbbp2::*;
 use crate::token::BotTokenCache;
 use types::plugin::{PluginContent, PluginMessage};
-use dashmap::DashMap;
+use channels_common::InboundDedup;
 use futures::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -36,7 +36,7 @@ pub struct FeishuWsClient {
     bot_id: String,  // app_id (used as route key in PluginMessage)
     token_cache: Arc<BotTokenCache>,
     shutdown: Arc<AtomicBool>,
-    dedup: DashMap<String, Instant>,
+    dedup: InboundDedup,
 }
 
 impl FeishuWsClient {
@@ -49,7 +49,7 @@ impl FeishuWsClient {
             bot_id,
             token_cache,
             shutdown,
-            dedup: DashMap::new(),
+            dedup: InboundDedup::new(DEDUP_TTL, 10_000),
         }
     }
 
@@ -339,11 +339,9 @@ impl FeishuWsClient {
         };
 
         // Dedup
-        if self.dedup.contains_key(msg_id) {
+        if !self.dedup.check(msg_id) {
             return;
         }
-        self.evict_old_entries();
-        self.dedup.insert(msg_id.to_string(), Instant::now());
 
         let msg_type = message
             .get("message_type")
@@ -497,13 +495,6 @@ impl FeishuWsClient {
             "file" => api::download_file(&http, &token, &base, key).await,
             _ => Err(format!("Unknown media kind: {kind}")),
         }
-    }
-
-    /// Remove dedup entries older than TTL.
-    fn evict_old_entries(&self) {
-        let now = Instant::now();
-        self.dedup
-            .retain(|_, received_at| now.duration_since(*received_at) < DEDUP_TTL);
     }
 }
 

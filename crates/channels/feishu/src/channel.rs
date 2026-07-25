@@ -83,44 +83,27 @@ impl Channel for FeishuChannel {
         let token_cache = self.token_cache.clone();
         let user_id = user_id.to_string();
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let rt = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(rt) => rt,
-                Err(e) => {
-                    let _ = tx.send(Err(ChannelError::Other(format!("Failed to create send runtime: {e}"))));
-                    return;
-                }
-            };
-            let result = rt.block_on(async {
-                let token = token_cache
-                    .get_token()
-                    .await
-                    .map_err(|e| ChannelError::TokenFailed(e.to_string()))?;
-                let http = token_cache.http().clone();
-                let base = token_cache.api_base().to_string();
-                let resp = crate::api::send_message(
-                    &http, &token, &base, &user_id, "open_id", "text", &content,
-                )
+        types::channel::block_on_detached(async move {
+            let token = token_cache
+                .get_token()
                 .await
-                .map_err(ChannelError::SendFailed)?;
+                .map_err(|e| ChannelError::TokenFailed(e.to_string()))?;
+            let http = token_cache.http().clone();
+            let base = token_cache.api_base().to_string();
+            let resp = crate::api::send_message(
+                &http, &token, &base, &user_id, "open_id", "text", &content,
+            )
+            .await
+            .map_err(ChannelError::SendFailed)?;
 
-                if resp.code != 0 {
-                    return Err(ChannelError::SendFailed(format!(
-                        "Feishu send error: code={} msg={}",
-                        resp.code, resp.msg
-                    )));
-                }
-                Ok(())
-            });
-            let _ = tx.send(result);
-        });
-
-        rx.recv()
-            .map_err(|e| ChannelError::Other(format!("Send thread disconnected: {e}")))?
+            if resp.code != 0 {
+                return Err(ChannelError::SendFailed(format!(
+                    "Feishu send error: code={} msg={}",
+                    resp.code, resp.msg
+                )));
+            }
+            Ok(())
+        })
     }
 
     fn stop(&mut self) {

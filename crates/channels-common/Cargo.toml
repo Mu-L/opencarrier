@@ -1,0 +1,12 @@
+[package]
+name = "channels-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared components for OpenCarrier channel adapters"
+
+[dependencies]
+types = { path = "../types" }
+tokio = { workspace = true }
+dashmap = { workspace = true }
+tracing = { workspace = true }

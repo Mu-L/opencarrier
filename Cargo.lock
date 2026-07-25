@@ -490,6 +490,7 @@ name = "channel-dingtalk"
 version = "0.3.0"
 dependencies = [
  "base64",
+ "channels-common",
  "dashmap",
  "futures",
  "hex",
@@ -511,6 +512,7 @@ name = "channel-feishu"
 version = "0.3.0"
 dependencies = [
  "base64",
+ "channels-common",
  "dashmap",
  "futures",
  "hmac",
@@ -596,6 +598,16 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "tokio",
+ "tracing",
+ "types",
+]
+
+[[package]]
+name = "channels-common"
+version = "0.3.0"
+dependencies = [
+ "dashmap",
  "tokio",
  "tracing",
  "types",
