@@ -121,19 +121,23 @@ fn find_file_recursive(dir: &std::path::Path, filename: &str) -> Option<String> 
     best.map(|(p, _)| p)
 }
 
-/// Extract the title from a leading `<!-- ... -->` META header block written by
-/// article-writer etc. Recognizes `META_TITLE:` (the writer's format) and
-/// `title:`. Returns None if there is no comment block or it has no title field.
-fn extract_meta_title(content: &str) -> Option<String> {
+/// Extract a field from a leading `<!-- ... -->` META header block written by
+/// article-writer etc. `key` is the field name without the `META_` prefix
+/// (e.g. "TITLE", "AUTHOR", "DIGEST"). Recognizes both `META_<KEY>:` (the
+/// writer's format) and `<key>:` (lowercase fallback). Returns None if there is
+/// no comment block or it has no such field.
+fn extract_meta_field(content: &str, key: &str) -> Option<String> {
     let start = content.find("<!--")?;
     let rest = &content[start..];
     let end = rest.find("-->")?;
     let block = &rest[4..end];
+    let meta_prefix = format!("META_{key}:");
+    let plain_prefix = format!("{}:", key.to_lowercase());
     for line in block.lines() {
         let trimmed = line.trim();
         let val = trimmed
-            .strip_prefix("META_TITLE:")
-            .or_else(|| trimmed.strip_prefix("title:"))
+            .strip_prefix(&meta_prefix)
+            .or_else(|| trimmed.strip_prefix(&plain_prefix))
             .map(|s| s.trim());
         if let Some(v) = val {
             if !v.is_empty() {
@@ -142,6 +146,11 @@ fn extract_meta_title(content: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Extract the title from a leading META header block. See `extract_meta_field`.
+fn extract_meta_title(content: &str) -> Option<String> {
+    extract_meta_field(content, "TITLE")
 }
 
 /// Resolve the article title. Prefer a `META_TITLE:` field in a leading
@@ -216,6 +225,21 @@ fn resolve_article_title(html_path: &str) -> String {
         .to_string()
 }
 
+/// Resolve META_AUTHOR and META_DIGEST from the sibling `.md`'s leading META
+/// header block. article-writer writes these specifically for the OA draft's
+/// author/digest fields (its flow.md: "META_DIGEST … 用于公众号草稿摘要字段").
+/// Returns (None, None) if there is no sibling .md or no META block.
+fn resolve_meta_author_digest(html_path: &str) -> (Option<String>, Option<String>) {
+    let md = std::path::Path::new(html_path).with_extension("md");
+    let Ok(content) = std::fs::read_to_string(&md) else {
+        return (None, None);
+    };
+    (
+        extract_meta_field(&content, "AUTHOR"),
+        extract_meta_field(&content, "DIGEST"),
+    )
+}
+
 /// Handle a `[PUBLISH:app_id]html_path|digest[/PUBLISH]` marker: generate a
 /// cover, create a WeChat OA draft, and publish it — all via in-process API
 /// (no MCP, no agent tool-chain; the "AI + API" pattern). The `|digest` part
@@ -273,6 +297,16 @@ async fn handle_publish_marker(
         Some(t) => t.to_string(),
         None => resolve_article_title(&abs_html),
     };
+    // OA draft author + digest. article-writer writes META_AUTHOR/META_DIGEST
+    // precisely for these fields. An explicit digest in the PUBLISH marker
+    // wins; otherwise fall back to META_DIGEST. Author has no marker source —
+    // only META_AUTHOR.
+    let (meta_author, meta_digest) = resolve_meta_author_digest(&abs_html);
+    let author = meta_author;
+    let digest = digest
+        .filter(|d| !d.is_empty())
+        .map(|d| d.to_string())
+        .or(meta_digest);
     let cover_prompt = format!(
         "WeChat official account article cover image, theme: {title}, flat illustration style, vibrant, clean, no text"
     );
@@ -321,10 +355,11 @@ async fn handle_publish_marker(
         "title": title,
         "publish": false,
     });
+    if let Some(a) = author {
+        args["author"] = serde_json::Value::String(a);
+    }
     if let Some(d) = digest {
-        if !d.is_empty() {
-            args["digest"] = serde_json::Value::String(d.to_string());
-        }
+        args["digest"] = serde_json::Value::String(d);
     }
     if let Some(cp) = cover_path {
         args["cover_path"] = serde_json::Value::String(cp);
@@ -388,7 +423,7 @@ async fn handle_publish_marker(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_meta_title, resolve_article_title};
+    use super::{extract_meta_field, extract_meta_title, resolve_article_title, resolve_meta_author_digest};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -422,6 +457,32 @@ mod tests {
         assert!(extract_meta_title("no comment here").is_none());
         // Block present but no title field.
         assert!(extract_meta_title("<!--\nMETA_AUTHOR: x\n-->").is_none());
+    }
+
+    #[test]
+    fn extract_meta_field_reads_author_and_digest() {
+        let content = "<!--\nMETA_TITLE: 我的标题\nMETA_AUTHOR: 张三\nMETA_DIGEST: 这是一段摘要\n-->\n\n# 正文";
+        assert_eq!(extract_meta_field(content, "TITLE").unwrap(), "我的标题");
+        assert_eq!(extract_meta_field(content, "AUTHOR").unwrap(), "张三");
+        assert_eq!(extract_meta_field(content, "DIGEST").unwrap(), "这是一段摘要");
+        assert!(extract_meta_field(content, "NOPE").is_none());
+    }
+
+    #[test]
+    fn resolve_meta_author_digest_from_sibling_md() {
+        let md = tmp_md("<!--\nMETA_AUTHOR: 李四\nMETA_DIGEST: 摘要内容\nMETA_PIPELINE: pipeline-20260721-x\n-->\n\n# t\n正文");
+        let html = md.with_extension("html");
+        let (author, digest) = resolve_meta_author_digest(html.to_str().unwrap());
+        assert_eq!(author.as_deref(), Some("李四"));
+        assert_eq!(digest.as_deref(), Some("摘要内容"));
+    }
+
+    #[test]
+    fn resolve_meta_author_digest_none_without_sibling_md() {
+        // html path with no sibling .md → (None, None), no panic.
+        let (author, digest) = resolve_meta_author_digest("/nonexistent/path/article.html");
+        assert!(author.is_none());
+        assert!(digest.is_none());
     }
 
     #[test]
