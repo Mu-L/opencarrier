@@ -304,23 +304,7 @@ impl CarrierKernel {
         // present, hard-error so the call site is forced to pass an explicit
         // label rather than silently corrupting session isolation.
         let session = {
-            let label = if let Some(ref sid) = sender_id {
-                format!("user:{}", sid)
-            } else if let Some(t) = task_id {
-                format!("task:{}", t)
-            } else if let Some(ref o) = owner_id {
-                format!("owner:{}", o)
-            } else if let Some(ref c) = channel_type {
-                format!("channel:{}", c)
-            } else {
-                warn!(
-                    agent_id = %agent_id,
-                    "Session isolation: sender_id/task_id/owner_id/channel_type all None — refusing to create unlabeled (orphan) session"
-                );
-                return Err(KernelError::Carrier(CarrierError::InvalidInput(
-                    "cannot determine session label: sender_id/task_id/owner_id/channel_type all missing — pass an explicit label at the call site".into(),
-                )));
-            };
+            let label = Self::resolve_session_label(agent_id, sender_id, task_id, owner_id, channel_type)?;
             // Windowed lookup: only resume a session updated within the
             // staleness window. A sender returning after the window starts a
             // fresh session (the old one stays archived-in-place, out of the
@@ -340,47 +324,180 @@ impl CarrierKernel {
         };
 
         // Check if auto-compaction is needed
-        let needs_compact = {
-            use runtime::compactor::{
-                estimate_token_count, needs_compaction as check_compact,
-                needs_compaction_by_tokens, CompactionConfig,
-            };
-            let config = CompactionConfig::default();
-            let by_messages = check_compact(&session, &config);
-            let estimated = estimate_token_count(
-                &session.messages,
-                Some(&entry.manifest.model.system_prompt),
-                None,
+        let needs_compact =
+            self.check_compaction_needed(&session, &entry.manifest.model.system_prompt, agent_id);
+
+        // Build agent's core tool set (bootstrap tools + delegate tools)
+        let mut tools = self.resolve_tools(entry);
+
+        // Auto-match flow for prompt injection
+        let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> =
+            Some(Arc::clone(&*self.brain.brain.read().unwrap_or_else(|e| {
+                warn!("Brain RwLock poisoned, recovering");
+                e.into_inner()
+            }))
+                as Arc<dyn runtime::llm_driver::Brain>);
+
+        // Flow resolution priority: resume > explicit active_flow > LLM classify.
+        // resume and active_flow both load a named flow directly (skipping the
+        // non-deterministic classifier); classify is the fallback. A silent
+        // classify-None previously left the agent with no flow prompt AND no
+        // max_iterations override (ad-occ3 root cause) — now logged.
+        let (auto_matched_flow, flow_max_iterations, matched_flow) = self
+            .resolve_matched_flow(entry, message, &mut tools, &brain_ref, resume_flow, active_flow, &session)
+            .await;
+
+        // Expose a system-shared flow's bundled scripts/ (deterministic
+        // validators/helpers) into the turn cwd as .flows/<name>, so the agent
+        // can invoke them via workspace-relative shell_allow patterns.
+        if let Some(ref flow) = matched_flow {
+            Self::expose_flow_scripts(
+                &types::config::home_dir(),
+                flow,
+                &agent_name,
+                sender_id,
+                owner_id,
+                entry.manifest.workspace.as_deref(),
             );
-            let by_tokens = needs_compaction_by_tokens(estimated, &config);
-            if by_tokens && !by_messages {
+        }
+
+        // Auto-match subagent trigger (only when no flow matched) + subagent
+        // delegation from channel_type.
+        let (auto_matched_subagent, subagent_config) = Self::resolve_subagent(
+            message,
+            &entry.manifest.subagents,
+            channel_type,
+            &auto_matched_flow,
+            &entry.name,
+        );
+
+        let driver = self.resolve_driver(&entry.manifest)?;
+        let ctx_window: Option<usize> = None;
+
+        let mut manifest = entry.manifest.clone();
+
+        // Flow turn elevation (shared system OR private skill with shell_allow):
+        // raise max_tool_level and stamp elevated tool names + shell_allow for tool_runner.
+        // Also enforce deny_tools: strip from LLM tool list for this turn.
+        if let Some(ref flow) = matched_flow {
+            Self::apply_flow_elevation(&mut tools, &mut manifest, flow, &entry.name);
+        }
+
+        // Apply flow's then subagent's max_iterations override (subagent wins).
+        Self::apply_manifest_overrides(
+            &mut manifest,
+            flow_max_iterations,
+            subagent_config.as_ref(),
+            &entry.name,
+        );
+
+        // Combine flow and subagent auto-match for prompt injection
+        let prompt_auto_match = auto_matched_flow.or_else(|| {
+            auto_matched_subagent.map(|name| format!("**Auto-delegation: {}**\nThe user message matches the '{}' subagent. Call delegate_{} to handle this task.", name, name, name))
+        });
+
+        // L0 turn summaries from session
+        let turn_summaries = session.turn_summaries.clone();
+
+        // Drawer entries from kv memory
+        let drawer_entries = self.prefetch_drawer_entries(&manifest.name, owner_id.as_deref().unwrap_or(sender_id.as_deref().unwrap_or("")));
+
+        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, sender_id, sender_name, owner_id, prompt_auto_match.clone(), turn_summaries, drawer_entries, task_id.map(|s| s.to_string()));
+
+        Ok(PreparedContext {
+            session,
+            needs_compact,
+            tools,
+            manifest,
+            driver,
+            ctx_window,
+            flow: matched_flow,
+        })
+    }
+
+    /// Resolve the session label from the available identifiers.
+    ///
+    /// Priority: sender_id (user:<openid>) > task_id > owner_id > channel_type.
+    /// There is NO silent fallback to an unlabeled "default" session — that
+    /// fallback was the source of orphan sessions: calls with no sender (cron
+    /// jobs without sender_id, background ticks, webhooks) all landed on the
+    /// agent's label=None default session, piling up invisible, untraceable
+    /// rows (wechat-writer had 48 of them). If none of the identifiers is
+    /// present, hard-error so the call site is forced to pass an explicit
+    /// label rather than silently corrupting session isolation.
+    fn resolve_session_label(
+        agent_id: AgentId,
+        sender_id: &Option<String>,
+        task_id: Option<&str>,
+        owner_id: &Option<String>,
+        channel_type: &Option<String>,
+    ) -> KernelResult<String> {
+        let label = if let Some(ref sid) = sender_id {
+            format!("user:{}", sid)
+        } else if let Some(t) = task_id {
+            format!("task:{}", t)
+        } else if let Some(ref o) = owner_id {
+            format!("owner:{}", o)
+        } else if let Some(ref c) = channel_type {
+            format!("channel:{}", c)
+        } else {
+            warn!(
+                agent_id = %agent_id,
+                "Session isolation: sender_id/task_id/owner_id/channel_type all None — refusing to create unlabeled (orphan) session"
+            );
+            return Err(KernelError::Carrier(CarrierError::InvalidInput(
+                "cannot determine session label: sender_id/task_id/owner_id/channel_type all missing — pass an explicit label at the call site".into(),
+            )));
+        };
+        Ok(label)
+    }
+
+    /// Check whether the session needs auto-compaction, on three criteria:
+    /// message-count threshold, estimated-token threshold, and quota headroom.
+    fn check_compaction_needed(
+        &self,
+        session: &memory::session::Session,
+        system_prompt: &str,
+        agent_id: AgentId,
+    ) -> bool {
+        use runtime::compactor::{
+            estimate_token_count, needs_compaction as check_compact,
+            needs_compaction_by_tokens, CompactionConfig,
+        };
+        let config = CompactionConfig::default();
+        let by_messages = check_compact(session, &config);
+        let estimated = estimate_token_count(&session.messages, Some(system_prompt), None);
+        let by_tokens = needs_compaction_by_tokens(estimated, &config);
+        if by_tokens && !by_messages {
+            info!(
+                agent_id = %agent_id,
+                estimated_tokens = estimated,
+                messages = session.messages.len(),
+                "Token-based compaction triggered (messages below threshold but tokens above)"
+            );
+        }
+        let by_quota = if let Some(headroom) = self.runtime.scheduler.token_headroom(agent_id) {
+            let threshold = (headroom as f64 * 0.8) as u64;
+            if estimated as u64 > threshold && session.messages.len() > 4 {
                 info!(
                     agent_id = %agent_id,
                     estimated_tokens = estimated,
-                    messages = session.messages.len(),
-                    "Token-based compaction triggered (messages below threshold but tokens above)"
+                    quota_headroom = headroom,
+                    "Quota-headroom compaction triggered (session would consume >80% of remaining quota)"
                 );
-            }
-            let by_quota = if let Some(headroom) = self.runtime.scheduler.token_headroom(agent_id) {
-                let threshold = (headroom as f64 * 0.8) as u64;
-                if estimated as u64 > threshold && session.messages.len() > 4 {
-                    info!(
-                        agent_id = %agent_id,
-                        estimated_tokens = estimated,
-                        quota_headroom = headroom,
-                        "Quota-headroom compaction triggered (session would consume >80% of remaining quota)"
-                    );
-                    true
-                } else {
-                    false
-                }
+                true
             } else {
                 false
-            };
-            by_messages || by_tokens || by_quota
+            }
+        } else {
+            false
         };
+        by_messages || by_tokens || by_quota
+    }
 
-        // Build agent's core tool set (bootstrap tools + delegate tools)
+    /// Build the agent's core tool set for this turn: bootstrap CORE_TOOL_NAMES,
+    /// declarative API tools, and subagent delegate tools.
+    fn resolve_tools(&self, entry: &AgentEntry) -> Vec<types::tool::ToolDefinition> {
         let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions(self.config.cli_exec.clone())
             .into_iter()
             .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
@@ -420,24 +537,32 @@ impl CarrierKernel {
             "Agent core tool set assembled"
         );
 
-        // Auto-match flow for prompt injection
-        let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> =
-            Some(Arc::clone(&*self.brain.brain.read().unwrap_or_else(|e| {
-                warn!("Brain RwLock poisoned, recovering");
-                e.into_inner()
-            }))
-                as Arc<dyn runtime::llm_driver::Brain>);
+        tools
+    }
 
-        // Flow resolution priority: resume > explicit active_flow > LLM classify.
-        // resume and active_flow both load a named flow directly (skipping the
-        // non-deterministic classifier); classify is the fallback. A silent
-        // classify-None previously left the agent with no flow prompt AND no
-        // max_iterations override (ad-occ3 root cause) — now logged.
+    /// Resolve the flow to inject this turn. Priority: resume > explicit
+    /// active_flow > LLM classify. resume and active_flow both load a named flow
+    /// directly (skipping the non-deterministic classifier); classify is the
+    /// fallback. A silent classify-None previously left the agent with no flow
+    /// prompt AND no max_iterations override (ad-occ3 root cause) — now logged.
+    /// Mutates `tools` to inject the matched flow's declared tools.
+    /// Returns (flow_prompt, max_iterations, matched_flow).
+    #[allow(clippy::too_many_arguments)]
+    async fn resolve_matched_flow(
+        &self,
+        entry: &AgentEntry,
+        message: &str,
+        tools: &mut Vec<types::tool::ToolDefinition>,
+        brain_ref: &Option<Arc<dyn runtime::llm_driver::Brain>>,
+        resume_flow: Option<&memory::FlowRunRow>,
+        active_flow: Option<&str>,
+        session: &memory::session::Session,
+    ) -> (Option<String>, Option<u32>, Option<crate::prompt_sources::FlowMatch>) {
         let from_resume = if let Some(rf) = resume_flow {
             // Resume: load by name WITHOUT an LLM classify call -- the user's
             // reply continues an already-matched flow, so re-classifying would
             // be wrong (and might match a different flow).
-            match self.load_named_flow_for_turn(entry, &mut tools, &rf.flow_name) {
+            match self.load_named_flow_for_turn(entry, tools, &rf.flow_name) {
                 Some(loaded) => {
                     info!(
                         agent = %entry.name,
@@ -463,7 +588,7 @@ impl CarrierKernel {
         // allowed since they belong to the agent.
         let from_active = if from_resume.is_none() {
             if let Some(name) = active_flow {
-                match self.load_named_flow_for_turn(entry, &mut tools, name) {
+                match self.load_named_flow_for_turn(entry, tools, name) {
                     Some((prompt, max_iter, flow)) => {
                         let allowed = || -> bool {
                             if !flow.is_system_shared {
@@ -498,93 +623,89 @@ impl CarrierKernel {
             None
         };
 
-        let (auto_matched_flow, flow_max_iterations, matched_flow) =
-            if let Some((prompt, max_iter, flow)) = from_resume.or(from_active) {
-                (Some(prompt), max_iter, Some(flow))
-            } else if let (Some(ws), Some(brain)) =
-                (entry.manifest.workspace.as_ref(), brain_ref.as_ref())
-            {
-                // Give the classifier recent conversation context so it can
-                // match follow-up messages in multi-turn workflows (e.g.
-                // charter-quoter after the user sends their phone in turn 2).
-                let recent_turns: Vec<(String, String)> = session
-                    .turn_summaries
-                    .iter()
-                    .rev()
-                    .take(2)
-                    .rev()
-                    .map(|t| {
-                        let intent = if t.user_intent.is_empty() { "(no intent)".to_string() } else { t.user_intent.clone() };
-                        let outcome = if t.assistant_outcome.is_empty() { "(no outcome)".to_string() } else { t.assistant_outcome.clone() };
-                        (intent, outcome)
-                    })
-                    .collect();
-                match crate::prompt_sources::classify_flow_with_llm(message, ws, brain, &entry.manifest.flows, &recent_turns, entry.manifest.clone_source.is_some()).await {
-                    Some(flow) => {
-                        let flow_name = flow.name.clone();
-                        let flow_body = flow.body.clone();
-                        let flow_max_iter = flow.max_iterations;
-                        let elevate = flow.elevates();
-                        let flow_warnings = self.inject_flow_tools(
-                            &mut tools,
-                            &flow,
-                            entry.manifest.max_tool_level,
-                            elevate,
-                            entry.manifest.cli_exec.clone().unwrap_or_default(),
-                        );
+        if let Some((prompt, max_iter, flow)) = from_resume.or(from_active) {
+            (Some(prompt), max_iter, Some(flow))
+        } else if let (Some(ws), Some(brain)) =
+            (entry.manifest.workspace.as_ref(), brain_ref.as_ref())
+        {
+            // Give the classifier recent conversation context so it can
+            // match follow-up messages in multi-turn workflows (e.g.
+            // charter-quoter after the user sends their phone in turn 2).
+            let recent_turns: Vec<(String, String)> = session
+                .turn_summaries
+                .iter()
+                .rev()
+                .take(2)
+                .rev()
+                .map(|t| {
+                    let intent = if t.user_intent.is_empty() { "(no intent)".to_string() } else { t.user_intent.clone() };
+                    let outcome = if t.assistant_outcome.is_empty() { "(no outcome)".to_string() } else { t.assistant_outcome.clone() };
+                    (intent, outcome)
+                })
+                .collect();
+            match crate::prompt_sources::classify_flow_with_llm(message, ws, brain, &entry.manifest.flows, &recent_turns, entry.manifest.clone_source.is_some()).await {
+                Some(flow) => {
+                    let flow_name = flow.name.clone();
+                    let flow_body = flow.body.clone();
+                    let flow_max_iter = flow.max_iterations;
+                    let elevate = flow.elevates();
+                    let flow_warnings = self.inject_flow_tools(
+                        tools,
+                        &flow,
+                        entry.manifest.max_tool_level,
+                        elevate,
+                        entry.manifest.cli_exec.clone().unwrap_or_default(),
+                    );
 
-                        info!(
-                            agent = %entry.name,
-                            flow = %flow_name,
-                            elevate,
-                            is_system_shared = flow.is_system_shared,
-                            "Flow classified by LLM"
-                        );
+                    info!(
+                        agent = %entry.name,
+                        flow = %flow_name,
+                        elevate,
+                        is_system_shared = flow.is_system_shared,
+                        "Flow classified by LLM"
+                    );
 
-                        let mut flow_prompt = format!("**{}**\n{}", flow_name, flow_body);
-                        if !flow_warnings.is_empty() {
-                            flow_prompt.push_str(&format!("\n\n⚠️ **Flow Tool Warnings:**\n{}", flow_warnings.iter().map(|w| format!("- {}", w)).collect::<Vec<_>>().join("\n")));
-                        }
-
-                        // The flow body is injected into the base system prompt for
-                        // BOTH single- and multi-step flows. Multi-step execution
-                        // (run_flow) receives this base prompt and adds per-step
-                        // directives on top; the streaming path falls back to
-                        // guided single-step execution if run_flow isn't wired there.
-                        (
-                            Some(flow_prompt),
-                            flow_max_iter,
-                            Some(flow),
-                        )
+                    let mut flow_prompt = format!("**{}**\n{}", flow_name, flow_body);
+                    if !flow_warnings.is_empty() {
+                        flow_prompt.push_str(&format!("\n\n⚠️ **Flow Tool Warnings:**\n{}", flow_warnings.iter().map(|w| format!("- {}", w)).collect::<Vec<_>>().join("\n")));
                     }
-                    None => {
-                        warn!(agent = %entry.name, "Flow classifier returned no match — proceeding without flow prompt");
-                        (None, None, None)
-                    }
+
+                    // The flow body is injected into the base system prompt for
+                    // BOTH single- and multi-step flows. Multi-step execution
+                    // (run_flow) receives this base prompt and adds per-step
+                    // directives on top; the streaming path falls back to
+                    // guided single-step execution if run_flow isn't wired there.
+                    (
+                        Some(flow_prompt),
+                        flow_max_iter,
+                        Some(flow),
+                    )
                 }
-            } else {
-                (None, None, None)
-            };
-
-        // Expose a system-shared flow's bundled scripts/ (deterministic
-        // validators/helpers) into the turn cwd as .flows/<name>, so the agent
-        // can invoke them via workspace-relative shell_allow patterns.
-        if let Some(ref flow) = matched_flow {
-            Self::expose_flow_scripts(
-                &types::config::home_dir(),
-                flow,
-                &agent_name,
-                sender_id,
-                owner_id,
-                entry.manifest.workspace.as_deref(),
-            );
+                None => {
+                    warn!(agent = %entry.name, "Flow classifier returned no match — proceeding without flow prompt");
+                    (None, None, None)
+                }
+            }
+        } else {
+            (None, None, None)
         }
+    }
 
+    /// Auto-match a subagent trigger (only when no flow matched) and resolve the
+    /// subagent config from channel_type ("subagent:<name>"). Returns
+    /// (auto_matched_subagent_name, subagent_config).
+    fn resolve_subagent(
+        message: &str,
+        subagents: &[SubagentConfig],
+        channel_type: &Option<String>,
+        auto_matched_flow: &Option<String>,
+        agent_name: &str,
+    ) -> (Option<String>, Option<SubagentConfig>) {
         // Auto-match subagent trigger (only when no flow matched)
-        let auto_matched_subagent = if auto_matched_flow.is_none() && !entry.manifest.subagents.is_empty() {
-            if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, &entry.manifest.subagents) {
+        let auto_matched_subagent = if auto_matched_flow.is_none() && !subagents.is_empty() {
+            if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, subagents) {
                 info!(
-                    agent = %entry.name,
+                    agent = %agent_name,
                     subagent = %sa_match.name,
                     "Subagent trigger matched"
                 );
@@ -599,7 +720,7 @@ impl CarrierKernel {
         // Subagent delegation from channel_type
         let subagent_config = if let Some(ref ct) = channel_type {
             if let Some(sa_name) = ct.strip_prefix("subagent:") {
-                entry.manifest.subagents.iter().find(|s| s.name == sa_name).cloned()
+                subagents.iter().find(|s| s.name == sa_name).cloned()
             } else {
                 None
             }
@@ -607,106 +728,93 @@ impl CarrierKernel {
             None
         };
 
-        let driver = self.resolve_driver(&entry.manifest)?;
-        let ctx_window: Option<usize> = None;
+        (auto_matched_subagent, subagent_config)
+    }
 
-        let mut manifest = entry.manifest.clone();
-
-        // Flow turn elevation (shared system OR private skill with shell_allow):
-        // raise max_tool_level and stamp elevated tool names + shell_allow for tool_runner.
-        // Also enforce deny_tools: strip from LLM tool list for this turn.
-        if let Some(ref flow) = matched_flow {
-            if !flow.flow_def.deny_tools.is_empty() {
-                let before = tools.len();
-                tools.retain(|t| {
-                    !flow
-                        .flow_def
-                        .deny_tools
-                        .iter()
-                        .any(|d| d == &t.name || t.name.ends_with(&format!("__{d}")))
-                });
-                manifest.metadata.insert(
-                    types::flow::META_FLOW_DENY_TOOLS.to_string(),
-                    serde_json::json!(flow.flow_def.deny_tools),
-                );
+    /// Apply flow turn elevation: enforce deny_tools (strip from the LLM tool
+    /// list for this turn), and for elevating flows raise max_tool_level and
+    /// stamp elevated tool names + shell_allow into manifest metadata.
+    fn apply_flow_elevation(
+        tools: &mut Vec<types::tool::ToolDefinition>,
+        manifest: &mut AgentManifest,
+        flow: &crate::prompt_sources::FlowMatch,
+        agent_name: &str,
+    ) {
+        if !flow.flow_def.deny_tools.is_empty() {
+            let before = tools.len();
+            tools.retain(|t| {
+                !flow
+                    .flow_def
+                    .deny_tools
+                    .iter()
+                    .any(|d| d == &t.name || t.name.ends_with(&format!("__{d}")))
+            });
+            manifest.metadata.insert(
+                types::flow::META_FLOW_DENY_TOOLS.to_string(),
+                serde_json::json!(flow.flow_def.deny_tools),
+            );
+            info!(
+                agent = %agent_name,
+                flow = %flow.name,
+                denied = ?flow.flow_def.deny_tools,
+                removed = before.saturating_sub(tools.len()),
+                "Flow deny_tools applied for this turn"
+            );
+        }
+        if flow.elevates() {
+            let required = flow.flow_def.required_max_tool_level();
+            if required > manifest.max_tool_level {
                 info!(
-                    agent = %entry.name,
+                    agent = %agent_name,
                     flow = %flow.name,
-                    denied = ?flow.flow_def.deny_tools,
-                    removed = before.saturating_sub(tools.len()),
-                    "Flow deny_tools applied for this turn"
+                    is_system_shared = flow.is_system_shared,
+                    from = ?manifest.max_tool_level,
+                    to = ?required,
+                    "Flow elevates max_tool_level for this turn"
                 );
+                manifest.max_tool_level = required;
             }
-            if flow.elevates() {
-                let required = flow.flow_def.required_max_tool_level();
-                if required > manifest.max_tool_level {
-                    info!(
-                        agent = %entry.name,
-                        flow = %flow.name,
-                        is_system_shared = flow.is_system_shared,
-                        from = ?manifest.max_tool_level,
-                        to = ?required,
-                        "Flow elevates max_tool_level for this turn"
-                    );
-                    manifest.max_tool_level = required;
-                }
+            manifest.metadata.insert(
+                types::flow::META_FLOW_ELEVATED_TOOLS.to_string(),
+                serde_json::json!(flow.tools),
+            );
+            if !flow.flow_def.shell_allow.is_empty() {
                 manifest.metadata.insert(
-                    types::flow::META_FLOW_ELEVATED_TOOLS.to_string(),
-                    serde_json::json!(flow.tools),
+                    types::flow::META_FLOW_SHELL_ALLOW.to_string(),
+                    serde_json::json!(flow.flow_def.shell_allow),
                 );
-                if !flow.flow_def.shell_allow.is_empty() {
-                    manifest.metadata.insert(
-                        types::flow::META_FLOW_SHELL_ALLOW.to_string(),
-                        serde_json::json!(flow.flow_def.shell_allow),
-                    );
-                }
             }
         }
+    }
 
+    /// Apply max_iterations overrides: flow first, then subagent (subagent wins).
+    fn apply_manifest_overrides(
+        manifest: &mut AgentManifest,
+        flow_max_iterations: Option<u32>,
+        subagent_config: Option<&SubagentConfig>,
+        agent_name: &str,
+    ) {
         // Apply flow's max_iterations override
         if let Some(max_iter) = flow_max_iterations {
             manifest.autonomous.get_or_insert_with(Default::default).max_iterations = max_iter;
             info!(
-                agent = %entry.name,
+                agent = %agent_name,
                 max_iterations = max_iter,
                 "Flow overrides max_iterations"
             );
         }
 
         // Apply subagent's max_iterations override
-        if let Some(ref sa) = subagent_config {
+        if let Some(sa) = subagent_config {
             manifest.autonomous.get_or_insert_with(Default::default).max_iterations = sa.max_iterations;
             manifest.metadata.insert("is_subagent".to_string(), serde_json::json!(true));
             info!(
-                agent = %entry.name,
+                agent = %agent_name,
                 subagent = %sa.name,
                 max_iterations = sa.max_iterations,
                 "Subagent overrides max_iterations"
             );
         }
-
-        // Combine flow and subagent auto-match for prompt injection
-        let prompt_auto_match = auto_matched_flow.or_else(|| {
-            auto_matched_subagent.map(|name| format!("**Auto-delegation: {}**\nThe user message matches the '{}' subagent. Call delegate_{} to handle this task.", name, name, name))
-        });
-
-        // L0 turn summaries from session
-        let turn_summaries = session.turn_summaries.clone();
-
-        // Drawer entries from kv memory
-        let drawer_entries = self.prefetch_drawer_entries(&manifest.name, owner_id.as_deref().unwrap_or(sender_id.as_deref().unwrap_or("")));
-
-        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, sender_id, sender_name, owner_id, prompt_auto_match.clone(), turn_summaries, drawer_entries, task_id.map(|s| s.to_string()));
-
-        Ok(PreparedContext {
-            session,
-            needs_compact,
-            tools,
-            manifest,
-            driver,
-            ctx_window,
-            flow: matched_flow,
-        })
     }
 
     /// Send a message to an agent and get a response.
