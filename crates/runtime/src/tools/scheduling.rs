@@ -6,6 +6,7 @@ use crate::kernel_handle::KernelHandle;
 use crate::memory_handle::MemoryHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
@@ -17,7 +18,7 @@ const SCHEDULES_KEY: &str = "__carrier_schedules";
 // ---------------------------------------------------------------------------
 
 /// Parse a natural language schedule into a cron expression.
-fn parse_schedule_to_cron(input: &str) -> Result<String, String> {
+fn parse_schedule_to_cron(input: &str) -> CarrierResult<String> {
     let input = input.trim().to_lowercase();
 
     // If it already looks like a cron expression (5 space-separated fields), pass through
@@ -39,9 +40,11 @@ fn parse_schedule_to_cron(input: &str) -> Result<String, String> {
             let n: u32 = mins
                 .trim()
                 .parse()
-                .map_err(|_| format!("Invalid number in '{input}'"))?;
+                .map_err(|_| CarrierError::InvalidInput(format!("Invalid number in '{input}'")))?;
             if n == 0 || n > 59 {
-                return Err(format!("Minutes must be 1-59, got {n}"));
+                return Err(CarrierError::InvalidInput(format!(
+                    "Minutes must be 1-59, got {n}"
+                )));
             }
             return Ok(format!("*/{n} * * * *"));
         }
@@ -52,9 +55,11 @@ fn parse_schedule_to_cron(input: &str) -> Result<String, String> {
             let n: u32 = hrs
                 .trim()
                 .parse()
-                .map_err(|_| format!("Invalid number in '{input}'"))?;
+                .map_err(|_| CarrierError::InvalidInput(format!("Invalid number in '{input}'")))?;
             if n == 0 || n > 23 {
-                return Err(format!("Hours must be 1-23, got {n}"));
+                return Err(CarrierError::InvalidInput(format!(
+                    "Hours must be 1-23, got {n}"
+                )));
             }
             return Ok(format!("0 */{n} * * *"));
         }
@@ -93,46 +98,61 @@ fn parse_schedule_to_cron(input: &str) -> Result<String, String> {
         _ => {}
     }
 
-    Err(format!(
+    Err(CarrierError::InvalidInput(format!(
         "Could not parse schedule '{input}'. Try: 'every 5 minutes', 'daily at 9am', 'weekdays at 6pm', or a cron expression like '0 */5 * * *'"
-    ))
+    )))
 }
 
 /// Parse a time string like "9am", "6pm", "14:00", "9:30am" into an hour (0-23).
-fn parse_time_to_hour(s: &str) -> Result<u32, String> {
+fn parse_time_to_hour(s: &str) -> CarrierResult<u32> {
     let s = s.trim().to_lowercase();
 
     // Handle "9am", "6pm", "12pm", "12am"
     if let Some(h) = s.strip_suffix("am") {
-        let hour: u32 = h.trim().parse().map_err(|_| format!("Invalid time: {s}"))?;
+        let hour: u32 = h
+            .trim()
+            .parse()
+            .map_err(|_| CarrierError::InvalidInput(format!("Invalid time: {s}")))?;
         return match hour {
             12 => Ok(0),
             1..=11 => Ok(hour),
-            _ => Err(format!("Invalid hour: {hour}")),
+            _ => Err(CarrierError::InvalidInput(format!("Invalid hour: {hour}"))),
         };
     }
     if let Some(h) = s.strip_suffix("pm") {
-        let hour: u32 = h.trim().parse().map_err(|_| format!("Invalid time: {s}"))?;
+        let hour: u32 = h
+            .trim()
+            .parse()
+            .map_err(|_| CarrierError::InvalidInput(format!("Invalid time: {s}")))?;
         return match hour {
             12 => Ok(12),
             1..=11 => Ok(hour + 12),
-            _ => Err(format!("Invalid hour: {hour}")),
+            _ => Err(CarrierError::InvalidInput(format!("Invalid hour: {hour}"))),
         };
     }
 
     // Handle "14:00" or "9:30"
     if let Some((h, _m)) = s.split_once(':') {
-        let hour: u32 = h.trim().parse().map_err(|_| format!("Invalid time: {s}"))?;
+        let hour: u32 = h
+            .trim()
+            .parse()
+            .map_err(|_| CarrierError::InvalidInput(format!("Invalid time: {s}")))?;
         if hour > 23 {
-            return Err(format!("Hour must be 0-23, got {hour}"));
+            return Err(CarrierError::InvalidInput(format!(
+                "Hour must be 0-23, got {hour}"
+            )));
         }
         return Ok(hour);
     }
 
     // Plain number
-    let hour: u32 = s.parse().map_err(|_| format!("Invalid time: {s}"))?;
+    let hour: u32 = s
+        .parse()
+        .map_err(|_| CarrierError::InvalidInput(format!("Invalid time: {s}")))?;
     if hour > 23 {
-        return Err(format!("Hour must be 0-23, got {hour}"));
+        return Err(CarrierError::InvalidInput(format!(
+            "Hour must be 0-23, got {hour}"
+        )));
     }
     Ok(hour)
 }
@@ -145,15 +165,23 @@ async fn tool_schedule_create(
     input: &serde_json::Value,
     memory: Option<&Arc<dyn MemoryHandle>>,
     caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let mem = memory.ok_or("schedule_create requires memory access")?;
-    let aid = caller_agent_id.ok_or("No agent context for schedule_create")?;
+) -> CarrierResult<String> {
+    let mem = memory.ok_or(CarrierError::Internal(
+        "schedule_create requires memory access".to_string(),
+    ))?;
+    let aid = caller_agent_id.ok_or(CarrierError::Internal(
+        "No agent context for schedule_create".to_string(),
+    ))?;
     let description = input["description"]
         .as_str()
-        .ok_or("Missing 'description' parameter")?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'description' parameter".to_string(),
+        ))?;
     let schedule_str = input["schedule"]
         .as_str()
-        .ok_or("Missing 'schedule' parameter")?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'schedule' parameter".to_string(),
+        ))?;
     let agent = input["agent"].as_str().unwrap_or("");
 
     let cron_expr = parse_schedule_to_cron(schedule_str)?;
@@ -170,13 +198,13 @@ async fn tool_schedule_create(
     });
 
     // Load existing schedules from agent's memory
-    let mut schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY).map_err(|e| e.to_string())? {
+    let mut schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
 
     schedules.push(entry);
-    mem.kv_set(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules)).map_err(|e| e.to_string())?;
+    mem.kv_set(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
 
     Ok(format!(
         "Schedule created:\n  ID: {schedule_id}\n  Description: {description}\n  Cron: {cron_expr}\n  Original: {schedule_str}"
@@ -186,11 +214,15 @@ async fn tool_schedule_create(
 async fn tool_schedule_list(
     memory: Option<&Arc<dyn MemoryHandle>>,
     caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let mem = memory.ok_or("schedule_list requires memory access")?;
-    let aid = caller_agent_id.ok_or("No agent context for schedule_list")?;
+) -> CarrierResult<String> {
+    let mem = memory.ok_or(CarrierError::Internal(
+        "schedule_list requires memory access".to_string(),
+    ))?;
+    let aid = caller_agent_id.ok_or(CarrierError::Internal(
+        "No agent context for schedule_list".to_string(),
+    ))?;
 
-    let schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY).map_err(|e| e.to_string())? {
+    let schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -220,12 +252,18 @@ async fn tool_schedule_delete(
     input: &serde_json::Value,
     memory: Option<&Arc<dyn MemoryHandle>>,
     caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let mem = memory.ok_or("schedule_delete requires memory access")?;
-    let aid = caller_agent_id.ok_or("No agent context for schedule_delete")?;
-    let id = input["id"].as_str().ok_or("Missing 'id' parameter")?;
+) -> CarrierResult<String> {
+    let mem = memory.ok_or(CarrierError::Internal(
+        "schedule_delete requires memory access".to_string(),
+    ))?;
+    let aid = caller_agent_id.ok_or(CarrierError::Internal(
+        "No agent context for schedule_delete".to_string(),
+    ))?;
+    let id = input["id"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput("Missing 'id' parameter".to_string()))?;
 
-    let mut schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY).map_err(|e| e.to_string())? {
+    let mut schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -234,10 +272,12 @@ async fn tool_schedule_delete(
     schedules.retain(|s| s["id"].as_str() != Some(id));
 
     if schedules.len() == before {
-        return Err(format!("Schedule '{id}' not found."));
+        return Err(CarrierError::InvalidInput(format!(
+            "Schedule '{id}' not found."
+        )));
     }
 
-    mem.kv_set(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules)).map_err(|e| e.to_string())?;
+    mem.kv_set(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
     Ok(format!("Schedule '{id}' deleted."))
 }
 
@@ -251,22 +291,27 @@ async fn tool_cron_create(
     caller_agent_id: Option<&str>,
     owner_id: Option<&str>,
     sender_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
-    let agent_id = caller_agent_id.ok_or("Agent ID required for cron_create")?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
+        "Agent ID required for cron_create".to_string(),
+    ))?;
     tracing::debug!(agent_id, ?input, "cron_create called");
-    kh.cron_create(agent_id, owner_id, sender_id, input.clone()).await.map_err(|e| e.to_string())
+    kh.cron_create(agent_id, owner_id, sender_id, input.clone()).await
 }
 
 async fn tool_cron_list(
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
     owner_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
-    let agent_id = caller_agent_id.ok_or("Agent ID required for cron_list")?;
-    let jobs = kh.cron_list(agent_id, owner_id).await.map_err(|e| e.to_string())?;
-    serde_json::to_string_pretty(&jobs).map_err(|e| format!("Failed to serialize cron jobs: {e}"))
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
+        "Agent ID required for cron_list".to_string(),
+    ))?;
+    let jobs = kh.cron_list(agent_id, owner_id).await?;
+    serde_json::to_string_pretty(&jobs)
+        .map_err(|e| CarrierError::Serialization(format!("Failed to serialize cron jobs: {e}")))
 }
 
 async fn tool_cron_cancel(
@@ -274,21 +319,27 @@ async fn tool_cron_cancel(
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
     owner_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
-    let agent_id = caller_agent_id.ok_or("Agent ID required for cron_cancel")?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
+        "Agent ID required for cron_cancel".to_string(),
+    ))?;
     let job_id = input["job_id"]
         .as_str()
-        .ok_or("Missing 'job_id' parameter")?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'job_id' parameter".to_string(),
+        ))?;
     // Ownership check: verify this job belongs to the caller
-    let jobs = kh.cron_list(agent_id, owner_id).await.map_err(|e| e.to_string())?;
+    let jobs = kh.cron_list(agent_id, owner_id).await?;
     let owned = jobs
         .iter()
         .any(|j| j.get("id").and_then(|v| v.as_str()) == Some(job_id));
     if !owned {
-        return Err("Cron job not found or does not belong to you".to_string());
+        return Err(CarrierError::InvalidInput(
+            "Cron job not found or does not belong to you".to_string(),
+        ));
     }
-    kh.cron_cancel(job_id).await.map_err(|e| e.to_string())?;
+    kh.cron_cancel(job_id).await?;
     Ok(format!("Cron job '{job_id}' cancelled."))
 }
 
@@ -397,14 +448,14 @@ impl ToolModule for SchedulingTools {
 
         match name {
             // Scheduling tools
-            "schedule_create" => Some(tool_schedule_create(input, memory, caller_agent_id).await),
-            "schedule_list" => Some(tool_schedule_list(memory, caller_agent_id).await),
-            "schedule_delete" => Some(tool_schedule_delete(input, memory, caller_agent_id).await),
+            "schedule_create" => Some(tool_schedule_create(input, memory, caller_agent_id).await.map_err(|e| e.to_string())),
+            "schedule_list" => Some(tool_schedule_list(memory, caller_agent_id).await.map_err(|e| e.to_string())),
+            "schedule_delete" => Some(tool_schedule_delete(input, memory, caller_agent_id).await.map_err(|e| e.to_string())),
 
             // Cron scheduling tools
-            "cron_create" => Some(tool_cron_create(input, kernel, caller_agent_id, owner_id, sender_id).await),
-            "cron_list" => Some(tool_cron_list(kernel, caller_agent_id, owner_id).await),
-            "cron_cancel" => Some(tool_cron_cancel(input, kernel, caller_agent_id, owner_id).await),
+            "cron_create" => Some(tool_cron_create(input, kernel, caller_agent_id, owner_id, sender_id).await.map_err(|e| e.to_string())),
+            "cron_list" => Some(tool_cron_list(kernel, caller_agent_id, owner_id).await.map_err(|e| e.to_string())),
+            "cron_cancel" => Some(tool_cron_cancel(input, kernel, caller_agent_id, owner_id).await.map_err(|e| e.to_string())),
 
             _ => None,
         }
