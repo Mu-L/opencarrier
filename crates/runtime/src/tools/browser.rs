@@ -16,6 +16,7 @@ use super::ToolModule;
 use super::{aginxbrowser_url, AGINXBROWSER_TIMEOUT_SECS};
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 
@@ -199,14 +200,14 @@ Use browser_navigate to extract page content instead."
         _ctx: &ToolContext<'_>,
     ) -> Option<Result<String, String>> {
         match name {
-            "browser_navigate" | "browser_read_page" => Some(browser_navigate(input).await),
-            "browser_click" => Some(browser_click(input).await),
-            "browser_evaluate" => Some(browser_evaluate(input).await),
-            "browser_type" => Some(browser_type(input).await),
-            "browser_scroll" => Some(browser_scroll(input).await),
-            "browser_back" => Some(browser_back(input).await),
-            "browser_screenshot" => Some(browser_screenshot(input).await),
-            "browser_wait" => Some(browser_wait(input).await),
+            "browser_navigate" | "browser_read_page" => Some(browser_navigate(input).await.map_err(|e| e.to_string())),
+            "browser_click" => Some(browser_click(input).await.map_err(|e| e.to_string())),
+            "browser_evaluate" => Some(browser_evaluate(input).await.map_err(|e| e.to_string())),
+            "browser_type" => Some(browser_type(input).await.map_err(|e| e.to_string())),
+            "browser_scroll" => Some(browser_scroll(input).await.map_err(|e| e.to_string())),
+            "browser_back" => Some(browser_back(input).await.map_err(|e| e.to_string())),
+            "browser_screenshot" => Some(browser_screenshot(input).await.map_err(|e| e.to_string())),
+            "browser_wait" => Some(browser_wait(input).await.map_err(|e| e.to_string())),
             "browser_close" => Some(Ok("Browser session closed (AginxBrowser is stateless).".to_string())),
             _ => None,
         }
@@ -227,11 +228,11 @@ Use browser_navigate to extract page content instead."
 // ---------------------------------------------------------------------------
 
 /// Shared AginBrowser HTTP request — POST to a given path, return JSON response.
-async fn do_aginxbrowser_request(path: &str, req_body: Value) -> Result<Value, String> {
+async fn do_aginxbrowser_request(path: &str, req_body: Value) -> CarrierResult<Value> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(AGINXBROWSER_TIMEOUT_SECS))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("Failed to create HTTP client: {e}")))?;
 
     let url = format!("{}/{}", aginxbrowser_url(), path);
     let resp = client
@@ -239,31 +240,31 @@ async fn do_aginxbrowser_request(path: &str, req_body: Value) -> Result<Value, S
         .json(&req_body)
         .send()
         .await
-        .map_err(|e| format!("AginxBrowser request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("AginxBrowser request failed: {e}")))?;
 
     let status = resp.status();
     let body = resp
         .json::<Value>()
         .await
-        .map_err(|e| format!("Failed to parse AginxBrowser response: {e}"))?;
+        .map_err(|e| CarrierError::Serialization(format!("Failed to parse AginxBrowser response: {e}")))?;
 
     if !status.is_success() {
         let err = body["error"].as_str().unwrap_or("Unknown error");
-        return Err(format!("AginxBrowser error ({}): {}", status, err));
+        return Err(CarrierError::Network(format!("AginxBrowser error ({}): {}", status, err)));
     }
 
     Ok(body)
 }
 
-async fn do_fetch_request(req_body: Value) -> Result<Value, String> {
+async fn do_fetch_request(req_body: Value) -> CarrierResult<Value> {
     do_aginxbrowser_request("fetch", req_body).await
 }
 
-async fn do_click_request(req_body: Value) -> Result<Value, String> {
+async fn do_click_request(req_body: Value) -> CarrierResult<Value> {
     do_aginxbrowser_request("click", req_body).await
 }
 
-async fn do_eval_request(req_body: Value) -> Result<Value, String> {
+async fn do_eval_request(req_body: Value) -> CarrierResult<Value> {
     do_aginxbrowser_request("eval", req_body).await
 }
 
@@ -271,8 +272,8 @@ async fn do_eval_request(req_body: Value) -> Result<Value, String> {
 // Tool implementations
 // ---------------------------------------------------------------------------
 
-async fn browser_navigate(input: &Value) -> Result<String, String> {
-    let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
+async fn browser_navigate(input: &Value) -> CarrierResult<String> {
+    let url = input["url"].as_str().ok_or(CarrierError::InvalidInput("Missing 'url' parameter".to_string()))?;
     let format = input["format"].as_str().unwrap_or("markdown");
     let selector = input["selector"].as_str();
     let wait_secs = input["wait_secs"].as_u64();
@@ -305,9 +306,9 @@ async fn browser_navigate(input: &Value) -> Result<String, String> {
     Ok(result)
 }
 
-async fn browser_click(input: &Value) -> Result<String, String> {
-    let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
-    let selector = input["selector"].as_str().ok_or("Missing 'selector' parameter")?;
+async fn browser_click(input: &Value) -> CarrierResult<String> {
+    let url = input["url"].as_str().ok_or(CarrierError::InvalidInput("Missing 'url' parameter".to_string()))?;
+    let selector = input["selector"].as_str().ok_or(CarrierError::InvalidInput("Missing 'selector' parameter".to_string()))?;
     let wait_secs = input["wait_secs"].as_u64();
 
     let mut req_body = serde_json::json!({
@@ -333,9 +334,9 @@ async fn browser_click(input: &Value) -> Result<String, String> {
     Ok(result)
 }
 
-async fn browser_evaluate(input: &Value) -> Result<String, String> {
-    let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
-    let script = input["script"].as_str().ok_or("Missing 'script' parameter")?;
+async fn browser_evaluate(input: &Value) -> CarrierResult<String> {
+    let url = input["url"].as_str().ok_or(CarrierError::InvalidInput("Missing 'url' parameter".to_string()))?;
+    let script = input["script"].as_str().ok_or(CarrierError::InvalidInput("Missing 'script' parameter".to_string()))?;
     let wait_secs = input["wait_secs"].as_u64();
 
     let mut req_body = serde_json::json!({
@@ -359,10 +360,10 @@ async fn browser_evaluate(input: &Value) -> Result<String, String> {
 
 // Legacy tool emulations via browser_evaluate
 
-async fn browser_type(input: &Value) -> Result<String, String> {
-    let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
-    let selector = input["selector"].as_str().ok_or("Missing 'selector' parameter")?;
-    let text = input["text"].as_str().ok_or("Missing 'text' parameter")?;
+async fn browser_type(input: &Value) -> CarrierResult<String> {
+    let url = input["url"].as_str().ok_or(CarrierError::InvalidInput("Missing 'url' parameter".to_string()))?;
+    let selector = input["selector"].as_str().ok_or(CarrierError::InvalidInput("Missing 'selector' parameter".to_string()))?;
+    let text = input["text"].as_str().ok_or(CarrierError::InvalidInput("Missing 'text' parameter".to_string()))?;
 
     let script = format!(
         r#"(function() {{
@@ -387,14 +388,14 @@ async fn browser_type(input: &Value) -> Result<String, String> {
     let result = &resp["result"];
 
     if result.get("error").is_some() {
-        return Err(result["error"].as_str().unwrap_or("Type failed").to_string());
+        return Err(CarrierError::Internal(result["error"].as_str().unwrap_or("Type failed").to_string()));
     }
 
     Ok(format!("Typed '{}' into '{}'. Result: {}", text, selector, result))
 }
 
-async fn browser_scroll(input: &Value) -> Result<String, String> {
-    let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
+async fn browser_scroll(input: &Value) -> CarrierResult<String> {
+    let url = input["url"].as_str().ok_or(CarrierError::InvalidInput("Missing 'url' parameter".to_string()))?;
     let direction = input["direction"].as_str().unwrap_or("down");
     let amount = input["amount"].as_u64().unwrap_or(500);
 
@@ -420,19 +421,19 @@ async fn browser_scroll(input: &Value) -> Result<String, String> {
     Ok(format!("Scrolled {} by {}px. Result: {}", direction, amount, result))
 }
 
-async fn browser_back(_input: &Value) -> Result<String, String> {
+async fn browser_back(_input: &Value) -> CarrierResult<String> {
     Ok("browser_back: AginxBrowser is stateless and does not maintain navigation history. \
 Use browser_navigate with the target URL instead.".to_string())
 }
 
-async fn browser_screenshot(_input: &Value) -> Result<String, String> {
-    Err("Screenshots are not supported by AginxBrowser. \
+async fn browser_screenshot(_input: &Value) -> CarrierResult<String> {
+    Err(CarrierError::InvalidInput("Screenshots are not supported by AginxBrowser. \
 AginxBrowser uses a lightweight engine without a layout/paint renderer. \
-Use browser_navigate to extract page content as text/markdown instead.".to_string())
+Use browser_navigate to extract page content as text/markdown instead.".to_string()))
 }
 
-async fn browser_wait(input: &Value) -> Result<String, String> {
-    let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
+async fn browser_wait(input: &Value) -> CarrierResult<String> {
+    let url = input["url"].as_str().ok_or(CarrierError::InvalidInput("Missing 'url' parameter".to_string()))?;
     let selector = input["selector"].as_str();
     let timeout_ms = input["timeout_ms"].as_u64().unwrap_or(5000);
 
