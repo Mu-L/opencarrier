@@ -4,6 +4,7 @@ use super::ToolModule;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
@@ -13,52 +14,62 @@ use std::sync::Arc;
 // ---------------------------------------------------------------------------
 
 /// Discover an external A2A agent by fetching its agent card.
-async fn tool_a2a_discover(input: &serde_json::Value) -> Result<String, String> {
-    let url = input["url"].as_str().ok_or("Missing 'url' parameter")?;
+async fn tool_a2a_discover(input: &serde_json::Value) -> CarrierResult<String> {
+    let url = input["url"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput("Missing 'url' parameter".to_string()))?;
 
     // SSRF protection: block private/metadata IPs
     if types::ssrf::check_ssrf(url).is_err() {
-        return Err("SSRF blocked: URL resolves to a private or metadata address".to_string());
+        return Err(CarrierError::InvalidInput(
+            "SSRF blocked: URL resolves to a private or metadata address".to_string(),
+        ));
     }
 
     let client = crate::a2a::A2aClient::new();
-    let card = client.discover(url).await.map_err(|e| e.to_string())?;
+    let card = client.discover(url).await?;
 
-    serde_json::to_string_pretty(&card).map_err(|e| format!("Serialization error: {e}"))
+    serde_json::to_string_pretty(&card)
+        .map_err(|e| CarrierError::Serialization(format!("Serialization error: {e}")))
 }
 
 /// Send a task to an external A2A agent.
 async fn tool_a2a_send(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(|e| e.to_string())?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel)?;
     let message = input["message"]
         .as_str()
-        .ok_or("Missing 'message' parameter")?;
+        .ok_or(CarrierError::InvalidInput("Missing 'message' parameter".to_string()))?;
 
     // Resolve agent URL: either directly provided or looked up by name
     let url = if let Some(url) = input["agent_url"].as_str() {
         // SSRF protection
         if types::ssrf::check_ssrf(url).is_err() {
-            return Err("SSRF blocked: URL resolves to a private or metadata address".to_string());
+            return Err(CarrierError::InvalidInput(
+                "SSRF blocked: URL resolves to a private or metadata address".to_string(),
+            ));
         }
         url.to_string()
     } else if let Some(name) = input["agent_name"].as_str() {
-        kh.get_a2a_agent_url(name)
-            .ok_or_else(|| format!("No known A2A agent with name '{name}'. Use a2a_discover first or provide agent_url directly."))?
+        kh.get_a2a_agent_url(name).ok_or(CarrierError::InvalidInput(format!(
+            "No known A2A agent with name '{name}'. Use a2a_discover first or provide agent_url directly."
+        )))?
     } else {
-        return Err("Missing 'agent_url' or 'agent_name' parameter".to_string());
+        return Err(CarrierError::InvalidInput(
+            "Missing 'agent_url' or 'agent_name' parameter".to_string(),
+        ));
     };
 
     let session_id = input["session_id"].as_str();
     let client = crate::a2a::A2aClient::new();
     let task = client
         .send_task(&url, message, session_id)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
-    serde_json::to_string_pretty(&task).map_err(|e| format!("Serialization error: {e}"))
+    serde_json::to_string_pretty(&task)
+        .map_err(|e| CarrierError::Serialization(format!("Serialization error: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -109,8 +120,8 @@ impl ToolModule for A2aTools {
         let kernel = ctx.kernel;
 
         match name {
-            "a2a_discover" => Some(tool_a2a_discover(input).await),
-            "a2a_send" => Some(tool_a2a_send(input, kernel).await),
+            "a2a_discover" => Some(tool_a2a_discover(input).await.map_err(|e| e.to_string())),
+            "a2a_send" => Some(tool_a2a_send(input, kernel).await.map_err(|e| e.to_string())),
             _ => None,
         }
     }

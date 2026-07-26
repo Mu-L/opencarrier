@@ -3,6 +3,7 @@
 use super::ToolModule;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::ToolDefinition;
 use serde_json::Value;
 
@@ -34,7 +35,7 @@ impl ToolModule for MiscTools {
         _ctx: &ToolContext<'_>,
     ) -> Option<Result<String, String>> {
         match name {
-            "location_get" => Some(location_get().await),
+            "location_get" => Some(location_get().await.map_err(|e| e.to_string())),
             "system_time" => Some(Ok(system_time())),
             _ => None,
         }
@@ -48,27 +49,27 @@ impl ToolModule for MiscTools {
     }
 }
 
-async fn location_get() -> Result<String, String> {
+async fn location_get() -> CarrierResult<String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("Failed to create HTTP client: {e}")))?;
     let resp = client
         .get("https://ip-api.com/json/?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,query")
         .header("User-Agent", format!("OpenCarrier/{}", env!("CARGO_PKG_VERSION")))
         .send()
         .await
-        .map_err(|e| format!("Location request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("Location request failed: {e}")))?;
     if !resp.status().is_success() {
-        return Err(format!("Location API returned {}", resp.status()));
+        return Err(CarrierError::Network(format!("Location API returned {}", resp.status())));
     }
     let body: serde_json::Value = resp
         .json()
         .await
-        .map_err(|e| format!("Failed to parse location response: {e}"))?;
+        .map_err(|e| CarrierError::Serialization(format!("Failed to parse location response: {e}")))?;
     if body["status"].as_str() != Some("success") {
         let msg = body["message"].as_str().unwrap_or("Unknown error");
-        return Err(format!("Location lookup failed: {msg}"));
+        return Err(CarrierError::Network(format!("Location lookup failed: {msg}")));
     }
     let result = serde_json::json!({
         "lat": body["lat"],
@@ -81,7 +82,7 @@ async fn location_get() -> Result<String, String> {
         "isp": body["isp"],
         "ip": body["query"],
     });
-    serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
+    serde_json::to_string_pretty(&result).map_err(|e| CarrierError::Serialization(format!("Serialize error: {e}")))
 }
 
 fn system_time() -> String {

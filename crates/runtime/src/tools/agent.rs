@@ -9,6 +9,7 @@ use super::ToolModule;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::ToolDefinition;
 use serde_json::Value;
 use std::path::Path;
@@ -24,12 +25,14 @@ async fn tool_user_profile(
     agent_name: Option<&str>,
     owner_id: Option<&str>,
     sender_id: Option<&str>,
-) -> Result<String, String> {
-    let sender = sender_id.ok_or("user_profile requires a sender context (sender_id). This tool is only available when a user identity is provided.")?;
-    let hd = home_dir.ok_or("user_profile requires home_dir")?;
-    let an = agent_name.ok_or("user_profile requires agent_name")?;
-    let oid = crate::tools::sanitize_path_component(owner_id.unwrap_or(sender)).map_err(|e| e.to_string())?;
-    let sender = crate::tools::sanitize_path_component(sender).map_err(|e| e.to_string())?;
+) -> CarrierResult<String> {
+    let sender = sender_id.ok_or(CarrierError::Internal(
+        "user_profile requires a sender context (sender_id). This tool is only available when a user identity is provided.".to_string(),
+    ))?;
+    let hd = home_dir.ok_or(CarrierError::Internal("user_profile requires home_dir".to_string()))?;
+    let an = agent_name.ok_or(CarrierError::Internal("user_profile requires agent_name".to_string()))?;
+    let oid = crate::tools::sanitize_path_component(owner_id.unwrap_or(sender))?;
+    let sender = crate::tools::sanitize_path_component(sender)?;
 
     let action = input["action"].as_str().unwrap_or("read");
     let profile_path = types::config::sender_data_dir(hd, oid, an, Some(sender)).join("profile.json");
@@ -39,7 +42,7 @@ async fn tool_user_profile(
             if profile_path.exists() {
                 let content = tokio::fs::read_to_string(&profile_path)
                     .await
-                    .map_err(|e| format!("Failed to read profile: {e}"))?;
+                    .map_err(|e| CarrierError::Internal(format!("Failed to read profile: {e}")))?;
                 Ok(content)
             } else {
                 // Return empty profile template
@@ -61,7 +64,7 @@ async fn tool_user_profile(
             let mut profile: serde_json::Value = if profile_path.exists() {
                 let content = tokio::fs::read_to_string(&profile_path)
                     .await
-                    .map_err(|e| format!("Failed to read profile: {e}"))?;
+                    .map_err(|e| CarrierError::Internal(format!("Failed to read profile: {e}")))?;
                 serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
             } else {
                 serde_json::json!({
@@ -92,20 +95,19 @@ async fn tool_user_profile(
             if let Some(parent) = profile_path.parent() {
                 tokio::fs::create_dir_all(parent)
                     .await
-                    .map_err(|e| format!("Failed to create user directory: {e}"))?;
+                    .map_err(|e| CarrierError::Internal(format!("Failed to create user directory: {e}")))?;
             }
 
             let output = serde_json::to_string_pretty(&profile)
-                .map_err(|e| format!("Failed to serialize profile: {e}"))?;
+                .map_err(|e| CarrierError::Serialization(format!("Failed to serialize profile: {e}")))?;
             tokio::fs::write(&profile_path, &output)
                 .await
-                .map_err(|e| format!("Failed to write profile: {e}"))?;
+                .map_err(|e| CarrierError::Internal(format!("Failed to write profile: {e}")))?;
             Ok(format!("Profile updated for user '{}'", sender))
         }
-        _ => Err(format!(
-            "Unknown action '{}'. Use 'read' or 'update'.",
-            action
-        )),
+        other => Err(CarrierError::InvalidInput(format!(
+            "Unknown action '{other}'. Use 'read' or 'update'."
+        ))),
     }
 }
 
@@ -120,15 +122,17 @@ async fn tool_delegate_subagent(
     caller_agent_id: Option<&str>,
     owner_id: Option<&str>,
     sender_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(|e| e.to_string())?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel)?;
     let message = input["message"]
         .as_str()
-        .ok_or("Missing 'message' parameter")?;
-    let aid = caller_agent_id.ok_or("delegate_* requires caller_agent_id")?;
+        .ok_or(CarrierError::InvalidInput("Missing 'message' parameter".to_string()))?;
+    let aid = caller_agent_id.ok_or(CarrierError::Internal(
+        "delegate_* requires caller_agent_id".to_string(),
+    ))?;
 
     // Check + increment inter-agent call depth
-    crate::tools::check_call_depth().map_err(|e| e.to_string())?;
+    crate::tools::check_call_depth()?;
     let current_depth = crate::tool_runner::AGENT_CALL_DEPTH
         .try_with(|d| d.get())
         .unwrap_or(0);
@@ -147,7 +151,6 @@ async fn tool_delegate_subagent(
         .scope(std::cell::Cell::new(current_depth + 1), async {
             kh.send_to_agent(aid, message, sender_id, None, caller_agent_id, owner_id, Some(&subagent_channel))
                 .await
-                .map_err(|e| e.to_string())
         })
         .await
 }
@@ -192,14 +195,14 @@ impl ToolModule for DelegationTools {
 
         match name {
             // User profile
-            "user_profile" => Some(tool_user_profile(input, ctx.home_dir, ctx.agent_name, owner_id, sender_id).await),
+            "user_profile" => Some(tool_user_profile(input, ctx.home_dir, ctx.agent_name, owner_id, sender_id).await.map_err(|e| e.to_string())),
 
             // Subagent delegation (delegate_{name})
             name if name.starts_with("delegate_") => {
                 let subagent_name = &name["delegate_".len()..];
                 Some(tool_delegate_subagent(
                     subagent_name, input, kernel, caller_agent_id, owner_id, sender_id,
-                ).await)
+                ).await.map_err(|e| e.to_string()))
             }
 
             _ => None,

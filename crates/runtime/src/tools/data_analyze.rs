@@ -1,10 +1,13 @@
 //! Data analysis tool — clone admins can query user analytics in-chat.
 
 use super::ToolModule;
+use crate::memory_handle::MemoryHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
+use std::sync::Arc;
 
 pub struct DataAnalyzeTools;
 
@@ -55,49 +58,63 @@ impl ToolModule for DataAnalyzeTools {
             return None;
         }
 
-        if !ctx.is_clone_admin {
-            return Some(Err("data_analyze requires clone admin privileges.".to_string()));
-        }
-
         let memory = ctx.memory?;
         let agent_id = ctx.caller_agent_id?;
 
-        let query_type = input["query_type"].as_str()
-            .unwrap_or("");
-
-        let result = match query_type {
-            "user_stats" => {
-                let days = input["days"].as_u64().unwrap_or(7) as u32;
-                memory.analytics_user_stats(agent_id, days).map_err(|e| e.to_string())
-            }
-            "user_lookup" => {
-                let user_id = match input["user_id"].as_str() {
-                    Some(id) => id,
-                    None => return Some(Err("user_id is required for user_lookup".to_string())),
-                };
-                memory.analytics_user_lookup(agent_id, user_id).map_err(|e| e.to_string())
-            }
-            "usage_analytics" => {
-                let days = input["days"].as_u64().unwrap_or(7) as u32;
-                memory.analytics_usage(agent_id, days).map_err(|e| e.to_string())
-            }
-            "recent_conversations" => {
-                let limit = input["limit"].as_u64().unwrap_or(10).min(50) as u32;
-                memory.analytics_recent_conversations(agent_id, limit).map_err(|e| e.to_string())
-            }
-            other => Err(format!(
-                "Unknown query_type '{}'. Valid: user_stats, user_lookup, usage_analytics, recent_conversations",
-                other
-            )),
-        };
-
-        Some(match result {
-            Ok(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| "Query succeeded but serialization failed".to_string())),
-            Err(e) => Err(e),
-        })
+        Some(
+            run_data_analyze(input, memory, agent_id, ctx.is_clone_admin)
+                .await
+                .map_err(|e| e.to_string()),
+        )
     }
 
     fn permission_level(&self, _tool_name: &str) -> PermissionLevel {
         PermissionLevel::None
     }
+}
+
+async fn run_data_analyze(
+    input: &Value,
+    memory: &Arc<dyn MemoryHandle>,
+    agent_id: &str,
+    is_clone_admin: bool,
+) -> CarrierResult<String> {
+    if !is_clone_admin {
+        return Err(CarrierError::CapabilityDenied(
+            "data_analyze requires clone admin privileges.".to_string(),
+        ));
+    }
+
+    let query_type = input["query_type"].as_str().unwrap_or("");
+
+    let val = match query_type {
+        "user_stats" => {
+            let days = input["days"].as_u64().unwrap_or(7) as u32;
+            memory.analytics_user_stats(agent_id, days)?
+        }
+        "user_lookup" => {
+            let user_id = input["user_id"].as_str().ok_or(CarrierError::InvalidInput(
+                "user_id is required for user_lookup".to_string(),
+            ))?;
+            memory.analytics_user_lookup(agent_id, user_id)?
+        }
+        "usage_analytics" => {
+            let days = input["days"].as_u64().unwrap_or(7) as u32;
+            memory.analytics_usage(agent_id, days)?
+        }
+        "recent_conversations" => {
+            let limit = input["limit"].as_u64().unwrap_or(10).min(50) as u32;
+            memory.analytics_recent_conversations(agent_id, limit)?
+        }
+        other => {
+            return Err(CarrierError::InvalidInput(format!(
+                "Unknown query_type '{}'. Valid: user_stats, user_lookup, usage_analytics, recent_conversations",
+                other
+            )))
+        }
+    };
+
+    serde_json::to_string_pretty(&val).map_err(|e| {
+        CarrierError::Serialization(format!("Query succeeded but serialization failed: {e}"))
+    })
 }
