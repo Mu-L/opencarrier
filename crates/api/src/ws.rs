@@ -423,66 +423,10 @@ async fn handle_text_message(
 
     match msg_type {
         "message" => {
-            let raw_content = match parsed["content"].as_str() {
-                Some(c) if !c.trim().is_empty() => c.to_string(),
-                _ => {
-                    let _ = send_json(
-                        sender,
-                        &serde_json::json!({
-                            "type": "error",
-                            "content": "Missing or empty 'content' field",
-                        }),
-                    )
-                    .await;
-                    return;
-                }
-            };
-
-            // Sanitize inbound user input
-            let content = sanitize_user_input(&raw_content);
-            if content.is_empty() {
-                let _ = send_json(
-                    sender,
-                    &serde_json::json!({
-                        "type": "error",
-                        "content": "Message content is empty after sanitization",
-                    }),
-                )
-                .await;
+            // Validate + sanitize content and inject attachments (extracted).
+            let Some(content) = prepare_incoming_message(sender, state, agent_id, &parsed).await else {
                 return;
-            }
-
-            // Resolve file attachments into image content blocks
-            let mut has_images = false;
-            if let Some(attachments) = parsed["attachments"].as_array() {
-                let refs: Vec<crate::types::AttachmentRef> = attachments
-                    .iter()
-                    .filter_map(|a| serde_json::from_value(a.clone()).ok())
-                    .collect();
-                if !refs.is_empty() {
-                    let image_blocks = crate::routes::resolve_attachments(&refs);
-                    if !image_blocks.is_empty() {
-                        has_images = true;
-                        crate::routes::inject_attachments_into_session(
-                            &state.kernel,
-                            agent_id,
-                            image_blocks,
-                        );
-                    }
-                }
-            }
-
-            // Warn if the model doesn't support vision but images were attached
-            if has_images {
-                let model_name = state
-                    .kernel
-                    .registry
-                    .get(agent_id)
-                    .map(|e| e.manifest.model.modality.clone())
-                    .unwrap_or_default();
-                // Allow vision by default — most modern models support it
-                let _ = model_name; // used for informational purposes only
-            }
+            };
 
             // Send typing lifecycle: start
             let _ = send_json(
@@ -511,7 +455,7 @@ async fn handle_text_message(
                 None,
                 None,
             ).await {
-                Ok((mut rx, handle)) => {
+                Ok((rx, handle)) => {
                     // Forward stream events to WebSocket with debouncing.
                     //
                     // The stream_task also accumulates the full response text and
@@ -520,143 +464,11 @@ async fn handle_text_message(
                     // (after `drop(phase_cb)` in the kernel), WITHOUT waiting for
                     // post-processing (canonical session writes, JSONL, compaction)
                     // that happens in the kernel task after the loop.
-                    let sender_stream = Arc::clone(sender);
-                    let verbose_clone = Arc::clone(verbose);
-                    let stream_task = tokio::spawn(async move {
-                        let mut text_buffer = String::new();
-                        let mut accumulated_text = String::new();
-                        let mut accumulated_thinking = String::new();
-                        let mut stream_usage: Option<types::message::TokenUsage> = None;
-                        let mut is_silent = false;
-                        let far_future = tokio::time::Instant::now() + Duration::from_secs(86400);
-                        let mut flush_deadline = far_future;
-
-                        loop {
-                            let sleep = tokio::time::sleep_until(flush_deadline);
-                            tokio::pin!(sleep);
-
-                            tokio::select! {
-                                event = rx.recv() => {
-                                    let vlevel = VerboseLevel::from_u8(
-                                        verbose_clone.load(Ordering::Relaxed),
-                                    );
-                                    match event {
-                                        None => {
-                                            // Stream ended — flush remaining text
-                                            let _ = flush_text_buffer(
-                                                &sender_stream,
-                                                &mut text_buffer,
-                                            )
-                                            .await;
-                                            break;
-                                        }
-                                        Some(ev) => {
-                                            // DEBUG: log every stream event for GLM troubleshooting
-                                            tracing::debug!("[ws-stream] event: {:?}", ev);
-
-                                            // Capture ContentComplete for immediate response
-                                            if let StreamEvent::ContentComplete { usage, .. } = &ev {
-                                                stream_usage = Some(*usage);
-                                                tracing::debug!("[ws-stream] ContentComplete usage: {:?}", usage);
-                                                // Don't forward — handled below
-                                                continue;
-                                            }
-
-                                            if let StreamEvent::TextDelta { ref text } = ev {
-                                                accumulated_text.push_str(text);
-                                                text_buffer.push_str(text);
-                                                if text_buffer.len() >= DEBOUNCE_CHARS {
-                                                    let _ = flush_text_buffer(
-                                                        &sender_stream,
-                                                        &mut text_buffer,
-                                                    )
-                                                    .await;
-                                                    flush_deadline = far_future;
-                                                } else if flush_deadline >= far_future {
-                                                    flush_deadline =
-                                                        tokio::time::Instant::now()
-                                                            + Duration::from_millis(DEBOUNCE_MS);
-                                                }
-                                            } else if let StreamEvent::ThinkingDelta { ref text } = ev {
-                                                accumulated_thinking.push_str(text);
-                                            } else {
-                                                // Flush pending text before non-text events
-                                                let _ = flush_text_buffer(
-                                                    &sender_stream,
-                                                    &mut text_buffer,
-                                                )
-                                                .await;
-                                                flush_deadline = far_future;
-
-                                                // Send typing indicator for tool events
-                                                if let StreamEvent::ToolUseStart {
-                                                    ref name, ..
-                                                } = ev
-                                                {
-                                                    let _ = send_json(
-                                                        &sender_stream,
-                                                        &serde_json::json!({
-                                                            "type": "typing",
-                                                            "state": "tool",
-                                                            "tool": name,
-                                                        }),
-                                                    )
-                                                    .await;
-                                                }
-
-                                                // Map event to JSON with verbose filtering
-                                                if let Some(json) =
-                                                    map_stream_event(&ev, vlevel)
-                                                {
-                                                    if send_json(&sender_stream, &json)
-                                                        .await
-                                                        .is_err()
-                                                    {
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                _ = &mut sleep => {
-                                    // Timer fired — flush text buffer
-                                    let _ = flush_text_buffer(
-                                        &sender_stream,
-                                        &mut text_buffer,
-                                    )
-                                    .await;
-                                    flush_deadline = far_future;
-                                }
-                            }
-                        }
-
-                        // Check if the agent signalled NO_REPLY via the stream
-                        // (PhaseChange with a "silent" marker — currently the
-                        // kernel sets result.silent after the loop, so we detect
-                        // If model sent only thinking (no text), use thinking as response
-                        // Some providers (e.g. GLM via Anthropic compat) send all content
-                        // as thinking blocks with no text block.
-                        tracing::debug!("[ws-stream] stream ended: text={} bytes, thinking={} bytes, usage={:?}",
-                            accumulated_text.len(), accumulated_thinking.len(), stream_usage);
-                        if accumulated_text.is_empty() && !accumulated_thinking.is_empty() {
-                            accumulated_text = accumulated_thinking;
-                            tracing::debug!(
-                                "[ws-stream] fallback: using thinking as text ({} bytes)",
-                                accumulated_text.len()
-                            );
-                        }
-
-                        // Detect silent responses (e.g. tool-only loops that produce
-                        // no visible text). Keep the silent path distinct so the UI
-                        // it from empty accumulated text when ContentComplete
-                        // had no text deltas at all).
-                        if accumulated_text.is_empty() && stream_usage.is_some() {
-                            is_silent = true;
-                        }
-
-                        (accumulated_text, stream_usage, is_silent)
-                    });
+                    let stream_task = tokio::spawn(stream_events_to_ws(
+                        Arc::clone(sender),
+                        Arc::clone(verbose),
+                        rx,
+                    ));
 
                     // Wait for the stream to finish (fast — closes as soon as
                     // drop(phase_cb) runs after the agent loop). This does NOT
@@ -701,113 +513,18 @@ async fn handle_text_message(
                     // Send the response immediately from stream data
                     match stream_result {
                         Ok((accumulated_text, stream_usage, is_silent)) => {
-                            // Send typing lifecycle: stop
-                            let _ = send_json(
-                                sender,
-                                &serde_json::json!({
-                                    "type": "typing",
-                                    "state": "stop",
-                                }),
-                            )
-                            .await;
-
-                            let usage = stream_usage.unwrap_or_default();
-
-                            if is_silent {
-                                let _ = send_json(
-                                    sender,
-                                    &serde_json::json!({
-                                        "type": "silent_complete",
-                                        "input_tokens": usage.input_tokens,
-                                        "output_tokens": usage.output_tokens,
-                                    }),
-                                )
-                                .await;
-                                return;
-                            }
-
-                            // Strip <think>...</think> blocks
-                            let mut cleaned = strip_think_tags(&accumulated_text);
-
-                            // If all text was inside think tags (some providers like GLM
-                            // send content only as thinking blocks), fall back to raw text.
-                            if cleaned.trim().is_empty() && !accumulated_text.trim().is_empty() {
-                                cleaned = accumulated_text.clone();
-                            }
-
-                            let content = if cleaned.trim().is_empty() {
-                                format!(
-                                    "[The agent completed processing but returned no text response. ({} in / {} out)]",
-                                    usage.input_tokens, usage.output_tokens,
-                                )
-                            } else {
-                                cleaned
-                            };
-
-                            // Estimate context pressure
-                            let ctx_pct =
-                                (usage.input_tokens as f64 / 200_000.0 * 100.0).min(100.0);
-                            let pressure = if ctx_pct > 85.0 {
-                                "critical"
-                            } else if ctx_pct > 70.0 {
-                                "high"
-                            } else if ctx_pct > 50.0 {
-                                "medium"
-                            } else {
-                                "low"
-                            };
-
-                            let _ = send_json(
-                                sender,
-                                &serde_json::json!({
-                                    "type": "response",
-                                    "content": content,
-                                    "input_tokens": usage.input_tokens,
-                                    "output_tokens": usage.output_tokens,
-                                    "iterations": 0, // Not available from stream; handle updates later if needed
-                                    "context_pressure": pressure,
-                                }),
-                            )
-                            .await;
+                            finalize_stream_response(sender, accumulated_text, stream_usage, is_silent).await;
                         }
                         Err(e) => {
                             warn!("Stream task panicked: {e}");
-                            let _ = send_json(
-                                sender,
-                                &serde_json::json!({
-                                    "type": "typing", "state": "stop",
-                                }),
-                            )
-                            .await;
-                            let _ = send_json(
-                                sender,
-                                &serde_json::json!({
-                                    "type": "error",
-                                    "content": "Internal error occurred",
-                                }),
-                            )
-                            .await;
+                            send_stream_failure(sender, "Internal error occurred").await;
                         }
                     }
                 }
                 Err(e) => {
                     warn!("Streaming setup failed: {e}");
-                    let _ = send_json(
-                        sender,
-                        &serde_json::json!({
-                            "type": "typing", "state": "stop",
-                        }),
-                    )
-                    .await;
                     let user_msg = classify_streaming_error(&e);
-                    let _ = send_json(
-                        sender,
-                        &serde_json::json!({
-                            "type": "error",
-                            "content": user_msg,
-                        }),
-                    )
-                    .await;
+                    send_stream_failure(sender, &user_msg).await;
                 }
             }
         }
@@ -832,6 +549,327 @@ async fn handle_text_message(
             .await;
         }
     }
+}
+
+/// Validate + sanitize the inbound chat content and inject any image
+/// attachments into the session. Returns the sanitized content, or `None` after
+/// sending an error reply (caller should abort the turn).
+async fn prepare_incoming_message(
+    sender: &Arc<Mutex<SplitSink<WebSocket, Message>>>,
+    state: &Arc<AppState>,
+    agent_id: AgentId,
+    parsed: &serde_json::Value,
+) -> Option<String> {
+    let raw_content = match parsed["content"].as_str() {
+        Some(c) if !c.trim().is_empty() => c.to_string(),
+        _ => {
+            let _ = send_json(
+                sender,
+                &serde_json::json!({
+                    "type": "error",
+                    "content": "Missing or empty 'content' field",
+                }),
+            )
+            .await;
+            return None;
+        }
+    };
+
+    // Sanitize inbound user input
+    let content = sanitize_user_input(&raw_content);
+    if content.is_empty() {
+        let _ = send_json(
+            sender,
+            &serde_json::json!({
+                "type": "error",
+                "content": "Message content is empty after sanitization",
+            }),
+        )
+        .await;
+        return None;
+    }
+
+    // Resolve file attachments into image content blocks
+    let mut has_images = false;
+    if let Some(attachments) = parsed["attachments"].as_array() {
+        let refs: Vec<crate::types::AttachmentRef> = attachments
+            .iter()
+            .filter_map(|a| serde_json::from_value(a.clone()).ok())
+            .collect();
+        if !refs.is_empty() {
+            let image_blocks = crate::routes::resolve_attachments(&refs);
+            if !image_blocks.is_empty() {
+                has_images = true;
+                crate::routes::inject_attachments_into_session(
+                    &state.kernel,
+                    agent_id,
+                    image_blocks,
+                );
+            }
+        }
+    }
+
+    // Warn if the model doesn't support vision but images were attached
+    if has_images {
+        let model_name = state
+            .kernel
+            .registry
+            .get(agent_id)
+            .map(|e| e.manifest.model.modality.clone())
+            .unwrap_or_default();
+        // Allow vision by default — most modern models support it
+        let _ = model_name; // used for informational purposes only
+    }
+
+    Some(content)
+}
+
+/// Forward agent stream events to the WebSocket with debouncing.
+///
+/// Accumulates the full response text and captures ContentComplete usage so the
+/// caller can send the `response` event as soon as the stream channel closes
+/// (after `drop(phase_cb)` in the kernel), WITHOUT waiting for post-processing
+/// (canonical session writes, JSONL, compaction) that happens in the kernel task
+/// after the loop. Returns (accumulated_text, usage, is_silent).
+async fn stream_events_to_ws(
+    sender_stream: Arc<Mutex<SplitSink<WebSocket, Message>>>,
+    verbose: Arc<AtomicU8>,
+    mut rx: tokio::sync::mpsc::Receiver<StreamEvent>,
+) -> (String, Option<types::message::TokenUsage>, bool) {
+    let mut text_buffer = String::new();
+    let mut accumulated_text = String::new();
+    let mut accumulated_thinking = String::new();
+    let mut stream_usage: Option<types::message::TokenUsage> = None;
+    let mut is_silent = false;
+    let far_future = tokio::time::Instant::now() + Duration::from_secs(86400);
+    let mut flush_deadline = far_future;
+
+    loop {
+        let sleep = tokio::time::sleep_until(flush_deadline);
+        tokio::pin!(sleep);
+
+        tokio::select! {
+            event = rx.recv() => {
+                let vlevel = VerboseLevel::from_u8(
+                    verbose.load(Ordering::Relaxed),
+                );
+                match event {
+                    None => {
+                        // Stream ended — flush remaining text
+                        let _ = flush_text_buffer(
+                            &sender_stream,
+                            &mut text_buffer,
+                        )
+                        .await;
+                        break;
+                    }
+                    Some(ev) => {
+                        // DEBUG: log every stream event for GLM troubleshooting
+                        tracing::debug!("[ws-stream] event: {:?}", ev);
+
+                        // Capture ContentComplete for immediate response
+                        if let StreamEvent::ContentComplete { usage, .. } = &ev {
+                            stream_usage = Some(*usage);
+                            tracing::debug!("[ws-stream] ContentComplete usage: {:?}", usage);
+                            // Don't forward — handled below
+                            continue;
+                        }
+
+                        if let StreamEvent::TextDelta { ref text } = ev {
+                            accumulated_text.push_str(text);
+                            text_buffer.push_str(text);
+                            if text_buffer.len() >= DEBOUNCE_CHARS {
+                                let _ = flush_text_buffer(
+                                    &sender_stream,
+                                    &mut text_buffer,
+                                )
+                                .await;
+                                flush_deadline = far_future;
+                            } else if flush_deadline >= far_future {
+                                flush_deadline =
+                                    tokio::time::Instant::now()
+                                        + Duration::from_millis(DEBOUNCE_MS);
+                            }
+                        } else if let StreamEvent::ThinkingDelta { ref text } = ev {
+                            accumulated_thinking.push_str(text);
+                        } else {
+                            // Flush pending text before non-text events
+                            let _ = flush_text_buffer(
+                                &sender_stream,
+                                &mut text_buffer,
+                            )
+                            .await;
+                            flush_deadline = far_future;
+
+                            // Send typing indicator for tool events
+                            if let StreamEvent::ToolUseStart {
+                                ref name, ..
+                            } = ev
+                            {
+                                let _ = send_json(
+                                    &sender_stream,
+                                    &serde_json::json!({
+                                        "type": "typing",
+                                        "state": "tool",
+                                        "tool": name,
+                                    }),
+                                )
+                                .await;
+                            }
+
+                            // Map event to JSON with verbose filtering
+                            if let Some(json) =
+                                map_stream_event(&ev, vlevel)
+                            {
+                                if send_json(&sender_stream, &json)
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ = &mut sleep => {
+                // Timer fired — flush text buffer
+                let _ = flush_text_buffer(
+                    &sender_stream,
+                    &mut text_buffer,
+                )
+                .await;
+                flush_deadline = far_future;
+            }
+        }
+    }
+
+    // Check if the agent signalled NO_REPLY via the stream
+    // (PhaseChange with a "silent" marker — currently the
+    // kernel sets result.silent after the loop, so we detect
+    // If model sent only thinking (no text), use thinking as response
+    // Some providers (e.g. GLM via Anthropic compat) send all content
+    // as thinking blocks with no text block.
+    tracing::debug!("[ws-stream] stream ended: text={} bytes, thinking={} bytes, usage={:?}",
+        accumulated_text.len(), accumulated_thinking.len(), stream_usage);
+    if accumulated_text.is_empty() && !accumulated_thinking.is_empty() {
+        accumulated_text = accumulated_thinking;
+        tracing::debug!(
+            "[ws-stream] fallback: using thinking as text ({} bytes)",
+            accumulated_text.len()
+        );
+    }
+
+    // Detect silent responses (e.g. tool-only loops that produce
+    // no visible text). Keep the silent path distinct so the UI
+    // it from empty accumulated text when ContentComplete
+    // had no text deltas at all).
+    if accumulated_text.is_empty() && stream_usage.is_some() {
+        is_silent = true;
+    }
+
+    (accumulated_text, stream_usage, is_silent)
+}
+
+/// Send the final response (or silent_complete) event immediately from the
+/// accumulated stream data: typing-stop, think-tag stripping, context-pressure
+/// estimate, then the response payload.
+async fn finalize_stream_response(
+    sender: &Arc<Mutex<SplitSink<WebSocket, Message>>>,
+    accumulated_text: String,
+    stream_usage: Option<types::message::TokenUsage>,
+    is_silent: bool,
+) {
+    // Send typing lifecycle: stop
+    let _ = send_json(
+        sender,
+        &serde_json::json!({
+            "type": "typing",
+            "state": "stop",
+        }),
+    )
+    .await;
+
+    let usage = stream_usage.unwrap_or_default();
+
+    if is_silent {
+        let _ = send_json(
+            sender,
+            &serde_json::json!({
+                "type": "silent_complete",
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+            }),
+        )
+        .await;
+        return;
+    }
+
+    // Strip <think>...</think> blocks
+    let mut cleaned = strip_think_tags(&accumulated_text);
+
+    // If all text was inside think tags (some providers like GLM
+    // send content only as thinking blocks), fall back to raw text.
+    if cleaned.trim().is_empty() && !accumulated_text.trim().is_empty() {
+        cleaned = accumulated_text.clone();
+    }
+
+    let content = if cleaned.trim().is_empty() {
+        format!(
+            "[The agent completed processing but returned no text response. ({} in / {} out)]",
+            usage.input_tokens, usage.output_tokens,
+        )
+    } else {
+        cleaned
+    };
+
+    // Estimate context pressure
+    let ctx_pct =
+        (usage.input_tokens as f64 / 200_000.0 * 100.0).min(100.0);
+    let pressure = if ctx_pct > 85.0 {
+        "critical"
+    } else if ctx_pct > 70.0 {
+        "high"
+    } else if ctx_pct > 50.0 {
+        "medium"
+    } else {
+        "low"
+    };
+
+    let _ = send_json(
+        sender,
+        &serde_json::json!({
+            "type": "response",
+            "content": content,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "iterations": 0, // Not available from stream; handle updates later if needed
+            "context_pressure": pressure,
+        }),
+    )
+    .await;
+}
+
+/// Send typing-stop followed by an error payload (streaming failure paths).
+async fn send_stream_failure(
+    sender: &Arc<Mutex<SplitSink<WebSocket, Message>>>,
+    user_msg: &str,
+) {
+    let _ = send_json(
+        sender,
+        &serde_json::json!({
+            "type": "typing", "state": "stop",
+        }),
+    )
+    .await;
+    let _ = send_json(
+        sender,
+        &serde_json::json!({
+            "type": "error",
+            "content": user_msg,
+        }),
+    )
+    .await;
 }
 
 // ---------------------------------------------------------------------------
