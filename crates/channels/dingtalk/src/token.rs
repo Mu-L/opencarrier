@@ -40,18 +40,15 @@ impl AccessTokenCache {
         let app_key = self.app_key.clone();
         let app_secret = self.app_secret.clone();
         get_cached_token(&self.token, Duration::from_secs(TOKEN_REFRESH_AHEAD_SECS), move || async move {
-            let resp = api::get_access_token(&http, &app_key, &app_secret)
-                .await
-                .map_err(|e| e.to_string())?;
+            let resp = api::get_access_token(&http, &app_key, &app_secret).await?;
             let token = resp
                 .access_token
-                .ok_or_else(|| "Missing accessToken in DingTalk OAuth response".to_string())?;
+                .ok_or_else(|| CarrierError::Network("Missing accessToken in DingTalk OAuth response".to_string()))?;
             let expire_secs = resp.expire_in.unwrap_or(7200);
             info!(app_key = %app_key, expire_secs, "Refreshed DingTalk access token");
             Ok((token, expire_secs))
         })
         .await
-        .map_err(CarrierError::Network)
     }
 
     pub fn http(&self) -> &Client {

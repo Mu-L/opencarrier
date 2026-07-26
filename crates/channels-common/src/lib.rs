@@ -10,6 +10,7 @@ use dashmap::DashMap;
 use std::future::Future;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use types::error::CarrierResult;
 
 // ---------------------------------------------------------------------------
 // Inbound dedup
@@ -99,10 +100,10 @@ pub async fn get_cached_token<F, Fut>(
     cache: &Mutex<Option<CachedToken>>,
     refresh_ahead: Duration,
     fetch: F,
-) -> Result<String, String>
+) -> CarrierResult<String>
 where
     F: FnOnce() -> Fut + Send,
-    Fut: Future<Output = Result<(String, u64), String>> + Send,
+    Fut: Future<Output = CarrierResult<(String, u64)>> + Send,
 {
     // Fast path: return a still-valid cached token.
     {
