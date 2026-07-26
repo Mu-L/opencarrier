@@ -2,6 +2,7 @@
 
 use super::types::{AgentCard, A2aTask};
 use tracing::{debug, info, warn};
+use types::error::{CarrierError, CarrierResult};
 
 /// Discover all configured external A2A agents and return their cards.
 ///
@@ -56,7 +57,7 @@ impl A2aClient {
         }
     }
 
-    pub async fn discover(&self, url: &str) -> Result<AgentCard, String> {
+    pub async fn discover(&self, url: &str) -> CarrierResult<AgentCard> {
         let agent_json_url = format!("{}/.well-known/agent.json", url.trim_end_matches('/'));
 
         debug!(url = %agent_json_url, "Discovering A2A agent");
@@ -70,16 +71,19 @@ impl A2aClient {
             )
             .send()
             .await
-            .map_err(|e| format!("A2A discovery failed: {e}"))?;
+            .map_err(|e| CarrierError::Network(format!("A2A discovery failed: {e}")))?;
 
         if !response.status().is_success() {
-            return Err(format!("A2A discovery returned {}", response.status()));
+            return Err(CarrierError::Network(format!(
+                "A2A discovery returned {}",
+                response.status()
+            )));
         }
 
         let card: AgentCard = response
             .json()
             .await
-            .map_err(|e| format!("Invalid Agent Card: {e}"))?;
+            .map_err(|e| CarrierError::Serialization(format!("Invalid Agent Card: {e}")))?;
 
         info!(agent = %card.name, skills = card.skills.len(), "Discovered A2A agent");
         Ok(card)
@@ -90,7 +94,7 @@ impl A2aClient {
         url: &str,
         message: &str,
         session_id: Option<&str>,
-    ) -> Result<A2aTask, String> {
+    ) -> CarrierResult<A2aTask> {
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -110,24 +114,24 @@ impl A2aClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| format!("A2A send_task failed: {e}"))?;
+            .map_err(|e| CarrierError::Network(format!("A2A send_task failed: {e}")))?;
 
         let body: serde_json::Value = response
             .json()
             .await
-            .map_err(|e| format!("Invalid A2A response: {e}"))?;
+            .map_err(|e| CarrierError::Serialization(format!("Invalid A2A response: {e}")))?;
 
         if let Some(result) = body.get("result") {
             serde_json::from_value(result.clone())
-                .map_err(|e| format!("Invalid A2A task response: {e}"))
+                .map_err(|e| CarrierError::Serialization(format!("Invalid A2A task response: {e}")))
         } else if let Some(error) = body.get("error") {
-            Err(format!("A2A error: {}", error))
+            Err(CarrierError::Network(format!("A2A error: {}", error)))
         } else {
-            Err("Empty A2A response".to_string())
+            Err(CarrierError::Serialization("Empty A2A response".into()))
         }
     }
 
-    pub async fn get_task(&self, url: &str, task_id: &str) -> Result<A2aTask, String> {
+    pub async fn get_task(&self, url: &str, task_id: &str) -> CarrierResult<A2aTask> {
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -143,17 +147,18 @@ impl A2aClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| format!("A2A get_task failed: {e}"))?;
+            .map_err(|e| CarrierError::Network(format!("A2A get_task failed: {e}")))?;
 
         let body: serde_json::Value = response
             .json()
             .await
-            .map_err(|e| format!("Invalid A2A response: {e}"))?;
+            .map_err(|e| CarrierError::Serialization(format!("Invalid A2A response: {e}")))?;
 
         if let Some(result) = body.get("result") {
-            serde_json::from_value(result.clone()).map_err(|e| format!("Invalid A2A task: {e}"))
+            serde_json::from_value(result.clone())
+                .map_err(|e| CarrierError::Serialization(format!("Invalid A2A task: {e}")))
         } else {
-            Err("Empty A2A response".to_string())
+            Err(CarrierError::Serialization("Empty A2A response".into()))
         }
     }
 }
