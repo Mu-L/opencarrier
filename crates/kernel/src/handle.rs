@@ -540,7 +540,8 @@ impl KernelHandle for CarrierKernel {
             toml::from_str(manifest_toml).map_err(|e| format!("Invalid manifest: {e}"))?;
         let child_caps = manifest_to_capabilities(&child_manifest);
 
-        types::capability::validate_capability_inheritance(parent_caps, &child_caps)?;
+        types::capability::validate_capability_inheritance(parent_caps, &child_caps)
+            .map_err(|e| e.to_string())?;
 
         tracing::info!(
             parent = parent_id.unwrap_or("kernel"),

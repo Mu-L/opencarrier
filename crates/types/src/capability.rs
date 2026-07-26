@@ -171,16 +171,16 @@ pub fn capability_matches(granted: &Capability, required: &Capability) -> bool {
 pub fn validate_capability_inheritance(
     parent_caps: &[Capability],
     child_caps: &[Capability],
-) -> Result<(), String> {
+) -> Result<(), crate::error::CarrierError> {
     for child_cap in child_caps {
         let is_covered = parent_caps
             .iter()
             .any(|parent_cap| capability_matches(parent_cap, child_cap));
         if !is_covered {
-            return Err(format!(
-                "Privilege escalation denied: child requests {:?} but parent does not have a matching grant",
+            return Err(crate::error::CarrierError::CapabilityDenied(format!(
+                "Privilege escalation: child requests {:?} but parent does not have a matching grant",
                 child_cap
-            ));
+            )));
         }
     }
     Ok(())
