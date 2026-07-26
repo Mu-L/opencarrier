@@ -4,19 +4,20 @@
 
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
+use types::error::{CarrierError, CarrierResult};
 
 // ---------------------------------------------------------------------------
 // AES decryption
 // ---------------------------------------------------------------------------
 
 /// Decrypt AES-256-CBC with custom PKCS7 padding used by WeCom.
-pub(crate) fn decrypt_aes_cbc(key: &[u8], encrypted_base64: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn decrypt_aes_cbc(key: &[u8], encrypted_base64: &str) -> CarrierResult<Vec<u8>> {
     use base64::Engine;
     use cbc::cipher::{BlockDecryptMut, KeyIvInit};
 
     let mut encrypted = base64::engine::general_purpose::STANDARD
         .decode(encrypted_base64)
-        .map_err(|e| format!("base64 decode error: {e}"))?;
+        .map_err(|e| CarrierError::Serialization(format!("base64 decode error: {e}")))?;
 
     type Aes256CbcDecrypt = cbc::Decryptor<aes::Aes256>;
     // SAFETY: WeCom protocol mandates IV = key[0..16] for AES-256-CBC mode.
@@ -27,22 +28,26 @@ pub(crate) fn decrypt_aes_cbc(key: &[u8], encrypted_base64: &str) -> Result<Vec<
 
     let decrypted = cipher
         .decrypt_padded_mut::<aes::cipher::block_padding::NoPadding>(&mut encrypted)
-        .map_err(|e| format!("decrypt error: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("decrypt error: {e}")))?;
 
     let decrypted = decrypted.to_vec();
     let pad = decrypted
         .last()
         .copied()
-        .ok_or_else(|| "decrypted payload is empty".to_string())? as usize;
+        .ok_or_else(|| CarrierError::Internal("decrypted payload is empty".to_string()))? as usize;
 
     if pad == 0 || pad > 32 || decrypted.len() < pad {
-        return Err(format!("invalid WeCom PKCS7 padding length: {pad}"));
+        return Err(CarrierError::Internal(format!(
+            "invalid WeCom PKCS7 padding length: {pad}"
+        )));
     }
     if !decrypted[decrypted.len() - pad..]
         .iter()
         .all(|byte| *byte as usize == pad)
     {
-        return Err("invalid WeCom PKCS7 padding bytes".to_string());
+        return Err(CarrierError::Internal(
+            "invalid WeCom PKCS7 padding bytes".to_string(),
+        ));
     }
 
     Ok(decrypted[..decrypted.len() - pad].to_vec())
@@ -81,7 +86,7 @@ pub fn is_valid_wecom_signature(
 pub fn decode_wecom_payload(
     encoding_aes_key: &str,
     encrypted_payload: &str,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     use base64::{
         alphabet,
         engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
@@ -97,21 +102,25 @@ pub fn decode_wecom_payload(
 
     let aes_key = aes_key_engine
         .decode(encoding_aes_key)
-        .map_err(|e| format!("aes key decode error: {e}"))?;
+        .map_err(|e| CarrierError::Serialization(format!("aes key decode error: {e}")))?;
     let decrypted = decrypt_aes_cbc(&aes_key, encrypted_payload)?;
 
     if decrypted.len() < 20 {
-        return Err("decrypted payload too short".to_string());
+        return Err(CarrierError::Internal(
+            "decrypted payload too short".to_string(),
+        ));
     }
 
     let msg_len =
         u32::from_be_bytes([decrypted[16], decrypted[17], decrypted[18], decrypted[19]]) as usize;
     if decrypted.len() < 20 + msg_len {
-        return Err("decrypted payload shorter than declared message".to_string());
+        return Err(CarrierError::Internal(
+            "decrypted payload shorter than declared message".to_string(),
+        ));
     }
 
     String::from_utf8(decrypted[20..20 + msg_len].to_vec())
-        .map_err(|e| format!("payload is not valid utf-8: {e}"))
+        .map_err(|e| CarrierError::Serialization(format!("payload is not valid utf-8: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -119,11 +128,14 @@ pub fn decode_wecom_payload(
 // ---------------------------------------------------------------------------
 
 /// Parse WeCom callback XML into a flat HashMap.
-pub fn parse_wecom_xml_fields(xml: &str) -> Result<HashMap<String, String>, String> {
-    let doc = roxmltree::Document::parse(xml).map_err(|e| format!("invalid xml: {e}"))?;
+pub fn parse_wecom_xml_fields(xml: &str) -> CarrierResult<HashMap<String, String>> {
+    let doc = roxmltree::Document::parse(xml)
+        .map_err(|e| CarrierError::Serialization(format!("invalid xml: {e}")))?;
     let root = doc.root_element();
     if root.tag_name().name() != "xml" {
-        return Err("root element is not <xml>".to_string());
+        return Err(CarrierError::InvalidInput(
+            "root element is not <xml>".to_string(),
+        ));
     }
 
     let mut fields = HashMap::new();

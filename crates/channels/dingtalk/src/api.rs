@@ -5,6 +5,7 @@
 use crate::models::*;
 use reqwest::{header::HeaderMap, Client};
 use std::time::Duration;
+use types::error::{CarrierError, CarrierResult};
 
 fn dingtalk_headers(token: &str) -> HeaderMap {
     let mut h = HeaderMap::new();
@@ -20,7 +21,7 @@ pub async fn get_access_token(
     http: &Client,
     app_key: &str,
     app_secret: &str,
-) -> Result<OAuthTokenResponse, String> {
+) -> CarrierResult<OAuthTokenResponse> {
     let url = format!("{DINGTALK_API_BASE}/v1.0/oauth2/accessToken");
     let body = OAuthTokenRequest {
         app_key: app_key.to_string(),
@@ -33,17 +34,19 @@ pub async fn get_access_token(
         .timeout(Duration::from_secs(10))
         .send()
         .await
-        .map_err(|e| format!("DingTalk token request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("DingTalk token request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("DingTalk token HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!(
+            "DingTalk token HTTP {status}: {body}"
+        )));
     }
 
     resp.json::<OAuthTokenResponse>()
         .await
-        .map_err(|e| format!("DingTalk token parse error: {e}"))
+        .map_err(|e| CarrierError::Serialization(format!("DingTalk token parse error: {e}")))
 }
 
 /// POST `/v1.0/gateway/connections/open`
@@ -55,7 +58,7 @@ pub async fn open_gateway(
     token: &str,
     client_id: &str,
     client_secret: &str,
-) -> Result<GatewayOpenResponse, String> {
+) -> CarrierResult<GatewayOpenResponse> {
     let url = format!("{DINGTALK_API_BASE}/v1.0/gateway/connections/open");
     let body = GatewayOpenRequest {
         client_id: client_id.to_string(),
@@ -79,17 +82,19 @@ pub async fn open_gateway(
         .timeout(Duration::from_secs(15))
         .send()
         .await
-        .map_err(|e| format!("DingTalk gateway open failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("DingTalk gateway open failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("DingTalk gateway open HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!(
+            "DingTalk gateway open HTTP {status}: {body}"
+        )));
     }
 
     resp.json::<GatewayOpenResponse>()
         .await
-        .map_err(|e| format!("DingTalk gateway open parse error: {e}"))
+        .map_err(|e| CarrierError::Serialization(format!("DingTalk gateway open parse error: {e}")))
 }
 
 /// POST `/v1.0/robot/oToMessages/batchSend`
@@ -101,7 +106,7 @@ pub async fn send_direct_message(
     robot_code: &str,
     user_id: &str,
     text: &str,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     let url = format!("{DINGTALK_API_BASE}/v1.0/robot/oToMessages/batchSend");
     let title = text.lines().next().unwrap_or("Reply").to_string();
     let title = title.chars().take(20).collect::<String>();
@@ -120,12 +125,14 @@ pub async fn send_direct_message(
         .timeout(Duration::from_secs(15))
         .send()
         .await
-        .map_err(|e| format!("DingTalk send_direct failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("DingTalk send_direct failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("DingTalk send_direct HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!(
+            "DingTalk send_direct HTTP {status}: {body}"
+        )));
     }
 
     Ok(())
@@ -138,7 +145,7 @@ pub async fn download_media(
     http: &Client,
     token: &str,
     download_code: &str,
-) -> Result<Vec<u8>, String> {
+) -> CarrierResult<Vec<u8>> {
     let url = format!("{DINGTALK_API_BASE}/v1.0/im/files/download");
     let body = serde_json::json!({
         "downloadCode": download_code,
@@ -151,17 +158,19 @@ pub async fn download_media(
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
-        .map_err(|e| format!("DingTalk download_media request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("DingTalk download_media request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("DingTalk download_media HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!(
+            "DingTalk download_media HTTP {status}: {body}"
+        )));
     }
 
     resp.bytes()
         .await
         .map(|b| b.to_vec())
-        .map_err(|e| format!("DingTalk download_media read error: {e}"))
+        .map_err(|e| CarrierError::Serialization(format!("DingTalk download_media read error: {e}")))
 }
 

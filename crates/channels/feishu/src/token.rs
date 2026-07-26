@@ -14,6 +14,7 @@ use reqwest::Client;
 use std::sync::Mutex;
 use std::time::Duration;
 use tracing::info;
+use types::error::{CarrierError, CarrierResult};
 
 /// Thread-safe cache for a single tenant's access token.
 pub struct BotTokenCache {
@@ -36,14 +37,15 @@ impl BotTokenCache {
     }
 
     /// Get a valid tenant_access_token, refreshing if necessary.
-    pub async fn get_token(&self) -> Result<String, String> {
+    pub async fn get_token(&self) -> CarrierResult<String> {
         let http = self.http.clone();
         let api_base = self.api_base.clone();
         let app_id = self.app_id.clone();
         let app_secret = self.app_secret.clone();
         get_cached_token(&self.token, Duration::from_secs(TOKEN_REFRESH_AHEAD_SECS), move || async move {
             let resp =
-                api::get_tenant_token(&http, &api_base, &app_id, &app_secret).await?;
+                api::get_tenant_token(&http, &api_base, &app_id, &app_secret).await
+                .map_err(|e| e.to_string())?;
             if resp.code != 0 {
                 return Err(format!(
                     "Feishu token API error: code={} msg={}",
@@ -52,12 +54,13 @@ impl BotTokenCache {
             }
             let token = resp
                 .tenant_access_token
-                .ok_or("Missing tenant_access_token in response")?;
+                .ok_or("Missing tenant_access_token in response".to_string())?;
             let expire_secs = resp.expire.unwrap_or(7200);
             info!(app_id = %app_id, expire_secs, "Refreshed Feishu tenant_access_token");
             Ok((token, expire_secs))
         })
         .await
+        .map_err(CarrierError::Network)
     }
 
     /// Get the HTTP client (for use by api functions).

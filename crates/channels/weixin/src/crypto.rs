@@ -8,6 +8,8 @@ use base64::Engine;
 use reqwest::Client;
 use tracing::warn;
 
+use types::error::{CarrierError, CarrierResult};
+
 use crate::models::CDN_BASE_URL;
 
 type Aes128 = aes::Aes128;
@@ -97,23 +99,25 @@ pub fn generate_aes_key() -> ([u8; 16], String) {
 }
 
 /// Download and decrypt a file from CDN.
-pub async fn cdn_download(http: &Client, url: &str, key: &[u8; 16]) -> Result<Vec<u8>, String> {
+pub async fn cdn_download(http: &Client, url: &str, key: &[u8; 16]) -> CarrierResult<Vec<u8>> {
     let resp = http
         .get(url)
         .send()
         .await
-        .map_err(|e| format!("CDN download failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("CDN download failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("CDN download HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!(
+            "CDN download HTTP {status}: {body}"
+        )));
     }
 
     let ciphertext = resp
         .bytes()
         .await
-        .map_err(|e| format!("CDN download read error: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("CDN download read error: {e}")))?;
 
     Ok(aes_128_ecb_decrypt(&ciphertext, key))
 }
@@ -123,19 +127,21 @@ pub async fn cdn_upload(
     http: &Client,
     upload_url: &str,
     ciphertext: &[u8],
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let resp = http
         .post(upload_url)
         .header("Content-Type", "application/octet-stream")
         .body(ciphertext.to_vec())
         .send()
         .await
-        .map_err(|e| format!("CDN upload failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("CDN upload failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("CDN upload HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!(
+            "CDN upload HTTP {status}: {body}"
+        )));
     }
 
     // Extract download param from response header
@@ -149,7 +155,9 @@ pub async fn cdn_upload(
         warn!(error = ?err, "CDN upload warning");
     }
 
-    download_param.ok_or_else(|| "CDN upload: no x-encrypted-param in response".to_string())
+    download_param.ok_or_else(|| {
+        CarrierError::Internal("CDN upload: no x-encrypted-param in response".to_string())
+    })
 }
 
 /// Build CDN download URL from encrypt_query_param.

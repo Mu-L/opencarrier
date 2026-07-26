@@ -37,7 +37,7 @@ impl ToolProvider for WeixinQrLoginTool {
         let bot = bot_id.clone();
         let result = rt.block_on(async { auth::qr_login(&http, &bot, None).await });
 
-        result.map_err(PluginToolError::tool)
+        result.map_err(|e| PluginToolError::tool(e.to_string()))
     }
 }
 

@@ -86,7 +86,7 @@ async fn resolve_kf_media_id(
     media_type: &str,
     media: &types::content::MediaRef,
     default_filename: &str,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     if let Some(mid) = &media.media_id {
         return Ok(mid.clone());
     }
@@ -95,10 +95,10 @@ async fn resolve_kf_media_id(
             .get(url)
             .send()
             .await
-            .map_err(|e| format!("download media: {e}"))?;
+            .map_err(|e| CarrierError::Network(format!("download media: {e}")))?;
         resp.bytes()
             .await
-            .map_err(|e| format!("read media body: {e}"))?
+            .map_err(|e| CarrierError::Network(format!("read media body: {e}")))?
             .to_vec()
     } else if let Some(fp) = &media.file_path {
         let resolved = if fp.starts_with('/') {
@@ -106,9 +106,12 @@ async fn resolve_kf_media_id(
         } else {
             types::config::home_dir().join(fp)
         };
-        std::fs::read(&resolved).map_err(|e| format!("read media {resolved:?}: {e}"))?
+        std::fs::read(&resolved)
+            .map_err(|e| CarrierError::Internal(format!("read media {resolved:?}: {e}")))?
     } else {
-        return Err(format!("media has no media_id, url, or file_path (for {media_type})"));
+        return Err(CarrierError::InvalidInput(format!(
+            "media has no media_id, url, or file_path (for {media_type})"
+        )));
     };
     let filename = media
         .url
@@ -116,7 +119,7 @@ async fn resolve_kf_media_id(
         .and_then(|u| u.rsplit('/').next())
         .unwrap_or(default_filename)
         .to_string();
-    token::upload_kf_media(http, token, media_type, bytes, &filename).await.map_err(|e| e.to_string())
+    token::upload_kf_media(http, token, media_type, bytes, &filename).await
 }
 
 /// Deliver rich content to a wecom kf customer. Priority:
@@ -127,7 +130,7 @@ async fn deliver_kf_rich(
     open_kfid: &str,
     external_userid: &str,
     content: &types::content::ContentDescriptor,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     if let Some(mp) = content.miniprogram.as_ref().filter(|m| m.is_complete()) {
         // thumb: OA's thumb_media_id is INVALID on wecom (separate media
         // library) - always re-upload from thumb_url/thumb_file.
@@ -146,27 +149,27 @@ async fn deliver_kf_rich(
                 "thumb_media_id": thumb,
             }
         });
-        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await.map_err(|e| e.to_string());
+        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
     }
     if let Some(f) = content.file.as_ref() {
         if !f.is_empty() {
             let mid = resolve_kf_media_id(http, token, "file", f, "file").await?;
             let body = serde_json::json!({ "msgtype": "file", "file": { "media_id": mid } });
-            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await.map_err(|e| e.to_string());
+            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
         }
     }
     if let Some(v) = content.video.as_ref() {
         if !v.is_empty() {
             let mid = resolve_kf_media_id(http, token, "video", v, "video.mp4").await?;
             let body = serde_json::json!({ "msgtype": "video", "video": { "media_id": mid } });
-            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await.map_err(|e| e.to_string());
+            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
         }
     }
     if let Some(img) = content.image.as_ref() {
         if !img.is_empty() {
             let mid = resolve_kf_media_id(http, token, "image", img, "image.jpg").await?;
             let body = serde_json::json!({ "msgtype": "image", "image": { "media_id": mid } });
-            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await.map_err(|e| e.to_string());
+            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
         }
     }
     if let Some(l) = content.link.as_ref() {
@@ -179,13 +182,15 @@ async fn deliver_kf_rich(
                 "pic_url": l.pic_url.clone().unwrap_or_default(),
             }
         });
-        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await.map_err(|e| e.to_string());
+        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
     }
     if let Some(text) = content.as_text() {
         let body = serde_json::json!({ "msgtype": "text", "text": { "content": text } });
-        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await.map_err(|e| e.to_string());
+        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
     }
-    Err("wecom kf: content has no representation".into())
+    Err(CarrierError::InvalidInput(
+        "wecom kf: content has no representation".to_string(),
+    ))
 }
 
 impl Channel for SessionWatcher {
@@ -306,9 +311,7 @@ impl Channel for SessionWatcher {
         let ext = user_id.to_string();
         let content = content.clone();
         types::channel::block_on_detached(async move {
-            deliver_kf_rich(&http, &token, &open_kfid, &ext, &content)
-                .await
-                .map_err(|e| CarrierError::Network(e.to_string()))
+            deliver_kf_rich(&http, &token, &open_kfid, &ext, &content).await
         })
     }
 

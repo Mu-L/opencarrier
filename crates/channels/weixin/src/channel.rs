@@ -263,10 +263,17 @@ async fn poll_loop_inner(
 async fn download_cdn_raw(
     http: &reqwest::Client,
     media: &CDNMedia,
-) -> Result<Vec<u8>, String> {
-    let eqp = media.encrypt_query_param.as_deref().ok_or("No encrypt_query_param")?;
-    let aes_key_b64 = media.aes_key.as_deref().ok_or("No aes_key")?;
-    let key = crypto::parse_aes_key(aes_key_b64).ok_or("Invalid AES key")?;
+) -> CarrierResult<Vec<u8>> {
+    let eqp = media
+        .encrypt_query_param
+        .as_deref()
+        .ok_or_else(|| CarrierError::InvalidInput("No encrypt_query_param".to_string()))?;
+    let aes_key_b64 = media
+        .aes_key
+        .as_deref()
+        .ok_or_else(|| CarrierError::InvalidInput("No aes_key".to_string()))?;
+    let key = crypto::parse_aes_key(aes_key_b64)
+        .ok_or_else(|| CarrierError::Internal("Invalid AES key".to_string()))?;
 
     let url = crypto::cdn_download_url(eqp);
     crypto::cdn_download(http, &url, &key).await

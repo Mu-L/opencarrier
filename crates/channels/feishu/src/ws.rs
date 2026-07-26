@@ -13,6 +13,7 @@ use crate::api;
 use crate::pbbp2::*;
 use crate::token::BotTokenCache;
 use types::plugin::{PluginContent, PluginMessage};
+use types::error::{CarrierError, CarrierResult};
 use channels_common::InboundDedup;
 use futures::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -91,7 +92,7 @@ impl FeishuWsClient {
     }
 
     /// Connect to the WebSocket and listen for events until disconnection.
-    async fn connect_and_listen(&self, sender: &mpsc::Sender<PluginMessage>) -> Result<(), String> {
+    async fn connect_and_listen(&self, sender: &mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         let ws_resp = api::get_ws_endpoint(
             self.token_cache.http(),
             self.token_cache.app_id(),
@@ -101,16 +102,16 @@ impl FeishuWsClient {
         .await?;
 
         if ws_resp.code != 0 {
-            return Err(format!(
+            return Err(CarrierError::Network(format!(
                 "ws/endpoint error: code={} msg={}",
                 ws_resp.code, ws_resp.msg
-            ));
+            )));
         }
 
         let ws_url = ws_resp
             .data
             .and_then(|d| d.url)
-            .ok_or("Missing URL in ws/endpoint response")?;
+            .ok_or_else(|| CarrierError::InvalidInput("Missing URL in ws/endpoint response".to_string()))?;
 
         // Extract service_id from URL query params (needed for ping frames).
         let service_id = parse_service_id(&ws_url).unwrap_or(0);
@@ -123,7 +124,7 @@ impl FeishuWsClient {
 
         let (ws_stream, _response) = connect_async(&ws_url)
             .await
-            .map_err(|e| format!("WebSocket connect failed: {e}"))?;
+            .map_err(|e| CarrierError::Network(format!("WebSocket connect failed: {e}")))?;
 
         info!(tenant = %self.bot_id, "Feishu WebSocket connected");
 
@@ -170,7 +171,7 @@ impl FeishuWsClient {
                             info!(tenant = %self.bot_id, "WS raw frame received");
                         }
                         Some(Err(e)) => {
-                            return Err(format!("WebSocket read error: {e}"));
+                            return Err(CarrierError::Network(format!("WebSocket read error: {e}")));
                         }
                     }
                 }
@@ -180,7 +181,7 @@ impl FeishuWsClient {
                     let hex: Vec<String> = encoded.iter().map(|b| format!("{b:02x}")).collect();
                     info!(tenant = %self.bot_id, len = encoded.len(), hex = %hex.join(""), "Sending app-level ping");
                     if let Err(e) = write.send(Message::Binary(encoded)).await {
-                        return Err(format!("WS ping send failed: {e}"));
+                        return Err(CarrierError::Network(format!("WS ping send failed: {e}")));
                     }
                 }
             }
@@ -484,16 +485,15 @@ impl FeishuWsClient {
     }
 
     /// Download media by key and return raw bytes.
-    async fn download_media(&self, key: &str, kind: &str) -> Result<Vec<u8>, String> {
-        let token = self.token_cache.get_token().await
-            .map_err(|e| format!("Token error: {e}"))?;
+    async fn download_media(&self, key: &str, kind: &str) -> CarrierResult<Vec<u8>> {
+        let token = self.token_cache.get_token().await?;
         let http = self.token_cache.http().clone();
         let base = self.token_cache.api_base().to_string();
 
         match kind {
             "image" => api::download_image(&http, &token, &base, key).await,
             "file" => api::download_file(&http, &token, &base, key).await,
-            _ => Err(format!("Unknown media kind: {kind}")),
+            _ => Err(CarrierError::InvalidInput(format!("Unknown media kind: {kind}"))),
         }
     }
 }

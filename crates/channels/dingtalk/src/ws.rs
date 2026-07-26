@@ -15,6 +15,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
+use types::error::{CarrierError, CarrierResult};
 
 const DEDUP_TTL: Duration = Duration::from_secs(60);
 const DEDUP_MAX_ENTRIES: usize = 10_000;
@@ -78,13 +79,9 @@ impl DingTalkWsClient {
     }
 
     /// Connect to WebSocket and listen for events until disconnection.
-    async fn connect_and_listen(&self, sender: &mpsc::Sender<PluginMessage>) -> Result<(), String> {
+    async fn connect_and_listen(&self, sender: &mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         // 1. Get access token (required for both gateway open header and send operations)
-        let token = self
-            .token_cache
-            .get_token()
-            .await
-            .map_err(|e| format!("Token error: {e}"))?;
+        let token = self.token_cache.get_token().await?;
 
         // 2. Open gateway connection (sends access token as header + credentials in body)
         let gw = api::open_gateway(
@@ -95,8 +92,12 @@ impl DingTalkWsClient {
         )
         .await?;
 
-        let endpoint = gw.endpoint.ok_or("Missing endpoint in gateway response")?;
-        let ticket = gw.ticket.ok_or("Missing ticket in gateway response")?;
+        let endpoint = gw
+            .endpoint
+            .ok_or_else(|| CarrierError::InvalidInput("Missing endpoint in gateway response".to_string()))?;
+        let ticket = gw
+            .ticket
+            .ok_or_else(|| CarrierError::InvalidInput("Missing ticket in gateway response".to_string()))?;
 
         let ws_url = format!("{endpoint}?ticket={ticket}");
 
@@ -110,7 +111,7 @@ impl DingTalkWsClient {
         // 3. Connect WebSocket
         let (ws_stream, response) = connect_async(&ws_url)
             .await
-            .map_err(|e| format!("WebSocket connect failed: {e}"))?;
+            .map_err(|e| CarrierError::Network(format!("WebSocket connect failed: {e}")))?;
 
         info!(
             tenant = %self.bot_id,
@@ -148,7 +149,7 @@ impl DingTalkWsClient {
                     info!(tenant = %self.bot_id, len = data.len(), "Unexpected binary frame");
                 }
                 Some(Err(e)) => {
-                    return Err(format!("WebSocket read error: {e}"));
+                    return Err(CarrierError::Network(format!("WebSocket read error: {e}")));
                 }
                 _ => {}
             }
@@ -409,11 +410,8 @@ impl DingTalkWsClient {
     }
 
     /// Download media by downloadCode and return raw bytes.
-    async fn download_media(&self, download_code: &str) -> Result<Vec<u8>, String> {
-        let token = self.token_cache
-            .get_token()
-            .await
-            .map_err(|e| format!("Token error: {e}"))?;
+    async fn download_media(&self, download_code: &str) -> CarrierResult<Vec<u8>> {
+        let token = self.token_cache.get_token().await?;
         let http = self.token_cache.http().clone();
 
         api::download_media(&http, &token, download_code).await

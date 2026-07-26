@@ -5,6 +5,7 @@
 use crate::models::*;
 use reqwest::{header::HeaderMap, Client};
 use std::time::Duration;
+use types::error::{CarrierError, CarrierResult};
 
 /// Build standard Feishu API headers with Bearer token.
 fn feishu_headers(token: &str) -> HeaderMap {
@@ -22,7 +23,7 @@ pub async fn get_tenant_token(
     base: &str,
     app_id: &str,
     app_secret: &str,
-) -> Result<TenantTokenResponse, String> {
+) -> CarrierResult<TenantTokenResponse> {
     let url = format!("{base}/open-apis/auth/v3/tenant_access_token/internal");
     let body = TenantTokenRequest {
         app_id: app_id.to_string(),
@@ -35,17 +36,17 @@ pub async fn get_tenant_token(
         .timeout(Duration::from_secs(10))
         .send()
         .await
-        .map_err(|e| format!("Feishu token request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("Feishu token request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Feishu token HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!("Feishu token HTTP {status}: {body}")));
     }
 
     resp.json::<TenantTokenResponse>()
         .await
-        .map_err(|e| format!("Feishu token parse error: {e}"))
+        .map_err(|e| CarrierError::Serialization(format!("Feishu token parse error: {e}")))
 }
 
 /// POST `/open-apis/im/v1/messages`
@@ -59,7 +60,7 @@ pub async fn send_message(
     receive_id_type: &str,
     msg_type: &str,
     content: &str,
-) -> Result<SendMessageResponse, String> {
+) -> CarrierResult<SendMessageResponse> {
     let url = format!("{base}/open-apis/im/v1/messages?receive_id_type={receive_id_type}");
     let body = SendMessageRequest {
         receive_id: receive_id.to_string(),
@@ -74,17 +75,17 @@ pub async fn send_message(
         .timeout(Duration::from_secs(15))
         .send()
         .await
-        .map_err(|e| format!("Feishu send_message request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("Feishu send_message request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Feishu send_message HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!("Feishu send_message HTTP {status}: {body}")));
     }
 
     resp.json::<SendMessageResponse>()
         .await
-        .map_err(|e| format!("Feishu send_message parse error: {e}"))
+        .map_err(|e| CarrierError::Serialization(format!("Feishu send_message parse error: {e}")))
 }
 
 /// POST `/callback/ws/endpoint`
@@ -96,7 +97,7 @@ pub async fn get_ws_endpoint(
     app_id: &str,
     app_secret: &str,
     base: &str,
-) -> Result<WsEndpointResponse, String> {
+) -> CarrierResult<WsEndpointResponse> {
     let url = format!("{base}/callback/ws/endpoint");
     let body = serde_json::json!({
         "AppID": app_id,
@@ -117,7 +118,7 @@ pub async fn get_ws_endpoint(
         .timeout(Duration::from_secs(15))
         .send()
         .await
-        .map_err(|e| format!("Feishu ws/endpoint request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("Feishu ws/endpoint request failed: {e}")))?;
 
     let status = resp.status();
     let body_text = resp.text().await.unwrap_or_default();
@@ -129,10 +130,11 @@ pub async fn get_ws_endpoint(
     );
 
     if !status.is_success() {
-        return Err(format!("Feishu ws/endpoint HTTP {status}: {body_text}"));
+        return Err(CarrierError::Network(format!("Feishu ws/endpoint HTTP {status}: {body_text}")));
     }
 
-    serde_json::from_str(&body_text).map_err(|e| format!("Feishu ws/endpoint parse error: {e}"))
+    serde_json::from_str(&body_text)
+        .map_err(|e| CarrierError::Serialization(format!("Feishu ws/endpoint parse error: {e}")))
 }
 
 /// GET `/open-apis/im/v1/images/{image_key}`
@@ -143,7 +145,7 @@ pub async fn download_image(
     token: &str,
     base: &str,
     image_key: &str,
-) -> Result<Vec<u8>, String> {
+) -> CarrierResult<Vec<u8>> {
     let url = format!("{base}/open-apis/im/v1/images/{image_key}");
     let resp = http
         .get(&url)
@@ -151,18 +153,18 @@ pub async fn download_image(
         .timeout(Duration::from_secs(30))
         .send()
         .await
-        .map_err(|e| format!("Feishu download_image request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("Feishu download_image request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Feishu download_image HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!("Feishu download_image HTTP {status}: {body}")));
     }
 
     resp.bytes()
         .await
         .map(|b| b.to_vec())
-        .map_err(|e| format!("Feishu download_image read error: {e}"))
+        .map_err(|e| CarrierError::Serialization(format!("Feishu download_image read error: {e}")))
 }
 
 /// GET `/open-apis/im/v1/files/{file_key}`
@@ -173,7 +175,7 @@ pub async fn download_file(
     token: &str,
     base: &str,
     file_key: &str,
-) -> Result<Vec<u8>, String> {
+) -> CarrierResult<Vec<u8>> {
     let url = format!("{base}/open-apis/im/v1/files/{file_key}");
     let resp = http
         .get(&url)
@@ -181,16 +183,16 @@ pub async fn download_file(
         .timeout(Duration::from_secs(30))
         .send()
         .await
-        .map_err(|e| format!("Feishu download_file request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("Feishu download_file request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Feishu download_file HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!("Feishu download_file HTTP {status}: {body}")));
     }
 
     resp.bytes()
         .await
         .map(|b| b.to_vec())
-        .map_err(|e| format!("Feishu download_file read error: {e}"))
+        .map_err(|e| CarrierError::Serialization(format!("Feishu download_file read error: {e}")))
 }

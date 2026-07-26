@@ -276,16 +276,11 @@ impl Channel for SessionWatcher {
         let text = text.to_string();
 
         types::channel::block_on_detached(async move {
-            let token = token_cache
-                .get_token()
-                .await
-                .map_err(|e| CarrierError::Network(e.to_string()))?;
+            let token = token_cache.get_token().await?;
             let http = token_cache.http().clone();
             let robot_code = token_cache.app_key().to_string();
 
-            api::send_direct_message(&http, &token, &robot_code, &user_id, &text)
-                .await
-                .map_err(CarrierError::Network)
+            api::send_direct_message(&http, &token, &robot_code, &user_id, &text).await
         })
     }
 

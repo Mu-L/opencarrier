@@ -249,11 +249,11 @@ async fn connect_and_handle(
     bot_id: &str,
     sender: &tokio::sync::mpsc::Sender<PluginMessage>,
     response_urls: &ResponseUrlStore,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     info!("SmartBot connecting to {}...", WS_URL);
     let (ws_stream, _) = tokio_tungstenite::connect_async(WS_URL)
         .await
-        .map_err(|e| format!("WebSocket connect failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("WebSocket connect failed: {e}")))?;
     info!("SmartBot connected!");
     let (mut write, mut read) = ws_stream.split();
 
@@ -272,7 +272,7 @@ async fn connect_and_handle(
     write
         .send(Message::Text(serde_json::to_string(&subscribe).unwrap()))
         .await
-        .map_err(|e| format!("Send subscribe failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("Send subscribe failed: {e}")))?;
 
     info!("SmartBot subscribe sent: req_id={}", req_id);
 
@@ -280,19 +280,19 @@ async fn connect_and_handle(
     let sub_resp: serde_json::Value = read
         .next()
         .await
-        .ok_or_else(|| "Connection closed before subscribe response".to_string())?
-        .map_err(|e| format!("Read subscribe response failed: {e}"))?
+        .ok_or_else(|| CarrierError::Network("Connection closed before subscribe response".to_string()))?
+        .map_err(|e| CarrierError::Network(format!("Read subscribe response failed: {e}")))?
         .into_text()
-        .map_err(|e| format!("Subscribe response not text: {e}"))?
+        .map_err(|e| CarrierError::Network(format!("Subscribe response not text: {e}")))?
         .parse()
-        .map_err(|e| format!("Parse subscribe response failed: {e}"))?;
+        .map_err(|e| CarrierError::Serialization(format!("Parse subscribe response failed: {e}")))?;
 
     info!("SmartBot subscribe response: {}", sub_resp);
     if sub_resp["errcode"].as_i64() != Some(0) {
-        return Err(format!(
+        return Err(CarrierError::Network(format!(
             "Subscribe failed: {}",
             sub_resp["errmsg"].as_str().unwrap_or("unknown")
-        ));
+        )));
     }
     info!("SmartBot subscribed successfully!");
 
@@ -308,7 +308,7 @@ async fn connect_and_handle(
                 });
                 if let Err(e) = write.send(Message::Text(ping.to_string())).await {
                     warn!("SmartBot ping failed: {:?}", e);
-                    return Err("Ping failed".to_string());
+                    return Err(CarrierError::Network("Ping failed".to_string()));
                 }
             }
 
@@ -321,7 +321,7 @@ async fn connect_and_handle(
                     }
                     Some(Err(e)) => {
                         error!("SmartBot WebSocket read error: {}", e);
-                        return Err(format!("Read error: {e}"));
+                        return Err(CarrierError::Network(format!("Read error: {e}")));
                     }
                     None => {
                         info!("SmartBot WebSocket closed");
@@ -343,15 +343,15 @@ async fn handle_ws_message(
     bot_id: &str,
     sender: &tokio::sync::mpsc::Sender<PluginMessage>,
     response_urls: &ResponseUrlStore,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     let json: serde_json::Value =
-        serde_json::from_str(raw).map_err(|e| format!("Parse WS message failed: {e}"))?;
+        serde_json::from_str(raw).map_err(|e| CarrierError::Serialization(format!("Parse WS message failed: {e}")))?;
     let cmd = json["cmd"].as_str().unwrap_or("");
 
     match cmd {
         "aibot_msg_callback" => {
             let body: MsgCallbackBody = serde_json::from_value(json["body"].clone())
-                .map_err(|e| format!("Parse msg_callback body failed: {e}"))?;
+                .map_err(|e| CarrierError::Serialization(format!("Parse msg_callback body failed: {e}")))?;
 
             let user_id = &body.from.userid;
             let chattype = &body.chattype;
@@ -478,7 +478,7 @@ async fn handle_ws_message(
 
         "aibot_event_callback" => {
             let body: EventCallbackBody = serde_json::from_value(json["body"].clone())
-                .map_err(|e| format!("Parse event_callback body failed: {e}"))?;
+                .map_err(|e| CarrierError::Serialization(format!("Parse event_callback body failed: {e}")))?;
 
             info!(
                 "SmartBot event: eventtype={}, from={}",

@@ -283,14 +283,12 @@ impl Channel for SessionWatcher {
         types::channel::block_on_detached(async move {
             let token = token_cache
                 .get_token()
-                .await
-                .map_err(|e| CarrierError::Network(e.to_string()))?;
+                .await?;
             let http = token_cache.http().clone();
             let base = token_cache.api_base().to_string();
             let resp =
                 api::send_message(&http, &token, &base, &user_id, "open_id", "text", &content)
-                    .await
-                    .map_err(CarrierError::Network)?;
+                    .await?;
 
             if resp.code != 0 {
                 return Err(CarrierError::Network(format!(

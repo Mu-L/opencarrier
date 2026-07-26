@@ -8,6 +8,7 @@ use crate::token::WEIXIN_STATE;
 use crate::models::*;
 use reqwest::Client;
 use tracing::{info, warn};
+use types::error::{CarrierError, CarrierResult};
 
 /// Maximum QR code refreshes before giving up.
 const MAX_QR_REFRESH: u32 = 3;
@@ -26,19 +27,21 @@ pub async fn qr_login(
     http: &Client,
     bot_id: &str,
     bind_agent: Option<&str>,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let mut base_url = ILINK_API_BASE.to_string();
     let mut refresh_count = 0;
     let start = std::time::Instant::now();
 
     loop {
         if start.elapsed().as_secs() > QR_TOTAL_TIMEOUT_SECS {
-            return Err("QR login timed out (8 minutes)".to_string());
+            return Err(CarrierError::Internal(
+                "QR login timed out (8 minutes)".to_string(),
+            ));
         }
 
         // Step 1: Get QR code
         info!("Fetching QR code from {base_url}");
-        let qr_resp = api::get_bot_qrcode_with_base(http, &base_url).await.map_err(|e| e.to_string())?;
+        let qr_resp = api::get_bot_qrcode_with_base(http, &base_url).await?;
         let qrcode_token = qr_resp.qrcode.clone();
         let qr_url = qr_resp.qrcode_img_content.clone();
 
@@ -48,7 +51,9 @@ pub async fn qr_login(
         let poll_base = base_url.clone();
         loop {
             if start.elapsed().as_secs() > QR_TOTAL_TIMEOUT_SECS {
-                return Err("QR login timed out during polling".to_string());
+                return Err(CarrierError::Internal(
+                    "QR login timed out during polling".to_string(),
+                ));
             }
 
             match api::get_qrcode_status(http, &poll_base, &qrcode_token).await {
@@ -60,9 +65,12 @@ pub async fn qr_login(
                         info!("QR code scanned, waiting for confirmation");
                     }
                     "confirmed" => {
-                        let bot_token = status.bot_token.ok_or("confirmed but no bot_token")?;
-                        let ilink_bot_id =
-                            status.ilink_bot_id.ok_or("confirmed but no ilink_bot_id")?;
+                        let bot_token = status
+                            .bot_token
+                            .ok_or_else(|| CarrierError::Internal("confirmed but no bot_token".to_string()))?;
+                        let ilink_bot_id = status
+                            .ilink_bot_id
+                            .ok_or_else(|| CarrierError::Internal("confirmed but no ilink_bot_id".to_string()))?;
                         let baseurl = status.baseurl.unwrap_or_else(|| ILINK_API_BASE.to_string());
                         let user_id = status.ilink_user_id;
 
@@ -85,7 +93,9 @@ pub async fn qr_login(
                     "expired" => {
                         refresh_count += 1;
                         if refresh_count >= MAX_QR_REFRESH {
-                            return Err("QR code expired 3 times, giving up".to_string());
+                            return Err(CarrierError::Internal(
+                                "QR code expired 3 times, giving up".to_string(),
+                            ));
                         }
                         warn!(refresh = refresh_count, "QR expired, refreshing");
                         break; // Back to step 1

@@ -61,20 +61,20 @@ impl OaAccountState {
     }
 
     /// Get a valid access_token, refreshing if needed.
-    pub async fn get_token(&self) -> Result<String, String> {
+    pub async fn get_token(&self) -> CarrierResult<String> {
         let mut guard = self.token.lock().await;
         if let Some((ref token, expiry)) = *guard {
             if expiry > Instant::now() {
                 return Ok(token.clone());
             }
         }
-        let resp = api::get_access_token(&self.http, &self.app_id, &self.app_secret).await.map_err(|e| e.to_string())?;
+        let resp = api::get_access_token(&self.http, &self.app_id, &self.app_secret).await?;
         let token = resp.access_token;
         let token = token.ok_or_else(|| {
-            format!(
+            CarrierError::Network(format!(
                 "No access_token in response (errcode={:?}, errmsg={:?})",
                 resp.errcode, resp.errmsg
-            )
+            ))
         })?;
         let expires_in = resp.expires_in.unwrap_or(7200);
         let margin = expires_in.saturating_sub(TOKEN_MARGIN_SECS);
@@ -305,7 +305,7 @@ async fn resolve_oa_media_id(
     token: &str,
     media: &types::content::MediaRef,
     default_filename: &str,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     if let Some(mid) = &media.media_id {
         return Ok(mid.clone());
     }
@@ -315,10 +315,10 @@ async fn resolve_oa_media_id(
             .get(url)
             .send()
             .await
-            .map_err(|e| format!("download media: {e}"))?;
+            .map_err(|e| CarrierError::Network(format!("download media: {e}")))?;
         resp.bytes()
             .await
-            .map_err(|e| format!("read media body: {e}"))?
+            .map_err(|e| CarrierError::Network(format!("read media body: {e}")))?
             .to_vec()
     } else if let Some(fp) = &media.file_path {
         let resolved = if fp.starts_with('/') {
@@ -326,9 +326,11 @@ async fn resolve_oa_media_id(
         } else {
             types::config::home_dir().join(fp)
         };
-        std::fs::read(&resolved).map_err(|e| format!("read media {resolved:?}: {e}"))?
+        std::fs::read(&resolved).map_err(|e| CarrierError::Network(format!("read media {resolved:?}: {e}")))?
     } else {
-        return Err("media has no media_id, url, or file_path".into());
+        return Err(CarrierError::InvalidInput(
+            "media has no media_id, url, or file_path".to_string(),
+        ));
     };
     let filename = media
         .url
@@ -336,7 +338,7 @@ async fn resolve_oa_media_id(
         .and_then(|u| u.rsplit('/').next())
         .unwrap_or(default_filename)
         .to_string();
-    let (mid, _url) = api::upload_media_permanent(&account.http, token, bytes, &filename).await.map_err(|e| e.to_string())?;
+    let (mid, _url) = api::upload_media_permanent(&account.http, token, bytes, &filename).await?;
     Ok(mid)
 }
 
@@ -347,7 +349,7 @@ async fn resolve_oa_thumb(
     account: &OaAccountState,
     token: &str,
     mp: &types::content::MiniprogramContent,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     if let Some(mid) = &mp.thumb_media_id {
         return Ok(mid.clone());
     }
@@ -360,15 +362,15 @@ async fn resolve_oa_thumb(
 }
 
 /// Run `send` once; on token-expired (40001) refresh and retry once.
-async fn with_token_retry<F, Fut>(account: &Arc<OaAccountState>, send: F) -> Result<(), String>
+async fn with_token_retry<F, Fut>(account: &Arc<OaAccountState>, send: F) -> CarrierResult<()>
 where
     F: Fn(String) -> Fut,
-    Fut: std::future::Future<Output = Result<(), String>>,
+    Fut: std::future::Future<Output = CarrierResult<()>>,
 {
     let token = account.get_token().await?;
     match send(token).await {
         Ok(()) => Ok(()),
-        Err(e) if is_token_expired(&e) => {
+        Err(e) if is_token_expired(&e.to_string()) => {
             let token = refresh_token(account).await?;
             send(token).await
         }
@@ -383,7 +385,7 @@ async fn deliver_oa(
     account: &Arc<OaAccountState>,
     openid: &str,
     content: &types::content::ContentDescriptor,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     if let Some(mp) = content.miniprogram.as_ref().filter(|m| m.is_complete()) {
         // Resolve thumb once (uses the current token); then send with retry.
         let token = account.get_token().await?;
@@ -403,7 +405,6 @@ async fn deliver_oa(
                     &http, &token, &openid, &title, &pagepath, &thumb, &appid,
                 )
                 .await
-                .map_err(|e| e.to_string())
             }
         })
         .await;
@@ -416,7 +417,7 @@ async fn deliver_oa(
                 let http = account.http.clone();
                 let openid = openid.to_string();
                 let media_id = media_id.clone();
-                async move { api::custom_send_image(&http, &token, &openid, &media_id).await.map_err(|e| e.to_string()) }
+                async move { api::custom_send_image(&http, &token, &openid, &media_id).await }
             })
             .await;
         }
@@ -426,11 +427,13 @@ async fn deliver_oa(
             let http = account.http.clone();
             let openid = openid.to_string();
             let text = text.clone();
-            async move { api::custom_send_text(&http, &token, &openid, &text).await.map_err(|e| e.to_string()) }
+            async move { api::custom_send_text(&http, &token, &openid, &text).await }
         })
         .await;
     }
-    Err("weixin-oa: content has no miniprogram, image, or text representation".into())
+    Err(CarrierError::InvalidInput(
+        "weixin-oa: content has no miniprogram, image, or text representation".to_string(),
+    ))
 }
 
 // --- Channel trait impl ---
@@ -536,11 +539,7 @@ impl Channel for SessionWatcher {
         let content = content.clone();
         // Dedicated thread + runtime: safe from Tokio workers / spawn_blocking.
         // Returning the real Result lets the marker handler fall back to text.
-        types::channel::block_on_detached(async move {
-            deliver_oa(&account, &openid, &content)
-                .await
-                .map_err(CarrierError::Network)
-        })
+        types::channel::block_on_detached(async move { deliver_oa(&account, &openid, &content).await })
     }
 
     fn stop(&mut self) {

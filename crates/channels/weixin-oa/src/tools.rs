@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 use tracing::{info, warn};
+use types::error::CarrierResult;
 use types::plugin::PluginToolContext;
 use types::tool::{PluginToolDef, PluginToolError, ToolProvider};
 
@@ -23,7 +24,7 @@ pub(crate) fn is_token_expired(err: &str) -> bool {
 
 /// Get a fresh access_token. If a prior call failed with 40001, call this to
 /// invalidate the cache and get a new token for one retry.
-pub(crate) async fn refresh_token(account: &crate::channel::OaAccountState) -> Result<String, String> {
+pub(crate) async fn refresh_token(account: &crate::channel::OaAccountState) -> CarrierResult<String> {
     account.invalidate_token().await;
     account.get_token().await
 }
