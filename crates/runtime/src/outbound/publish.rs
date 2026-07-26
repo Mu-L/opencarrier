@@ -364,7 +364,7 @@ async fn handle_publish_marker(
     .await;
 
     let result_msg = match tool_result {
-        Ok(Some(Ok(body))) => {
+        Ok(Ok(Some(body))) => {
             let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
             let media_id = v["media_id"].as_str().unwrap_or("?");
             let cover_src = v["cover_source"].as_str().unwrap_or("?");
@@ -383,11 +383,15 @@ async fn handle_publish_marker(
                 format!("✅ 草稿已建,待审核\n《{title}》\n封面来源:{cover_src}\n草稿 media_id:{media_id}\n→ 请到公众号后台草稿箱审核后发布")
             }
         }
-        Ok(Some(Err(e))) => {
+        Ok(Err(e)) => {
             error!(%app_id, error = %e, "Publish tool failed");
-            format!("❌ 发布失败:{e}")
+            let reason = match e {
+                types::error::CarrierError::ToolExecution { reason, .. } => reason,
+                other => other.to_string(),
+            };
+            format!("❌ 发布失败:{reason}")
         }
-        Ok(None) => {
+        Ok(Ok(None)) => {
             error!(%app_id, "weixin_oa_publish_article tool not registered in dispatcher");
             "❌ 发布失败:publish 工具未注册".to_string()
         }

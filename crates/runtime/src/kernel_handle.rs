@@ -176,19 +176,16 @@ pub trait KernelHandle: Send + Sync {
     ///
     /// Returns `None` if no dispatcher is registered or the tool isn't a plugin
     /// tool (so the caller can fall through to other dispatch paths).
-    /// Returns `Some(Ok(content))` on success, `Some(Err(message))` on failure.
-    ///
-    /// NOTE: still `Result<String, String>` — the plugin dispatcher
-    /// (`tool_dispatch.rs`) is the last String-error holdout; migrated in a
-    /// separate batch.
+    /// Returns `Ok(Some(content))` on success, `Ok(None)` if no plugin handles
+    /// the tool, or `Err(_)` if a plugin handled it but execution failed.
     fn execute_plugin_tool(
         &self,
         tool_name: &str,
         args: &serde_json::Value,
         context: &types::plugin::PluginToolContext,
-    ) -> Option<Result<String, String>> {
+    ) -> CarrierResult<Option<String>> {
         let _ = (tool_name, args, context);
-        None
+        Ok(None)
     }
 
     /// Generate an image via the Brain's image modality and save it to `out_dir`.

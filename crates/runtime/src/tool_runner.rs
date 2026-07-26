@@ -220,22 +220,25 @@ pub async fn execute_tool(
             kernel.execute_plugin_tool(&tool_name_owned, &args_owned, &plugin_ctx)
         })
         .await;
-        if let Ok(Some(result)) = join {
-            return match result {
-                Ok(content) => ToolResult {
-                    tool_use_id: tool_use_id.to_string(),
-                    content: truncate_tool_result(tool_name, content),
-                    is_error: false,
-                },
+        if let Ok(exec_result) = join {
+            match exec_result {
+                Ok(Some(content)) => {
+                    return ToolResult {
+                        tool_use_id: tool_use_id.to_string(),
+                        content: truncate_tool_result(tool_name, content),
+                        is_error: false,
+                    };
+                }
+                Ok(None) => { /* no plugin handles it — fall through to MCP/other dispatch */ }
                 Err(err) => {
                     warn!(tool_name = %tool_name, error = %err, "Plugin tool execution failed");
-                    ToolResult {
+                    return ToolResult {
                         tool_use_id: tool_use_id.to_string(),
                         content: format!("Error: {err}"),
                         is_error: true,
-                    }
+                    };
                 }
-            };
+            }
         }
     }
 

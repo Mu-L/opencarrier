@@ -739,17 +739,20 @@ impl KernelHandle for CarrierKernel {
         tool_name: &str,
         args: &serde_json::Value,
         context: &types::plugin::PluginToolContext,
-    ) -> Option<Result<String, String>> {
+    ) -> CarrierResult<Option<String>> {
         let dispatcher = self
             .plugins
             .plugin_tool_dispatcher
             .lock()
             .ok()
-            .and_then(|g| g.clone())?;
+            .and_then(|g| g.clone());
+        let Some(dispatcher) = dispatcher else {
+            return Ok(None);
+        };
         if !dispatcher.has_tool(tool_name) {
-            return None;
+            return Ok(None);
         }
-        Some(dispatcher.execute(tool_name, args, context))
+        Ok(Some(dispatcher.execute(tool_name, args, context)?))
     }
 
     async fn generate_image_to_file(

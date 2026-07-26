@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use types::error::{CarrierError, CarrierResult};
 use types::plugin::{PluginToolContext, PluginToolDef};
 use types::tool::ToolDefinition;
 use dashmap::DashMap;
@@ -87,20 +88,23 @@ impl PluginToolDispatcher {
         tool_name: &str,
         args: &serde_json::Value,
         context: &PluginToolContext,
-    ) -> Result<String, String> {
-        let entry = self
-            .tools
-            .get(tool_name)
-            .ok_or_else(|| format!("Unknown plugin tool: {}", tool_name))?;
+    ) -> CarrierResult<String> {
+        let entry = self.tools.get(tool_name).ok_or_else(|| {
+            CarrierError::Internal(format!("Unknown plugin tool: {}", tool_name))
+        })?;
 
         let args_json =
-            serde_json::to_string(args).map_err(|e| format!("Args serialization: {}", e))?;
-        let context_json =
-            serde_json::to_string(context).map_err(|e| format!("Context serialization: {}", e))?;
+            serde_json::to_string(args).map_err(|e| CarrierError::Serialization(e.to_string()))?;
+        let context_json = serde_json::to_string(context)
+            .map_err(|e| CarrierError::Serialization(e.to_string()))?;
 
         entry
             .plugin
             .tool_execute(tool_name, &args_json, &context_json)
+            .map_err(|e| CarrierError::ToolExecution {
+                tool_id: tool_name.to_string(),
+                reason: e,
+            })
     }
 }
 
