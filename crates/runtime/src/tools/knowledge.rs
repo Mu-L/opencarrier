@@ -7,6 +7,7 @@
 use super::ToolModule;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::ToolDefinition;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -192,22 +193,22 @@ impl ToolModule for KnowledgeTools {
         ctx: &ToolContext<'_>,
     ) -> Option<Result<String, String>> {
         match name {
-            "knowledge_list" => Some(tool_knowledge_list(ctx.workspace_root).await),
-            "knowledge_read" => Some(tool_knowledge_read(input, ctx.workspace_root).await),
-            "apply_patch" => Some(tool_apply_patch(input, ctx.workspace_root).await),
-            "knowledge_lint" => Some(tool_knowledge_lint(ctx.workspace_root).await),
-            "knowledge_heal" => Some(tool_knowledge_heal(ctx.workspace_root).await),
-            "knowledge_add" => Some(tool_knowledge_add(input, ctx.workspace_root).await),
-            "knowledge_remove" => Some(tool_knowledge_remove(input, ctx.workspace_root).await),
-            "knowledge_import" => Some(tool_knowledge_import(input, ctx.workspace_root).await),
-            "clone_evaluate" => Some(tool_clone_evaluate(ctx.workspace_root).await),
-            "knowledge_extract" => Some(tool_knowledge_extract(input, ctx.workspace_root).await),
-            "knowledge_index" => Some(tool_knowledge_index(ctx.workspace_root).await),
-            "flow_create" => Some(tool_flow_create(input, ctx.workspace_root).await),
-            "flow_update" => Some(tool_flow_update(input, ctx.workspace_root).await),
-            "flow_load" => Some(tool_flow_load(input, ctx.workspace_root).await),
+            "knowledge_list" => Some(tool_knowledge_list(ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "knowledge_read" => Some(tool_knowledge_read(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "apply_patch" => Some(tool_apply_patch(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "knowledge_lint" => Some(tool_knowledge_lint(ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "knowledge_heal" => Some(tool_knowledge_heal(ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "knowledge_add" => Some(tool_knowledge_add(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "knowledge_remove" => Some(tool_knowledge_remove(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "knowledge_import" => Some(tool_knowledge_import(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "clone_evaluate" => Some(tool_clone_evaluate(ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "knowledge_extract" => Some(tool_knowledge_extract(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "knowledge_index" => Some(tool_knowledge_index(ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "flow_create" => Some(tool_flow_create(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "flow_update" => Some(tool_flow_update(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "flow_load" => Some(tool_flow_load(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
             "session_summarize" => Some(
-                tool_session_summarize(input, ctx.memory, ctx.caller_agent_id, ctx.sender_id).await,
+                tool_session_summarize(input, ctx.memory, ctx.caller_agent_id, ctx.sender_id).await.map_err(|e| e.to_string()),
             ),
             _ => None,
         }
@@ -232,8 +233,8 @@ impl ToolModule for KnowledgeTools {
 // Knowledge tools (safe access to knowledge/)
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn tool_knowledge_list(workspace_root: Option<&Path>) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_list requires a workspace root")?;
+pub(crate) async fn tool_knowledge_list(workspace_root: Option<&Path>) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal("knowledge_list requires a workspace root".to_string()))?;
     let knowledge_dir = root.join("knowledge");
 
     if !knowledge_dir.exists() {
@@ -242,13 +243,13 @@ pub(crate) async fn tool_knowledge_list(workspace_root: Option<&Path>) -> Result
 
     let mut entries = tokio::fs::read_dir(&knowledge_dir)
         .await
-        .map_err(|e| format!("Failed to read knowledge directory: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to read knowledge directory: {e}")))?;
 
     let mut files = Vec::new();
     while let Some(entry) = entries
         .next_entry()
         .await
-        .map_err(|e| format!("Failed to read entry: {e}"))?
+        .map_err(|e| CarrierError::Internal(format!("Failed to read entry: {e}")))?
     {
         let path = entry.path();
         if path.extension().map(|e| e == "md").unwrap_or(false) {
@@ -280,18 +281,18 @@ pub(crate) async fn tool_knowledge_list(workspace_root: Option<&Path>) -> Result
 pub(crate) async fn tool_knowledge_read(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let filename = input["filename"]
         .as_str()
-        .ok_or("Missing 'filename' parameter")?;
-    let root = workspace_root.ok_or("knowledge_read requires a workspace root")?;
+        .ok_or(CarrierError::InvalidInput("Missing 'filename' parameter".to_string()))?;
+    let root = workspace_root.ok_or(CarrierError::Internal("knowledge_read requires a workspace root".to_string()))?;
 
     // Security: validate filename (no path traversal)
     if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
-        return Err("Invalid filename: path separators and '..' are forbidden".to_string());
+        return Err(CarrierError::InvalidInput("Invalid filename: path separators and '..' are forbidden".to_string()));
     }
     if !filename.ends_with(".md") {
-        return Err("Only .md knowledge files can be read".to_string());
+        return Err(CarrierError::InvalidInput("Only .md knowledge files can be read".to_string()));
     }
 
     let path = root.join("knowledge").join(filename);
@@ -324,7 +325,7 @@ pub(crate) async fn tool_knowledge_read(
 
     tokio::fs::read_to_string(&path)
         .await
-        .map_err(|e| format!("Failed to read knowledge file: {e}"))
+        .map_err(|e| CarrierError::Internal(format!("Failed to read knowledge file: {e}")))
 }
 
 /// Extract `name` from YAML frontmatter of a knowledge file.
@@ -351,19 +352,19 @@ fn extract_knowledge_title(content: &str) -> Option<String> {
 async fn tool_apply_patch(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let patch_str = input["patch"].as_str().ok_or("Missing 'patch' parameter")?;
-    let root = workspace_root.ok_or("apply_patch requires a workspace root")?;
-    let ops = crate::apply_patch::parse_patch(patch_str)?;
+) -> CarrierResult<String> {
+    let patch_str = input["patch"].as_str().ok_or(CarrierError::InvalidInput("Missing 'patch' parameter".to_string()))?;
+    let root = workspace_root.ok_or(CarrierError::Internal("apply_patch requires a workspace root".to_string()))?;
+    let ops = crate::apply_patch::parse_patch(patch_str).map_err(CarrierError::InvalidInput)?;
     let result = crate::apply_patch::apply_patch(&ops, root).await;
     if result.is_ok() {
         Ok(result.summary())
     } else {
-        Err(format!(
+        Err(CarrierError::Internal(format!(
             "Patch partially applied: {}. Errors: {}",
             result.summary(),
             result.errors.join("; ")
-        ))
+        )))
     }
 }
 
@@ -371,8 +372,8 @@ async fn tool_apply_patch(
 // Lifecycle system tools (clone knowledge management)
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn tool_knowledge_lint(workspace_root: Option<&Path>) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_lint requires a workspace root")?;
+pub(crate) async fn tool_knowledge_lint(workspace_root: Option<&Path>) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal("knowledge_lint requires a workspace root".to_string()))?;
     let report = lifecycle::health::check_health(root);
     if report.issues.is_empty() {
         Ok("All knowledge files are healthy.".to_string())
@@ -388,8 +389,8 @@ pub(crate) async fn tool_knowledge_lint(workspace_root: Option<&Path>) -> Result
     }
 }
 
-pub(crate) async fn tool_knowledge_heal(workspace_root: Option<&Path>) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_heal requires a workspace root")?;
+pub(crate) async fn tool_knowledge_heal(workspace_root: Option<&Path>) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal("knowledge_heal requires a workspace root".to_string()))?;
     let report = lifecycle::health::check_health(root);
     let fixes = lifecycle::health::auto_fix(root, &report);
     Ok(format!("Fixed {} issue(s).", fixes))
@@ -401,12 +402,12 @@ pub(crate) async fn knowledge_add_core(
     title: &str,
     content: &str,
     source_label: &str,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let filename = lifecycle::evolution::sanitize_filename(title);
     let knowledge_dir = root.join("knowledge");
     tokio::fs::create_dir_all(&knowledge_dir)
         .await
-        .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to create knowledge dir: {e}")))?;
     let path = knowledge_dir.join(format!("{filename}.md"));
     let full = format!(
         "---\nname: {}\ndescription: {}\nconfidence: EXTRACTED\n---\n{}\n---\n",
@@ -414,7 +415,7 @@ pub(crate) async fn knowledge_add_core(
     );
     tokio::fs::write(&path, &full)
         .await
-        .map_err(|e| format!("Failed to write knowledge file: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to write knowledge file: {e}")))?;
     let _ = lifecycle::version::record_version(
         root,
         "create",
@@ -431,13 +432,13 @@ pub(crate) async fn knowledge_import_core(
     root: &Path,
     data: &str,
     data_type: &str,
-) -> Result<(Vec<String>, lifecycle::parsers::ParseQuality), String> {
+) -> CarrierResult<(Vec<String>, lifecycle::parsers::ParseQuality)> {
     let result = lifecycle::parsers::parse_import_data(data, data_type)
-        .map_err(|e| format!("Parse failed: {e}"))?;
+        .map_err(|e| CarrierError::Serialization(format!("Parse failed: {e}")))?;
     let knowledge_dir = root.join("knowledge");
     tokio::fs::create_dir_all(&knowledge_dir)
         .await
-        .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to create knowledge dir: {e}")))?;
     let mut saved = Vec::new();
     for entry in &result.entries {
         let filename = lifecycle::evolution::sanitize_filename(&entry.title);
@@ -448,7 +449,7 @@ pub(crate) async fn knowledge_import_core(
         );
         tokio::fs::write(&path, &full)
             .await
-            .map_err(|e| format!("Failed to write {}: {e}", filename))?;
+            .map_err(|e| CarrierError::Internal(format!("Failed to write {}: {e}", filename)))?;
         saved.push(filename);
     }
     Ok((saved, result.quality))
@@ -457,22 +458,22 @@ pub(crate) async fn knowledge_import_core(
 async fn tool_knowledge_add(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_add requires a workspace root")?;
-    let title = input["title"].as_str().ok_or("Missing 'title' parameter")?;
+) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal("knowledge_add requires a workspace root".to_string()))?;
+    let title = input["title"].as_str().ok_or(CarrierError::InvalidInput("Missing 'title' parameter".to_string()))?;
     let content = input["content"]
         .as_str()
-        .ok_or("Missing 'content' parameter")?;
+        .ok_or(CarrierError::InvalidInput("Missing 'content' parameter".to_string()))?;
 
     // Reject content that looks like credentials/secrets — these belong in kv_set
     let content_lower = content.to_lowercase();
     let sensitive_patterns = ["app_secret", "app_id", "api_key", "apikey", "secret_key", "access_token", "private_key"];
     let matched = sensitive_patterns.iter().find(|p| content_lower.contains(*p));
     if let Some(pattern) = matched {
-        return Err(format!(
+        return Err(CarrierError::InvalidInput(format!(
             "Rejected: content contains '{pattern}' which looks like credentials/secrets. \
              Use kv_set to store private data in your personal key-value store instead of knowledge_add."
-        ));
+        )));
     }
 
     let filename = knowledge_add_core(root, title, content, "tool").await?;
@@ -482,12 +483,12 @@ async fn tool_knowledge_add(
 async fn tool_knowledge_extract(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_extract requires a workspace root")?;
-    let title = input["title"].as_str().ok_or("Missing 'title' parameter")?;
+) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal("knowledge_extract requires a workspace root".to_string()))?;
+    let title = input["title"].as_str().ok_or(CarrierError::InvalidInput("Missing 'title' parameter".to_string()))?;
     let content = input["content"]
         .as_str()
-        .ok_or("Missing 'content' parameter")?;
+        .ok_or(CarrierError::InvalidInput("Missing 'content' parameter".to_string()))?;
 
     let candidate = lifecycle::evolution::KnowledgeCandidate {
         title: title.to_string(),
@@ -508,10 +509,10 @@ async fn tool_knowledge_extract(
     }
 }
 
-async fn tool_knowledge_index(workspace_root: Option<&Path>) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_index requires a workspace root")?;
+async fn tool_knowledge_index(workspace_root: Option<&Path>) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal("knowledge_index requires a workspace root".to_string()))?;
     lifecycle::evolution::update_memory_index(root)
-        .map_err(|e| format!("Failed to rebuild index: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to rebuild index: {e}")))?;
     Ok("Knowledge index (MEMORY.md) rebuilt successfully.".to_string())
 }
 
@@ -615,11 +616,11 @@ fn upsert_frontmatter_description(fm: &str, description: &str) -> String {
 async fn tool_flow_create(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("flow_create requires a workspace root")?;
-    let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
+) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal("flow_create requires a workspace root".to_string()))?;
+    let name = input["name"].as_str().ok_or(CarrierError::InvalidInput("Missing 'name' parameter".to_string()))?;
     let description = input["description"].as_str().unwrap_or("");
-    let body = input["body"].as_str().ok_or("Missing 'body' parameter")?;
+    let body = input["body"].as_str().ok_or(CarrierError::InvalidInput("Missing 'body' parameter".to_string()))?;
     // Prefer `tools`; accept legacy `toolsets` as alias (same list of tool names).
     let mut tools = parse_string_list(input, "tools");
     if tools.is_empty() {
@@ -629,15 +630,15 @@ async fn tool_flow_create(
     let flows_dir = root.join("flows");
     tokio::fs::create_dir_all(&flows_dir)
         .await
-        .map_err(|e| format!("Failed to create flows dir: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to create flows dir: {e}")))?;
 
     let filename = lifecycle::evolution::sanitize_filename(name);
     let path = flows_dir.join(format!("{filename}.md"));
 
     if path.exists() {
-        return Err(format!(
+        return Err(CarrierError::InvalidInput(format!(
             "Flow '{name}' already exists. Use flow_update to modify it."
-        ));
+        )));
     }
 
     let mut frontmatter = format!("---\nname: {name}\n");
@@ -652,7 +653,7 @@ async fn tool_flow_create(
     let full = format!("{frontmatter}\n{body}");
     tokio::fs::write(&path, &full)
         .await
-        .map_err(|e| format!("Failed to write flow: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to write flow: {e}")))?;
 
     Ok(format!(
         "Flow '{name}' created successfully{}.",
@@ -667,9 +668,9 @@ async fn tool_flow_create(
 async fn tool_flow_update(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("flow_update requires a workspace root")?;
-    let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
+) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal("flow_update requires a workspace root".to_string()))?;
+    let name = input["name"].as_str().ok_or(CarrierError::InvalidInput("Missing 'name' parameter".to_string()))?;
     let new_body = input["body"].as_str().filter(|s| !s.is_empty());
     let new_tools = {
         let t = parse_string_list(input, "tools");
@@ -682,9 +683,9 @@ async fn tool_flow_update(
     let new_description = input["description"].as_str().filter(|s| !s.is_empty());
 
     if new_body.is_none() && new_tools.is_none() && new_description.is_none() {
-        return Err(
+        return Err(CarrierError::InvalidInput(
             "flow_update requires at least one of: body, tools, description (non-empty)".to_string(),
-        );
+        ));
     }
 
     let private_flows = root.join("flows");
@@ -699,20 +700,20 @@ async fn tool_flow_update(
     let source_path = match (&private_path, &shared_path) {
         (Some(p), _) => p.clone(),
         (None, Some(_)) => {
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "Flow '{name}' is a shared system flow and read-only. Agents cannot modify shared flows (copy-on-write is disabled). Ask a human to update it in the platform flows source, or create a clone-specific variant with flow_create."
-            ));
+            )));
         }
         (None, None) => {
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "Flow '{name}' not found in workspace or shared flows."
-            ));
+            )));
         }
     };
 
     let existing = tokio::fs::read_to_string(&source_path)
         .await
-        .map_err(|e| format!("Failed to read flow: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to read flow: {e}")))?;
 
     let (fm_opt, old_body) = split_flow_file(&existing);
     let mut fm = fm_opt.unwrap_or_else(|| format!("name: {name}"));
@@ -731,7 +732,7 @@ async fn tool_flow_update(
 
     tokio::fs::write(&target, &updated)
         .await
-        .map_err(|e| format!("Failed to write flow: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to write flow: {e}")))?;
 
     let mut notes = Vec::new();
     if let Some(ref tools) = new_tools {
@@ -753,9 +754,9 @@ async fn tool_flow_update(
 async fn tool_flow_load(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("flow_load requires a workspace root")?;
-    let name = input["name"].as_str().ok_or("Missing 'name' parameter")?;
+) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal("flow_load requires a workspace root".to_string()))?;
+    let name = input["name"].as_str().ok_or(CarrierError::InvalidInput("Missing 'name' parameter".to_string()))?;
 
     // Search private flows first (workspace/flows), then fall back to
     // shared system flows (~/.opencarrier/flows). Private wins on collision.
@@ -767,11 +768,11 @@ async fn tool_flow_load(
         if let Some(path) = find_flow_path(&flows_dir, name).await {
             return tokio::fs::read_to_string(&path)
                 .await
-                .map_err(|e| format!("Failed to read flow: {e}"));
+                .map_err(|e| CarrierError::Internal(format!("Failed to read flow: {e}")));
         }
     }
 
-    Err(format!("Flow '{name}' not found."))
+    Err(CarrierError::InvalidInput(format!("Flow '{name}' not found.")))
 }
 
 /// Locate a flow file by name within a flows directory.
@@ -827,13 +828,13 @@ async fn tool_session_summarize(
     memory: Option<&Arc<dyn crate::memory_handle::MemoryHandle>>,
     caller_agent_id: Option<&str>,
     sender_id: Option<&str>,
-) -> Result<String, String> {
-    let mem = memory.ok_or("session_summarize requires memory access")?;
-    let agent_id = caller_agent_id.ok_or("session_summarize requires caller agent ID")?;
+) -> CarrierResult<String> {
+    let mem = memory.ok_or(CarrierError::Internal("session_summarize requires memory access".to_string()))?;
+    let agent_id = caller_agent_id.ok_or(CarrierError::Internal("session_summarize requires caller agent ID".to_string()))?;
     let sid = sender_id.unwrap_or("");
     let summary = input["summary"]
         .as_str()
-        .ok_or("Missing 'summary' parameter")?;
+        .ok_or(CarrierError::InvalidInput("Missing 'summary' parameter".to_string()))?;
 
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let key = format!("session_summary:{date}");
@@ -844,8 +845,7 @@ async fn tool_session_summarize(
         sid,
         &key,
         serde_json::Value::String(summary.to_string()),
-    )
-    .map_err(|e| format!("Failed to store summary: {e}"))?;
+    )?;
 
     Ok(format!("Session summary stored for {date}."))
 }
@@ -853,17 +853,17 @@ async fn tool_session_summarize(
 async fn tool_knowledge_remove(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_remove requires a workspace root")?;
+) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal("knowledge_remove requires a workspace root".to_string()))?;
     let query = input["filename"]
         .as_str()
-        .ok_or("Missing 'filename' parameter")?;
+        .ok_or(CarrierError::InvalidInput("Missing 'filename' parameter".to_string()))?;
     let knowledge_dir = root.join("knowledge");
     let target = find_knowledge_file(&knowledge_dir, query)?;
     let before = tokio::fs::read_to_string(&target).await.ok();
     tokio::fs::remove_file(&target)
         .await
-        .map_err(|e| format!("Failed to delete: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to delete: {e}")))?;
     let name = target
         .file_name()
         .unwrap_or_default()
@@ -884,9 +884,9 @@ async fn tool_knowledge_remove(
 async fn tool_knowledge_import(
     input: &serde_json::Value,
     workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let root = workspace_root.ok_or("knowledge_import requires a workspace root")?;
-    let data = input["data"].as_str().ok_or("Missing 'data' parameter")?;
+) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal("knowledge_import requires a workspace root".to_string()))?;
+    let data = input["data"].as_str().ok_or(CarrierError::InvalidInput("Missing 'data' parameter".to_string()))?;
     let data_type = input["data_type"].as_str().unwrap_or("auto");
     let (saved, quality) = knowledge_import_core(root, data, data_type).await?;
     Ok(format!(
@@ -896,8 +896,8 @@ async fn tool_knowledge_import(
     ))
 }
 
-pub(crate) async fn tool_clone_evaluate(workspace_root: Option<&Path>) -> Result<String, String> {
-    let root = workspace_root.ok_or("clone_evaluate requires a workspace root")?;
+pub(crate) async fn tool_clone_evaluate(workspace_root: Option<&Path>) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal("clone_evaluate requires a workspace root".to_string()))?;
     let metrics = lifecycle::evaluate::compute_deterministic_metrics(root);
     Ok(format!(
         "Quality Score: {}/100 ({})\nKnowledge: {} files, {} bytes\nSkills: {}\nIdentity: SOUL={}, SP={}, MEMORY={}",
@@ -913,8 +913,8 @@ pub(crate) async fn tool_clone_evaluate(workspace_root: Option<&Path>) -> Result
 }
 
 /// Fuzzy-match a knowledge file by name (exact -> prefix -> substring).
-fn find_knowledge_file(knowledge_dir: &Path, query: &str) -> Result<PathBuf, String> {
-    let entries = std::fs::read_dir(knowledge_dir).map_err(|e| e.to_string())?;
+fn find_knowledge_file(knowledge_dir: &Path, query: &str) -> CarrierResult<PathBuf> {
+    let entries = std::fs::read_dir(knowledge_dir)?;
     let query_lower = query.to_lowercase();
     let query_no_ext = query_lower.trim_end_matches(".md");
 
@@ -962,7 +962,7 @@ fn find_knowledge_file(knowledge_dir: &Path, query: &str) -> Result<PathBuf, Str
         return Ok(sub.clone());
     }
 
-    Err(format!("No knowledge file matching '{}' found", query))
+    Err(CarrierError::InvalidInput(format!("No knowledge file matching '{}' found", query)))
 }
 
 /// Append tool names to a skill .md file's `tools:` frontmatter field.
@@ -970,7 +970,7 @@ fn find_knowledge_file(knowledge_dir: &Path, query: &str) -> Result<PathBuf, Str
 /// If a `tools:` line already exists in the frontmatter, new tools are merged
 /// (duplicates removed). Otherwise, a new line is inserted after `name:`.
 /// Uses atomic write (tmp + rename) for safety.
-pub fn write_skill_tools(workspace: &Path, skill_name: &str, tools: &[String]) -> Result<(), String> {
+pub fn write_skill_tools(workspace: &Path, skill_name: &str, tools: &[String]) -> CarrierResult<()> {
     let flows_dir = workspace.join("flows");
     let filename = lifecycle::evolution::sanitize_filename(skill_name);
     let flat_path = flows_dir.join(format!("{filename}.md"));
@@ -986,11 +986,11 @@ pub fn write_skill_tools(workspace: &Path, skill_name: &str, tools: &[String]) -
     } else if dir_skill.exists() {
         dir_skill
     } else {
-        return Err(format!("Flow '{skill_name}' not found"));
+        return Err(CarrierError::InvalidInput(format!("Flow '{skill_name}' not found")));
     };
 
     let content = std::fs::read_to_string(&target)
-        .map_err(|e| format!("Failed to read flow: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to read flow: {e}")))?;
 
     if tools.is_empty() {
         return Ok(());
@@ -1056,18 +1056,18 @@ pub fn write_skill_tools(workspace: &Path, skill_name: &str, tools: &[String]) -
                 format!("---\n{new_fm}---{after_fm}")
             }
         } else {
-            return Err("Invalid frontmatter: no closing ---".to_string());
+            return Err(CarrierError::InvalidInput("Invalid frontmatter: no closing ---".to_string()));
         }
     } else {
-        return Err("No frontmatter found in skill file".to_string());
+        return Err(CarrierError::InvalidInput("No frontmatter found in skill file".to_string()));
     };
 
     // Atomic write
     let tmp_path = target.with_extension("tmp");
     std::fs::write(&tmp_path, &updated)
-        .map_err(|e| format!("Failed to write temp file: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to write temp file: {e}")))?;
     std::fs::rename(&tmp_path, &target)
-        .map_err(|e| format!("Failed to rename temp file: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to rename temp file: {e}")))?;
 
     Ok(())
 }
@@ -1204,7 +1204,7 @@ mod flow_evolution_tests {
         let err = tool_flow_update(&input, Some(tmp.path()))
             .await
             .expect_err("shared flow must be read-only (no copy-on-write)");
-        assert!(err.contains("read-only"), "got: {err}");
+        assert!(err.to_string().contains("read-only"), "got: {err}");
         // No private overlay created — shared flows are never forked.
         assert!(!tmp.path().join("flows/demo.md").exists(), "no COW private flow");
         // Shared unchanged

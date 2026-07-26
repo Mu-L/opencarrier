@@ -86,7 +86,7 @@ async fn tool_train_evaluate(
     _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
-    crate::tools::knowledge::tool_clone_evaluate(Some(&target_root)).await
+    crate::tools::knowledge::tool_clone_evaluate(Some(&target_root)).await.map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
