@@ -8,6 +8,7 @@
 //! - `AgentLoopEnd`: Fires after the agent loop completes. Observe-only.
 
 use types::agent::HookEvent;
+use types::error::CarrierResult;
 use dashmap::DashMap;
 use std::sync::Arc;
 
@@ -29,7 +30,7 @@ pub trait HookHandler: Send + Sync {
     ///
     /// For `BeforeToolCall`: returning `Err(reason)` blocks the tool call.
     /// For all other events: return value is ignored (observe-only).
-    fn on_event(&self, ctx: &HookContext) -> Result<(), String>;
+    fn on_event(&self, ctx: &HookContext) -> CarrierResult<()>;
 }
 
 /// Registry of hook handlers, keyed by event type.
@@ -56,7 +57,7 @@ impl HookRegistry {
     ///
     /// For `BeforeToolCall`, the first Err stops execution and returns the reason.
     /// For other events, errors are logged but don't propagate.
-    pub fn fire(&self, ctx: &HookContext) -> Result<(), String> {
+    pub fn fire(&self, ctx: &HookContext) -> CarrierResult<()> {
         if let Some(handlers) = self.handlers.get(&ctx.event) {
             for handler in handlers.iter() {
                 if let Err(reason) = handler.on_event(ctx) {
@@ -94,11 +95,12 @@ impl Default for HookRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use types::error::CarrierError;
 
     /// A test handler that always succeeds.
     struct OkHandler;
     impl HookHandler for OkHandler {
-        fn on_event(&self, _ctx: &HookContext) -> Result<(), String> {
+        fn on_event(&self, _ctx: &HookContext) -> CarrierResult<()> {
             Ok(())
         }
     }
@@ -108,8 +110,8 @@ mod tests {
         reason: String,
     }
     impl HookHandler for BlockHandler {
-        fn on_event(&self, _ctx: &HookContext) -> Result<(), String> {
-            Err(self.reason.clone())
+        fn on_event(&self, _ctx: &HookContext) -> CarrierResult<()> {
+            Err(CarrierError::CapabilityDenied(self.reason.clone()))
         }
     }
 
@@ -128,7 +130,7 @@ mod tests {
         }
     }
     impl HookHandler for RecordHandler {
-        fn on_event(&self, ctx: &HookContext) -> Result<(), String> {
+        fn on_event(&self, ctx: &HookContext) -> CarrierResult<()> {
             self.calls.lock().unwrap().push(format!("{:?}", ctx.event));
             Ok(())
         }
@@ -162,7 +164,7 @@ mod tests {
         let ctx = make_ctx(HookEvent::BeforeToolCall);
         let result = registry.fire(&ctx);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Not allowed");
+        assert!(result.unwrap_err().to_string().contains("Not allowed"));
     }
 
     #[test]
