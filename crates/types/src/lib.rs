@@ -31,16 +31,25 @@ pub mod tool;
 pub mod tool_compat;
 pub mod webhook;
 
+/// Walk `bp` back to the nearest UTF-8 char boundary (≤ bp, clamped to `s.len()`).
+///
+/// Shared char-boundary primitive for all the tool-result truncation layers
+/// (per-tool static, dynamic budget, overflow recovery), which previously each
+/// hand-rolled this `while !is_char_boundary { bp -= 1 }` loop.
+pub fn floor_char_boundary(s: &str, bp: usize) -> usize {
+    let mut end = bp.min(s.len());
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
 /// Safely truncate a string to at most `max_bytes`, never splitting a UTF-8 char.
 pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }
-    let mut end = max_bytes;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
+    &s[..floor_char_boundary(s, max_bytes)]
 }
 
 #[cfg(test)]

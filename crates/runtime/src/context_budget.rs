@@ -58,23 +58,12 @@ pub fn truncate_tool_result_dynamic(content: &str, budget: &ContextBudget) -> St
     }
 
     // Find last newline before the cap to break cleanly (char-boundary safe)
-    let mut safe_cap = cap.min(content.len());
-    while safe_cap > 0 && !content.is_char_boundary(safe_cap) {
-        safe_cap -= 1;
-    }
-    let mut search_start = safe_cap.saturating_sub(200);
-    // Ensure search_start is a valid char boundary
-    while search_start > 0 && !content.is_char_boundary(search_start) {
-        search_start -= 1;
-    }
-    let mut break_point = content[search_start..safe_cap]
+    let safe_cap = types::floor_char_boundary(content, cap);
+    let search_start = types::floor_char_boundary(content, safe_cap.saturating_sub(200));
+    let break_point = content[search_start..safe_cap]
         .rfind('\n')
         .map(|pos| search_start + pos)
-        .unwrap_or(safe_cap.saturating_sub(100));
-    // Ensure break_point is also a char boundary
-    while break_point > 0 && !content.is_char_boundary(break_point) {
-        break_point -= 1;
-    }
+        .unwrap_or_else(|| types::floor_char_boundary(content, safe_cap.saturating_sub(100)));
 
     format!(
         "{}\n\n[TRUNCATED: result was {} chars, showing first {} (budget: {}% of {}K context window)]",

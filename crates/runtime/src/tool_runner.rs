@@ -299,16 +299,11 @@ pub async fn execute_tool(
 /// Per-tool maximum result size in characters.
 /// Tools returning more than this will be truncated with a marker.
 /// None means no per-tool limit (dynamic context truncation still applies).
+///
+/// Thin wrapper over [`crate::tool_meta::tool_meta`] — the single source of
+/// truth for tool metadata.
 fn tool_max_result_chars(name: &str) -> Option<usize> {
-    match name {
-        "web_fetch" => Some(20_000),
-        "file_read" => Some(50_000),
-        "shell_exec" => Some(10_000),
-        "knowledge_read" => Some(30_000),
-        "sqlite_query" => Some(30_000),
-        "image_analyze" | "media_describe" | "media_transcribe" => Some(10_000),
-        _ => None,
-    }
+    crate::tool_meta::tool_meta(name).max_result_chars
 }
 
 /// Truncate a tool result if it exceeds the per-tool max size.
@@ -379,14 +374,8 @@ fn smart_truncate(content: &str, max_chars: usize) -> String {
         if content.len() <= max_chars {
             return content.to_string();
         }
-        let mut bp = max_chars.min(content.len());
-        while bp > 0 && !content.is_char_boundary(bp) {
-            bp -= 1;
-        }
-        let mut search_start = bp.saturating_sub(200);
-        while search_start > 0 && !content.is_char_boundary(search_start) {
-            search_start -= 1;
-        }
+        let mut bp = types::floor_char_boundary(content, max_chars);
+        let search_start = types::floor_char_boundary(content, bp.saturating_sub(200));
         if let Some(nl_pos) = content[search_start..bp].rfind('\n') {
             bp = search_start + nl_pos;
         }

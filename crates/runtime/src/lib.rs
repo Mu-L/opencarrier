@@ -48,6 +48,7 @@ pub mod subprocess_sandbox;
 pub mod text_tool_recovery;
 pub mod think_filter;
 pub mod tool_context;
+pub mod tool_meta;
 pub mod tool_runner;
 pub mod tools;
 pub mod web_cache;

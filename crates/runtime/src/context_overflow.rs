@@ -112,11 +112,10 @@ pub fn recover_from_overflow(
             for block in blocks.iter_mut() {
                 if let ContentBlock::ToolResult { content, .. } = block {
                     if content.len() > tool_truncation_limit {
-                        let mut safe_keep = tool_truncation_limit.saturating_sub(80);
-                        // Walk back to a valid char boundary
-                        while safe_keep > 0 && !content.is_char_boundary(safe_keep) {
-                            safe_keep -= 1;
-                        }
+                        let safe_keep = types::floor_char_boundary(
+                            content,
+                            tool_truncation_limit.saturating_sub(80),
+                        );
                         *content = format!(
                             "{}\n\n[OVERFLOW RECOVERY: truncated from {} to {} chars]",
                             &content[..safe_keep],

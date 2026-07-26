@@ -425,22 +425,33 @@ mod tests {
         }
     }
 
-    /// Unique temp OPENCARRIER_HOME, restored on drop. Not parallel-safe with
-    /// other home_dir readers, but channels-common has none.
-    struct TempHome(String);
+    /// Serializes tests that mutate the process-global OPENCARRIER_HOME, so the
+    /// two registry tests don't clobber each other's env var when run in parallel.
+    static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Unique temp OPENCARRIER_HOME, restored on drop. Holds `HOME_ENV_LOCK` for
+    /// its whole lifetime so concurrent env-mutating tests run one at a time.
+    struct TempHome {
+        path: String,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
     impl TempHome {
         fn new(tag: &str) -> Self {
+            let guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let dir = std::env::temp_dir().join(format!("oc-botreg-{}-{}", std::process::id(), tag));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             std::env::set_var("OPENCARRIER_HOME", &dir);
-            Self(dir.to_string_lossy().to_string())
+            Self {
+                path: dir.to_string_lossy().to_string(),
+                _guard: guard,
+            }
         }
     }
     impl Drop for TempHome {
         fn drop(&mut self) {
             std::env::remove_var("OPENCARRIER_HOME");
-            let _ = std::fs::remove_dir_all(&self.0);
+            let _ = std::fs::remove_dir_all(&self.path);
         }
     }
 

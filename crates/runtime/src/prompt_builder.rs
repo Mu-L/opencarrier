@@ -886,101 +886,16 @@ const OPERATIONAL_GUIDELINES: &str = "\
 // ---------------------------------------------------------------------------
 
 /// Map a tool name to its category for grouping.
+///
+/// Thin wrapper over [`crate::tool_meta::tool_meta`] — the single source of
+/// truth for tool metadata (previously three separate string-match tables).
 pub fn tool_category(name: &str) -> &'static str {
-    match name {
-        "file_read" | "file_write" | "file_list" | "file_delete" | "file_move" | "file_copy"
-        | "file_search" => "Files",
-
-        "web_fetch" => "Web",
-
-        "browser_navigate" | "browser_click" | "browser_type" | "browser_screenshot"
-        | "browser_read_page" | "browser_close" | "browser_scroll" | "browser_wait"
-        | "browser_evaluate" | "browser_select" | "browser_back" => "Browser",
-
-        "shell_exec" | "shell_background" => "Shell",
-
-        "agent_send" | "agent_spawn" | "agent_list" | "agent_kill" => "Agents",
-
-        "image_describe" | "image_generate" | "audio_transcribe" | "tts_speak" => "Media",
-
-        "cron_create" | "cron_list" | "cron_delete" => "Scheduling",
-
-        "process_start" | "process_poll" | "process_write" | "process_kill" | "process_list" => {
-            "Processes"
-        }
-
-        _ if name.starts_with("mcp_") => "MCP",
-        _ if name.starts_with("flow_") => "Flows",
-        _ => "Other",
-    }
+    crate::tool_meta::tool_meta(name).category.label()
 }
 
 /// Map a tool name to a one-line description hint.
 pub fn tool_hint(name: &str) -> &'static str {
-    match name {
-        // Files
-        "file_read" => "read file contents",
-        "file_write" => "create or overwrite a file",
-        "file_list" => "list directory contents",
-        "file_delete" => "delete a file",
-        "file_move" => "move or rename a file",
-        "file_copy" => "copy a file",
-        "file_search" => "search files by name pattern",
-
-        // Web
-        "web_fetch" => "fetch a URL and get its content as markdown",
-
-        // Browser
-        "browser_navigate" => "open a URL in the browser and return content",
-        "browser_click" => "click an element on the page via JS",
-        "browser_type" => "type text into an input field via JS",
-        "browser_screenshot" => "capture a screenshot (not supported — use browser_navigate)",
-        "browser_read_page" => "extract page content as text/markdown",
-        "browser_close" => "close the browser session (no-op for AginxBrowser)",
-        "browser_scroll" => "scroll the page via JS",
-        "browser_wait" => "wait for an element or condition via JS",
-        "browser_evaluate" => "run arbitrary JavaScript on the page",
-        "browser_select" => "select a dropdown option via JS",
-        "browser_back" => "go back to the previous page (not supported — use browser_navigate)",
-
-        // Shell
-        "shell_exec" => "execute a shell command",
-        "shell_background" => "run a command in the background",
-
-        // Agents
-        "agent_send" => "send a message to another agent",
-        "agent_spawn" => "create a new agent",
-        "agent_list" => "list running agents",
-        "agent_kill" => "terminate an agent",
-
-        // Media
-        "image_describe" => "describe an image",
-        "image_generate" => "generate an image from a prompt",
-        "audio_transcribe" => "transcribe audio to text",
-        "tts_speak" => "convert text to speech",
-
-        // Scheduling
-        "cron_create" => "schedule a recurring task",
-        "cron_list" => "list scheduled tasks",
-        "cron_delete" => "remove a scheduled task",
-
-        // Processes
-        "process_start" => "start a long-running process (REPL, server)",
-        "process_poll" => "read stdout/stderr from a running process",
-        "process_write" => "write to a process's stdin",
-        "process_kill" => "terminate a running process",
-        "process_list" => "list active processes",
-
-        // Evolution (self-improvement)
-        "knowledge_extract" => "extract and save new knowledge from conversation",
-        "knowledge_index" => "rebuild knowledge index (MEMORY.md)",
-        "flow_create" => "create a new flow",
-        "flow_update" => "update an existing flow",
-        "flow_load" => "load full flow content",
-        "session_summarize" => "save a conversation summary",
-
-        _ => "",
-    }
+    crate::tool_meta::tool_meta(name).hint
 }
 
 // ---------------------------------------------------------------------------
