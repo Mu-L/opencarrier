@@ -7,7 +7,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use types::channel::{Channel, ChannelError};
+use types::channel::Channel;
+use types::error::{CarrierError, CarrierResult};
 use types::plugin::PluginMessage;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -207,7 +208,7 @@ impl Channel for SessionWatcher {
         ""
     }
 
-    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         // Initial load + spawn all discovered bots
         token::WECOM_STATE.load_from_dir();
         spawn_inactive_bots(&sender);
@@ -215,31 +216,29 @@ impl Channel for SessionWatcher {
         Ok(())
     }
 
-    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> CarrierResult<()> {
         let session = token::WECOM_STATE
             .get_session_for_send(bot_id)
-            .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
+            .ok_or_else(|| CarrierError::InvalidInput(bot_id.to_string()))?;
 
         match &session.entry.mode {
             token::WecomMode::App { .. } => {
-                token::send_app_message(&session.entry, user_id, text)
-                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                token::send_app_message(&session.entry, user_id, text)?;
             }
             token::WecomMode::Kf { .. } => {
-                token::send_kf_message(&session.entry, user_id, text)
-                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                token::send_kf_message(&session.entry, user_id, text)?;
             }
             token::WecomMode::SmartBot { .. } => {
                 // SmartBot uses response_url mechanism
                 let key = format!("{}:{}", bot_id, user_id);
                 let response_url = smartbot::RESPONSE_URLS
                     .get()
-                    .ok_or_else(|| ChannelError::Config("RESPONSE_URLS not initialized".to_string()))?
+                    .ok_or_else(|| CarrierError::Config("RESPONSE_URLS not initialized".to_string()))?
                     .lock()
                     .unwrap()
                     .remove(&key)
                     .ok_or_else(|| {
-                        ChannelError::NotSupported("No response_url available. SmartBot can only reply within callback context.".to_string())
+                        CarrierError::InvalidInput("No response_url available. SmartBot can only reply within callback context.".to_string())
                     })?;
 
                 let http = session.entry.http.clone();
@@ -251,13 +250,13 @@ impl Channel for SessionWatcher {
                         .build();
                     let result = match rt {
                         Ok(rt) => rt.block_on(token::send_smartbot_response_async(&http, &response_url, &text))
-                            .map_err(|e| ChannelError::SendFailed(e.to_string())),
-                        Err(e) => Err(ChannelError::Other(format!("Runtime creation failed: {e}"))),
+                            .map_err(|e| CarrierError::Network(e.to_string())),
+                        Err(e) => Err(CarrierError::Internal(format!("Runtime creation failed: {e}"))),
                     };
                     let _ = tx.send(result);
                 });
                 rx.recv()
-                    .map_err(|e| ChannelError::Other(format!("SmartBot send thread disconnected: {e}")))??;
+                    .map_err(|e| CarrierError::Internal(format!("SmartBot send thread disconnected: {e}")))??;
             }
         }
 
@@ -269,14 +268,14 @@ impl Channel for SessionWatcher {
         content: &types::content::ContentDescriptor,
         bot_id: &str,
         user_id: &str,
-    ) -> Result<(), ChannelError> {
+    ) -> CarrierResult<()> {
         // Resolve Kf creds as owned data and drop the DashMap ref before the
         // blocking thread spawn (avoids holding a shard lock across recv()).
         // Non-Kf modes (App/SmartBot) degrade rich content to text via send().
         let kf_creds = {
             let session = token::WECOM_STATE
                 .get_session_for_send(bot_id)
-                .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
+                .ok_or_else(|| CarrierError::InvalidInput(bot_id.to_string()))?;
             match &session.entry.mode {
                 token::WecomMode::Kf { .. } => {
                     let open_kfid = session
@@ -284,12 +283,11 @@ impl Channel for SessionWatcher {
                         .open_kfid()
                         .map(|s| s.to_string())
                         .ok_or_else(|| {
-                            ChannelError::NotSupported("kf session missing open_kfid".into())
+                            CarrierError::InvalidInput("kf session missing open_kfid".into())
                         })?;
                     let token = session
                         .entry
-                        .get_access_token()
-                        .map_err(|e| ChannelError::TokenFailed(e.to_string()))?;
+                        .get_access_token()?;
                     Some((session.entry.http.clone(), token, open_kfid))
                 }
                 _ => None,
@@ -298,7 +296,7 @@ impl Channel for SessionWatcher {
 
         let Some((http, token, open_kfid)) = kf_creds else {
             let text = content.as_text().ok_or_else(|| {
-                ChannelError::NotSupported(
+                CarrierError::InvalidInput(
                     "wecom app/smartbot: no text representation for this content".into(),
                 )
             })?;
@@ -310,7 +308,7 @@ impl Channel for SessionWatcher {
         types::channel::block_on_detached(async move {
             deliver_kf_rich(&http, &token, &open_kfid, &ext, &content)
                 .await
-                .map_err(|e| ChannelError::SendFailed(e.to_string()))
+                .map_err(|e| CarrierError::Network(e.to_string()))
         })
     }
 
@@ -318,7 +316,7 @@ impl Channel for SessionWatcher {
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
+    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         token::WECOM_STATE.load_new_from_dir();
         spawn_bot_by_id(sender_id, &sender);
         info!(sender_id = %sender_id, "WeCom: started new sender");

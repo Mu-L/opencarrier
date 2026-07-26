@@ -6,7 +6,8 @@ use axum::extract::Query;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
-use types::channel::{Channel, ChannelError};
+use types::channel::Channel;
+use types::error::{CarrierError, CarrierResult};
 use types::plugin::{PluginContent, PluginMessage};
 use serde::Deserialize;
 use tokio::sync::mpsc;
@@ -74,7 +75,7 @@ impl Channel for WeComChannel {
         &self.bot_id
     }
 
-    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         let bot_id = self.bot_id.clone();
         let encoding_aes_key = self.encoding_aes_key.clone();
         let callback_token = self.callback_token.clone();
@@ -107,22 +108,20 @@ impl Channel for WeComChannel {
         Ok(())
     }
 
-    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> CarrierResult<()> {
         let bot = crate::token::WECOM_STATE
             .get_session_for_send(bot_id)
-            .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
+            .ok_or_else(|| CarrierError::InvalidInput(bot_id.to_string()))?;
 
         match &bot.entry.mode {
             token::WecomMode::App { .. } => {
-                token::send_app_message(&bot.entry, user_id, text)
-                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                token::send_app_message(&bot.entry, user_id, text)?;
             }
             token::WecomMode::Kf { .. } => {
-                token::send_kf_message(&bot.entry, user_id, text)
-                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
+                token::send_kf_message(&bot.entry, user_id, text)?;
             }
             token::WecomMode::SmartBot { .. } => {
-                return Err(ChannelError::NotSupported(
+                return Err(CarrierError::InvalidInput(
                     "SmartBot mode does not support send via channel (use response_url)".to_string(),
                 ));
             }

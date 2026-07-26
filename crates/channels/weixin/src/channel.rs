@@ -13,7 +13,8 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use types::channel::{Channel, ChannelError};
+use types::channel::Channel;
+use types::error::{CarrierError, CarrierResult};
 
 /// Drop redelivered getUpdates items (same message_id / seq / content window).
 /// Without this, iLink can hand the same inbound item multiple times within
@@ -476,7 +477,7 @@ impl Channel for SessionWatcher {
         ""
     }
 
-    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         // Initial load + spawn all discovered bots
         WEIXIN_STATE.load_from_dir();
         spawn_all_bots(&sender);
@@ -488,23 +489,23 @@ impl Channel for SessionWatcher {
             .spawn(move || {
                 respawn_watcher_loop(sender, shutdown);
             })
-            .map_err(|e| ChannelError::Other(format!("Failed to spawn respawn watcher thread: {e}")))?;
+            .map_err(|e| CarrierError::Internal(format!("Failed to spawn respawn watcher thread: {e}")))?;
         self.thread_handle = Some(handle);
         info!("WeChat SessionWatcher started");
         Ok(())
     }
 
-    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> CarrierResult<()> {
         let state = WEIXIN_STATE
             .get_session_for_send(bot_id, user_id)
-            .ok_or_else(|| ChannelError::UnknownBot(format!("No session for bot {bot_id}, user {user_id}")))?;
+            .ok_or_else(|| CarrierError::InvalidInput(format!("No session for bot {bot_id}, user {user_id}")))?;
 
         if state.is_expired() {
-            return Err(ChannelError::TokenFailed(format!("Token expired for bot {bot_id}")));
+            return Err(CarrierError::Network(format!("Token expired for bot {bot_id}")));
         }
 
         let context_token = state.get_context_token(user_id).ok_or_else(|| {
-            ChannelError::NotSupported(format!("No context_token for user {user_id} — can only reply to received messages"))
+            CarrierError::InvalidInput(format!("No context_token for user {user_id} — can only reply to received messages"))
         })?;
 
         let client_id = format!("openclaw-weixin-{}", Uuid::new_v4().as_simple());
@@ -523,7 +524,7 @@ impl Channel for SessionWatcher {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    let _ = tx.send(Err(ChannelError::Other(format!("Failed to create send runtime: {e}"))));
+                    let _ = tx.send(Err(CarrierError::Internal(format!("Failed to create send runtime: {e}"))));
                     return;
                 }
             };
@@ -538,13 +539,13 @@ impl Channel for SessionWatcher {
                     &text,
                 )
                 .await
-                .map_err(|e| ChannelError::SendFailed(e.to_string()))
+                .map_err(|e| CarrierError::Network(e.to_string()))
             });
             let _ = tx.send(result);
         });
 
         rx.recv()
-            .map_err(|e| ChannelError::Other(format!("Send thread disconnected: {e}")))?
+            .map_err(|e| CarrierError::Internal(format!("Send thread disconnected: {e}")))?
     }
 
     fn deliver(
@@ -552,17 +553,17 @@ impl Channel for SessionWatcher {
         content: &types::content::ContentDescriptor,
         bot_id: &str,
         user_id: &str,
-    ) -> Result<(), ChannelError> {
+    ) -> CarrierResult<()> {
         let state = WEIXIN_STATE
             .get_session_for_send(bot_id, user_id)
-            .ok_or_else(|| ChannelError::UnknownBot(format!("No session for bot {bot_id}, user {user_id}")))?;
+            .ok_or_else(|| CarrierError::InvalidInput(format!("No session for bot {bot_id}, user {user_id}")))?;
 
         if state.is_expired() {
-            return Err(ChannelError::TokenFailed(format!("Token expired for bot {bot_id}")));
+            return Err(CarrierError::Network(format!("Token expired for bot {bot_id}")));
         }
 
         let context_token = state.get_context_token(user_id).ok_or_else(|| {
-            ChannelError::NotSupported(format!("No context_token for user {user_id} - can only reply to received messages"))
+            CarrierError::InvalidInput(format!("No context_token for user {user_id} - can only reply to received messages"))
         })?;
 
         // iLink supports video_url, image_url and text only. Pick the best
@@ -571,7 +572,7 @@ impl Channel for SessionWatcher {
             if let Some(url) = v.url.as_deref().filter(|u| !u.is_empty()) {
                 ("video", url.to_string())
             } else {
-                return Err(ChannelError::NotSupported(
+                return Err(CarrierError::InvalidInput(
                     "iLink video requires a public URL".into(),
                 ));
             }
@@ -579,14 +580,14 @@ impl Channel for SessionWatcher {
             if let Some(url) = img.url.as_deref().filter(|u| !u.is_empty()) {
                 ("image", url.to_string())
             } else {
-                return Err(ChannelError::NotSupported(
+                return Err(CarrierError::InvalidInput(
                     "iLink image requires a public URL".into(),
                 ));
             }
         } else if let Some(text) = content.as_text() {
             return self.send(bot_id, user_id, &text);
         } else {
-            return Err(ChannelError::NotSupported(
+            return Err(CarrierError::InvalidInput(
                 "iLink: content has no video URL, image URL, or text representation".into(),
             ));
         };
@@ -604,12 +605,12 @@ impl Channel for SessionWatcher {
                     &http, &bot_token, &baseurl, &user_id, &context_token, &client_id, &payload,
                 )
                 .await
-                .map_err(|e| ChannelError::SendFailed(e.to_string())),
+                .map_err(|e| CarrierError::Network(e.to_string())),
                 "image" => api::send_image(
                     &http, &bot_token, &baseurl, &user_id, &context_token, &client_id, &payload,
                 )
                 .await
-                .map_err(|e| ChannelError::SendFailed(e.to_string())),
+                .map_err(|e| CarrierError::Network(e.to_string())),
                 _ => unreachable!(),
             }
         })
@@ -626,7 +627,7 @@ impl Channel for SessionWatcher {
         info!("SessionWatcher stopped");
     }
 
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
+    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         WEIXIN_STATE.load_new_from_dir();
         // Force-spawn poll thread regardless of active flag.
         // register_from_qr sets active=true, which causes spawn_bot_by_id to skip,

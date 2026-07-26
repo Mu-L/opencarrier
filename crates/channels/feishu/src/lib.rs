@@ -14,7 +14,8 @@ pub mod ws;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use types::channel::{Channel, ChannelError};
+use types::channel::Channel;
+use types::error::{CarrierError, CarrierResult};
 use types::plugin::PluginMessage;
 use dashmap::DashMap;
 use tokio::sync::mpsc;
@@ -262,7 +263,7 @@ impl Channel for SessionWatcher {
         ""
     }
 
-    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         // Initial load + spawn all discovered bots
         FEISHU_STATE.load_from_dir();
         spawn_inactive_bots(&sender);
@@ -270,10 +271,10 @@ impl Channel for SessionWatcher {
         Ok(())
     }
 
-    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> CarrierResult<()> {
         let entry = FEISHU_STATE
             .get_session(bot_id)
-            .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
+            .ok_or_else(|| CarrierError::InvalidInput(bot_id.to_string()))?;
 
         let content = serde_json::json!({ "text": text }).to_string();
         let token_cache = entry.token_cache.clone();
@@ -283,16 +284,16 @@ impl Channel for SessionWatcher {
             let token = token_cache
                 .get_token()
                 .await
-                .map_err(|e| ChannelError::TokenFailed(e.to_string()))?;
+                .map_err(|e| CarrierError::Network(e.to_string()))?;
             let http = token_cache.http().clone();
             let base = token_cache.api_base().to_string();
             let resp =
                 api::send_message(&http, &token, &base, &user_id, "open_id", "text", &content)
                     .await
-                    .map_err(ChannelError::SendFailed)?;
+                    .map_err(CarrierError::Network)?;
 
             if resp.code != 0 {
-                return Err(ChannelError::SendFailed(format!(
+                return Err(CarrierError::Network(format!(
                     "Feishu send error: code={} msg={}",
                     resp.code, resp.msg
                 )));
@@ -305,7 +306,7 @@ impl Channel for SessionWatcher {
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
+    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         FEISHU_STATE.load_new_from_dir();
         spawn_bot_by_id(sender_id, &sender);
         info!(sender_id = %sender_id, "Feishu: started new sender");

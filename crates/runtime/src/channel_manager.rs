@@ -7,7 +7,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use types::channel::{Channel, ChannelError};
+use types::channel::Channel;
+use types::error::{CarrierError, CarrierResult};
 use types::plugin::{PluginMessage, PluginStatus};
 use types::tool::ToolDefinition;
 use tokio::sync::mpsc;
@@ -130,7 +131,7 @@ impl ChannelManager {
                     return channel.send(bot_id, user_id, text);
                 }
             }
-            Err(ChannelError::UnknownBot(format!(
+            Err(CarrierError::InvalidInput(format!(
                 "Channel not found for type: {}, bot: {}",
                 channel_type, bot_id
             )))
@@ -150,7 +151,7 @@ impl ChannelManager {
                         return channel.deliver(content, bot_id, user_id);
                     }
                 }
-                Err(ChannelError::UnknownBot(format!(
+                Err(CarrierError::InvalidInput(format!(
                     "Channel not found for type: {}, bot: {}",
                     channel_type, bot_id
                 )))
@@ -254,14 +255,14 @@ impl ChannelManager {
         bot_id: &str,
         user_id: &str,
         text: &str,
-    ) -> Result<(), ChannelError> {
+    ) -> CarrierResult<()> {
         let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         for channel in channels.values() {
             if channel.channel_type() == channel_type {
                 return channel.send(bot_id, user_id, text);
             }
         }
-        Err(ChannelError::UnknownBot(format!(
+        Err(CarrierError::InvalidInput(format!(
             "Channel not found for type: {}, bot: {}",
             channel_type, bot_id
         )))
@@ -278,7 +279,7 @@ impl ChannelManager {
                     return channel.send(bot_id, user_id, text);
                 }
             }
-            Err(ChannelError::UnknownBot(format!(
+            Err(CarrierError::InvalidInput(format!(
                 "Channel not found for type: {}, bot: {}",
                 channel_type, bot_id
             )))
@@ -292,14 +293,14 @@ impl ChannelManager {
         bot_id: &str,
         user_id: &str,
         content: &types::content::ContentDescriptor,
-    ) -> Result<(), ChannelError> {
+    ) -> CarrierResult<()> {
         let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         for channel in channels.values() {
             if channel.channel_type() == channel_type {
                 return channel.deliver(content, bot_id, user_id);
             }
         }
-        Err(ChannelError::UnknownBot(format!(
+        Err(CarrierError::InvalidInput(format!(
             "Channel not found for type: {}, bot: {}",
             channel_type, bot_id
         )))
@@ -316,7 +317,7 @@ impl ChannelManager {
                     return channel.deliver(content, bot_id, user_id);
                 }
             }
-            Err(ChannelError::UnknownBot(format!(
+            Err(CarrierError::InvalidInput(format!(
                 "Channel not found for type: {}, bot: {}",
                 channel_type, bot_id
             )))
@@ -360,7 +361,7 @@ impl ChannelManager {
         bot_id: &str,
         user_id: &str,
         text: &str,
-    ) -> Result<(), ChannelError> {
+    ) -> CarrierResult<()> {
         let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         for channel in channels.values() {
             match channel.send(bot_id, user_id, text) {
@@ -368,7 +369,7 @@ impl ChannelManager {
                 Err(_) => continue,
             }
         }
-        Err(ChannelError::UnknownBot(format!("No channel found for bot: {}", bot_id)))
+        Err(CarrierError::InvalidInput(format!("No channel found for bot: {}", bot_id)))
     }
 
     /// Set a sender route (route_key → agent_id).
@@ -431,14 +432,14 @@ impl ChannelManager {
     ///
     /// Called by the API after writing a new `senders/{sender_id}/session.json`.
     /// The matching channel loads the session and starts its connection immediately.
-    pub fn start_sender(&self, channel_type: &str, sender_id: &str) -> Result<(), ChannelError> {
+    pub fn start_sender(&self, channel_type: &str, sender_id: &str) -> CarrierResult<()> {
         let mut channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         for channel in channels.values_mut() {
             if channel.channel_type() == channel_type {
                 return channel.start_sender(sender_id, self.message_tx.clone());
             }
         }
-        Err(ChannelError::UnknownBot(format!(
+        Err(CarrierError::InvalidInput(format!(
             "Channel not found for type: {}, sender: {}",
             channel_type, sender_id
         )))

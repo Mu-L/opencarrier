@@ -7,7 +7,8 @@ use std::time::Instant;
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
-use types::channel::{Channel, ChannelError, RoutingMode};
+use types::channel::{Channel, RoutingMode};
+use types::error::{CarrierError, CarrierResult};
 use types::plugin::{PluginContent, PluginMessage};
 
 use crate::api;
@@ -456,7 +457,7 @@ impl Channel for SessionWatcher {
     fn start(
         &mut self,
         _sender: mpsc::Sender<PluginMessage>,
-    ) -> Result<(), ChannelError> {
+    ) -> CarrierResult<()> {
         info!("weixin-oa: channel started (webhook mode, no polling)");
         Ok(())
     }
@@ -466,10 +467,10 @@ impl Channel for SessionWatcher {
         bot_id: &str,
         user_id: &str,
         text: &str,
-    ) -> Result<(), ChannelError> {
+    ) -> CarrierResult<()> {
         let account = self
             .get_account(bot_id)
-            .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
+            .ok_or_else(|| CarrierError::InvalidInput(bot_id.to_string()))?;
 
         let http = account.http.clone();
         let app_id = account.app_id.clone();
@@ -527,10 +528,10 @@ impl Channel for SessionWatcher {
         content: &types::content::ContentDescriptor,
         bot_id: &str,
         user_id: &str,
-    ) -> Result<(), ChannelError> {
+    ) -> CarrierResult<()> {
         let account = self
             .get_account(bot_id)
-            .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
+            .ok_or_else(|| CarrierError::InvalidInput(bot_id.to_string()))?;
         let openid = user_id.to_string();
         let content = content.clone();
         // Dedicated thread + runtime: safe from Tokio workers / spawn_blocking.
@@ -538,7 +539,7 @@ impl Channel for SessionWatcher {
         types::channel::block_on_detached(async move {
             deliver_oa(&account, &openid, &content)
                 .await
-                .map_err(ChannelError::SendFailed)
+                .map_err(CarrierError::Network)
         })
     }
 
@@ -551,7 +552,7 @@ impl Channel for SessionWatcher {
         &self,
         sender_id: &str,
         _sender: mpsc::Sender<PluginMessage>,
-    ) -> Result<(), ChannelError> {
+    ) -> CarrierResult<()> {
         info!(sender_id, "weixin-oa: start_sender called (no dynamic spawn needed)");
         Ok(())
     }

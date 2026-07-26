@@ -13,7 +13,8 @@ pub mod ws;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use types::channel::{Channel, ChannelError};
+use types::channel::Channel;
+use types::error::{CarrierError, CarrierResult};
 use types::plugin::PluginMessage;
 use dashmap::DashMap;
 use tokio::sync::mpsc;
@@ -257,7 +258,7 @@ impl Channel for SessionWatcher {
         ""
     }
 
-    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         // Initial load + spawn all discovered bots
         DINGTALK_STATE.load_from_dir();
         spawn_inactive_bots(&sender);
@@ -265,10 +266,10 @@ impl Channel for SessionWatcher {
         Ok(())
     }
 
-    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> CarrierResult<()> {
         let entry = DINGTALK_STATE
             .get_session(bot_id)
-            .ok_or_else(|| ChannelError::UnknownBot(bot_id.to_string()))?;
+            .ok_or_else(|| CarrierError::InvalidInput(bot_id.to_string()))?;
 
         let token_cache = entry.token_cache.clone();
         let user_id = user_id.to_string();
@@ -278,13 +279,13 @@ impl Channel for SessionWatcher {
             let token = token_cache
                 .get_token()
                 .await
-                .map_err(|e| ChannelError::TokenFailed(e.to_string()))?;
+                .map_err(|e| CarrierError::Network(e.to_string()))?;
             let http = token_cache.http().clone();
             let robot_code = token_cache.app_key().to_string();
 
             api::send_direct_message(&http, &token, &robot_code, &user_id, &text)
                 .await
-                .map_err(ChannelError::SendFailed)
+                .map_err(CarrierError::Network)
         })
     }
 
@@ -292,7 +293,7 @@ impl Channel for SessionWatcher {
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
+    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         DINGTALK_STATE.load_new_from_dir();
         spawn_bot_by_id(sender_id, &sender);
         info!(sender_id = %sender_id, "DingTalk: started new sender");

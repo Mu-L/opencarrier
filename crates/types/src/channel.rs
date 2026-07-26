@@ -5,45 +5,8 @@
 
 use tokio::sync::mpsc;
 
+use crate::error::{CarrierError, CarrierResult};
 use crate::plugin::PluginMessage;
-
-/// Errors that can occur in channel operations.
-#[derive(Debug)]
-pub enum ChannelError {
-    /// The requested bot/session was not found.
-    UnknownBot(String),
-    /// Token refresh or acquisition failed.
-    TokenFailed(String),
-    /// Sending a message failed.
-    SendFailed(String),
-    /// Operation not supported by this channel mode.
-    NotSupported(String),
-    /// Configuration error.
-    Config(String),
-    /// Other channel-specific error.
-    Other(String),
-}
-
-impl std::fmt::Display for ChannelError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ChannelError::UnknownBot(id) => write!(f, "Unknown bot: {id}"),
-            ChannelError::TokenFailed(e) => write!(f, "Token error: {e}"),
-            ChannelError::SendFailed(e) => write!(f, "Send failed: {e}"),
-            ChannelError::NotSupported(e) => write!(f, "Not supported: {e}"),
-            ChannelError::Config(e) => write!(f, "Config error: {e}"),
-            ChannelError::Other(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl std::error::Error for ChannelError {}
-
-impl From<String> for ChannelError {
-    fn from(s: String) -> Self {
-        ChannelError::Other(s)
-    }
-}
 
 /// Run async work from a sync [`Channel`] method on a dedicated OS thread.
 ///
@@ -55,9 +18,9 @@ impl From<String> for ChannelError {
 ///
 /// Prefer this over copy-pasting `thread::spawn` + `Builder::new_current_thread`
 /// in each channel crate.
-pub fn block_on_detached<F, T>(fut: F) -> Result<T, ChannelError>
+pub fn block_on_detached<F, T>(fut: F) -> CarrierResult<T>
 where
-    F: std::future::Future<Output = Result<T, ChannelError>> + Send + 'static,
+    F: std::future::Future<Output = CarrierResult<T>> + Send + 'static,
     T: Send + 'static,
 {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -67,12 +30,14 @@ where
             .build()
         {
             Ok(rt) => rt.block_on(fut),
-            Err(e) => Err(ChannelError::Other(format!("runtime: {e}"))),
+            Err(e) => Err(CarrierError::Internal(format!("runtime: {e}"))),
         };
         let _ = tx.send(result);
     });
-    rx.recv()
-        .map_err(|e| ChannelError::Other(format!("deliver/send thread disconnected: {e}")))?
+    let inner = rx
+        .recv()
+        .map_err(|e| CarrierError::Internal(format!("deliver/send thread disconnected: {e}")))?;
+    inner
 }
 
 /// How a channel routes inbound messages to agents.
@@ -124,10 +89,10 @@ pub trait Channel: Send + Sync {
     /// Start receiving messages from the channel.
     ///
     /// Inbound messages are sent through `sender` for routing to agents.
-    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError>;
+    fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()>;
 
     /// Send a text message through the channel.
-    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> Result<(), ChannelError>;
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> CarrierResult<()>;
 
     /// Deliver rich content. Each channel picks the highest-fidelity
     /// representation it supports from `content` (miniprogram > video > file >
@@ -143,9 +108,9 @@ pub trait Channel: Send + Sync {
         content: &crate::content::ContentDescriptor,
         bot_id: &str,
         user_id: &str,
-    ) -> Result<(), ChannelError> {
+    ) -> CarrierResult<()> {
         let text = content.as_text().ok_or_else(|| {
-            ChannelError::NotSupported(
+            CarrierError::InvalidInput(
                 "channel has no representation for this content and no text fallback".into(),
             )
         })?;
@@ -160,9 +125,12 @@ pub trait Channel: Send + Sync {
     /// Called by the API after writing a new `senders/{sender_id}/session.json`.
     /// The channel should load the session and start its connection immediately,
     /// without waiting for a polling cycle.
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> Result<(), ChannelError> {
+    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         let _ = (sender_id, sender);
-        Err(ChannelError::NotSupported(format!("start_sender not implemented for {}", self.channel_type())))
+        Err(CarrierError::InvalidInput(format!(
+            "start_sender not implemented for {}",
+            self.channel_type()
+        )))
     }
 
     /// Whether this channel supports proactive push (sending without an inbound

@@ -7,7 +7,8 @@
 
 use std::sync::Arc;
 
-use types::channel::{ChannelError, RoutingMode};
+use types::channel::RoutingMode;
+use types::error::CarrierError;
 use types::plugin::{PluginContent, PluginMessage};
 use dashmap::DashMap;
 use tokio::sync::mpsc;
@@ -130,16 +131,16 @@ impl PluginBridgeManager {
             // Try exact match first
             for channel in plugin.channels() {
                 if channel.channel_type == channel_type && channel.bot_id == bot_id {
-                    return plugin.channel_send(channel, bot_id, user_id, text).map_err(ChannelError::Other);
+                    return plugin.channel_send(channel, bot_id, user_id, text).map_err(CarrierError::Internal);
                 }
             }
             // Fallback: any channel of the same type
             for channel in plugin.channels() {
                 if channel.channel_type == channel_type {
-                    return plugin.channel_send(channel, bot_id, user_id, text).map_err(ChannelError::Other);
+                    return plugin.channel_send(channel, bot_id, user_id, text).map_err(CarrierError::Internal);
                 }
             }
-            Err(ChannelError::UnknownBot(format!("No plugin channel found for type: {}", channel_type)))
+            Err(CarrierError::InvalidInput(format!("No plugin channel found for type: {}", channel_type)))
         });
 
         // If no send fn set yet, use this one. Otherwise, chain them.
