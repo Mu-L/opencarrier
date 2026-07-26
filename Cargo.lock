@@ -608,6 +608,8 @@ name = "channels-common"
 version = "0.3.0"
 dependencies = [
  "dashmap",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "types",

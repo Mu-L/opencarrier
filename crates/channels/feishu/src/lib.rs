@@ -17,7 +17,6 @@ use std::sync::Arc;
 use types::channel::Channel;
 use types::error::{CarrierError, CarrierResult};
 use types::plugin::PluginMessage;
-use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -49,39 +48,37 @@ impl FeishuBotEntry {
 }
 
 // ---------------------------------------------------------------------------
-// FeishuState — global state manager
+// FeishuBot — ChannelBot marker + FeishuState alias
 // ---------------------------------------------------------------------------
 
-/// Global state manager for all Feishu bots.
-///
-/// Discovers bots by scanning `~/.opencarrier/senders/{app_id}/session.json`.
-pub struct FeishuState {
-    pub bots: DashMap<String, FeishuBotEntry>, // key: app_id
+impl channels_common::BotEntry for FeishuBotEntry {
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn secret(&self) -> &str {
+        &self.config.app_secret
+    }
+    fn active(&self) -> &AtomicBool {
+        &self.active
+    }
 }
 
-impl FeishuState {
-    fn new() -> Self {
-        Self {
-            bots: DashMap::new(),
-        }
+/// Zero-sized marker parameterizing `BotRegistry` for Feishu.
+pub struct FeishuBot;
+
+impl channels_common::ChannelBot for FeishuBot {
+    type Entry = FeishuBotEntry;
+    type Session = models::FeishuSessionFile;
+    const CHANNEL: &'static str = "feishu";
+    const LABEL: &'static str = "Feishu";
+
+    fn key(sf: &models::FeishuSessionFile) -> &str {
+        &sf.app_id
     }
 
-    /// Resolve the effective app_secret: try env var first, fall back to inline value.
-    fn resolve_secret(sf: &models::FeishuSessionFile) -> String {
-        if let Some(ref env_name) = sf.secret_env {
-            if let Ok(s) = std::env::var(env_name) {
-                if !s.is_empty() {
-                    return s;
-                }
-            }
-        }
-        sf.app_secret.clone().unwrap_or_default()
-    }
-
-    /// Build a FeishuBotEntry from a session file.
     fn build_entry(sf: &models::FeishuSessionFile) -> Option<FeishuBotEntry> {
         let app_id = sf.app_id.clone();
-        let app_secret = Self::resolve_secret(sf);
+        let app_secret = channels_common::resolve_secret(&sf.secret_env, &sf.app_secret);
         if app_id.is_empty() || app_secret.is_empty() {
             warn!(name = %sf.name, "Skipping Feishu session: missing app_id or app_secret");
             return None;
@@ -95,126 +92,16 @@ impl FeishuState {
         Some(FeishuBotEntry::new(cfg))
     }
 
-    /// Load all sessions from senders/*/session.json (initial load at startup).
-    /// Only loads files where channel == "feishu".
-    pub fn load_from_dir(&self) {
-        let home = types::config::home_dir();
-        for (sender_id, json) in types::config::scan_sender_sessions(&home) {
-            if json.get("channel").and_then(|v| v.as_str()) != Some("feishu") {
-                continue;
-            }
-            let sf: models::FeishuSessionFile = match serde_json::from_value(json) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(sender_id = %sender_id, "Failed to parse feishu session: {e}");
-                    continue;
-                }
-            };
-            if sf.app_id.is_empty() {
-                continue;
-            }
-            if self.bots.contains_key(&sf.app_id) {
-                continue;
-            }
-            let entry = match Self::build_entry(&sf) {
-                Some(e) => e,
-                None => continue,
-            };
-            info!(name = %sf.name, app_id = %sf.app_id, "Loaded Feishu session");
-            self.bots.insert(sf.app_id.clone(), entry);
-        }
-    }
-
-    /// Load new sessions from senders/*/session.json (skips already-loaded).
-    /// Only loads files where channel == "feishu".
-    pub fn load_new_from_dir(&self) {
-        let home = types::config::home_dir();
-        for (sender_id, json) in types::config::scan_sender_sessions(&home) {
-            if json.get("channel").and_then(|v| v.as_str()) != Some("feishu") {
-                continue;
-            }
-            // Refresh existing bot if session file changed
-            if let Some(mut existing) = self.bots.get_mut(&sender_id) {
-                let sf: models::FeishuSessionFile = match serde_json::from_value(json) {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                };
-                let new_entry = match Self::build_entry(&sf) {
-                    Some(e) => e,
-                    None => continue,
-                };
-                if existing.config.app_secret != new_entry.config.app_secret {
-                    info!(app_id = %sf.app_id, "Refreshing Feishu session from updated file");
-                    *existing = new_entry;
-                }
-                continue;
-            }
-            let sf: models::FeishuSessionFile = match serde_json::from_value(json) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            if sf.app_id.is_empty() {
-                continue;
-            }
-            let entry = match Self::build_entry(&sf) {
-                Some(e) => e,
-                None => continue,
-            };
-            info!(name = %sf.name, app_id = %sf.app_id, "Dynamic watcher loaded new Feishu session");
-            self.bots.insert(sf.app_id.clone(), entry);
-        }
-    }
-
-    /// Save a session file to senders/{app_id}/session.json.
-    pub fn save_session(&self, sf: &models::FeishuSessionFile) {
-        let sender_id = &sf.app_id;
-        if sender_id.is_empty() {
-            warn!("Cannot save feishu session with empty app_id");
-            return;
-        }
-        let home = types::config::home_dir();
-        let dir = home.join("senders").join(sender_id);
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            warn!(dir = %dir.display(), "Failed to create sender directory: {e}");
-            return;
-        }
-        let path = dir.join("session.json");
-        match serde_json::to_string_pretty(sf) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
-                    warn!(path = %path.display(), "Failed to write session file: {e}");
-                }
-            }
-            Err(e) => {
-                warn!("Failed to serialize session file: {e}");
-            }
-        }
-    }
-
-    /// Get a bot session by app_id.
-    pub fn get_session(
-        &self,
-        app_id: &str,
-    ) -> Option<dashmap::mapref::one::Ref<'_, String, FeishuBotEntry>> {
-        self.bots.get(app_id)
-    }
-
-    /// Get status of all bots for the API.
-    pub fn status_list(&self) -> Vec<serde_json::Value> {
-        self.bots
-            .iter()
-            .map(|entry| {
-                let s = entry.value();
-                serde_json::json!({
-                    "name": s.config.name,
-                    "app_id": s.config.app_id,
-                    "brand": s.config.brand,
-                    "active": s.active.load(Ordering::Relaxed),
-                })
-            })
-            .collect()
+    fn status_extra(entry: &FeishuBotEntry, out: &mut serde_json::Map<String, serde_json::Value>) {
+        out.insert("app_id".to_string(), entry.config.app_id.clone().into());
+        out.insert("brand".to_string(), entry.config.brand.clone().into());
     }
 }
+
+/// Global state manager for all Feishu bots (generic registry over `FeishuBot`).
+///
+/// Discovers bots by scanning `~/.opencarrier/senders/{app_id}/session.json`.
+pub type FeishuState = channels_common::BotRegistry<FeishuBot>;
 
 /// Global singleton for Feishu state management.
 pub static FEISHU_STATE: std::sync::LazyLock<FeishuState> =

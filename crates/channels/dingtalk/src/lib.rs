@@ -16,7 +16,6 @@ use std::sync::Arc;
 use types::channel::Channel;
 use types::error::{CarrierError, CarrierResult};
 use types::plugin::PluginMessage;
-use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
@@ -46,39 +45,37 @@ impl DingTalkBotEntry {
 }
 
 // ---------------------------------------------------------------------------
-// DingTalkState — global state manager
+// DingTalkBot — ChannelBot marker + DingTalkState alias
 // ---------------------------------------------------------------------------
 
-/// Global state manager for all DingTalk bots.
-///
-/// Discovers bots by scanning `~/.opencarrier/senders/{app_key}/session.json`.
-pub struct DingTalkState {
-    pub bots: DashMap<String, DingTalkBotEntry>, // key: app_key
+impl channels_common::BotEntry for DingTalkBotEntry {
+    fn name(&self) -> &str {
+        &self.config.name
+    }
+    fn secret(&self) -> &str {
+        &self.config.app_secret
+    }
+    fn active(&self) -> &AtomicBool {
+        &self.active
+    }
 }
 
-impl DingTalkState {
-    fn new() -> Self {
-        Self {
-            bots: DashMap::new(),
-        }
+/// Zero-sized marker parameterizing `BotRegistry` for DingTalk.
+pub struct DingTalkBot;
+
+impl channels_common::ChannelBot for DingTalkBot {
+    type Entry = DingTalkBotEntry;
+    type Session = models::DingTalkSessionFile;
+    const CHANNEL: &'static str = "dingtalk";
+    const LABEL: &'static str = "DingTalk";
+
+    fn key(sf: &models::DingTalkSessionFile) -> &str {
+        &sf.app_key
     }
 
-    /// Resolve the effective app_secret: try env var first, fall back to inline value.
-    fn resolve_secret(sf: &models::DingTalkSessionFile) -> String {
-        if let Some(ref env_name) = sf.secret_env {
-            if let Ok(s) = std::env::var(env_name) {
-                if !s.is_empty() {
-                    return s;
-                }
-            }
-        }
-        sf.app_secret.clone().unwrap_or_default()
-    }
-
-    /// Build a DingTalkBotEntry from a session file.
     fn build_entry(sf: &models::DingTalkSessionFile) -> Option<DingTalkBotEntry> {
         let app_key = sf.app_key.clone();
-        let app_secret = Self::resolve_secret(sf);
+        let app_secret = channels_common::resolve_secret(&sf.secret_env, &sf.app_secret);
         if app_key.is_empty() || app_secret.is_empty() {
             warn!(name = %sf.name, "Skipping DingTalk session: missing app_key or app_secret");
             return None;
@@ -91,125 +88,15 @@ impl DingTalkState {
         Some(DingTalkBotEntry::new(cfg))
     }
 
-    /// Load all sessions from senders/*/session.json (initial load at startup).
-    /// Only loads files where channel == "dingtalk".
-    pub fn load_from_dir(&self) {
-        let home = types::config::home_dir();
-        for (sender_id, json) in types::config::scan_sender_sessions(&home) {
-            if json.get("channel").and_then(|v| v.as_str()) != Some("dingtalk") {
-                continue;
-            }
-            let sf: models::DingTalkSessionFile = match serde_json::from_value(json) {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(sender_id = %sender_id, "Failed to parse dingtalk session: {e}");
-                    continue;
-                }
-            };
-            if sf.app_key.is_empty() {
-                continue;
-            }
-            if self.bots.contains_key(&sf.app_key) {
-                continue;
-            }
-            let entry = match Self::build_entry(&sf) {
-                Some(e) => e,
-                None => continue,
-            };
-            info!(name = %sf.name, app_key = %sf.app_key, "Loaded DingTalk session");
-            self.bots.insert(sf.app_key.clone(), entry);
-        }
-    }
-
-    /// Load new sessions from senders/*/session.json (skips already-loaded).
-    /// Only loads files where channel == "dingtalk".
-    pub fn load_new_from_dir(&self) {
-        let home = types::config::home_dir();
-        for (sender_id, json) in types::config::scan_sender_sessions(&home) {
-            if json.get("channel").and_then(|v| v.as_str()) != Some("dingtalk") {
-                continue;
-            }
-            // Refresh existing bot if session file changed
-            if let Some(mut existing) = self.bots.get_mut(&sender_id) {
-                let sf: models::DingTalkSessionFile = match serde_json::from_value(json) {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                };
-                let new_entry = match Self::build_entry(&sf) {
-                    Some(e) => e,
-                    None => continue,
-                };
-                if existing.config.app_secret != new_entry.config.app_secret {
-                    info!(app_key = %sf.app_key, "Refreshing DingTalk session from updated file");
-                    *existing = new_entry;
-                }
-                continue;
-            }
-            let sf: models::DingTalkSessionFile = match serde_json::from_value(json) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            if sf.app_key.is_empty() {
-                continue;
-            }
-            let entry = match Self::build_entry(&sf) {
-                Some(e) => e,
-                None => continue,
-            };
-            info!(name = %sf.name, app_key = %sf.app_key, "Dynamic watcher loaded new DingTalk session");
-            self.bots.insert(sf.app_key.clone(), entry);
-        }
-    }
-
-    /// Save a session file to senders/{app_key}/session.json.
-    pub fn save_session(&self, sf: &models::DingTalkSessionFile) {
-        let sender_id = &sf.app_key;
-        if sender_id.is_empty() {
-            warn!("Cannot save dingtalk session with empty app_key");
-            return;
-        }
-        let home = types::config::home_dir();
-        let dir = home.join("senders").join(sender_id);
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            warn!(dir = %dir.display(), "Failed to create sender directory: {e}");
-            return;
-        }
-        let path = dir.join("session.json");
-        match serde_json::to_string_pretty(sf) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
-                    warn!(path = %path.display(), "Failed to write session file: {e}");
-                }
-            }
-            Err(e) => {
-                warn!("Failed to serialize session file: {e}");
-            }
-        }
-    }
-
-    /// Get a bot session by app_key.
-    pub fn get_session(
-        &self,
-        app_key: &str,
-    ) -> Option<dashmap::mapref::one::Ref<'_, String, DingTalkBotEntry>> {
-        self.bots.get(app_key)
-    }
-
-    /// Get status of all bots for the API.
-    pub fn status_list(&self) -> Vec<serde_json::Value> {
-        self.bots
-            .iter()
-            .map(|entry| {
-                let s = entry.value();
-                serde_json::json!({
-                    "name": s.config.name,
-                    "app_key": s.config.app_key,
-                    "active": s.active.load(Ordering::Relaxed),
-                })
-            })
-            .collect()
+    fn status_extra(entry: &DingTalkBotEntry, out: &mut serde_json::Map<String, serde_json::Value>) {
+        out.insert("app_key".to_string(), entry.config.app_key.clone().into());
     }
 }
+
+/// Global state manager for all DingTalk bots (generic registry over `DingTalkBot`).
+///
+/// Discovers bots by scanning `~/.opencarrier/senders/{app_key}/session.json`.
+pub type DingTalkState = channels_common::BotRegistry<DingTalkBot>;
 
 /// Global singleton for DingTalk state management.
 pub static DINGTALK_STATE: std::sync::LazyLock<DingTalkState> =
