@@ -211,6 +211,8 @@ impl BucketSealEngine {
         let node = SummaryNode {
             id: summary_id.clone(),
             tree_id: tree.id.clone(),
+            // Inherit per-user isolation from the tree being sealed.
+            user_id: tree.user_id.clone(),
             tree_kind: tree.kind,
             level: target_level,
             parent_id: None,
@@ -290,7 +292,7 @@ impl BucketSealEngine {
     ) -> CarrierResult<Vec<SummaryInput>> {
         let mut out = Vec::with_capacity(chunk_ids.len());
         for id in chunk_ids {
-            let chunk = match self.chunk_store.get_chunk(owner_id, id)? {
+            let chunk = match self.chunk_store.get_chunk(owner_id, None, id)? {
                 Some(c) => c,
                 None => {
                     tracing::warn!("[bucket_seal] missing chunk {id} — skipping");
@@ -325,7 +327,7 @@ impl BucketSealEngine {
     ) -> CarrierResult<Vec<SummaryInput>> {
         let mut out = Vec::with_capacity(summary_ids.len());
         for id in summary_ids {
-            let node = match self.tree_store.get_summary(owner_id, id)? {
+            let node = match self.tree_store.get_summary(owner_id, None, id)? {
                 Some(n) => n,
                 None => {
                     tracing::warn!("[bucket_seal] missing summary {id} — skipping");
@@ -389,7 +391,7 @@ mod tests {
     fn make_tree(conn: &Arc<Mutex<Connection>>, owner_id: &str, scope: &str) -> Tree {
         let store = TreeTreeStore::new(conn.clone());
         store
-            .get_or_create_tree(owner_id, TreeKind::Source, scope)
+            .get_or_create_tree(owner_id, "", TreeKind::Source, scope)
             .unwrap()
     }
 
@@ -398,6 +400,7 @@ mod tests {
         let chunk = crate::tree::types::Chunk {
             id: id.to_string(),
             owner_id: owner_id.to_string(),
+            user_id: String::new(),
             agent_id: "agent_1".to_string(),
             source_kind: SourceKind::Chat,
             source_id: "wechat:test:sender".to_string(),
@@ -507,7 +510,7 @@ mod tests {
         // Verify an L1 summary was created
         let summaries = engine
             .tree_store
-            .list_summaries("owner_1", &tree.id, Some(1), 100)
+            .list_summaries("owner_1", None, &tree.id, Some(1), 100)
             .unwrap();
         assert!(!summaries.is_empty());
     }
@@ -552,7 +555,7 @@ mod tests {
         // Verify L1 summary created
         let summaries = engine
             .tree_store
-            .list_summaries("owner_1", &tree.id, Some(1), 100)
+            .list_summaries("owner_1", None, &tree.id, Some(1), 100)
             .unwrap();
         assert_eq!(summaries.len(), 1);
     }

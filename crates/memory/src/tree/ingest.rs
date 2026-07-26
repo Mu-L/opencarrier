@@ -88,6 +88,7 @@ impl IngestPipeline {
         let tags = req.tags.clone();
         let chunks = chunker::chunk_messages(&ChunkInput {
             owner_id: &req.owner_id,
+            user_id: req.user_id.as_deref().unwrap_or(""),
             agent_id: &req.agent_id,
             source_kind,
             source_id: &req.source_id,
@@ -166,6 +167,7 @@ impl IngestPipeline {
                     score: decision.total,
                     timestamp_ms: chunk.timestamp_ms,
                     tree_id: None,
+                    user_id: chunk.user_id.as_str(),
                 })?;
                 // Bump entity hotness
                 self.entity_store.bump_entity_hotness(&req.owner_id, &entity.canonical_id, &req.source_id)?;

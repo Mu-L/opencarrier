@@ -44,8 +44,8 @@ pub fn end_of_day_digest(
     let content_store = ContentStore::new(content_root.to_path_buf());
     let chunk_store = ChunkStore::new(conn.clone());
 
-    // Get or create the global tree
-    let global = tree_store.get_or_create_tree(owner_id, TreeKind::Global, GLOBAL_SCOPE)?;
+    // Get or create the global tree (owner-shared: user_id = "").
+    let global = tree_store.get_or_create_tree(owner_id, "", TreeKind::Global, GLOBAL_SCOPE)?;
 
     let now_ms = chrono::Utc::now().timestamp_millis();
 
@@ -56,13 +56,14 @@ pub fn end_of_day_digest(
         });
     }
 
-    // Gather one contribution per active source tree
-    let source_trees = tree_store.list_trees(owner_id, Some(TreeKind::Source), 1000)?;
+    // Gather one contribution per active source tree (cross-user by design —
+    // the daily digest folds every user's activity under this owner).
+    let source_trees = tree_store.list_trees(owner_id, None, Some(TreeKind::Source), 1000)?;
     let mut inputs: Vec<SummaryInput> = Vec::with_capacity(source_trees.len());
 
     for tree_summary in &source_trees {
         // Get the tree to access its scope
-        if let Some(tree) = tree_store.get_tree(owner_id, &tree_summary.tree_id)? {
+        if let Some(tree) = tree_store.get_tree(owner_id, None, &tree_summary.tree_id)? {
             if let Some(inp) = pick_source_contribution(
                 &tree_store,
                 &chunk_store,
@@ -107,6 +108,8 @@ pub fn end_of_day_digest(
     let daily = SummaryNode {
         id: daily_id.clone(),
         tree_id: global.id.clone(),
+        // Owner-shared: the daily digest spans every user under this owner.
+        user_id: String::new(),
         tree_kind: TreeKind::Global,
         level: 0,
         parent_id: None,
@@ -157,7 +160,7 @@ fn find_existing_daily(
     _now_ms: i64,
 ) -> CarrierResult<Option<String>> {
     // Check for any L0 summary in the global tree today
-    let summaries = tree_store.list_summaries(owner_id, global_tree_id, Some(0), 1)?;
+    let summaries = tree_store.list_summaries(owner_id, None, global_tree_id, Some(0), 1)?;
     Ok(summaries.first().map(|s| s.id.clone()))
 }
 
@@ -176,7 +179,7 @@ fn pick_source_contribution(
     }
 
     let root_id = source_tree.root_id.as_ref().unwrap();
-    match tree_store.get_summary(owner_id, root_id)? {
+    match tree_store.get_summary(owner_id, None, root_id)? {
         Some(node) => Ok(Some(SummaryInput {
             id: node.id,
             content: format!("[{}]\n{}", source_tree.scope, node.content),
@@ -220,13 +223,14 @@ mod tests {
 
         // Create a source tree with a root summary
         let source_tree = tree_store
-            .get_or_create_tree("owner_1", TreeKind::Source, "wechat:test:sender")
+            .get_or_create_tree("owner_1", "", TreeKind::Source, "wechat:test:sender")
             .unwrap();
 
         // Insert a summary as root
         let summary = crate::tree::types::SummaryNode {
             id: "sum_test".to_string(),
             tree_id: source_tree.id.clone(),
+            user_id: String::new(),
             tree_kind: TreeKind::Source,
             level: 1,
             parent_id: None,
@@ -258,7 +262,7 @@ mod tests {
         }
 
         // Global tree should now exist
-        let global = tree_store.get_or_create_tree("owner_1", TreeKind::Global, GLOBAL_SCOPE).unwrap();
+        let global = tree_store.get_or_create_tree("owner_1", "", TreeKind::Global, GLOBAL_SCOPE).unwrap();
         assert_eq!(global.kind, TreeKind::Global);
     }
 }

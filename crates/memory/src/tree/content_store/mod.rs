@@ -171,6 +171,7 @@ mod tests {
         Chunk {
             id: "chunk_001".to_string(),
             owner_id: "owner_1".to_string(),
+            user_id: String::new(),
             agent_id: "agent_1".to_string(),
             source_kind: SourceKind::Chat,
             source_id: "wechat:gh_abc:sender_1".to_string(),
@@ -227,6 +228,7 @@ mod tests {
         let summary = SummaryNode {
             id: "sum_001".to_string(),
             tree_id: "tree_abc".to_string(),
+            user_id: String::new(),
             tree_kind: TreeKind::Source,
             level: 1,
             parent_id: None,

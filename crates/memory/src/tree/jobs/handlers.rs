@@ -58,7 +58,7 @@ fn handle_extract(
     let entity_store = EntityStore::new(conn.clone());
     let job_store = JobStore::new(conn.clone());
 
-    let Some(chunk) = chunk_store.get_chunk(owner_id, &payload.chunk_id)? else {
+    let Some(chunk) = chunk_store.get_chunk(owner_id, None, &payload.chunk_id)? else {
         tracing::warn!(
             "[tree_jobs] extract chunk missing chunk_id={}",
             payload.chunk_id
@@ -81,6 +81,7 @@ fn handle_extract(
             score: 0.0,
             timestamp_ms: chunk.timestamp_ms,
             tree_id: None,
+            user_id: chunk.user_id.as_str(),
         };
         entity_store.upsert_entity_index(owner_id, &entry)?;
     }
@@ -148,13 +149,43 @@ fn handle_append_buffer(
     let chunk_store = ChunkStore::new(conn.clone());
     let job_store = JobStore::new(conn.clone());
 
-    // Resolve the tree for the target
+    // Resolve the node first (we need its user_id to create the source tree with
+    // the correct per-user isolation).
+    let (item_id, token_count, timestamp_ms, node_user_id) = match &payload.node {
+        NodeRef::Leaf { chunk_id } => {
+            let Some(chunk) = chunk_store.get_chunk(owner_id, None, chunk_id)? else {
+                tracing::warn!(
+                    "[tree_jobs] append_buffer chunk missing chunk_id={chunk_id}"
+                );
+                return Ok(JobOutcome::Done);
+            };
+            (chunk.id.clone(), chunk.token_count, chunk.timestamp_ms, chunk.user_id.clone())
+        }
+        NodeRef::Summary { summary_id } => {
+            let Some(summary) = tree_store.get_summary(owner_id, None, summary_id)? else {
+                tracing::warn!(
+                    "[tree_jobs] append_buffer summary missing summary_id={summary_id}"
+                );
+                return Ok(JobOutcome::Done);
+            };
+            (
+                summary.id.clone(),
+                summary.token_count,
+                summary.time_range_start_ms,
+                summary.user_id.clone(),
+            )
+        }
+    };
+
+    // Resolve the tree for the target.
+    // Source trees inherit the appended node's user_id (per-user isolation);
+    // topic trees are owner-shared (user_id = "") and already exist.
     let tree = match &payload.target {
         AppendTarget::Source { source_id } => {
-            tree_store.get_or_create_tree(owner_id, TreeKind::Source, source_id)?
+            tree_store.get_or_create_tree(owner_id, &node_user_id, TreeKind::Source, source_id)?
         }
         AppendTarget::Topic { tree_id } => {
-            match tree_store.get_tree(owner_id, tree_id)? {
+            match tree_store.get_tree(owner_id, None, tree_id)? {
                 Some(t) => t,
                 None => {
                     tracing::warn!(
@@ -163,28 +194,6 @@ fn handle_append_buffer(
                     return Ok(JobOutcome::Done);
                 }
             }
-        }
-    };
-
-    // Get token count and timestamp from the node
-    let (item_id, token_count, timestamp_ms) = match &payload.node {
-        NodeRef::Leaf { chunk_id } => {
-            let Some(chunk) = chunk_store.get_chunk(owner_id, chunk_id)? else {
-                tracing::warn!(
-                    "[tree_jobs] append_buffer chunk missing chunk_id={chunk_id}"
-                );
-                return Ok(JobOutcome::Done);
-            };
-            (chunk.id.clone(), chunk.token_count, chunk.timestamp_ms)
-        }
-        NodeRef::Summary { summary_id } => {
-            let Some(summary) = tree_store.get_summary(owner_id, summary_id)? else {
-                tracing::warn!(
-                    "[tree_jobs] append_buffer summary missing summary_id={summary_id}"
-                );
-                return Ok(JobOutcome::Done);
-            };
-            (summary.id.clone(), summary.token_count, summary.time_range_start_ms)
         }
     };
 
@@ -240,7 +249,7 @@ fn handle_seal(
     let tree_store = TreeTreeStore::new(conn.clone());
     let job_store = JobStore::new(conn.clone());
 
-    let Some(tree) = tree_store.get_tree(owner_id, &payload.tree_id)? else {
+    let Some(tree) = tree_store.get_tree(owner_id, None, &payload.tree_id)? else {
         tracing::warn!(
             "[tree_jobs] seal tree missing tree_id={}",
             payload.tree_id
@@ -300,7 +309,7 @@ fn handle_topic_route(
         NodeRef::Summary { summary_id } => summary_id.clone(),
     };
 
-    let entity_ids = entity_store.entities_for_node(owner_id, &node_id)?;
+    let entity_ids = entity_store.entities_for_node(owner_id, None, &node_id)?;
     if entity_ids.is_empty() {
         return Ok(JobOutcome::Done);
     }
@@ -309,14 +318,14 @@ fn handle_topic_route(
     let (token_count, timestamp_ms) = match &payload.node {
         NodeRef::Leaf { chunk_id } => {
             let chunk_store = ChunkStore::new(conn.clone());
-            if let Some(chunk) = chunk_store.get_chunk(owner_id, chunk_id)? {
+            if let Some(chunk) = chunk_store.get_chunk(owner_id, None, chunk_id)? {
                 (chunk.token_count, chunk.timestamp_ms)
             } else {
                 return Ok(JobOutcome::Done);
             }
         }
         NodeRef::Summary { summary_id } => {
-            if let Some(summary) = tree_store.get_summary(owner_id, summary_id)? {
+            if let Some(summary) = tree_store.get_summary(owner_id, None, summary_id)? {
                 (summary.token_count, summary.time_range_start_ms)
             } else {
                 return Ok(JobOutcome::Done);
@@ -442,6 +451,7 @@ mod tests {
         let chunk = crate::tree::types::Chunk {
             id: "chunk_test".to_string(),
             owner_id: "owner_1".to_string(),
+            user_id: String::new(),
             agent_id: "agent_1".to_string(),
             source_kind: SourceKind::Chat,
             source_id: "wechat:test:sender".to_string(),
@@ -467,10 +477,10 @@ mod tests {
         let result = handle_job(&conn, &content_root, "owner_1", &job)?;
         assert_eq!(result, JobOutcome::Done);
 
-        let updated = chunk_store.get_chunk("owner_1", "chunk_test")?.unwrap();
+        let updated = chunk_store.get_chunk("owner_1", None, "chunk_test")?.unwrap();
         assert_eq!(updated.lifecycle_status, "admitted");
 
-        let entities = entity_store.entities_for_node("owner_1", "chunk_test")?;
+        let entities = entity_store.entities_for_node("owner_1", None, "chunk_test")?;
         assert!(entities.iter().any(|e| e.starts_with("email:")));
 
         let pending = job_store.count_pending("owner_1", None)?;
@@ -485,10 +495,11 @@ mod tests {
         let tree_store = TreeTreeStore::new(conn.clone());
         let chunk_store = ChunkStore::new(conn.clone());
 
-        let tree = tree_store.get_or_create_tree("owner_1", TreeKind::Source, "wechat:test:sender")?;
+        let tree = tree_store.get_or_create_tree("owner_1", "", TreeKind::Source, "wechat:test:sender")?;
         let chunk = crate::tree::types::Chunk {
             id: "chunk_ab".to_string(),
             owner_id: "owner_1".to_string(),
+            user_id: String::new(),
             agent_id: "agent_1".to_string(),
             source_kind: SourceKind::Chat,
             source_id: "wechat:test:sender".to_string(),
@@ -528,13 +539,14 @@ mod tests {
         let tree_store = TreeTreeStore::new(conn.clone());
         let chunk_store = ChunkStore::new(conn.clone());
 
-        let tree = tree_store.get_or_create_tree("owner_1", TreeKind::Source, "wechat:test:sender")?;
+        let tree = tree_store.get_or_create_tree("owner_1", "", TreeKind::Source, "wechat:test:sender")?;
 
         for i in 0..10 {
             let chunk_id = format!("chunk_seal_{i}");
             let chunk = crate::tree::types::Chunk {
                 id: chunk_id.clone(),
                 owner_id: "owner_1".to_string(),
+                user_id: String::new(),
                 agent_id: "agent_1".to_string(),
                 source_kind: SourceKind::Chat,
                 source_id: "wechat:test:sender".to_string(),
@@ -568,7 +580,7 @@ mod tests {
         let result = handle_job(&conn, &content_root, "owner_1", &job)?;
         assert_eq!(result, JobOutcome::Done);
 
-        let summaries = tree_store.list_summaries("owner_1", &tree.id, Some(1), 100)?;
+        let summaries = tree_store.list_summaries("owner_1", None, &tree.id, Some(1), 100)?;
         assert!(!summaries.is_empty());
 
         Ok(())
@@ -594,10 +606,11 @@ mod tests {
         let chunk_store = ChunkStore::new(conn.clone());
         let job_store = JobStore::new(conn.clone());
 
-        let tree = tree_store.get_or_create_tree("owner_1", TreeKind::Source, "wechat:stale:sender")?;
+        let tree = tree_store.get_or_create_tree("owner_1", "", TreeKind::Source, "wechat:stale:sender")?;
         let chunk = crate::tree::types::Chunk {
             id: "chunk_stale".to_string(),
             owner_id: "owner_1".to_string(),
+            user_id: String::new(),
             agent_id: "agent_1".to_string(),
             source_kind: SourceKind::Chat,
             source_id: "wechat:stale:sender".to_string(),

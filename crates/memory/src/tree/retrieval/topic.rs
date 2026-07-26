@@ -13,9 +13,14 @@ use crate::tree::tree_store::TreeTreeStore;
 const DEFAULT_LIMIT: usize = 10;
 
 /// Query by entity id — returns hits from the entity index plus topic tree root.
+///
+/// When `user_id` is `Some(u)`, only the user's mentions (or owner-shared) are
+/// returned. Topic trees themselves are owner-scoped; this filters at the
+/// chunk/summary read layer.
 pub fn query_topic(
     conn: &Arc<Mutex<Connection>>,
     owner_id: &str,
+    user_id: Option<&str>,
     entity_id: &str,
     time_window_days: Option<u32>,
     limit: usize,
@@ -28,12 +33,12 @@ pub fn query_topic(
     let mut hits: Vec<RetrievalHit> = Vec::new();
 
     // 1. Topic tree root summary (if exists)
-    let topic_trees = tree_store.list_trees(owner_id, Some(TreeKind::Topic), 1000)?;
+    let topic_trees = tree_store.list_trees(owner_id, user_id, Some(TreeKind::Topic), 1000)?;
     if let Some(topic_tree) = topic_trees.iter().find(|t| t.scope == entity_id) {
         // Fetch the full tree to get root_id
-        if let Some(full_tree) = tree_store.get_tree(owner_id, &topic_tree.tree_id)? {
+        if let Some(full_tree) = tree_store.get_tree(owner_id, user_id, &topic_tree.tree_id)? {
             if let Some(root_id) = &full_tree.root_id {
-                if let Some(node) = tree_store.get_summary(owner_id, root_id)? {
+                if let Some(node) = tree_store.get_summary(owner_id, user_id, root_id)? {
                     hits.push(RetrievalHit {
                         node_id: node.id,
                         node_kind: NodeKind::Summary,
@@ -56,11 +61,11 @@ pub fn query_topic(
     }
 
     // 2. Entity index hits
-    let index_rows = entity_store.chunks_for_entity(owner_id, entity_id, 100)?;
+    let index_rows = entity_store.chunks_for_entity(owner_id, user_id, entity_id, 100)?;
     for (node_id, _node_kind) in &index_rows {
         // Try as summary first
-        if let Some(node) = tree_store.get_summary(owner_id, node_id)? {
-            let scope = tree_store.get_tree(owner_id, &node.tree_id)?
+        if let Some(node) = tree_store.get_summary(owner_id, user_id, node_id)? {
+            let scope = tree_store.get_tree(owner_id, user_id, &node.tree_id)?
                 .map(|t| t.scope)
                 .unwrap_or_default();
             hits.push(RetrievalHit {
@@ -82,7 +87,7 @@ pub fn query_topic(
             continue;
         }
         // Try as chunk (leaf)
-        if let Some(chunk) = chunk_store.get_chunk(owner_id, node_id)? {
+        if let Some(chunk) = chunk_store.get_chunk(owner_id, user_id, node_id)? {
             hits.push(RetrievalHit {
                 node_id: chunk.id,
                 node_kind: NodeKind::Leaf,
@@ -139,7 +144,7 @@ mod tests {
     #[test]
     fn test_unknown_entity_returns_empty() -> CarrierResult<()> {
         let (conn, _dir) = setup();
-        let resp = query_topic(&conn, "owner_1", "email:nobody@example.com", None, 10)?;
+        let resp = query_topic(&conn, "owner_1", None, "email:nobody@example.com", None, 10)?;
         assert!(resp.hits.is_empty());
         Ok(())
     }

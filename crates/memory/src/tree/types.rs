@@ -147,6 +147,10 @@ pub const CHUNK_STATUS_DROPPED: &str = "dropped";
 pub struct Chunk {
     pub id: String,
     pub owner_id: String,
+    /// Per-user isolation within an owner. `""` = owner-shared (legacy /
+    /// non-chat sources). See migration v27.
+    #[serde(default)]
+    pub user_id: String,
     pub agent_id: String,
     pub source_kind: SourceKind,
     pub source_id: String,
@@ -168,6 +172,10 @@ pub struct Chunk {
 pub struct Tree {
     pub id: String,
     pub owner_id: String,
+    /// Per-user isolation within an owner. `""` = owner-shared (topic/global
+    /// trees, legacy source trees). See migration v27.
+    #[serde(default)]
+    pub user_id: String,
     pub kind: TreeKind,
     pub scope: String,
     pub root_id: Option<String>,
@@ -181,6 +189,10 @@ pub struct Tree {
 pub struct SummaryNode {
     pub id: String,
     pub tree_id: String,
+    /// Per-user isolation within an owner. `""` = owner-shared (topic/global
+    /// summaries, legacy). See migration v27.
+    #[serde(default)]
+    pub user_id: String,
     pub tree_kind: TreeKind,
     pub level: u32,
     pub parent_id: Option<String>,

@@ -37,7 +37,7 @@ pub fn route_leaf_to_topic_trees(
 
     for entity_id in entity_ids {
         // Step 1: if a topic tree already exists and is active, append the leaf
-        let trees = tree_store.list_trees(owner_id, Some(TreeKind::Topic), 100)?;
+        let trees = tree_store.list_trees(owner_id, None, Some(TreeKind::Topic), 100)?;
         let matching_tree = trees.iter().find(|t| {
             // The scope of a topic tree is the entity_id
             t.scope == *entity_id
@@ -45,7 +45,7 @@ pub fn route_leaf_to_topic_trees(
 
         if let Some(tree_summary) = matching_tree {
             if tree_summary.status == "active" {
-                if let Some(tree) = tree_store.get_tree(owner_id, &tree_summary.tree_id)? {
+                if let Some(tree) = tree_store.get_tree(owner_id, None, &tree_summary.tree_id)? {
                     let seal_engine = BucketSealEngine::new(
                         conn.clone(),
                         content_root.to_path_buf(),
@@ -83,7 +83,7 @@ pub fn route_leaf_to_topic_trees(
             if hotness >= TOPIC_CREATION_THRESHOLD {
                 // Spawn topic tree if it doesn't exist yet
                 if matching_tree.is_none() {
-                    if let Err(e) = tree_store.get_or_create_tree(owner_id, TreeKind::Topic, entity_id) {
+                    if let Err(e) = tree_store.get_or_create_tree(owner_id, "", TreeKind::Topic, entity_id) {
                         tracing::warn!(
                             "[tree_topic::routing] failed spawning topic tree for {}: {e:#}",
                             entity_id
@@ -159,7 +159,7 @@ mod tests {
         ).unwrap();
 
         // Check topic tree was created
-        let trees = tree_store.list_trees("owner_1", Some(TreeKind::Topic), 100).unwrap();
+        let trees = tree_store.list_trees("owner_1", None, Some(TreeKind::Topic), 100).unwrap();
         assert!(trees.iter().any(|t| t.scope == entity_id));
     }
 }

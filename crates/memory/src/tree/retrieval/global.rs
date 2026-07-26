@@ -12,6 +12,10 @@ use crate::tree::tree_store::TreeTreeStore;
 const DEFAULT_LIMIT: usize = 10;
 
 /// Query the global tree for a time window.
+///
+/// The global tree is a per-owner daily/weekly/monthly digest that is
+/// intentionally cross-user by design, so it does NOT take a `user_id` filter
+/// (unlike the other retrieval primitives). It is the only unfiltered path.
 pub fn query_global(
     conn: &Arc<Mutex<Connection>>,
     owner_id: &str,
@@ -21,14 +25,14 @@ pub fn query_global(
     let limit = if limit == 0 { DEFAULT_LIMIT } else { limit };
     let tree_store = TreeTreeStore::new(conn.clone());
 
-    // Find or create the global tree
-    let global = tree_store.get_or_create_tree(owner_id, TreeKind::Global, GLOBAL_SCOPE)?;
+    // Find or create the global tree (owner-shared: user_id = "").
+    let global = tree_store.get_or_create_tree(owner_id, "", TreeKind::Global, GLOBAL_SCOPE)?;
 
     let mut hits: Vec<RetrievalHit> = Vec::new();
 
-    // Walk all summary levels in the global tree
+    // Walk all summary levels in the global tree (no user filter — cross-user).
     for level in 0..=global.max_level {
-        let summaries = tree_store.list_summaries(owner_id, &global.id, Some(level), 100)?;
+        let summaries = tree_store.list_summaries(owner_id, None, &global.id, Some(level), 100)?;
         for node in summaries {
             hits.push(RetrievalHit {
                 node_id: node.id,

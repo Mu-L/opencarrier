@@ -525,6 +525,7 @@ impl MemorySubstrate {
         retrieval::source::query_source(
             &self.conn,
             req.owner_id,
+            req.user_id,
             req.source_id,
             source_kind,
             req.time_window_days,
@@ -547,6 +548,7 @@ impl MemorySubstrate {
         retrieval::topic::query_topic(
             &self.conn,
             req.owner_id,
+            req.user_id,
             req.entity_id,
             req.time_window_days,
             req.limit,
@@ -559,6 +561,7 @@ impl MemorySubstrate {
         retrieval::search::search_entities(
             &self.conn,
             req.owner_id,
+            req.user_id,
             req.query,
             kind,
             req.limit,
@@ -570,6 +573,7 @@ impl MemorySubstrate {
         let hits = retrieval::drill_down::drill_down(
             &self.conn,
             req.owner_id,
+            req.user_id,
             req.node_id,
             req.max_depth.clamp(1, 3),
             Some(req.limit),
@@ -588,6 +592,7 @@ impl MemorySubstrate {
         retrieval::fetch::fetch_leaves(
             &self.conn,
             req.owner_id,
+            req.user_id,
             &req.chunk_ids,
             req.limit,
         )
@@ -602,7 +607,8 @@ impl MemorySubstrate {
     ) -> CarrierResult<Vec<TreeSummary>> {
         use types::memory_tree::TreeKind;
         let tree_store = crate::tree::tree_store::TreeTreeStore::new(Arc::clone(&self.conn));
-        let mut trees = tree_store.list_trees(owner_id, Some(TreeKind::Source), limit)?;
+        // Owner-level listing (no user filter) — metadata only, no conversation content.
+        let mut trees = tree_store.list_trees(owner_id, None, Some(TreeKind::Source), limit)?;
         if let Some(sk) = source_kind {
             trees.retain(|t| t.scope.starts_with(&format!("{sk}:")));
         }
@@ -613,6 +619,7 @@ impl MemorySubstrate {
     pub async fn tree_query_source_async(&self, req: SourceQuery<'_>) -> CarrierResult<QueryResponse> {
         let conn = Arc::clone(&self.conn);
         let owner_id = req.owner_id.to_string();
+        let user_id = req.user_id.map(String::from);
         let source_id = req.source_id.map(String::from);
         let source_kind = req.source_kind.map(String::from);
         let time_window_days = req.time_window_days;
@@ -629,6 +636,7 @@ impl MemorySubstrate {
             retrieval::source::query_source(
                 &conn,
                 &owner_id,
+                user_id.as_deref(),
                 source_id.as_deref(),
                 source_kind_val,
                 time_window_days,
@@ -662,6 +670,7 @@ impl MemorySubstrate {
     pub async fn tree_query_topic_async(&self, req: TopicQuery<'_>) -> CarrierResult<QueryResponse> {
         let conn = Arc::clone(&self.conn);
         let owner_id = req.owner_id.to_string();
+        let user_id = req.user_id.map(String::from);
         let entity_id = req.entity_id.to_string();
         let _query = req.query.map(String::from);
         let time_window_days = req.time_window_days;
@@ -670,6 +679,7 @@ impl MemorySubstrate {
             retrieval::topic::query_topic(
                 &conn,
                 &owner_id,
+                user_id.as_deref(),
                 &entity_id,
                 time_window_days,
                 limit,
@@ -683,6 +693,7 @@ impl MemorySubstrate {
     pub async fn tree_search_entities_async(&self, req: EntitySearch<'_>) -> CarrierResult<Vec<EntityMatch>> {
         let conn = Arc::clone(&self.conn);
         let owner_id = req.owner_id.to_string();
+        let user_id = req.user_id.map(String::from);
         let query = req.query.to_string();
         let kind = req.kind.map(String::from);
         let limit = req.limit;
@@ -691,6 +702,7 @@ impl MemorySubstrate {
             retrieval::search::search_entities(
                 &conn,
                 &owner_id,
+                user_id.as_deref(),
                 &query,
                 parsed_kind,
                 limit,
@@ -704,6 +716,7 @@ impl MemorySubstrate {
     pub async fn tree_drill_down_async(&self, req: DrillDownQuery<'_>) -> CarrierResult<QueryResponse> {
         let conn = Arc::clone(&self.conn);
         let owner_id = req.owner_id.to_string();
+        let user_id = req.user_id.map(String::from);
         let node_id = req.node_id.to_string();
         let max_depth = req.max_depth.clamp(1, 3);
         let limit = req.limit;
@@ -711,6 +724,7 @@ impl MemorySubstrate {
             let hits = retrieval::drill_down::drill_down(
                 &conn,
                 &owner_id,
+                user_id.as_deref(),
                 &node_id,
                 max_depth,
                 Some(limit),
@@ -731,12 +745,14 @@ impl MemorySubstrate {
     pub async fn tree_fetch_leaves_async(&self, req: FetchLeavesQuery<'_>) -> CarrierResult<QueryResponse> {
         let conn = Arc::clone(&self.conn);
         let owner_id = req.owner_id.to_string();
+        let user_id = req.user_id.map(String::from);
         let chunk_ids = req.chunk_ids.clone();
         let limit = req.limit;
         tokio::task::spawn_blocking(move || {
             retrieval::fetch::fetch_leaves(
                 &conn,
                 &owner_id,
+                user_id.as_deref(),
                 &chunk_ids,
                 limit,
             )
@@ -758,7 +774,8 @@ impl MemorySubstrate {
         tokio::task::spawn_blocking(move || {
             use types::memory_tree::TreeKind;
             let tree_store = crate::tree::tree_store::TreeTreeStore::new(Arc::clone(&conn));
-            let mut trees = tree_store.list_trees(&owner_id, Some(TreeKind::Source), limit)?;
+            // Owner-level listing (no user filter) — metadata only.
+            let mut trees = tree_store.list_trees(&owner_id, None, Some(TreeKind::Source), limit)?;
             if let Some(ref sk) = source_kind {
                 trees.retain(|t| t.scope.starts_with(&format!("{sk}:")));
             }

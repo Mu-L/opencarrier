@@ -17,6 +17,8 @@ pub struct EntityIndexEntry<'a> {
     pub score: f32,
     pub timestamp_ms: i64,
     pub tree_id: Option<&'a str>,
+    /// Per-user isolation. `""` = owner-shared.
+    pub user_id: &'a str,
 }
 
 /// Entity store backed by SQLite.
@@ -45,8 +47,8 @@ impl EntityStore {
 
         conn.execute(
             "INSERT OR REPLACE INTO mem_tree_entity_index
-             (entity_id, node_id, node_kind, owner_id, entity_kind, surface, score, timestamp_ms, tree_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (entity_id, node_id, node_kind, owner_id, entity_kind, surface, score, timestamp_ms, tree_id, user_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 entry.entity_id,
                 entry.node_id,
@@ -57,6 +59,7 @@ impl EntityStore {
                 entry.score,
                 entry.timestamp_ms,
                 entry.tree_id,
+                entry.user_id,
             ],
         )
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -64,9 +67,13 @@ impl EntityStore {
     }
 
     /// Get all node IDs associated with an entity.
+    ///
+    /// When `user_id` is `Some(u)`, only return nodes whose chunk is owned by
+    /// `u` or owner-shared. `None` skips the filter.
     pub fn chunks_for_entity(
         &self,
         owner_id: &str,
+        user_id: Option<&str>,
         entity_id: &str,
         limit: usize,
     ) -> CarrierResult<Vec<(String, String)>> {
@@ -75,23 +82,29 @@ impl EntityStore {
             .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
 
-        let mut stmt = conn
-            .prepare(
-                "SELECT node_id, node_kind FROM mem_tree_entity_index
-                 WHERE owner_id = ?1 AND entity_id = ?2
-                 ORDER BY timestamp_ms DESC LIMIT ?3",
-            )
-            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(owner_id.to_string()),
+            Box::new(entity_id.to_string()),
+        ];
+        let mut sql = "SELECT node_id, node_kind FROM mem_tree_entity_index
+                 WHERE owner_id = ?1 AND entity_id = ?2".to_string();
+        if let Some(u) = user_id {
+            sql.push_str(" AND (user_id = ? OR user_id = '')");
+            params.push(Box::new(u.to_string()));
+        }
+        sql.push_str(" ORDER BY timestamp_ms DESC LIMIT ?");
+        params.push(Box::new(limit as i64));
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
 
         let rows = stmt
-            .query_map(
-                rusqlite::params![owner_id, entity_id, limit as i64],
-                |row| {
-                    let node_id: String = row.get(0)?;
-                    let node_kind: String = row.get(1)?;
-                    Ok((node_id, node_kind))
-                },
-            )
+            .query_map(param_refs.as_slice(), |row| {
+                let node_id: String = row.get(0)?;
+                let node_kind: String = row.get(1)?;
+                Ok((node_id, node_kind))
+            })
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let mut result = Vec::new();
@@ -151,9 +164,13 @@ impl EntityStore {
     }
 
     /// Fuzzy search entities by surface form.
+    ///
+    /// When `user_id` is `Some(u)`, only return entities from `u`'s chunks or
+    /// owner-shared chunks. `None` skips the filter.
     pub fn search_entities(
         &self,
         owner_id: &str,
+        user_id: Option<&str>,
         query: &str,
         kind: Option<&EntityKind>,
         limit: usize,
@@ -172,6 +189,10 @@ impl EntityStore {
                      FROM mem_tree_entity_index
                      WHERE owner_id = ?1 AND surface LIKE ?2".to_string();
 
+        if let Some(u) = user_id {
+            sql.push_str(" AND (user_id = ? OR user_id = '')");
+            params.push(Box::new(u.to_string()));
+        }
         if let Some(k) = kind {
             sql.push_str(" AND entity_kind = ?");
             params.push(Box::new(k.as_str().to_string()));
@@ -360,9 +381,13 @@ impl EntityStore {
     }
 
     /// Get all entity IDs associated with a node (chunk or summary).
+    ///
+    /// When `user_id` is `Some(u)`, only return entities from `u`'s nodes or
+    /// owner-shared nodes. `None` skips the filter.
     pub fn entities_for_node(
         &self,
         owner_id: &str,
+        user_id: Option<&str>,
         node_id: &str,
     ) -> CarrierResult<Vec<String>> {
         let conn = self
@@ -370,18 +395,23 @@ impl EntityStore {
             .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
 
-        let mut stmt = conn
-            .prepare(
-                "SELECT DISTINCT entity_id FROM mem_tree_entity_index
-                 WHERE owner_id = ?1 AND node_id = ?2",
-            )
-            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(owner_id.to_string()),
+            Box::new(node_id.to_string()),
+        ];
+        let mut sql = "SELECT DISTINCT entity_id FROM mem_tree_entity_index
+                 WHERE owner_id = ?1 AND node_id = ?2".to_string();
+        if let Some(u) = user_id {
+            sql.push_str(" AND (user_id = ? OR user_id = '')");
+            params.push(Box::new(u.to_string()));
+        }
+
+        let mut stmt = conn.prepare(&sql).map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
 
         let rows = stmt
-            .query_map(
-                rusqlite::params![owner_id, node_id],
-                |row| row.get(0),
-            )
+            .query_map(param_refs.as_slice(), |row| row.get(0))
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let mut result = Vec::new();
@@ -452,11 +482,12 @@ mod tests {
                     score: 0.8,
                     timestamp_ms: 1000,
                     tree_id: Some("tree_1"),
+                    user_id: "",
                 },
             )
             .unwrap();
 
-        let nodes = store.chunks_for_entity("owner_1", "person:Alice", 10).unwrap();
+        let nodes = store.chunks_for_entity("owner_1", None, "person:Alice", 10).unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].0, "chunk_001");
     }
@@ -533,6 +564,7 @@ mod tests {
                     score: 0.8,
                     timestamp_ms: 1000,
                     tree_id: Some("tree_1"),
+                    user_id: "",
                 },
             )
             .unwrap();
@@ -548,12 +580,13 @@ mod tests {
                     score: 0.6,
                     timestamp_ms: 2000,
                     tree_id: Some("tree_1"),
+                    user_id: "",
                 },
             )
             .unwrap();
 
         let results = store
-            .search_entities("owner_1", "Alice", None, 10)
+            .search_entities("owner_1", None, "Alice", None, 10)
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].canonical_id, "person:Alice");
@@ -574,12 +607,13 @@ mod tests {
                     score: 0.8,
                     timestamp_ms: 1000,
                     tree_id: Some("tree_1"),
+                    user_id: "",
                 },
             )
             .unwrap();
 
         let results = store
-            .search_entities("owner_2", "Alice", None, 10)
+            .search_entities("owner_2", None, "Alice", None, 10)
             .unwrap();
         assert!(results.is_empty());
     }

@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 26;
+const SCHEMA_VERSION: u32 = 27;
 
 /// Run all migrations to bring the database up to date.
 ///
@@ -42,6 +42,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         (24, migrate_v24),
         (25, migrate_v25),
         (26, migrate_v26),
+        (27, migrate_v27),
     ];
 
     for (version, migrate_fn) in &migrations {
@@ -1140,6 +1141,57 @@ fn migrate_v26(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 27: Per-user isolation for the memory tree.
+///
+/// Adds a `user_id` column to the four content-bearing mem_tree tables
+/// (chunks, trees, summaries, entity_index). `''` — the column default — means
+/// owner-shared (visible to every user under that owner). New ingests write the
+/// real sender_id (see `agent_loop/end_turn.rs`), and user-scoped queries filter
+/// with `(user_id = ? OR user_id = '')`: new data is isolated to its user while
+/// legacy rows (pre-v27, `user_id = ''`) stay owner-shared until they age out,
+/// so there is no recall regression. Hotness/buffers/ingested_sources are
+/// owner-aggregates by design and are intentionally NOT given a `user_id`.
+///
+/// We deliberately do NOT backfill `user_id` from `source_id`: the
+/// source_id→sender_id mapping is channel-specific (one colon for some
+/// channels, two for wechat-OA) and a wrong derivation would make legacy rows
+/// invisible instead of shared. The fallback clause preserves legacy recall;
+/// new data is correctly tagged going forward.
+fn migrate_v27(conn: &Connection) -> Result<(), rusqlite::Error> {
+    // ALTER TABLE ADD COLUMN with a constant DEFAULT is metadata-only in SQLite
+    // (no table rewrite), so this is cheap even on large tables.
+    for table in &[
+        "mem_tree_chunks",
+        "mem_tree_trees",
+        "mem_tree_summaries",
+        "mem_tree_entity_index",
+    ] {
+        if !column_exists(conn, table, "user_id") {
+            conn.execute_batch(&format!(
+                "ALTER TABLE {table} ADD COLUMN user_id TEXT NOT NULL DEFAULT ''"
+            ))?;
+        }
+    }
+
+    // Per-user filter indexes for the hot query paths.
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_mem_tree_chunks_owner_user
+            ON mem_tree_chunks(owner_id, user_id);
+         CREATE INDEX IF NOT EXISTS idx_mem_tree_trees_owner_user_kind
+            ON mem_tree_trees(owner_id, user_id, kind);
+         CREATE INDEX IF NOT EXISTS idx_mem_tree_summaries_owner_user_tree
+            ON mem_tree_summaries(owner_id, user_id, tree_id);
+         CREATE INDEX IF NOT EXISTS idx_mem_tree_entity_index_owner_user
+            ON mem_tree_entity_index(owner_id, user_id);",
+    )?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![27, "per-user tree isolation: user_id on chunks/trees/summaries/entity_index"],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1176,6 +1228,26 @@ mod tests {
             assert!(
                 !tables.contains(&dead.to_string()),
                 "dead table {dead} should have been dropped by migrate_v26"
+            );
+        }
+
+        // v27: per-user isolation column on the four content-bearing mem_tree tables.
+        for table in &[
+            "mem_tree_chunks",
+            "mem_tree_trees",
+            "mem_tree_summaries",
+            "mem_tree_entity_index",
+        ] {
+            let cols: Vec<String> = conn
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap()
+                .query_map([], |r| r.get::<_, String>(1))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect();
+            assert!(
+                cols.contains(&"user_id".to_string()),
+                "v27 should add a user_id column to {table}"
             );
         }
     }

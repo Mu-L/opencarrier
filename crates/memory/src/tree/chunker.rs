@@ -11,6 +11,8 @@ pub fn approx_token_count(text: &str) -> u32 {
 /// Input for chunk_messages.
 pub struct ChunkInput<'a> {
     pub owner_id: &'a str,
+    /// Per-user isolation within the owner. `""` = owner-shared.
+    pub user_id: &'a str,
     pub agent_id: &'a str,
     pub source_kind: SourceKind,
     pub source_id: &'a str,
@@ -95,6 +97,7 @@ fn make_chunk(
     Chunk {
         id,
         owner_id: input.owner_id.to_string(),
+        user_id: input.user_id.to_string(),
         agent_id: input.agent_id.to_string(),
         source_kind: input.source_kind,
         source_id: input.source_id.to_string(),
@@ -300,6 +303,7 @@ mod tests {
     fn test_chunk_chat_short() {
         let chunks = chunk_messages(&ChunkInput {
             owner_id: "owner_1",
+            user_id: "",
             agent_id: "agent_1",
             source_kind: SourceKind::Chat,
             source_id: "wechat:gh_abc:sender_1",
@@ -318,6 +322,7 @@ mod tests {
         let md = "## Alice\nHello\n## Bob\nHi there\n## Alice\nHow are you?";
         let chunks = chunk_messages(&ChunkInput {
             owner_id: "owner_1",
+            user_id: "",
             agent_id: "agent_1",
             source_kind: SourceKind::Chat,
             source_id: "wechat:gh_abc:sender_1",
@@ -341,6 +346,7 @@ mod tests {
         );
         let chunks = chunk_messages(&ChunkInput {
             owner_id: "owner_1",
+            user_id: "",
             agent_id: "agent_1",
             source_kind: SourceKind::Chat,
             source_id: "wechat:gh_abc:sender_1",
@@ -357,6 +363,7 @@ mod tests {
     fn test_chunk_deterministic_id() {
         let input = ChunkInput {
             owner_id: "owner_1",
+            user_id: "",
             agent_id: "agent_1",
             source_kind: SourceKind::Chat,
             source_id: "wechat:gh_abc:sender_1",
@@ -375,6 +382,7 @@ mod tests {
     fn test_chunk_different_owner_different_id() {
         let chunks1 = chunk_messages(&ChunkInput {
             owner_id: "owner_1",
+            user_id: "",
             agent_id: "agent_1",
             source_kind: SourceKind::Chat,
             source_id: "wechat:gh_abc:sender_1",
@@ -386,6 +394,7 @@ mod tests {
         });
         let chunks2 = chunk_messages(&ChunkInput {
             owner_id: "owner_2",
+            user_id: "",
             agent_id: "agent_1",
             source_kind: SourceKind::Chat,
             source_id: "wechat:gh_abc:sender_1",

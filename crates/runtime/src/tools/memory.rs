@@ -98,18 +98,19 @@ impl super::ToolModule for MemoryTools {
             None => return Some(Err("memory_tree: memory not available".to_string())),
         };
         let owner_id = ctx.owner_id.unwrap_or("default");
+        let user_id = ctx.sender_id;
 
         let mode = match input.get("mode").and_then(|v| v.as_str()) {
             Some(m) => m,
             None => return Some(Err("memory_tree: 'mode' parameter is required. Valid modes: search_entities, query_topic, query_source, query_global, drill_down, fetch_leaves".to_string())),
         };
         match mode {
-            "search_entities" => Some(handle_search_entities(input, memory, owner_id).await.map_err(|e| e.to_string())),
-            "query_topic" => Some(handle_query_topic(input, memory, owner_id).await.map_err(|e| e.to_string())),
-            "query_source" => Some(handle_query_source(input, memory, owner_id).await.map_err(|e| e.to_string())),
-            "query_global" => Some(handle_query_global(input, memory, owner_id).await.map_err(|e| e.to_string())),
-            "drill_down" => Some(handle_drill_down(input, memory, owner_id).await.map_err(|e| e.to_string())),
-            "fetch_leaves" => Some(handle_fetch_leaves(input, memory, owner_id).await.map_err(|e| e.to_string())),
+            "search_entities" => Some(handle_search_entities(input, memory, owner_id, user_id).await.map_err(|e| e.to_string())),
+            "query_topic" => Some(handle_query_topic(input, memory, owner_id, user_id).await.map_err(|e| e.to_string())),
+            "query_source" => Some(handle_query_source(input, memory, owner_id, user_id).await.map_err(|e| e.to_string())),
+            "query_global" => Some(handle_query_global(input, memory, owner_id, user_id).await.map_err(|e| e.to_string())),
+            "drill_down" => Some(handle_drill_down(input, memory, owner_id, user_id).await.map_err(|e| e.to_string())),
+            "fetch_leaves" => Some(handle_fetch_leaves(input, memory, owner_id, user_id).await.map_err(|e| e.to_string())),
             other => Some(Err(format!("memory_tree: unknown mode `{other}`. Valid modes: search_entities, query_topic, query_source, query_global, drill_down, fetch_leaves"))),
         }
     }
@@ -130,6 +131,7 @@ async fn handle_search_entities(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
+    user_id: Option<&str>,
 ) -> CarrierResult<String> {
     let query = input["query"]
         .as_str()
@@ -150,7 +152,7 @@ async fn handle_search_entities(
         query,
         kind: kinds,
         limit,
-        user_id: None,
+        user_id,
     };
 
     let matches = memory.tree_search_entities(req).await?;
@@ -173,6 +175,7 @@ async fn handle_query_topic(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
+    user_id: Option<&str>,
 ) -> CarrierResult<String> {
     let entity_id = input["entity_id"]
         .as_str()
@@ -189,7 +192,7 @@ async fn handle_query_topic(
         query,
         time_window_days,
         limit,
-        user_id: None,
+        user_id,
     };
 
     let resp = memory.tree_query_topic(req).await?;
@@ -200,6 +203,7 @@ async fn handle_query_source(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
+    user_id: Option<&str>,
 ) -> CarrierResult<String> {
     let source_id = input["source_id"].as_str();
     let source_kind = input["source_kind"].as_str();
@@ -214,7 +218,7 @@ async fn handle_query_source(
         time_window_days,
         query,
         limit,
-        user_id: None,
+        user_id,
     };
 
     let resp = memory.tree_query_source(req).await?;
@@ -225,6 +229,7 @@ async fn handle_query_global(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
+    user_id: Option<&str>,
 ) -> CarrierResult<String> {
     let time_window_days = input["time_window_days"].as_u64().map(|d| d as u32);
     let query = input["query"].as_str();
@@ -235,7 +240,7 @@ async fn handle_query_global(
         time_window_days,
         query,
         limit,
-        user_id: None,
+        user_id,
     };
 
     let resp = memory.tree_query_global(req).await?;
@@ -246,6 +251,7 @@ async fn handle_drill_down(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
+    user_id: Option<&str>,
 ) -> CarrierResult<String> {
     let node_id = input["node_id"]
         .as_str()
@@ -260,7 +266,7 @@ async fn handle_drill_down(
         node_id,
         max_depth,
         limit,
-        user_id: None,
+        user_id,
     };
 
     let resp = memory.tree_drill_down(req).await?;
@@ -288,6 +294,7 @@ async fn handle_fetch_leaves(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
+    user_id: Option<&str>,
 ) -> CarrierResult<String> {
     let chunk_ids: Vec<String> = input["chunk_ids"]
         .as_array()
@@ -310,7 +317,7 @@ async fn handle_fetch_leaves(
         owner_id,
         chunk_ids,
         limit,
-        user_id: None,
+        user_id,
     };
 
     let resp = memory.tree_fetch_leaves(req).await?;

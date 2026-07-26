@@ -12,9 +12,13 @@ use crate::tree::tree_store::TreeTreeStore;
 
 /// Drill down from a summary node, returning its children.
 /// BFS traversal up to `max_depth` levels.
+///
+/// When `user_id` is `Some(u)`, only nodes belonging to `u` or owner-shared
+/// are traversed.
 pub fn drill_down(
     conn: &Arc<Mutex<Connection>>,
     owner_id: &str,
+    user_id: Option<&str>,
     node_id: &str,
     max_depth: u32,
     limit: Option<usize>,
@@ -27,12 +31,12 @@ pub fn drill_down(
     let chunk_store = ChunkStore::new(conn.clone());
 
     // Get the root summary to find its children
-    let root = tree_store.get_summary(owner_id, node_id)?;
+    let root = tree_store.get_summary(owner_id, user_id, node_id)?;
     let start_children: Vec<String> = match root {
         Some(ref s) => s.child_ids.clone(),
         None => {
             // It's a leaf — no children
-            if chunk_store.get_chunk(owner_id, node_id)?.is_some() {
+            if chunk_store.get_chunk(owner_id, user_id, node_id)?.is_some() {
                 return Ok(Vec::new());
             }
             return Ok(Vec::new());
@@ -40,7 +44,7 @@ pub fn drill_down(
     };
 
     let root_tree_scope = root.as_ref().and_then(|s| {
-        tree_store.get_tree(owner_id, &s.tree_id).ok().flatten().map(|t| t.scope)
+        tree_store.get_tree(owner_id, user_id, &s.tree_id).ok().flatten().map(|t| t.scope)
     }).unwrap_or_default();
 
     let mut hits: Vec<RetrievalHit> = Vec::new();
@@ -53,8 +57,8 @@ pub fn drill_down(
         }
 
         // Try as summary
-        if let Some(node) = tree_store.get_summary(owner_id, &id)? {
-            let scope = tree_store.get_tree(owner_id, &node.tree_id)?
+        if let Some(node) = tree_store.get_summary(owner_id, user_id, &id)? {
+            let scope = tree_store.get_tree(owner_id, user_id, &node.tree_id)?
                 .map(|t| t.scope)
                 .unwrap_or_else(|| root_tree_scope.clone());
             let child_ids = node.child_ids.clone();
@@ -83,7 +87,7 @@ pub fn drill_down(
         }
 
         // Try as chunk (leaf)
-        if let Some(chunk) = chunk_store.get_chunk(owner_id, &id)? {
+        if let Some(chunk) = chunk_store.get_chunk(owner_id, user_id, &id)? {
             hits.push(RetrievalHit {
                 node_id: chunk.id,
                 node_kind: NodeKind::Leaf,
@@ -130,7 +134,7 @@ mod tests {
     #[test]
     fn test_depth_zero_returns_empty() -> CarrierResult<()> {
         let (conn, _dir) = setup();
-        let result = drill_down(&conn, "owner_1", "nonexistent", 0, None)?;
+        let result = drill_down(&conn, "owner_1", None, "nonexistent", 0, None)?;
         assert!(result.is_empty());
         Ok(())
     }
@@ -138,7 +142,7 @@ mod tests {
     #[test]
     fn test_invalid_id_returns_empty() -> CarrierResult<()> {
         let (conn, _dir) = setup();
-        let result = drill_down(&conn, "owner_1", "nonexistent", 1, None)?;
+        let result = drill_down(&conn, "owner_1", None, "nonexistent", 1, None)?;
         assert!(result.is_empty());
         Ok(())
     }
@@ -149,13 +153,14 @@ mod tests {
         let tree_store = TreeTreeStore::new(conn.clone());
         let chunk_store = ChunkStore::new(conn.clone());
 
-        let tree = tree_store.get_or_create_tree("owner_1", TreeKind::Source, "wechat:test:sender")?;
+        let tree = tree_store.get_or_create_tree("owner_1", "", TreeKind::Source, "wechat:test:sender")?;
 
         // Insert enough chunks and force seal
         for i in 0..10 {
             let chunk = Chunk {
                 id: format!("chunk_dd_{i}"),
                 owner_id: "owner_1".to_string(),
+                user_id: String::new(),
                 agent_id: "agent_1".to_string(),
                 source_kind: SourceKind::Chat,
                 source_id: "wechat:test:sender".to_string(),
@@ -181,10 +186,10 @@ mod tests {
         seal_engine.cascade_seals("owner_1", &tree, 0, false)?;
 
         // Get the root summary
-        let refreshed = tree_store.get_tree("owner_1", &tree.id)?.unwrap();
+        let refreshed = tree_store.get_tree("owner_1", None, &tree.id)?.unwrap();
         let root_id = refreshed.root_id.unwrap();
 
-        let result = drill_down(&conn, "owner_1", &root_id, 1, None)?;
+        let result = drill_down(&conn, "owner_1", None, &root_id, 1, None)?;
         assert!(!result.is_empty(), "drill_down from sealed L1 should return leaf children");
         Ok(())
     }

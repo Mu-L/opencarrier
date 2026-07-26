@@ -15,11 +15,14 @@ const DEFAULT_LIMIT: usize = 20;
 
 /// Fetch leaf chunks by their IDs directly (no BFS traversal).
 ///
+/// When `user_id` is `Some(u)`, only chunks belonging to `u` or owner-shared
+/// are returned — this prevents one user from hydrating another's chunk by id.
 /// Missing IDs are silently skipped (best-effort). Results are sorted
 /// oldest-first by `time_range_start_ms`.
 pub fn fetch_leaves(
     conn: &Arc<Mutex<Connection>>,
     owner_id: &str,
+    user_id: Option<&str>,
     chunk_ids: &[String],
     limit: usize,
 ) -> CarrierResult<QueryResponse> {
@@ -32,7 +35,7 @@ pub fn fetch_leaves(
     let mut hits: Vec<RetrievalHit> = Vec::new();
 
     for id in chunk_ids.iter().take(cap) {
-        if let Some(chunk) = chunk_store.get_chunk(owner_id, id)? {
+        if let Some(chunk) = chunk_store.get_chunk(owner_id, user_id, id)? {
             let score = score_store
                 .get_score(owner_id, id)
                 .ok()
@@ -89,6 +92,7 @@ mod tests {
         let chunk = Chunk {
             id: id.to_string(),
             owner_id: owner_id.to_string(),
+            user_id: String::new(),
             agent_id: "agent_1".to_string(),
             source_kind: SourceKind::Chat,
             source_id: "wechat:test:sender".to_string(),
@@ -110,7 +114,7 @@ mod tests {
     #[test]
     fn test_empty_ids_returns_empty() -> CarrierResult<()> {
         let (conn, _dir) = setup();
-        let resp = fetch_leaves(&conn, "owner_1", &[], 10)?;
+        let resp = fetch_leaves(&conn, "owner_1", None, &[], 10)?;
         assert!(resp.hits.is_empty());
         Ok(())
     }
@@ -118,7 +122,7 @@ mod tests {
     #[test]
     fn test_missing_ids_skipped() -> CarrierResult<()> {
         let (conn, _dir) = setup();
-        let resp = fetch_leaves(&conn, "owner_1", &["nonexistent".to_string()], 10)?;
+        let resp = fetch_leaves(&conn, "owner_1", None, &["nonexistent".to_string()], 10)?;
         assert!(resp.hits.is_empty());
         Ok(())
     }
@@ -128,7 +132,7 @@ mod tests {
         let (conn, _dir) = setup();
         insert_chunk(&conn, "owner_1", "chunk_1", 0, "hello world");
 
-        let resp = fetch_leaves(&conn, "owner_1", &["chunk_1".to_string()], 10)?;
+        let resp = fetch_leaves(&conn, "owner_1", None, &["chunk_1".to_string()], 10)?;
         assert_eq!(resp.hits.len(), 1);
         assert_eq!(resp.hits[0].node_kind, NodeKind::Leaf);
         assert_eq!(resp.hits[0].content, "hello world");
@@ -144,6 +148,7 @@ mod tests {
         let resp = fetch_leaves(
             &conn,
             "owner_1",
+            None,
             &["chunk_b".to_string(), "chunk_a".to_string()],
             10,
         )?;
@@ -161,7 +166,7 @@ mod tests {
             insert_chunk(&conn, "owner_1", &format!("chunk_cap_{i}"), i, "content");
         }
 
-        let resp = fetch_leaves(&conn, "owner_1", &ids, 100)?;
+        let resp = fetch_leaves(&conn, "owner_1", None, &ids, 100)?;
         assert!(resp.hits.len() <= MAX_FETCH_BATCH);
         assert!(resp.truncated);
         Ok(())
@@ -175,11 +180,58 @@ mod tests {
         let resp = fetch_leaves(
             &conn,
             "owner_1",
+            None,
             &["chunk_exists".to_string(), "missing".to_string()],
             10,
         )?;
         assert_eq!(resp.hits.len(), 1);
         assert_eq!(resp.hits[0].content, "found");
+        Ok(())
+    }
+
+    /// One user must not hydrate another user's chunk by guessing its id.
+    #[test]
+    fn test_fetch_leaves_user_isolation() -> CarrierResult<()> {
+        let (conn, _dir) = setup();
+        let store = ChunkStore::new(conn.clone());
+
+        // alice's private chunk + an owner-shared chunk
+        let alice = crate::tree::types::Chunk {
+            id: "chunk_alice".to_string(),
+            owner_id: "owner_1".to_string(),
+            user_id: "alice".to_string(),
+            agent_id: "agent_1".to_string(),
+            source_kind: SourceKind::Chat,
+            source_id: "wechat:test:alice".to_string(),
+            source_ref: None,
+            timestamp_ms: 1_700_000_000_000,
+            time_range_start_ms: 1_700_000_000_000,
+            time_range_end_ms: 1_700_000_000_000,
+            tags_json: "[]".to_string(),
+            content: "alice's secret".to_string(),
+            token_count: 10,
+            seq_in_source: 0,
+            partial_message: false,
+            lifecycle_status: "admitted".to_string(),
+            created_at_ms: 1_700_000_000_000,
+        };
+        let shared = crate::tree::types::Chunk {
+            id: "chunk_shared".to_string(),
+            user_id: String::new(),
+            ..alice.clone()
+        };
+        store.upsert_chunks(&[alice, shared])?;
+
+        // bob requests both ids — only the owner-shared one is returned.
+        let resp = fetch_leaves(
+            &conn,
+            "owner_1",
+            Some("bob"),
+            &["chunk_alice".to_string(), "chunk_shared".to_string()],
+            10,
+        )?;
+        assert_eq!(resp.hits.len(), 1);
+        assert_eq!(resp.hits[0].node_id, "chunk_shared");
         Ok(())
     }
 }

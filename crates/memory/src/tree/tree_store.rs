@@ -21,9 +21,14 @@ impl TreeTreeStore {
     // -- Tree operations ---------------------------------------------------
 
     /// Get or create a tree for (owner_id, kind, scope). Returns the tree.
+    ///
+    /// `user_id` is persisted on creation (source trees carry the sender;
+    /// topic/global trees pass `""` for owner-shared). The lookup itself keys on
+    /// (owner_id, kind, scope) — source-tree scopes already encode the sender.
     pub fn get_or_create_tree(
         &self,
         owner_id: &str,
+        user_id: &str,
         kind: TreeKind,
         scope: &str,
     ) -> CarrierResult<Tree> {
@@ -34,7 +39,7 @@ impl TreeTreeStore {
 
         // Try to find existing
         let result = conn.query_row(
-            "SELECT id, owner_id, kind, scope, root_id, max_level, status, created_at_ms, last_sealed_at_ms
+            "SELECT id, owner_id, kind, scope, root_id, max_level, status, created_at_ms, last_sealed_at_ms, user_id
              FROM mem_tree_trees WHERE owner_id = ?1 AND kind = ?2 AND scope = ?3",
             rusqlite::params![owner_id, kind.as_str(), scope],
             Self::row_to_tree,
@@ -47,15 +52,16 @@ impl TreeTreeStore {
                 let id = format!("tree_{}", uuid::Uuid::new_v4().simple());
 
                 conn.execute(
-                    "INSERT INTO mem_tree_trees (id, owner_id, kind, scope, root_id, max_level, status, created_at_ms, last_sealed_at_ms)
-                     VALUES (?1, ?2, ?3, ?4, NULL, 0, 'active', ?5, NULL)",
-                    rusqlite::params![id, owner_id, kind.as_str(), scope, now_ms],
+                    "INSERT INTO mem_tree_trees (id, owner_id, user_id, kind, scope, root_id, max_level, status, created_at_ms, last_sealed_at_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5, NULL, 0, 'active', ?6, NULL)",
+                    rusqlite::params![id, owner_id, user_id, kind.as_str(), scope, now_ms],
                 )
                 .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
                 Ok(Tree {
                     id,
                     owner_id: owner_id.to_string(),
+                    user_id: user_id.to_string(),
                     kind,
                     scope: scope.to_string(),
                     root_id: None,
@@ -70,18 +76,33 @@ impl TreeTreeStore {
     }
 
     /// Get a tree by ID.
-    pub fn get_tree(&self, owner_id: &str, tree_id: &str) -> CarrierResult<Option<Tree>> {
+    ///
+    /// When `user_id` is `Some(u)`, only return the tree if it belongs to `u`
+    /// or is owner-shared (`user_id = ''`). `None` skips the filter.
+    pub fn get_tree(
+        &self,
+        owner_id: &str,
+        user_id: Option<&str>,
+        tree_id: &str,
+    ) -> CarrierResult<Option<Tree>> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
 
-        let result = conn.query_row(
-            "SELECT id, owner_id, kind, scope, root_id, max_level, status, created_at_ms, last_sealed_at_ms
-             FROM mem_tree_trees WHERE owner_id = ?1 AND id = ?2",
-            rusqlite::params![owner_id, tree_id],
-            Self::row_to_tree,
-        );
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(owner_id.to_string()),
+            Box::new(tree_id.to_string()),
+        ];
+        let mut sql = "SELECT id, owner_id, kind, scope, root_id, max_level, status, created_at_ms, last_sealed_at_ms, user_id
+             FROM mem_tree_trees WHERE owner_id = ?1 AND id = ?2".to_string();
+        if let Some(u) = user_id {
+            sql.push_str(" AND (user_id = ? OR user_id = '')");
+            params.push(Box::new(u.to_string()));
+        }
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let result = conn.query_row(&sql, param_refs.as_slice(), Self::row_to_tree);
 
         match result {
             Ok(tree) => Ok(Some(tree)),
@@ -90,10 +111,11 @@ impl TreeTreeStore {
         }
     }
 
-    /// List all trees for an owner, optionally filtered by kind.
+    /// List all trees for an owner, optionally filtered by user and kind.
     pub fn list_trees(
         &self,
         owner_id: &str,
+        user_id: Option<&str>,
         kind: Option<TreeKind>,
         limit: usize,
     ) -> CarrierResult<Vec<TreeSummary>> {
@@ -113,6 +135,10 @@ impl TreeTreeStore {
                         LEFT JOIN (SELECT tree_id, COUNT(*) as cnt FROM mem_tree_summaries WHERE owner_id = ?1 AND deleted = 0 GROUP BY tree_id) s ON s.tree_id = t.id
                         WHERE t.owner_id = ?1".to_string();
 
+        if let Some(u) = user_id {
+            sql.push_str(" AND (t.user_id = ? OR t.user_id = '')");
+            params.push(Box::new(u.to_string()));
+        }
         if let Some(k) = kind {
             sql.push_str(" AND t.kind = ?");
             params.push(Box::new(k.as_str().to_string()));
@@ -183,13 +209,14 @@ impl TreeTreeStore {
 
         conn.execute(
             "INSERT OR REPLACE INTO mem_tree_summaries
-             (id, owner_id, tree_id, tree_kind, level, parent_id, child_ids_json,
+             (id, owner_id, user_id, tree_id, tree_kind, level, parent_id, child_ids_json,
               content, token_count, entities_json, topics_json,
               time_range_start_ms, time_range_end_ms, score, sealed_at_ms, deleted, embedding)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             rusqlite::params![
                 summary.id,
                 owner_id,
+                summary.user_id,
                 summary.tree_id,
                 summary.tree_kind.as_str(),
                 summary.level,
@@ -212,9 +239,13 @@ impl TreeTreeStore {
     }
 
     /// Get a summary node by ID.
+    ///
+    /// When `user_id` is `Some(u)`, enforce per-user isolation (own summary or
+    /// owner-shared). `None` skips the filter (write-path lookups by exact id).
     pub fn get_summary(
         &self,
         owner_id: &str,
+        user_id: Option<&str>,
         summary_id: &str,
     ) -> CarrierResult<Option<SummaryNode>> {
         let conn = self
@@ -222,14 +253,21 @@ impl TreeTreeStore {
             .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
 
-        let result = conn.query_row(
-            "SELECT id, tree_id, tree_kind, level, parent_id, child_ids_json,
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(owner_id.to_string()),
+            Box::new(summary_id.to_string()),
+        ];
+        let mut sql = "SELECT id, tree_id, tree_kind, level, parent_id, child_ids_json,
                     content, token_count, entities_json, topics_json,
-                    time_range_start_ms, time_range_end_ms, score, sealed_at_ms, deleted, embedding
-             FROM mem_tree_summaries WHERE owner_id = ?1 AND id = ?2",
-            rusqlite::params![owner_id, summary_id],
-            Self::row_to_summary,
-        );
+                    time_range_start_ms, time_range_end_ms, score, sealed_at_ms, deleted, embedding, user_id
+             FROM mem_tree_summaries WHERE owner_id = ?1 AND id = ?2".to_string();
+        if let Some(u) = user_id {
+            sql.push_str(" AND (user_id = ? OR user_id = '')");
+            params.push(Box::new(u.to_string()));
+        }
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        let result = conn.query_row(&sql, param_refs.as_slice(), Self::row_to_summary);
 
         match result {
             Ok(s) => Ok(Some(s)),
@@ -239,9 +277,13 @@ impl TreeTreeStore {
     }
 
     /// List summary nodes for a tree at a given level.
+    ///
+    /// When `user_id` is `Some(u)`, only return summaries belonging to `u` or
+    /// owner-shared. `None` skips the filter.
     pub fn list_summaries(
         &self,
         owner_id: &str,
+        user_id: Option<&str>,
         tree_id: &str,
         level: Option<u32>,
         limit: usize,
@@ -256,10 +298,14 @@ impl TreeTreeStore {
 
         let mut sql = "SELECT id, tree_id, tree_kind, level, parent_id, child_ids_json,
                               content, token_count, entities_json, topics_json,
-                              time_range_start_ms, time_range_end_ms, score, sealed_at_ms, deleted, embedding
+                              time_range_start_ms, time_range_end_ms, score, sealed_at_ms, deleted, embedding, user_id
                        FROM mem_tree_summaries
                        WHERE owner_id = ?1 AND tree_id = ?2 AND deleted = 0".to_string();
 
+        if let Some(u) = user_id {
+            sql.push_str(" AND (user_id = ? OR user_id = '')");
+            params.push(Box::new(u.to_string()));
+        }
         if let Some(l) = level {
             sql.push_str(" AND level = ?");
             params.push(Box::new(l));
@@ -470,6 +516,7 @@ impl TreeTreeStore {
             status,
             created_at_ms: row.get(7)?,
             last_sealed_at_ms: row.get(8)?,
+            user_id: row.get(9)?,
         })
     }
 
@@ -508,6 +555,7 @@ impl TreeTreeStore {
             sealed_at_ms,
             deleted: deleted != 0,
             embedding,
+            user_id: row.get(16)?,
         })
     }
 
@@ -540,7 +588,7 @@ mod tests {
     fn test_get_or_create_tree() {
         let store = setup();
         let tree = store
-            .get_or_create_tree("owner_1", TreeKind::Source, "wechat:gh_abc:sender_1")
+            .get_or_create_tree("owner_1", "", TreeKind::Source, "wechat:gh_abc:sender_1")
             .unwrap();
         assert_eq!(tree.owner_id, "owner_1");
         assert_eq!(tree.kind, TreeKind::Source);
@@ -549,7 +597,7 @@ mod tests {
 
         // Same call returns same tree
         let tree2 = store
-            .get_or_create_tree("owner_1", TreeKind::Source, "wechat:gh_abc:sender_1")
+            .get_or_create_tree("owner_1", "", TreeKind::Source, "wechat:gh_abc:sender_1")
             .unwrap();
         assert_eq!(tree.id, tree2.id);
     }
@@ -558,25 +606,25 @@ mod tests {
     fn test_list_trees() {
         let store = setup();
         store
-            .get_or_create_tree("owner_1", TreeKind::Source, "source_1")
+            .get_or_create_tree("owner_1", "", TreeKind::Source, "source_1")
             .unwrap();
         store
-            .get_or_create_tree("owner_1", TreeKind::Source, "source_2")
+            .get_or_create_tree("owner_1", "", TreeKind::Source, "source_2")
             .unwrap();
         store
-            .get_or_create_tree("owner_1", TreeKind::Global, "global")
+            .get_or_create_tree("owner_1", "", TreeKind::Global, "global")
             .unwrap();
 
-        let all = store.list_trees("owner_1", None, 100).unwrap();
+        let all = store.list_trees("owner_1", None, None, 100).unwrap();
         assert_eq!(all.len(), 3);
 
         let sources = store
-            .list_trees("owner_1", Some(TreeKind::Source), 100)
+            .list_trees("owner_1", None, Some(TreeKind::Source), 100)
             .unwrap();
         assert_eq!(sources.len(), 2);
 
         // Different owner sees nothing
-        let empty = store.list_trees("owner_2", None, 100).unwrap();
+        let empty = store.list_trees("owner_2", None, None, 100).unwrap();
         assert!(empty.is_empty());
     }
 
@@ -584,7 +632,7 @@ mod tests {
     fn test_buffer_upsert_and_get() {
         let store = setup();
         let tree = store
-            .get_or_create_tree("owner_1", TreeKind::Source, "source_1")
+            .get_or_create_tree("owner_1", "", TreeKind::Source, "source_1")
             .unwrap();
 
         let buf = Buffer {
@@ -608,7 +656,7 @@ mod tests {
     fn test_buffer_clear() {
         let store = setup();
         let tree = store
-            .get_or_create_tree("owner_1", TreeKind::Source, "source_1")
+            .get_or_create_tree("owner_1", "", TreeKind::Source, "source_1")
             .unwrap();
 
         let buf = Buffer {
@@ -635,12 +683,13 @@ mod tests {
     fn test_insert_and_get_summary() {
         let store = setup();
         let tree = store
-            .get_or_create_tree("owner_1", TreeKind::Source, "source_1")
+            .get_or_create_tree("owner_1", "", TreeKind::Source, "source_1")
             .unwrap();
 
         let summary = SummaryNode {
             id: "sum_001".to_string(),
             tree_id: tree.id.clone(),
+            user_id: String::new(),
             tree_kind: TreeKind::Source,
             level: 1,
             parent_id: None,
@@ -658,7 +707,7 @@ mod tests {
         };
         store.insert_summary("owner_1", &summary).unwrap();
 
-        let got = store.get_summary("owner_1", "sum_001").unwrap().unwrap();
+        let got = store.get_summary("owner_1", None, "sum_001").unwrap().unwrap();
         assert_eq!(got.content, "Summary of conversation");
         assert_eq!(got.entities.len(), 1);
     }
