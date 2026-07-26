@@ -115,7 +115,7 @@ async fn resolve_kf_media_id(
         .and_then(|u| u.rsplit('/').next())
         .unwrap_or(default_filename)
         .to_string();
-    token::upload_kf_media(http, token, media_type, bytes, &filename).await
+    token::upload_kf_media(http, token, media_type, bytes, &filename).await.map_err(|e| e.to_string())
 }
 
 /// Deliver rich content to a wecom kf customer. Priority:
@@ -145,27 +145,27 @@ async fn deliver_kf_rich(
                 "thumb_media_id": thumb,
             }
         });
-        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
+        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await.map_err(|e| e.to_string());
     }
     if let Some(f) = content.file.as_ref() {
         if !f.is_empty() {
             let mid = resolve_kf_media_id(http, token, "file", f, "file").await?;
             let body = serde_json::json!({ "msgtype": "file", "file": { "media_id": mid } });
-            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
+            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await.map_err(|e| e.to_string());
         }
     }
     if let Some(v) = content.video.as_ref() {
         if !v.is_empty() {
             let mid = resolve_kf_media_id(http, token, "video", v, "video.mp4").await?;
             let body = serde_json::json!({ "msgtype": "video", "video": { "media_id": mid } });
-            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
+            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await.map_err(|e| e.to_string());
         }
     }
     if let Some(img) = content.image.as_ref() {
         if !img.is_empty() {
             let mid = resolve_kf_media_id(http, token, "image", img, "image.jpg").await?;
             let body = serde_json::json!({ "msgtype": "image", "image": { "media_id": mid } });
-            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
+            return token::send_kf_msg(http, token, open_kfid, external_userid, body).await.map_err(|e| e.to_string());
         }
     }
     if let Some(l) = content.link.as_ref() {
@@ -178,11 +178,11 @@ async fn deliver_kf_rich(
                 "pic_url": l.pic_url.clone().unwrap_or_default(),
             }
         });
-        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
+        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await.map_err(|e| e.to_string());
     }
     if let Some(text) = content.as_text() {
         let body = serde_json::json!({ "msgtype": "text", "text": { "content": text } });
-        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
+        return token::send_kf_msg(http, token, open_kfid, external_userid, body).await.map_err(|e| e.to_string());
     }
     Err("wecom kf: content has no representation".into())
 }
@@ -223,11 +223,11 @@ impl Channel for SessionWatcher {
         match &session.entry.mode {
             token::WecomMode::App { .. } => {
                 token::send_app_message(&session.entry, user_id, text)
-                    .map_err(ChannelError::SendFailed)?;
+                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
             }
             token::WecomMode::Kf { .. } => {
                 token::send_kf_message(&session.entry, user_id, text)
-                    .map_err(ChannelError::SendFailed)?;
+                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
             }
             token::WecomMode::SmartBot { .. } => {
                 // SmartBot uses response_url mechanism
@@ -289,7 +289,7 @@ impl Channel for SessionWatcher {
                     let token = session
                         .entry
                         .get_access_token()
-                        .map_err(ChannelError::TokenFailed)?;
+                        .map_err(|e| ChannelError::TokenFailed(e.to_string()))?;
                     Some((session.entry.http.clone(), token, open_kfid))
                 }
                 _ => None,
@@ -310,7 +310,7 @@ impl Channel for SessionWatcher {
         types::channel::block_on_detached(async move {
             deliver_kf_rich(&http, &token, &open_kfid, &ext, &content)
                 .await
-                .map_err(ChannelError::SendFailed)
+                .map_err(|e| ChannelError::SendFailed(e.to_string()))
         })
     }
 

@@ -38,7 +38,7 @@ pub async fn qr_login(
 
         // Step 1: Get QR code
         info!("Fetching QR code from {base_url}");
-        let qr_resp = api::get_bot_qrcode_with_base(http, &base_url).await?;
+        let qr_resp = api::get_bot_qrcode_with_base(http, &base_url).await.map_err(|e| e.to_string())?;
         let qrcode_token = qr_resp.qrcode.clone();
         let qr_url = qr_resp.qrcode_img_content.clone();
 

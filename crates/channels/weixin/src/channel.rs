@@ -538,7 +538,7 @@ impl Channel for SessionWatcher {
                     &text,
                 )
                 .await
-                .map_err(ChannelError::SendFailed)
+                .map_err(|e| ChannelError::SendFailed(e.to_string()))
             });
             let _ = tx.send(result);
         });
@@ -604,12 +604,12 @@ impl Channel for SessionWatcher {
                     &http, &bot_token, &baseurl, &user_id, &context_token, &client_id, &payload,
                 )
                 .await
-                .map_err(ChannelError::SendFailed),
+                .map_err(|e| ChannelError::SendFailed(e.to_string())),
                 "image" => api::send_image(
                     &http, &bot_token, &baseurl, &user_id, &context_token, &client_id, &payload,
                 )
                 .await
-                .map_err(ChannelError::SendFailed),
+                .map_err(|e| ChannelError::SendFailed(e.to_string())),
                 _ => unreachable!(),
             }
         })

@@ -89,7 +89,7 @@ impl ToolProvider for WeixinOaPublishArticleTool {
         rt.block_on(async move {
             let mut token = api::get_access_token(&http, &app_id, &app_secret)
                 .await
-                .map_err(PluginToolError::tool)?
+                .map_err(|e| PluginToolError::tool(e.to_string()))?
                 .access_token
                 .ok_or_else(|| PluginToolError::tool("get_access_token returned no access_token"))?;
 
@@ -151,17 +151,17 @@ impl ToolProvider for WeixinOaPublishArticleTool {
             .await
             {
                 Ok(mid) => mid,
-                Err(e) if is_token_expired(&e) => {
+                Err(e) if is_token_expired(&e.to_string()) => {
                     token = api::get_access_token(&http, &app_id, &app_secret)
                         .await
-                        .map_err(PluginToolError::tool)?
+                        .map_err(|e| PluginToolError::tool(e.to_string()))?
                         .access_token
                         .ok_or_else(|| PluginToolError::tool("get_access_token returned no access_token"))?;
                     api::add_draft(&http, &token, &title, &content, Some(&thumb), author.as_deref(), digest.as_deref())
                         .await
-                        .map_err(PluginToolError::tool)?
+                        .map_err(|e| PluginToolError::tool(e.to_string()))?
                 }
-                Err(e) => return Err(PluginToolError::tool(e)),
+                Err(e) => return Err(PluginToolError::tool(e.to_string())),
             };
             info!(draft_media_id = %draft_media_id, "Draft created");
 
@@ -176,13 +176,13 @@ impl ToolProvider for WeixinOaPublishArticleTool {
             if publish {
                 match api::freepublish_submit(&http, &token, &draft_media_id).await {
                     Ok(pid) => publish_id = Some(pid),
-                    Err(e) if is_token_expired(&e) => {
+                    Err(e) if is_token_expired(&e.to_string()) => {
                         match api::get_access_token(&http, &app_id, &app_secret).await {
                             Ok(resp) => match resp.access_token {
                                 Some(new_tok) => {
                                     match api::freepublish_submit(&http, &new_tok, &draft_media_id).await {
                                         Ok(pid) => publish_id = Some(pid),
-                                        Err(e2) => publish_error = Some(e2),
+                                        Err(e2) => publish_error = Some(e2.to_string()),
                                     }
                                 }
                                 None => publish_error = Some("get_access_token returned no access_token".to_string()),
@@ -190,7 +190,7 @@ impl ToolProvider for WeixinOaPublishArticleTool {
                             Err(e2) => publish_error = Some(e2.to_string()),
                         }
                     }
-                    Err(e) => publish_error = Some(e),
+                    Err(e) => publish_error = Some(e.to_string()),
                 }
             }
 

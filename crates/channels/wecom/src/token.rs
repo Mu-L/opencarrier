@@ -198,9 +198,9 @@ impl BotEntry {
 
     /// Get a valid access token, refreshing if needed.
     /// Returns error for SmartBot mode (no token needed).
-    pub fn get_access_token(&self) -> Result<String, String> {
+    pub fn get_access_token(&self) -> CarrierResult<String> {
         match &self.mode {
-            WecomMode::SmartBot { .. } => Err("SmartBot mode does not use access tokens".into()),
+            WecomMode::SmartBot { .. } => Err(CarrierError::InvalidInput("SmartBot mode does not use access tokens".into())),
             _ => self.get_or_refresh_token(),
         }
     }
@@ -209,14 +209,14 @@ impl BotEntry {
     /// `get_access_token` builds a new current_thread runtime and `block_on`,
     /// which panics ("Cannot start a runtime from within a runtime") if the
     /// caller is already on a tokio runtime (e.g. an axum webhook handler).
-    pub async fn get_access_token_async(&self) -> Result<String, String> {
+    pub async fn get_access_token_async(&self) -> CarrierResult<String> {
         match &self.mode {
-            WecomMode::SmartBot { .. } => Err("SmartBot mode does not use access tokens".into()),
+            WecomMode::SmartBot { .. } => Err(CarrierError::InvalidInput("SmartBot mode does not use access tokens".into())),
             _ => self.fetch_token().await,
         }
     }
 
-    fn get_or_refresh_token(&self) -> Result<String, String> {
+    fn get_or_refresh_token(&self) -> CarrierResult<String> {
         // Check cache
         if let Some((token, expires_at)) = self.cached_token.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             if Instant::now() < *expires_at {
@@ -228,13 +228,13 @@ impl BotEntry {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(|e| format!("Runtime error: {e}"))?;
+            .map_err(|e| CarrierError::Internal(format!("Runtime error: {e}")))?;
         let token = rt.block_on(self.fetch_token())?;
 
         Ok(token)
     }
 
-    async fn fetch_token(&self) -> Result<String, String> {
+    async fn fetch_token(&self) -> CarrierResult<String> {
         // SECURITY: Use POST body instead of query params to avoid leaking corpsecret in logs
         let url = format!("{}/cgi-bin/gettoken", WECOM_API_BASE);
         let body = serde_json::json!({
@@ -248,20 +248,20 @@ impl BotEntry {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("token request failed: {e}"))?
+            .map_err(|e| CarrierError::Network(format!("token request failed: {e}")))?
             .json()
             .await
-            .map_err(|e| format!("token response parse error: {e}"))?;
+            .map_err(|e| CarrierError::Serialization(format!("token response parse error: {e}")))?;
 
         let errcode = resp["errcode"].as_i64().unwrap_or(-1);
         if errcode != 0 {
             let errmsg = resp["errmsg"].as_str().unwrap_or("unknown");
-            return Err(format!("token error: {errcode} {errmsg}"));
+            return Err(CarrierError::Network(format!("token error: {errcode} {errmsg}")));
         }
 
         let token = resp["access_token"]
             .as_str()
-            .ok_or("missing access_token")?
+            .ok_or(CarrierError::Serialization("missing access_token".to_string()))?
             .to_string();
         let expires_in = resp["expires_in"].as_u64().unwrap_or(7200);
 
@@ -285,7 +285,7 @@ pub async fn wedoc_post(
     path: &str,
     token: &str,
     body: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
+) -> CarrierResult<serde_json::Value> {
     // 企业微信 API 要求 access_token 作为 query 参数（不支持 X-Access-Token
     // header，否则返回 41001 access_token missing）。
     let url = format!("{}/{}?access_token={}", WECOM_API_BASE, path, token);
@@ -294,25 +294,25 @@ pub async fn wedoc_post(
         .json(body)
         .send()
         .await
-        .map_err(|e| format!("API request failed: {e}"))?
+        .map_err(|e| CarrierError::Network(format!("API request failed: {e}")))?
         .json()
         .await
-        .map_err(|e| format!("API response parse error: {e}"))?;
+        .map_err(|e| CarrierError::Serialization(format!("API response parse error: {e}")))?;
 
     let errcode = resp["errcode"].as_i64().unwrap_or(-1);
     if errcode != 0 {
         let errmsg = resp["errmsg"].as_str().unwrap_or("unknown");
-        return Err(format!("WeCom API error {errcode}: {errmsg}"));
+        return Err(CarrierError::Network(format!("WeCom API error {errcode}: {errmsg}")));
     }
 
     Ok(resp)
 }
 
 /// Send an application message to a WeCom user (App mode).
-pub fn send_app_message(bot: &BotEntry, user_id: &str, content: &str) -> Result<(), String> {
+pub fn send_app_message(bot: &BotEntry, user_id: &str, content: &str) -> CarrierResult<()> {
     let agent_id = bot
         .agent_id()
-        .ok_or("send_app_message requires App mode")?
+        .ok_or(CarrierError::InvalidInput("send_app_message requires App mode".to_string()))?
         .to_string();
     let token = bot.get_access_token()?;
 
@@ -328,7 +328,7 @@ pub fn send_app_message(bot: &BotEntry, user_id: &str, content: &str) -> Result<
         {
             Ok(rt) => rt,
             Err(e) => {
-                let _ = tx.send(Err(format!("Runtime error: {e}")));
+                let _ = tx.send(Err(CarrierError::Internal(format!("Runtime error: {e}"))));
                 return;
             }
         };
@@ -344,17 +344,21 @@ pub fn send_app_message(bot: &BotEntry, user_id: &str, content: &str) -> Result<
         let _ = tx.send(result);
     });
 
-    let _ = rx
-        .recv()
-        .map_err(|e| format!("Send thread disconnected: {e}"))??;
+    match rx.recv() {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(e) => {
+            return Err(CarrierError::Internal(format!("Send thread disconnected: {e}")))
+        }
+    }
     Ok(())
 }
 
 /// Send a customer service message (Kf mode).
-pub fn send_kf_message(bot: &BotEntry, user_id: &str, content: &str) -> Result<(), String> {
+pub fn send_kf_message(bot: &BotEntry, user_id: &str, content: &str) -> CarrierResult<()> {
     let open_kfid = bot
         .open_kfid()
-        .ok_or("send_kf_message requires Kf mode")?
+        .ok_or(CarrierError::InvalidInput("send_kf_message requires Kf mode".to_string()))?
         .to_string();
     let token = bot.get_access_token()?;
 
@@ -370,7 +374,7 @@ pub fn send_kf_message(bot: &BotEntry, user_id: &str, content: &str) -> Result<(
         {
             Ok(rt) => rt,
             Err(e) => {
-                let _ = tx.send(Err(format!("Runtime error: {e}")));
+                let _ = tx.send(Err(CarrierError::Internal(format!("Runtime error: {e}"))));
                 return;
             }
         };
@@ -386,9 +390,13 @@ pub fn send_kf_message(bot: &BotEntry, user_id: &str, content: &str) -> Result<(
         let _ = tx.send(result);
     });
 
-    let _ = rx
-        .recv()
-        .map_err(|e| format!("Send thread disconnected: {e}"))??;
+    match rx.recv() {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => return Err(e),
+        Err(e) => {
+            return Err(CarrierError::Internal(format!("Send thread disconnected: {e}")))
+        }
+    }
     Ok(())
 }
 
@@ -405,7 +413,7 @@ pub async fn sync_kf_msg(
     cb_token: &str,
     open_kfid: &str,
     limit: u32,
-) -> Result<(Vec<serde_json::Value>, String, bool), String> {
+) -> CarrierResult<(Vec<serde_json::Value>, String, bool)> {
     let body = serde_json::json!({
         "cursor": cursor,
         "token": cb_token,
@@ -457,7 +465,7 @@ pub async fn upload_kf_media(
     media_type: &str,
     bytes: Vec<u8>,
     filename: &str,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let url = format!(
         "{}/cgi-bin/media/upload?access_token={}&type={}",
         WECOM_API_BASE, access_token, media_type
@@ -469,19 +477,19 @@ pub async fn upload_kf_media(
         .multipart(form)
         .send()
         .await
-        .map_err(|e| format!("media upload request failed: {e}"))?
+        .map_err(|e| CarrierError::Network(format!("media upload request failed: {e}")))?
         .json()
         .await
-        .map_err(|e| format!("media upload response parse error: {e}"))?;
+        .map_err(|e| CarrierError::Serialization(format!("media upload response parse error: {e}")))?;
     let errcode = resp["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         let errmsg = resp["errmsg"].as_str().unwrap_or("unknown");
-        return Err(format!("media upload error {errcode}: {errmsg}"));
+        return Err(CarrierError::Network(format!("media upload error {errcode}: {errmsg}")));
     }
     resp["media_id"]
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| "media upload returned no media_id".into())
+        .ok_or_else(|| CarrierError::Serialization("media upload returned no media_id".to_string()))
 }
 
 /// Send an arbitrary kf message via `cgi-bin/kf/send_msg`. `body` must contain
@@ -494,7 +502,7 @@ pub async fn send_kf_msg(
     open_kfid: &str,
     external_userid: &str,
     mut body: serde_json::Value,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     body["touser"] = serde_json::Value::String(external_userid.to_string());
     body["open_kfid"] = serde_json::Value::String(open_kfid.to_string());
     wedoc_post(http, "cgi-bin/kf/send_msg", access_token, &body).await?;

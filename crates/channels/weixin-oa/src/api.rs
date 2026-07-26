@@ -2,6 +2,7 @@
 
 use serde::Deserialize;
 use sha1::{Digest, Sha1};
+use types::error::{CarrierError, CarrierResult};
 
 use crate::models::{TokenResponse, WechatApiError};
 
@@ -33,7 +34,7 @@ pub async fn get_access_token(
     http: &reqwest::Client,
     app_id: &str,
     app_secret: &str,
-) -> Result<TokenResponse, String> {
+) -> CarrierResult<TokenResponse> {
     let url = format!("{}/cgi-bin/stable_token", WECHAT_API_BASE);
     let body = serde_json::json!({
         "grant_type": "client_credential",
@@ -46,18 +47,18 @@ pub async fn get_access_token(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("get_access_token request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("get_access_token request failed: {e}")))?;
     let tok = resp
         .json::<TokenResponse>()
         .await
-        .map_err(|e| format!("get_access_token parse failed: {e}"))?;
+        .map_err(|e| CarrierError::Serialization(format!("get_access_token parse failed: {e}")))?;
     if let Some(code) = tok.errcode {
         if code != 0 {
-            return Err(format!(
+            return Err(CarrierError::Network(format!(
                 "get_access_token WeChat error {}: {}",
                 code,
                 tok.errmsg.as_deref().unwrap_or("?")
-            ));
+            )));
         }
     }
     Ok(tok)
@@ -72,7 +73,7 @@ pub async fn get_user_unionid(
     http: &reqwest::Client,
     access_token: &str,
     openid: &str,
-) -> Result<Option<String>, String> {
+) -> CarrierResult<Option<String>> {
     let url = format!(
         "{}/cgi-bin/user/info?access_token={}&openid={}&lang=zh_CN",
         WECHAT_API_BASE,
@@ -83,14 +84,14 @@ pub async fn get_user_unionid(
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("user/info request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("user/info request failed: {e}")))?;
     let val: serde_json::Value = resp
         .json()
         .await
-        .map_err(|e| format!("user/info parse failed: {e}"))?;
+        .map_err(|e| CarrierError::Serialization(format!("user/info parse failed: {e}")))?;
     if let Some(code) = val.get("errcode").and_then(|v| v.as_i64()) {
         if code != 0 {
-            return Err(format!("user/info errcode={code}"));
+            return Err(CarrierError::Network(format!("user/info errcode={code}")));
         }
     }
     Ok(val
@@ -106,7 +107,7 @@ pub async fn custom_send_text(
     access_token: &str,
     openid: &str,
     text: &str,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     let url = format!(
         "{}/cgi-bin/message/custom/send?access_token={}",
         WECHAT_API_BASE, access_token
@@ -123,30 +124,30 @@ pub async fn custom_send_text(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("custom_send request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("custom_send request failed: {e}")))?;
     // Parse response body as text first, then deserialize — avoids reqwest::Error vs serde_json::Error mismatch
     let resp_text = resp
         .text()
         .await
-        .map_err(|e| format!("custom_send read body failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("custom_send read body failed: {e}")))?;
     let err: WechatApiError = serde_json::from_str(&resp_text)
         .unwrap_or(WechatApiError { errcode: -1, errmsg: resp_text });
     if err.errcode != 0 {
-        return Err(format!(
+        return Err(CarrierError::Network(format!(
             "WeChat API error {}: {}",
             err.errcode, err.errmsg
-        ));
+        )));
     }
     Ok(())
 }
 
 /// Check a WeChat API JSON response for an error errcode.
 /// Returns Ok(()) if errcode==0, else Err with the message.
-fn check_wechat_error(resp_text: String, label: &str) -> Result<(), String> {
+fn check_wechat_error(resp_text: String, label: &str) -> CarrierResult<()> {
     let err: WechatApiError = serde_json::from_str(&resp_text)
         .unwrap_or(WechatApiError { errcode: -1, errmsg: resp_text });
     if err.errcode != 0 {
-        return Err(format!("WeChat API error {} ({})", err.errcode, err.errmsg));
+        return Err(CarrierError::Network(format!("WeChat API error {} ({})", err.errcode, err.errmsg)));
     }
     let _ = label;
     Ok(())
@@ -158,7 +159,7 @@ pub async fn custom_send_image(
     access_token: &str,
     openid: &str,
     media_id: &str,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     let url = format!(
         "{}/cgi-bin/message/custom/send?access_token={}",
         WECHAT_API_BASE, access_token
@@ -175,11 +176,11 @@ pub async fn custom_send_image(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("custom_send_image request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("custom_send_image request failed: {e}")))?;
     let resp_text = resp
         .text()
         .await
-        .map_err(|e| format!("custom_send_image read body failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("custom_send_image read body failed: {e}")))?;
     check_wechat_error(resp_text, "custom_send_image")
 }
 
@@ -197,7 +198,7 @@ pub async fn custom_send_miniprogrampage(
     pagepath: &str,
     thumb_media_id: &str,
     mini_appid: &str,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     let url = format!(
         "{}/cgi-bin/message/custom/send?access_token={}",
         WECHAT_API_BASE, access_token
@@ -217,11 +218,11 @@ pub async fn custom_send_miniprogrampage(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("custom_send_miniprogrampage request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("custom_send_miniprogrampage request failed: {e}")))?;
     let resp_text = resp
         .text()
         .await
-        .map_err(|e| format!("custom_send_miniprogrampage read body failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("custom_send_miniprogrampage read body failed: {e}")))?;
     check_wechat_error(resp_text, "custom_send_miniprogrampage")
 }
 
@@ -247,7 +248,7 @@ pub async fn upload_media_permanent(
     access_token: &str,
     image_bytes: Vec<u8>,
     filename: &str,
-) -> Result<(String, Option<String>), String> {
+) -> CarrierResult<(String, Option<String>)> {
     let url = format!(
         "{}/cgi-bin/material/add_material?access_token={}&type=image",
         WECHAT_API_BASE, access_token
@@ -255,25 +256,25 @@ pub async fn upload_media_permanent(
     let part = reqwest::multipart::Part::bytes(image_bytes)
         .file_name(filename.to_string())
         .mime_str("image/png")
-        .map_err(|e| format!("invalid mime: {e}"))?;
+        .map_err(|e| CarrierError::InvalidInput(format!("invalid mime: {e}")))?;
     let form = reqwest::multipart::Form::new().part("media", part);
     let resp = http
         .post(&url)
         .multipart(form)
         .send()
         .await
-        .map_err(|e| format!("upload_media request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("upload_media request failed: {e}")))?;
     let resp_text = resp
         .text()
         .await
-        .map_err(|e| format!("upload_media read body failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("upload_media read body failed: {e}")))?;
     let parsed: UploadMaterialResponse = serde_json::from_str(&resp_text)
-        .map_err(|e| format!("upload_media parse failed: {e} (body: {resp_text})"))?;
+        .map_err(|e| CarrierError::Serialization(format!("upload_media parse failed: {e} (body: {resp_text})")))?;
     let media_id = parsed.media_id.ok_or_else(|| {
-        format!(
+        CarrierError::Serialization(format!(
             "upload_media: no media_id (errcode={}, errmsg={})",
             parsed.errcode, parsed.errmsg
-        )
+        ))
     })?;
     Ok((media_id, parsed.url))
 }
@@ -291,7 +292,7 @@ pub async fn add_draft(
     thumb_media_id: Option<&str>,
     author: Option<&str>,
     digest: Option<&str>,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let url = format!(
         "{}/cgi-bin/draft/add?access_token={}",
         WECHAT_API_BASE, access_token
@@ -317,25 +318,25 @@ pub async fn add_draft(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("add_draft request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("add_draft request failed: {e}")))?;
     let resp_text = resp
         .text()
         .await
-        .map_err(|e| format!("add_draft read body failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("add_draft read body failed: {e}")))?;
     let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| format!("add_draft parse failed: {e} (body: {resp_text})"))?;
+        .map_err(|e| CarrierError::Serialization(format!("add_draft parse failed: {e} (body: {resp_text})")))?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
-        return Err(format!(
+        return Err(CarrierError::Network(format!(
             "add_draft WeChat error {}: {}",
             errcode,
             v["errmsg"].as_str().unwrap_or("?")
-        ));
+        )));
     }
     v["media_id"]
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| format!("add_draft: no media_id (body: {resp_text})"))
+        .ok_or_else(|| CarrierError::Serialization(format!("add_draft: no media_id (body: {resp_text})")))
 }
 
 /// Submit a draft for publishing (`/cgi-bin/freepublish/submit`).
@@ -346,7 +347,7 @@ pub async fn freepublish_submit(
     http: &reqwest::Client,
     access_token: &str,
     media_id: &str,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let url = format!(
         "{}/cgi-bin/freepublish/submit?access_token={}",
         WECHAT_API_BASE, access_token
@@ -357,25 +358,25 @@ pub async fn freepublish_submit(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("freepublish request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("freepublish request failed: {e}")))?;
     let resp_text = resp
         .text()
         .await
-        .map_err(|e| format!("freepublish read body failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("freepublish read body failed: {e}")))?;
     let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| format!("freepublish parse failed: {e} (body: {resp_text})"))?;
+        .map_err(|e| CarrierError::Serialization(format!("freepublish parse failed: {e} (body: {resp_text})")))?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
-        return Err(format!(
+        return Err(CarrierError::Network(format!(
             "freepublish WeChat error {}: {}",
             errcode,
             v["errmsg"].as_str().unwrap_or("?")
-        ));
+        )));
     }
     v["publish_id"]
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| format!("freepublish: no publish_id (body: {resp_text})"))
+        .ok_or_else(|| CarrierError::Serialization(format!("freepublish: no publish_id (body: {resp_text})")))
 }
 
 /// List permanent materials (`/cgi-bin/material/batchget_material`).
@@ -388,7 +389,7 @@ pub async fn list_materials(
     material_type: &str,
     offset: i64,
     count: i64,
-) -> Result<Vec<(String, Option<String>)>, String> {
+) -> CarrierResult<Vec<(String, Option<String>)>> {
     let url = format!(
         "{}/cgi-bin/material/batchget_material?access_token={}",
         WECHAT_API_BASE, access_token
@@ -403,20 +404,20 @@ pub async fn list_materials(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("list_materials request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("list_materials request failed: {e}")))?;
     let resp_text = resp
         .text()
         .await
-        .map_err(|e| format!("list_materials read body failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("list_materials read body failed: {e}")))?;
     let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| format!("list_materials parse failed: {e} (body: {resp_text})"))?;
+        .map_err(|e| CarrierError::Serialization(format!("list_materials parse failed: {e} (body: {resp_text})")))?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
-        return Err(format!(
+        return Err(CarrierError::Network(format!(
             "list_materials WeChat error {}: {}",
             errcode,
             v["errmsg"].as_str().unwrap_or("?")
-        ));
+        )));
     }
     let items = v["item"]
         .as_array()

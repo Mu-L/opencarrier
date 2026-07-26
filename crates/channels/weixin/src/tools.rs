@@ -102,7 +102,7 @@ impl ToolProvider for WeixinSendMessageTool {
                 text,
             )
             .await
-            .map_err(PluginToolError::tool)
+            .map_err(|e| PluginToolError::tool(e.to_string()))
         })?;
 
         Ok("Message sent".to_string())
@@ -170,7 +170,7 @@ impl ToolProvider for WeixinSendImageTool {
                 image_url,
             )
             .await
-            .map_err(PluginToolError::tool)
+            .map_err(|e| PluginToolError::tool(e.to_string()))
         })?;
 
         Ok("Image sent".to_string())
@@ -238,7 +238,7 @@ impl ToolProvider for WeixinSendVideoTool {
                 video_url,
             )
             .await
-            .map_err(PluginToolError::tool)
+            .map_err(|e| PluginToolError::tool(e.to_string()))
         })?;
 
         Ok("Video sent".to_string())

@@ -6,6 +6,7 @@ use base64::Engine;
 use rand::Rng;
 use reqwest::{header::HeaderMap, Client};
 use std::time::Duration;
+use types::error::{CarrierError, CarrierResult};
 
 use crate::models::*;
 
@@ -37,7 +38,7 @@ fn ilink_headers(bot_token: Option<&str>) -> HeaderMap {
 /// GET `/ilink/bot/get_bot_qrcode?bot_type=3`
 ///
 /// No auth required. Returns QR code for WeChat scanning.
-pub async fn get_bot_qrcode(http: &Client) -> Result<QrCodeResponse, String> {
+pub async fn get_bot_qrcode(http: &Client) -> CarrierResult<QrCodeResponse> {
     get_bot_qrcode_with_base(http, ILINK_API_BASE).await
 }
 
@@ -45,23 +46,23 @@ pub async fn get_bot_qrcode(http: &Client) -> Result<QrCodeResponse, String> {
 pub async fn get_bot_qrcode_with_base(
     http: &Client,
     base_url: &str,
-) -> Result<QrCodeResponse, String> {
+) -> CarrierResult<QrCodeResponse> {
     let url = format!("{base_url}/ilink/bot/get_bot_qrcode?bot_type={BOT_TYPE}");
     let resp = http
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("get_bot_qrcode request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("get_bot_qrcode request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("get_bot_qrcode HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!("get_bot_qrcode HTTP {status}: {body}")));
     }
 
     resp.json::<QrCodeResponse>()
         .await
-        .map_err(|e| format!("get_bot_qrcode parse error: {e}"))
+        .map_err(|e| CarrierError::Serialization(format!("get_bot_qrcode parse error: {e}")))
 }
 
 /// GET `<base>/ilink/bot/get_qrcode_status?qrcode=xxx`
@@ -71,7 +72,7 @@ pub async fn get_qrcode_status(
     http: &Client,
     base_url: &str,
     qrcode: &str,
-) -> Result<QrCodeStatusResponse, String> {
+) -> CarrierResult<QrCodeStatusResponse> {
     let url = format!(
         "{base_url}/ilink/bot/get_qrcode_status?qrcode={}",
         urlencoding::encode(qrcode)
@@ -81,22 +82,22 @@ pub async fn get_qrcode_status(
         .timeout(Duration::from_secs(40))
         .send()
         .await
-        .map_err(|e| format!("get_qrcode_status request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("get_qrcode_status request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("get_qrcode_status HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!("get_qrcode_status HTTP {status}: {body}")));
     }
 
     // iLink may return application/octet-stream content type
     let text = resp
         .text()
         .await
-        .map_err(|e| format!("get_qrcode_status read body error: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("get_qrcode_status read body error: {e}")))?;
 
     serde_json::from_str::<QrCodeStatusResponse>(&text)
-        .map_err(|e| format!("get_qrcode_status parse error: {e}: {text}"))
+        .map_err(|e| CarrierError::Serialization(format!("get_qrcode_status parse error: {e}: {text}")))
 }
 
 /// POST `/ilink/bot/getupdates`
@@ -107,7 +108,7 @@ pub async fn get_updates(
     bot_token: &str,
     baseurl: &str,
     cursor: &str,
-) -> Result<GetUpdatesResponse, String> {
+) -> CarrierResult<GetUpdatesResponse> {
     let url = format!("{baseurl}/ilink/bot/getupdates");
     let body = GetUpdatesRequest {
         get_updates_buf: cursor.to_string(),
@@ -121,21 +122,21 @@ pub async fn get_updates(
         .timeout(Duration::from_millis(LONG_POLL_TIMEOUT_MS + 5_000))
         .send()
         .await
-        .map_err(|e| format!("getupdates request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("getupdates request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("getupdates HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!("getupdates HTTP {status}: {body}")));
     }
 
     let text = resp
         .text()
         .await
-        .map_err(|e| format!("getupdates read body error: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("getupdates read body error: {e}")))?;
 
     serde_json::from_str::<GetUpdatesResponse>(&text)
-        .map_err(|e| format!("getupdates parse error: {e}"))
+        .map_err(|e| CarrierError::Serialization(format!("getupdates parse error: {e}")))
 }
 
 /// POST `/ilink/bot/sendmessage`
@@ -149,7 +150,7 @@ pub async fn send_message(
     context_token: &str,
     client_id: &str,
     text: &str,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     let url = format!("{baseurl}/ilink/bot/sendmessage");
 
     let req = SendMessageRequest {
@@ -179,19 +180,19 @@ pub async fn send_message(
         .timeout(Duration::from_secs(15))
         .send()
         .await
-        .map_err(|e| format!("sendmessage request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("sendmessage request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("sendmessage HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!("sendmessage HTTP {status}: {body}")));
     }
 
     // iLink returns empty JSON or { } on success
     let _ = resp
         .text()
         .await
-        .map_err(|e| format!("sendmessage read body error: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("sendmessage read body error: {e}")))?;
 
     Ok(())
 }
@@ -205,7 +206,7 @@ pub async fn send_image(
     context_token: &str,
     client_id: &str,
     image_url: &str,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     let url = format!("{baseurl}/ilink/bot/sendmessage");
 
     let req = SendMessageRequest {
@@ -235,18 +236,18 @@ pub async fn send_image(
         .timeout(Duration::from_secs(15))
         .send()
         .await
-        .map_err(|e| format!("send_image request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("send_image request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("send_image HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!("send_image HTTP {status}: {body}")));
     }
 
     let _ = resp
         .text()
         .await
-        .map_err(|e| format!("send_image read body error: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("send_image read body error: {e}")))?;
 
     Ok(())
 }
@@ -262,7 +263,7 @@ pub async fn send_video(
     context_token: &str,
     client_id: &str,
     video_url: &str,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     let url = format!("{baseurl}/ilink/bot/sendmessage");
 
     let req = SendMessageRequest {
@@ -292,18 +293,18 @@ pub async fn send_video(
         .timeout(Duration::from_secs(15))
         .send()
         .await
-        .map_err(|e| format!("send_video request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("send_video request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("send_video HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!("send_video HTTP {status}: {body}")));
     }
 
     let _ = resp
         .text()
         .await
-        .map_err(|e| format!("send_video read body error: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("send_video read body error: {e}")))?;
 
     Ok(())
 }
@@ -317,7 +318,7 @@ pub async fn get_config(
     baseurl: &str,
     ilink_user_id: &str,
     context_token: Option<&str>,
-) -> Result<GetConfigResponse, String> {
+) -> CarrierResult<GetConfigResponse> {
     let url = format!("{baseurl}/ilink/bot/getconfig");
 
     let body = GetConfigRequest {
@@ -333,21 +334,21 @@ pub async fn get_config(
         .timeout(Duration::from_secs(10))
         .send()
         .await
-        .map_err(|e| format!("getconfig request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("getconfig request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("getconfig HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!("getconfig HTTP {status}: {body}")));
     }
 
     let text = resp
         .text()
         .await
-        .map_err(|e| format!("getconfig read body error: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("getconfig read body error: {e}")))?;
 
     serde_json::from_str::<GetConfigResponse>(&text)
-        .map_err(|e| format!("getconfig parse error: {e}"))
+        .map_err(|e| CarrierError::Serialization(format!("getconfig parse error: {e}")))
 }
 
 /// POST `/ilink/bot/sendtyping`
@@ -360,7 +361,7 @@ pub async fn send_typing(
     ilink_user_id: &str,
     typing_ticket: &str,
     status: u32,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     let url = format!("{baseurl}/ilink/bot/sendtyping");
 
     let body = SendTypingRequest {
@@ -377,12 +378,12 @@ pub async fn send_typing(
         .timeout(Duration::from_secs(10))
         .send()
         .await
-        .map_err(|e| format!("sendtyping request failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("sendtyping request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("sendtyping HTTP {status}: {body}"));
+        return Err(CarrierError::Network(format!("sendtyping HTTP {status}: {body}")));
     }
 
     Ok(())

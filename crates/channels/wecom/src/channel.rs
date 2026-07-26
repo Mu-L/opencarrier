@@ -115,11 +115,11 @@ impl Channel for WeComChannel {
         match &bot.entry.mode {
             token::WecomMode::App { .. } => {
                 token::send_app_message(&bot.entry, user_id, text)
-                    .map_err(ChannelError::SendFailed)?;
+                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
             }
             token::WecomMode::Kf { .. } => {
                 token::send_kf_message(&bot.entry, user_id, text)
-                    .map_err(ChannelError::SendFailed)?;
+                    .map_err(|e| ChannelError::SendFailed(e.to_string()))?;
             }
             token::WecomMode::SmartBot { .. } => {
                 return Err(ChannelError::NotSupported(

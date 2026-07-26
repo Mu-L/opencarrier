@@ -48,7 +48,7 @@ async fn oa_access_token(app_id: &str, app_secret: &str) -> Result<String, Strin
             }
         }
     }
-    let tok = get_access_token(&BIND_CLIENT, app_id, app_secret).await?;
+    let tok = get_access_token(&BIND_CLIENT, app_id, app_secret).await.map_err(|e| e.to_string())?;
     let token = tok.access_token.ok_or("no access_token in response")?;
     let expires_in = tok.expires_in.unwrap_or(7200);
     // Re-check cache — another request may have refreshed while we were fetching.

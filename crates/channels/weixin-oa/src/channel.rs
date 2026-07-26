@@ -67,7 +67,7 @@ impl OaAccountState {
                 return Ok(token.clone());
             }
         }
-        let resp = api::get_access_token(&self.http, &self.app_id, &self.app_secret).await?;
+        let resp = api::get_access_token(&self.http, &self.app_id, &self.app_secret).await.map_err(|e| e.to_string())?;
         let token = resp.access_token;
         let token = token.ok_or_else(|| {
             format!(
@@ -335,7 +335,7 @@ async fn resolve_oa_media_id(
         .and_then(|u| u.rsplit('/').next())
         .unwrap_or(default_filename)
         .to_string();
-    let (mid, _url) = api::upload_media_permanent(&account.http, token, bytes, &filename).await?;
+    let (mid, _url) = api::upload_media_permanent(&account.http, token, bytes, &filename).await.map_err(|e| e.to_string())?;
     Ok(mid)
 }
 
@@ -402,6 +402,7 @@ async fn deliver_oa(
                     &http, &token, &openid, &title, &pagepath, &thumb, &appid,
                 )
                 .await
+                .map_err(|e| e.to_string())
             }
         })
         .await;
@@ -414,7 +415,7 @@ async fn deliver_oa(
                 let http = account.http.clone();
                 let openid = openid.to_string();
                 let media_id = media_id.clone();
-                async move { api::custom_send_image(&http, &token, &openid, &media_id).await }
+                async move { api::custom_send_image(&http, &token, &openid, &media_id).await.map_err(|e| e.to_string()) }
             })
             .await;
         }
@@ -424,7 +425,7 @@ async fn deliver_oa(
             let http = account.http.clone();
             let openid = openid.to_string();
             let text = text.clone();
-            async move { api::custom_send_text(&http, &token, &openid, &text).await }
+            async move { api::custom_send_text(&http, &token, &openid, &text).await.map_err(|e| e.to_string()) }
         })
         .await;
     }
