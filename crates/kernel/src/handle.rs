@@ -8,6 +8,7 @@ use runtime::kernel_handle::{self, KernelHandle};
 use runtime::llm_driver::CompletionRequest;
 use runtime::memory_handle::MemoryHandle;
 use types::agent::{AgentId, AgentManifest};
+use types::error::CarrierResult;
 use types::event::*;
 use types::message::{ContentBlock, Message, MessageContent, Role};
 use std::sync::Arc;
@@ -862,11 +863,9 @@ impl MemoryHandle for CarrierKernel {
         user_id: &str,
         key: &str,
         value: serde_json::Value,
-    ) -> Result<(), String> {
-        let (agent_id, _) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
+    ) -> CarrierResult<()> {
+        let (agent_id, _) = self.registry.resolve(agent_id)?;
         self.memory.system_kv_set(&agent_id.to_string(), owner_id, user_id, key, value)
-            .map_err(|e| e.to_string())
     }
 
     fn kv_get(
@@ -875,11 +874,9 @@ impl MemoryHandle for CarrierKernel {
         owner_id: &str,
         user_id: &str,
         key: &str,
-    ) -> Result<Option<serde_json::Value>, String> {
-        let (agent_id, _) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
+    ) -> CarrierResult<Option<serde_json::Value>> {
+        let (agent_id, _) = self.registry.resolve(agent_id)?;
         self.memory.system_kv_get(&agent_id.to_string(), owner_id, user_id, key)
-            .map_err(|e| e.to_string())
     }
 
     fn kv_list(
@@ -887,11 +884,9 @@ impl MemoryHandle for CarrierKernel {
         agent_id: &str,
         owner_id: &str,
         user_id: &str,
-    ) -> Result<Vec<(String, serde_json::Value)>, String> {
-        let (agent_id, _) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
+    ) -> CarrierResult<Vec<(String, serde_json::Value)>> {
+        let (agent_id, _) = self.registry.resolve(agent_id)?;
         self.memory.list_kv(&agent_id.to_string(), owner_id, user_id)
-            .map_err(|e| e.to_string())
     }
 
     fn kv_delete(
@@ -900,67 +895,58 @@ impl MemoryHandle for CarrierKernel {
         owner_id: &str,
         user_id: &str,
         key: &str,
-    ) -> Result<(), String> {
-        let (agent_id, _) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
+    ) -> CarrierResult<()> {
+        let (agent_id, _) = self.registry.resolve(agent_id)?;
         self.memory.system_kv_delete(&agent_id.to_string(), owner_id, user_id, key)
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_ingest(
         &self,
         req: types::memory_tree::IngestRequest,
-    ) -> Result<types::memory_tree::IngestResult, String> {
+    ) -> CarrierResult<types::memory_tree::IngestResult> {
         self.memory.tree_ingest_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_query_source(
         &self,
         req: types::memory_tree::SourceQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String> {
+    ) -> CarrierResult<types::memory_tree::QueryResponse> {
         self.memory.tree_query_source_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_query_global(
         &self,
         req: types::memory_tree::GlobalQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String> {
+    ) -> CarrierResult<types::memory_tree::QueryResponse> {
         self.memory.tree_query_global_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_query_topic(
         &self,
         req: types::memory_tree::TopicQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String> {
+    ) -> CarrierResult<types::memory_tree::QueryResponse> {
         self.memory.tree_query_topic_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_search_entities(
         &self,
         req: types::memory_tree::EntitySearch<'_>,
-    ) -> Result<Vec<types::memory_tree::EntityMatch>, String> {
+    ) -> CarrierResult<Vec<types::memory_tree::EntityMatch>> {
         self.memory.tree_search_entities_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_drill_down(
         &self,
         req: types::memory_tree::DrillDownQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String> {
+    ) -> CarrierResult<types::memory_tree::QueryResponse> {
         self.memory.tree_drill_down_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_fetch_leaves(
         &self,
         req: types::memory_tree::FetchLeavesQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String> {
+    ) -> CarrierResult<types::memory_tree::QueryResponse> {
         self.memory.tree_fetch_leaves_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_list_sources(
@@ -968,37 +954,28 @@ impl MemoryHandle for CarrierKernel {
         owner_id: &str,
         source_kind: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<types::memory_tree::TreeSummary>, String> {
+    ) -> CarrierResult<Vec<types::memory_tree::TreeSummary>> {
         self.memory.tree_list_sources_async(owner_id, source_kind, limit).await
-            .map_err(|e| e.to_string())
     }
 
-    fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> Result<serde_json::Value, String> {
-        let (agent_id, _) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
+    fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> CarrierResult<serde_json::Value> {
+        let (agent_id, _) = self.registry.resolve(agent_id)?;
         self.memory.analytics_user_stats(&agent_id.to_string(), active_days)
-            .map_err(|e| e.to_string())
     }
 
-    fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> Result<serde_json::Value, String> {
-        let (agent_id, _) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
+    fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> CarrierResult<serde_json::Value> {
+        let (agent_id, _) = self.registry.resolve(agent_id)?;
         self.memory.analytics_user_lookup(&agent_id.to_string(), sender_id)
-            .map_err(|e| e.to_string())
     }
 
-    fn analytics_usage(&self, agent_id: &str, days: u32) -> Result<serde_json::Value, String> {
-        let (agent_id, _) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
+    fn analytics_usage(&self, agent_id: &str, days: u32) -> CarrierResult<serde_json::Value> {
+        let (agent_id, _) = self.registry.resolve(agent_id)?;
         self.memory.analytics_usage(&agent_id.to_string(), days)
-            .map_err(|e| e.to_string())
     }
 
-    fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> Result<serde_json::Value, String> {
-        let (agent_id, _) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
+    fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> CarrierResult<serde_json::Value> {
+        let (agent_id, _) = self.registry.resolve(agent_id)?;
         self.memory.analytics_recent_conversations(&agent_id.to_string(), limit)
-            .map_err(|e| e.to_string())
     }
 }
 
@@ -1175,9 +1152,8 @@ impl MemoryHandle for MemorySubstrateHandle {
         user_id: &str,
         key: &str,
         value: serde_json::Value,
-    ) -> Result<(), String> {
+    ) -> CarrierResult<()> {
         self.inner.system_kv_set(agent_id, owner_id, user_id, key, value)
-            .map_err(|e| e.to_string())
     }
 
     fn kv_get(
@@ -1186,9 +1162,8 @@ impl MemoryHandle for MemorySubstrateHandle {
         owner_id: &str,
         user_id: &str,
         key: &str,
-    ) -> Result<Option<serde_json::Value>, String> {
+    ) -> CarrierResult<Option<serde_json::Value>> {
         self.inner.system_kv_get(agent_id, owner_id, user_id, key)
-            .map_err(|e| e.to_string())
     }
 
     fn kv_list(
@@ -1196,9 +1171,8 @@ impl MemoryHandle for MemorySubstrateHandle {
         agent_id: &str,
         owner_id: &str,
         user_id: &str,
-    ) -> Result<Vec<(String, serde_json::Value)>, String> {
+    ) -> CarrierResult<Vec<(String, serde_json::Value)>> {
         self.inner.list_kv(agent_id, owner_id, user_id)
-            .map_err(|e| e.to_string())
     }
 
     fn kv_delete(
@@ -1207,65 +1181,57 @@ impl MemoryHandle for MemorySubstrateHandle {
         owner_id: &str,
         user_id: &str,
         key: &str,
-    ) -> Result<(), String> {
+    ) -> CarrierResult<()> {
         self.inner.system_kv_delete(agent_id, owner_id, user_id, key)
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_ingest(
         &self,
         req: types::memory_tree::IngestRequest,
-    ) -> Result<types::memory_tree::IngestResult, String> {
+    ) -> CarrierResult<types::memory_tree::IngestResult> {
         self.inner.tree_ingest_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_query_source(
         &self,
         req: types::memory_tree::SourceQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String> {
+    ) -> CarrierResult<types::memory_tree::QueryResponse> {
         self.inner.tree_query_source_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_query_global(
         &self,
         req: types::memory_tree::GlobalQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String> {
+    ) -> CarrierResult<types::memory_tree::QueryResponse> {
         self.inner.tree_query_global_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_query_topic(
         &self,
         req: types::memory_tree::TopicQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String> {
+    ) -> CarrierResult<types::memory_tree::QueryResponse> {
         self.inner.tree_query_topic_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_search_entities(
         &self,
         req: types::memory_tree::EntitySearch<'_>,
-    ) -> Result<Vec<types::memory_tree::EntityMatch>, String> {
+    ) -> CarrierResult<Vec<types::memory_tree::EntityMatch>> {
         self.inner.tree_search_entities_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_drill_down(
         &self,
         req: types::memory_tree::DrillDownQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String> {
+    ) -> CarrierResult<types::memory_tree::QueryResponse> {
         self.inner.tree_drill_down_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_fetch_leaves(
         &self,
         req: types::memory_tree::FetchLeavesQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String> {
+    ) -> CarrierResult<types::memory_tree::QueryResponse> {
         self.inner.tree_fetch_leaves_async(req).await
-            .map_err(|e| e.to_string())
     }
 
     async fn tree_list_sources(
@@ -1273,29 +1239,24 @@ impl MemoryHandle for MemorySubstrateHandle {
         owner_id: &str,
         source_kind: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<types::memory_tree::TreeSummary>, String> {
+    ) -> CarrierResult<Vec<types::memory_tree::TreeSummary>> {
         self.inner.tree_list_sources_async(owner_id, source_kind, limit).await
-            .map_err(|e| e.to_string())
     }
 
-    fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> Result<serde_json::Value, String> {
+    fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> CarrierResult<serde_json::Value> {
         self.inner.analytics_user_stats(agent_id, active_days)
-            .map_err(|e| e.to_string())
     }
 
-    fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> Result<serde_json::Value, String> {
+    fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> CarrierResult<serde_json::Value> {
         self.inner.analytics_user_lookup(agent_id, sender_id)
-            .map_err(|e| e.to_string())
     }
 
-    fn analytics_usage(&self, agent_id: &str, days: u32) -> Result<serde_json::Value, String> {
+    fn analytics_usage(&self, agent_id: &str, days: u32) -> CarrierResult<serde_json::Value> {
         self.inner.analytics_usage(agent_id, days)
-            .map_err(|e| e.to_string())
     }
 
-    fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> Result<serde_json::Value, String> {
+    fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> CarrierResult<serde_json::Value> {
         self.inner.analytics_recent_conversations(agent_id, limit)
-            .map_err(|e| e.to_string())
     }
 }
 

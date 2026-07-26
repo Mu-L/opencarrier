@@ -10,6 +10,7 @@
 //! Both are scoped by (agent_id, owner_id, user_id) for multi-user isolation.
 
 use async_trait::async_trait;
+use types::error::CarrierResult;
 
 /// Handle to memory operations, passed into the agent loop and tools.
 ///
@@ -28,7 +29,7 @@ pub trait MemoryHandle: Send + Sync {
         user_id: &str,
         key: &str,
         value: serde_json::Value,
-    ) -> Result<(), String>;
+    ) -> CarrierResult<()>;
 
     /// Retrieve a value from the user's private memory by key.
     fn kv_get(
@@ -37,7 +38,7 @@ pub trait MemoryHandle: Send + Sync {
         owner_id: &str,
         user_id: &str,
         key: &str,
-    ) -> Result<Option<serde_json::Value>, String>;
+    ) -> CarrierResult<Option<serde_json::Value>>;
 
     /// List all key-value pairs for a given agent + user.
     fn kv_list(
@@ -45,7 +46,7 @@ pub trait MemoryHandle: Send + Sync {
         agent_id: &str,
         owner_id: &str,
         user_id: &str,
-    ) -> Result<Vec<(String, serde_json::Value)>, String>;
+    ) -> CarrierResult<Vec<(String, serde_json::Value)>>;
 
     /// Delete a key-value pair from the user's private memory.
     fn kv_delete(
@@ -54,7 +55,7 @@ pub trait MemoryHandle: Send + Sync {
         owner_id: &str,
         user_id: &str,
         key: &str,
-    ) -> Result<(), String>;
+    ) -> CarrierResult<()>;
 
     // -----------------------------------------------------------------
     // Tree memory operations — conversation history retrieval
@@ -64,43 +65,43 @@ pub trait MemoryHandle: Send + Sync {
     async fn tree_ingest(
         &self,
         req: types::memory_tree::IngestRequest,
-    ) -> Result<types::memory_tree::IngestResult, String>;
+    ) -> CarrierResult<types::memory_tree::IngestResult>;
 
     /// Query source-scoped tree summaries.
     async fn tree_query_source(
         &self,
         req: types::memory_tree::SourceQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String>;
+    ) -> CarrierResult<types::memory_tree::QueryResponse>;
 
     /// Query global tree summaries.
     async fn tree_query_global(
         &self,
         req: types::memory_tree::GlobalQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String>;
+    ) -> CarrierResult<types::memory_tree::QueryResponse>;
 
     /// Query topic-scoped tree by entity.
     async fn tree_query_topic(
         &self,
         req: types::memory_tree::TopicQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String>;
+    ) -> CarrierResult<types::memory_tree::QueryResponse>;
 
     /// Search entities by substring.
     async fn tree_search_entities(
         &self,
         req: types::memory_tree::EntitySearch<'_>,
-    ) -> Result<Vec<types::memory_tree::EntityMatch>, String>;
+    ) -> CarrierResult<Vec<types::memory_tree::EntityMatch>>;
 
     /// Drill down from a summary node to its children.
     async fn tree_drill_down(
         &self,
         req: types::memory_tree::DrillDownQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String>;
+    ) -> CarrierResult<types::memory_tree::QueryResponse>;
 
     /// Fetch all leaf chunks under a summary node.
     async fn tree_fetch_leaves(
         &self,
         req: types::memory_tree::FetchLeavesQuery<'_>,
-    ) -> Result<types::memory_tree::QueryResponse, String>;
+    ) -> CarrierResult<types::memory_tree::QueryResponse>;
 
     /// List all source trees for an owner.
     async fn tree_list_sources(
@@ -108,21 +109,21 @@ pub trait MemoryHandle: Send + Sync {
         owner_id: &str,
         source_kind: Option<&str>,
         limit: usize,
-    ) -> Result<Vec<types::memory_tree::TreeSummary>, String>;
+    ) -> CarrierResult<Vec<types::memory_tree::TreeSummary>>;
 
     // -----------------------------------------------------------------
     // Analytics operations (for data_analyze tool)
     // -----------------------------------------------------------------
 
     /// User statistics: total users, active users, new users.
-    fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> Result<serde_json::Value, String>;
+    fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> CarrierResult<serde_json::Value>;
 
     /// Per-user lookup: session count, last active, recent conversation summary.
-    fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> Result<serde_json::Value, String>;
+    fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> CarrierResult<serde_json::Value>;
 
     /// Usage analytics: token consumption, daily trends, per-model breakdown.
-    fn analytics_usage(&self, agent_id: &str, days: u32) -> Result<serde_json::Value, String>;
+    fn analytics_usage(&self, agent_id: &str, days: u32) -> CarrierResult<serde_json::Value>;
 
     /// Recent conversations list (metadata only, no message content).
-    fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> Result<serde_json::Value, String>;
+    fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> CarrierResult<serde_json::Value>;
 }

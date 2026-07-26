@@ -68,22 +68,22 @@ impl ToolModule for DataAnalyzeTools {
         let result = match query_type {
             "user_stats" => {
                 let days = input["days"].as_u64().unwrap_or(7) as u32;
-                memory.analytics_user_stats(agent_id, days)
+                memory.analytics_user_stats(agent_id, days).map_err(|e| e.to_string())
             }
             "user_lookup" => {
                 let user_id = match input["user_id"].as_str() {
                     Some(id) => id,
                     None => return Some(Err("user_id is required for user_lookup".to_string())),
                 };
-                memory.analytics_user_lookup(agent_id, user_id)
+                memory.analytics_user_lookup(agent_id, user_id).map_err(|e| e.to_string())
             }
             "usage_analytics" => {
                 let days = input["days"].as_u64().unwrap_or(7) as u32;
-                memory.analytics_usage(agent_id, days)
+                memory.analytics_usage(agent_id, days).map_err(|e| e.to_string())
             }
             "recent_conversations" => {
                 let limit = input["limit"].as_u64().unwrap_or(10).min(50) as u32;
-                memory.analytics_recent_conversations(agent_id, limit)
+                memory.analytics_recent_conversations(agent_id, limit).map_err(|e| e.to_string())
             }
             other => Err(format!(
                 "Unknown query_type '{}'. Valid: user_stats, user_lookup, usage_analytics, recent_conversations",

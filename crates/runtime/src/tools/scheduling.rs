@@ -170,13 +170,13 @@ async fn tool_schedule_create(
     });
 
     // Load existing schedules from agent's memory
-    let mut schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY).map_err(|e| e.to_string())? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
 
     schedules.push(entry);
-    mem.kv_set(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    mem.kv_set(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules)).map_err(|e| e.to_string())?;
 
     Ok(format!(
         "Schedule created:\n  ID: {schedule_id}\n  Description: {description}\n  Cron: {cron_expr}\n  Original: {schedule_str}"
@@ -190,7 +190,7 @@ async fn tool_schedule_list(
     let mem = memory.ok_or("schedule_list requires memory access")?;
     let aid = caller_agent_id.ok_or("No agent context for schedule_list")?;
 
-    let schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY)? {
+    let schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY).map_err(|e| e.to_string())? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -225,7 +225,7 @@ async fn tool_schedule_delete(
     let aid = caller_agent_id.ok_or("No agent context for schedule_delete")?;
     let id = input["id"].as_str().ok_or("Missing 'id' parameter")?;
 
-    let mut schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY)? {
+    let mut schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY).map_err(|e| e.to_string())? {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),
     };
@@ -237,7 +237,7 @@ async fn tool_schedule_delete(
         return Err(format!("Schedule '{id}' not found."));
     }
 
-    mem.kv_set(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    mem.kv_set(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules)).map_err(|e| e.to_string())?;
     Ok(format!("Schedule '{id}' deleted."))
 }
 

@@ -148,7 +148,7 @@ async fn handle_search_entities(
         user_id: None,
     };
 
-    let matches = memory.tree_search_entities(req).await?;
+    let matches = memory.tree_search_entities(req).await.map_err(|e| e.to_string())?;
 
     if matches.is_empty() {
         return Ok(format!("No entities matching '{}'.", query));
@@ -183,7 +183,7 @@ async fn handle_query_topic(
         user_id: None,
     };
 
-    let resp = memory.tree_query_topic(req).await?;
+    let resp = memory.tree_query_topic(req).await.map_err(|e| e.to_string())?;
     format_hit_response(resp)
 }
 
@@ -208,7 +208,7 @@ async fn handle_query_source(
         user_id: None,
     };
 
-    let resp = memory.tree_query_source(req).await?;
+    let resp = memory.tree_query_source(req).await.map_err(|e| e.to_string())?;
     format_hit_response(resp)
 }
 
@@ -229,7 +229,7 @@ async fn handle_query_global(
         user_id: None,
     };
 
-    let resp = memory.tree_query_global(req).await?;
+    let resp = memory.tree_query_global(req).await.map_err(|e| e.to_string())?;
     format_hit_response(resp)
 }
 
@@ -250,7 +250,7 @@ async fn handle_drill_down(
         user_id: None,
     };
 
-    let resp = memory.tree_drill_down(req).await?;
+    let resp = memory.tree_drill_down(req).await.map_err(|e| e.to_string())?;
 
     if resp.hits.is_empty() {
         return Ok(format!("No children found for node '{}'.", node_id));
@@ -296,7 +296,7 @@ async fn handle_fetch_leaves(
         user_id: None,
     };
 
-    let resp = memory.tree_fetch_leaves(req).await?;
+    let resp = memory.tree_fetch_leaves(req).await.map_err(|e| e.to_string())?;
 
     if resp.hits.is_empty() {
         return Ok("No leaf chunks found for the given IDs.".to_string());

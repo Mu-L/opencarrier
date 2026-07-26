@@ -101,7 +101,7 @@ async fn handle_kv_get(
     let owner_id = ctx.owner_id.unwrap_or("");
     let user_id = ctx.sender_id.unwrap_or("");
 
-    match memory.kv_get(agent_id, owner_id, user_id, key)? {
+    match memory.kv_get(agent_id, owner_id, user_id, key).map_err(|e| e.to_string())? {
         Some(val) => Ok(serde_json::to_string_pretty(&val)
             .unwrap_or_else(|_| val.to_string())),
         None => Ok(format!("No value found for key '{key}'.")),
@@ -119,7 +119,7 @@ async fn handle_kv_set(
     let owner_id = ctx.owner_id.unwrap_or("");
     let user_id = ctx.sender_id.unwrap_or("");
 
-    memory.kv_set(agent_id, owner_id, user_id, key, value)?;
+    memory.kv_set(agent_id, owner_id, user_id, key, value).map_err(|e| e.to_string())?;
     Ok(format!("Stored value for key '{key}'."))
 }
 
@@ -133,7 +133,7 @@ async fn handle_kv_list(
     let owner_id = ctx.owner_id.unwrap_or("");
     let user_id = ctx.sender_id.unwrap_or("");
 
-    let pairs = memory.kv_list(agent_id, owner_id, user_id)?;
+    let pairs = memory.kv_list(agent_id, owner_id, user_id).map_err(|e| e.to_string())?;
     let filtered: Vec<_> = if let Some(p) = prefix {
         pairs.into_iter().filter(|(k, _)| k.starts_with(p)).collect()
     } else {
