@@ -1464,23 +1464,7 @@ async fn register_bot_from_scan(
             };
             channel_wecom::token::WECOM_STATE.save_session(&sf);
 
-            // Set sender route — sender_id = wecom bot_id
-            if let Some(ref pm) = state.channel_manager {
-                let pm = pm.lock().await;
-                pm.set_sender_route(&wecom_bot_id, &agent_ref);
-                // Immediately start the new bot's connection
-                if let Err(e) = pm.start_sender("wecom", &wecom_bot_id) {
-                    tracing::warn!(sender_id = %wecom_bot_id, error = %e, "start_sender failed for wecom");
-                }
-            }
-
-            tracing::info!(
-                platform = "wecom",
-                sender_id = %wecom_bot_id,
-                agent = %agent_ref,
-                "Registered WeCom bot from scan"
-            );
-            Ok(wecom_bot_id)
+            complete_bot_registration(state, "wecom", "WeCom", wecom_bot_id, &agent_ref).await
         }
         "feishu" => {
             let app_id = credentials
@@ -1506,23 +1490,7 @@ async fn register_bot_from_scan(
             };
             channel_feishu::FEISHU_STATE.save_session(&sf);
 
-            // Set sender route using Feishu app_id
-            if let Some(ref pm) = state.channel_manager {
-                let pm = pm.lock().await;
-                pm.set_sender_route(&app_id, &agent_ref);
-                // Immediately start the new bot's connection
-                if let Err(e) = pm.start_sender("feishu", &app_id) {
-                    tracing::warn!(sender_id = %app_id, error = %e, "start_sender failed for feishu");
-                }
-            }
-
-            tracing::info!(
-                platform = "feishu",
-                sender_id = %app_id,
-                agent = %agent_ref,
-                "Registered Feishu bot from scan"
-            );
-            Ok(app_id)
+            complete_bot_registration(state, "feishu", "Feishu", app_id, &agent_ref).await
         }
         "dingtalk" => {
             let app_key = credentials
@@ -1548,26 +1516,42 @@ async fn register_bot_from_scan(
             };
             channel_dingtalk::DINGTALK_STATE.save_session(&sf);
 
-            // Set sender route using DingTalk app_key
-            if let Some(ref pm) = state.channel_manager {
-                let pm = pm.lock().await;
-                pm.set_sender_route(&app_key, &agent_ref);
-                // Immediately start the new bot's connection
-                if let Err(e) = pm.start_sender("dingtalk", &app_key) {
-                    tracing::warn!(sender_id = %app_key, error = %e, "start_sender failed for dingtalk");
-                }
-            }
-
-            tracing::info!(
-                platform = "dingtalk",
-                sender_id = %app_key,
-                agent = %agent_ref,
-                "Registered DingTalk bot from scan"
-            );
-            Ok(app_key)
+            complete_bot_registration(state, "dingtalk", "DingTalk", app_key, &agent_ref).await
         }
         _ => Err(format!("不支持的平台: {platform}")),
     }
+}
+
+/// Shared tail of `register_bot_from_scan`: set the sender route, start the new
+/// bot's channel connection, log, and return the sender_id. `platform` is the
+/// lowercase channel id (for start_sender + warn + the info field); `display` is
+/// the capitalized label (for the "Registered … bot" info message) — kept as two
+/// separate strings so the log text stays byte-identical to the previous
+/// per-platform arms.
+async fn complete_bot_registration(
+    state: &Arc<AppState>,
+    platform: &str,
+    label: &str,
+    sender_id: String,
+    agent_ref: &str,
+) -> Result<String, String> {
+    if let Some(ref pm) = state.channel_manager {
+        let pm = pm.lock().await;
+        pm.set_sender_route(&sender_id, agent_ref);
+        // Immediately start the new bot's connection
+        if let Err(e) = pm.start_sender(platform, &sender_id) {
+            tracing::warn!(sender_id = %sender_id, error = %e, "start_sender failed for {}", platform);
+        }
+    }
+
+    tracing::info!(
+        platform = platform,
+        sender_id = %sender_id,
+        agent = %agent_ref,
+        "Registered {} bot from scan",
+        label
+    );
+    Ok(sender_id)
 }
 
 /// POST /api/push — push a text message to any user.
