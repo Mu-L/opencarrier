@@ -355,7 +355,7 @@ async fn tool_apply_patch(
 ) -> CarrierResult<String> {
     let patch_str = input["patch"].as_str().ok_or(CarrierError::InvalidInput("Missing 'patch' parameter".to_string()))?;
     let root = workspace_root.ok_or(CarrierError::Internal("apply_patch requires a workspace root".to_string()))?;
-    let ops = crate::apply_patch::parse_patch(patch_str).map_err(CarrierError::InvalidInput)?;
+    let ops = crate::apply_patch::parse_patch(patch_str)?;
     let result = crate::apply_patch::apply_patch(&ops, root).await;
     if result.is_ok() {
         Ok(result.summary())

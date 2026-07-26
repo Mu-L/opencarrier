@@ -252,7 +252,7 @@ fn resolve_user_data_path(
 
     // Validate no path traversal
     if let Err(e) = super::validate_path(rel) {
-        return Some(Err(e));
+        return Some(Err(e.to_string()));
     }
 
     let oid = owner_id.unwrap_or(sender_id);
@@ -289,11 +289,11 @@ async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> Result<String, 
             Some(Err(e)) => return Err(e),
             None => {
                 // Internal path — go through sandbox
-                super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
+                super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name).map_err(|e| e.to_string())?
             }
         }
     } else {
-        super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
+        super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name).map_err(|e| e.to_string())?
     };
 
     tracing::info!(raw_path, resolved = %resolved.display(), "file_read resolved path");
@@ -368,17 +368,17 @@ async fn tool_file_write(input: &Value, ctx: &ToolContext<'_>) -> Result<String,
             None => {
                 // Internal path — go through sandbox
                 if let Some(root) = ctx.workspace_root {
-                    crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin)?
+                    crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin).map_err(|e| e.to_string())?
                 } else {
-                    let _ = super::validate_path(raw_path)?;
+                    let _ = super::validate_path(raw_path).map_err(|e| e.to_string())?;
                     PathBuf::from(raw_path)
                 }
             }
         }
     } else if let Some(root) = ctx.workspace_root {
-        crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin)?
+        crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin).map_err(|e| e.to_string())?
     } else {
-        let _ = super::validate_path(raw_path)?;
+        let _ = super::validate_path(raw_path).map_err(|e| e.to_string())?;
         PathBuf::from(raw_path)
     };
 
@@ -423,11 +423,11 @@ async fn tool_file_list(input: &Value, ctx: &ToolContext<'_>) -> Result<String, 
             Some(Err(e)) => return Err(e),
             None => {
                 // Internal path — go through sandbox
-                super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
+                super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name).map_err(|e| e.to_string())?
             }
         }
     } else {
-        super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
+        super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name).map_err(|e| e.to_string())?
     };
 
     // For user-data paths (output/ memory/), treat missing directory as empty
@@ -486,7 +486,7 @@ async fn tool_file_convert(input: &Value, ctx: &ToolContext<'_>) -> Result<Strin
         .ok_or("Missing 'output_format' parameter")?;
     let raw_output_path = input["output_path"].as_str();
 
-    let input_path = super::resolve_file_path(raw_input_path, ctx.workspace_root)?;
+    let input_path = super::resolve_file_path(raw_input_path, ctx.workspace_root).map_err(|e| e.to_string())?;
     if !input_path.exists() {
         return Err(format!("Input file not found: {}", input_path.display()));
     }
@@ -507,17 +507,17 @@ async fn tool_file_convert(input: &Value, ctx: &ToolContext<'_>) -> Result<Strin
                 Some(Err(e)) => return Err(e),
                 None => {
                     if let Some(root) = ctx.workspace_root {
-                        crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin)?
+                        crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin).map_err(|e| e.to_string())?
                     } else {
-                        let _ = super::validate_path(op)?;
+                        let _ = super::validate_path(op).map_err(|e| e.to_string())?;
                         PathBuf::from(op)
                     }
                 }
             }
         } else if let Some(root) = ctx.workspace_root {
-            crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin)?
+            crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin).map_err(|e| e.to_string())?
         } else {
-            let _ = super::validate_path(op)?;
+            let _ = super::validate_path(op).map_err(|e| e.to_string())?;
             PathBuf::from(op)
         }
     } else {

@@ -292,7 +292,7 @@ async fn tool_cron_create(
     owner_id: Option<&str>,
     sender_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
         "Agent ID required for cron_create".to_string(),
     ))?;
@@ -305,7 +305,7 @@ async fn tool_cron_list(
     caller_agent_id: Option<&str>,
     owner_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
         "Agent ID required for cron_list".to_string(),
     ))?;
@@ -320,7 +320,7 @@ async fn tool_cron_cancel(
     caller_agent_id: Option<&str>,
     owner_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
         "Agent ID required for cron_cancel".to_string(),
     ))?;

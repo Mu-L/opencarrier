@@ -32,7 +32,7 @@ async fn tool_a2a_send(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
 ) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+    let kh = crate::tools::require_kernel(kernel).map_err(|e| e.to_string())?;
     let message = input["message"]
         .as_str()
         .ok_or("Missing 'message' parameter")?;

@@ -17,9 +17,9 @@ async fn tool_train_read(
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
+    let target_root = crate::tools::resolve_target_workspace(input, kernel).map_err(|e| e.to_string())?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let full_path = crate::workspace_sandbox::resolve_sandbox_path(path, &target_root)?;
+    let full_path = crate::workspace_sandbox::resolve_sandbox_path(path, &target_root).map_err(|e| e.to_string())?;
     tokio::fs::read_to_string(&full_path)
         .await
         .map_err(|e| format!("Failed to read file: {e}"))
@@ -30,12 +30,12 @@ async fn tool_train_write(
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
+    let target_root = crate::tools::resolve_target_workspace(input, kernel).map_err(|e| e.to_string())?;
     let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
     let content = input["content"]
         .as_str()
         .ok_or("Missing 'content' parameter")?;
-    let full_path = crate::workspace_sandbox::resolve_sandbox_path(path, &target_root)?;
+    let full_path = crate::workspace_sandbox::resolve_sandbox_path(path, &target_root).map_err(|e| e.to_string())?;
     if let Some(parent) = full_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -56,9 +56,9 @@ async fn tool_train_list(
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
+    let target_root = crate::tools::resolve_target_workspace(input, kernel).map_err(|e| e.to_string())?;
     let sub_path = input["path"].as_str().unwrap_or(".");
-    let full_path = crate::workspace_sandbox::resolve_sandbox_path(sub_path, &target_root)?;
+    let full_path = crate::workspace_sandbox::resolve_sandbox_path(sub_path, &target_root).map_err(|e| e.to_string())?;
     let mut entries = tokio::fs::read_dir(&full_path)
         .await
         .map_err(|e| format!("Failed to list directory: {e}"))?;
@@ -85,7 +85,7 @@ async fn tool_train_evaluate(
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
-    let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
+    let target_root = crate::tools::resolve_target_workspace(input, kernel).map_err(|e| e.to_string())?;
     crate::tools::knowledge::tool_clone_evaluate(Some(&target_root)).await.map_err(|e| e.to_string())
 }
 

@@ -66,6 +66,7 @@ pub fn sandbox_command(cmd: &mut tokio::process::Command, allowed_env_vars: &[St
 // ---------------------------------------------------------------------------
 
 use types::config::{ExecPolicy, ExecSecurityMode};
+use types::error::{CarrierError, CarrierResult};
 
 /// Detect actual brace expansion patterns like `{a,b}` or `{1..10}`.
 /// Single braces (e.g. in JSON arguments like `{"key":"val"}`) are NOT expansion.
@@ -220,10 +221,12 @@ fn extract_all_commands(command: &str) -> Vec<&str> {
 /// Validate a shell command against the exec policy.
 ///
 /// Returns `Ok(())` if the command is allowed, `Err(reason)` if blocked.
-pub fn validate_command_allowlist(command: &str, policy: &ExecPolicy) -> Result<(), String> {
+pub fn validate_command_allowlist(command: &str, policy: &ExecPolicy) -> CarrierResult<()> {
     match policy.mode {
         ExecSecurityMode::Deny => {
-            Err("Shell execution is disabled (exec_policy.mode = deny)".to_string())
+            Err(CarrierError::InvalidInput(
+                "Shell execution is disabled (exec_policy.mode = deny)".to_string(),
+            ))
         }
         ExecSecurityMode::Full => {
             tracing::warn!(
@@ -236,9 +239,9 @@ pub fn validate_command_allowlist(command: &str, policy: &ExecPolicy) -> Result<
             // SECURITY: Check for shell metacharacters BEFORE base-command extraction.
             // These can smuggle commands inside arguments of allowed binaries.
             if let Some(reason) = contains_shell_metacharacters(command) {
-                return Err(format!(
+                return Err(CarrierError::InvalidInput(format!(
                     "Command blocked: contains {reason}. Shell metacharacters are not allowed in Allowlist mode."
-                ));
+                )));
             }
             let base_commands = extract_all_commands(command);
             for base in &base_commands {
@@ -250,10 +253,10 @@ pub fn validate_command_allowlist(command: &str, policy: &ExecPolicy) -> Result<
                 if policy.allowed_commands.iter().any(|ac| ac == base) {
                     continue;
                 }
-                return Err(format!(
+                return Err(CarrierError::InvalidInput(format!(
                     "Command '{}' is not in the exec allowlist. Add it to exec_policy.allowed_commands or exec_policy.safe_bins.",
                     base
-                ));
+                )));
             }
             Ok(())
         }
@@ -268,9 +271,11 @@ pub fn validate_process_command(
     command: &str,
     args: &[String],
     policy: &ExecPolicy,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     match policy.mode {
-        ExecSecurityMode::Deny => Err("Process execution is denied by policy".to_string()),
+        ExecSecurityMode::Deny => Err(CarrierError::InvalidInput(
+            "Process execution is denied by policy".to_string(),
+        )),
         ExecSecurityMode::Full => Ok(()),
         ExecSecurityMode::Allowlist => {
             // Check for shell metacharacters in command + args
@@ -280,9 +285,9 @@ pub fn validate_process_command(
                 format!("{} {}", command, args.join(" "))
             };
             if let Some(reason) = contains_shell_metacharacters(&full) {
-                return Err(format!(
+                return Err(CarrierError::InvalidInput(format!(
                     "Command blocked: contains {reason}. Shell metacharacters are not allowed in Allowlist mode."
-                ));
+                )));
             }
             // Check base command against allowlist
             let base = extract_base_command(command);
@@ -292,10 +297,10 @@ pub fn validate_process_command(
             if policy.allowed_commands.iter().any(|ac| ac == base) {
                 return Ok(());
             }
-            Err(format!(
+            Err(CarrierError::InvalidInput(format!(
                 "Command '{}' is not in the exec allowlist. Add it to exec_policy.allowed_commands or exec_policy.safe_bins.",
                 base
-            ))
+            )))
         }
     }
 }
@@ -318,7 +323,7 @@ pub const MAX_GRACE_MS: u64 = 60_000;
 ///
 /// Returns `Ok(true)` if the process was killed, `Ok(false)` if it was already
 /// dead, or `Err` if the kill operation itself failed.
-pub async fn kill_process_tree(pid: u32, grace_ms: u64) -> Result<bool, String> {
+pub async fn kill_process_tree(pid: u32, grace_ms: u64) -> CarrierResult<bool> {
     let grace = grace_ms.min(MAX_GRACE_MS);
 
     #[cfg(unix)]
@@ -333,7 +338,7 @@ pub async fn kill_process_tree(pid: u32, grace_ms: u64) -> Result<bool, String> 
 }
 
 #[cfg(unix)]
-async fn kill_tree_unix(pid: u32, grace_ms: u64) -> Result<bool, String> {
+async fn kill_tree_unix(pid: u32, grace_ms: u64) -> CarrierResult<bool> {
     use tokio::process::Command;
 
     let pid_i32 = pid as i32;
@@ -392,7 +397,7 @@ async fn kill_tree_unix(pid: u32, grace_ms: u64) -> Result<bool, String> {
 }
 
 #[cfg(windows)]
-async fn kill_tree_windows(pid: u32, grace_ms: u64) -> Result<bool, String> {
+async fn kill_tree_windows(pid: u32, grace_ms: u64) -> CarrierResult<bool> {
     use tokio::process::Command;
 
     // Try graceful kill first (taskkill /T = tree, no /F = graceful).
@@ -441,10 +446,10 @@ async fn kill_tree_windows(pid: u32, grace_ms: u64) -> Result<bool, String> {
                 if stderr.contains("not found") || stderr.contains("no process") {
                     Ok(false) // Already dead.
                 } else {
-                    Err(format!("Force kill failed: {stderr}"))
+                    Err(CarrierError::Internal(format!("Force kill failed: {stderr}")))
                 }
             }
-            Err(e) => Err(format!("Failed to execute taskkill: {e}")),
+            Err(e) => Err(CarrierError::Internal(format!("Failed to execute taskkill: {e}"))),
         }
     } else {
         Ok(true)

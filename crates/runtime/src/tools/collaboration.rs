@@ -19,7 +19,7 @@ fn tool_agent_find(
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let query = input["query"]
         .as_str()
         .ok_or(CarrierError::InvalidInput(
@@ -51,7 +51,7 @@ async fn tool_task_post(
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let title = input["title"]
         .as_str()
         .ok_or(CarrierError::InvalidInput(
@@ -129,7 +129,7 @@ async fn tool_task_claim(
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
         "Missing caller agent identity".to_string(),
     ))?;
@@ -146,7 +146,7 @@ async fn tool_task_complete(
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let task_id = input["task_id"]
         .as_str()
         .ok_or(CarrierError::InvalidInput(
@@ -166,7 +166,7 @@ async fn tool_task_list(
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let status = input["status"].as_str();
     let tasks = kh.task_list(status).await?;
     if tasks.is_empty() {
@@ -180,7 +180,7 @@ async fn tool_event_publish(
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let event_type = input["event_type"]
         .as_str()
         .ok_or(CarrierError::InvalidInput(

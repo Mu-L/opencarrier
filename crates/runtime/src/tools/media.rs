@@ -329,8 +329,7 @@ async fn tool_image_analyze(
                 ctx.workspace_root,
                 ctx.sender_id,
                 ctx.agent_name,
-            )
-            .map_err(CarrierError::Internal)?
+            )?
         }
     } else {
         crate::tools::resolve_file_path_for_read(
@@ -338,8 +337,7 @@ async fn tool_image_analyze(
             ctx.workspace_root,
             ctx.sender_id,
             ctx.agent_name,
-        )
-        .map_err(CarrierError::Internal)?
+        )?
     };
 
     let data = tokio::fs::read(&resolved)
@@ -525,8 +523,7 @@ async fn tool_media_describe(
                 ctx.workspace_root,
                 ctx.sender_id,
                 ctx.agent_name,
-            )
-            .map_err(CarrierError::Internal)?
+            )?
         }
     } else {
         crate::tools::resolve_file_path_for_read(
@@ -534,8 +531,7 @@ async fn tool_media_describe(
             ctx.workspace_root,
             ctx.sender_id,
             ctx.agent_name,
-        )
-        .map_err(CarrierError::Internal)?
+        )?
     };
 
     if !resolved.is_file() {
@@ -671,7 +667,7 @@ async fn tool_media_transcribe(
     let path = input["path"].as_str().ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
     // Allow /tmp/ paths for browser screenshots; validate relative paths normally
     if !path.starts_with("/tmp/") {
-        let _ = crate::tools::validate_path(path).map_err(CarrierError::Internal)?;
+        let _ = crate::tools::validate_path(path)?;
     }
 
     // Read audio file
@@ -1154,7 +1150,7 @@ async fn tool_speech_to_text(
     let raw_path = input["path"].as_str().ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
     let language = input["language"].as_str();
 
-    let resolved = crate::tools::resolve_file_path(raw_path, workspace_root).map_err(CarrierError::Internal)?;
+    let resolved = crate::tools::resolve_file_path(raw_path, workspace_root)?;
 
     // Read the audio file
     let data = tokio::fs::read(&resolved)
@@ -1244,8 +1240,7 @@ async fn tool_process_start(
 
     let proc_id = pm
         .start(agent_id, command, &args, exec_policy, allowed_env_vars)
-        .await
-        .map_err(CarrierError::Internal)?;
+        .await?;
     Ok(serde_json::json!({
         "process_id": proc_id,
         "status": "started"
@@ -1268,7 +1263,7 @@ async fn tool_process_poll(
     if !pm.list(agent_id).iter().any(|p| p.id == proc_id) {
         return Err(CarrierError::InvalidInput("Process not found or does not belong to you".to_string()));
     }
-    let (stdout, stderr) = pm.read(proc_id).await.map_err(CarrierError::Internal)?;
+    let (stdout, stderr) = pm.read(proc_id).await?;
     Ok(serde_json::json!({
         "stdout": stdout,
         "stderr": stderr,
@@ -1298,7 +1293,7 @@ async fn tool_process_write(
     } else {
         format!("{data}\n")
     };
-    pm.write(proc_id, &data).await.map_err(CarrierError::Internal)?;
+    pm.write(proc_id, &data).await?;
     Ok(r#"{"status": "written"}"#.to_string())
 }
 
@@ -1317,7 +1312,7 @@ async fn tool_process_kill(
     if !pm.list(agent_id).iter().any(|p| p.id == proc_id) {
         return Err(CarrierError::InvalidInput("Process not found or does not belong to you".to_string()));
     }
-    pm.kill(proc_id).await.map_err(CarrierError::Internal)?;
+    pm.kill(proc_id).await?;
     Ok(r#"{"status": "killed"}"#.to_string())
 }
 

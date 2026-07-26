@@ -82,7 +82,7 @@ const QUERY_TIMEOUT_SECS: u64 = 30;
 /// Resolve db_path: use explicit path, or auto-discover first .db in workspace.
 fn resolve_db_path(input: &Value, workspace_root: Option<&Path>) -> Result<PathBuf, String> {
     if let Some(path) = input["db_path"].as_str() {
-        let resolved = super::resolve_file_path(path, workspace_root)?;
+        let resolved = super::resolve_file_path(path, workspace_root).map_err(|e| e.to_string())?;
         if !resolved.extension().map(|e| e == "db").unwrap_or(false) {
             return Err(format!("File must have .db extension: {}", resolved.display()));
         }

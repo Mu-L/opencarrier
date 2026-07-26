@@ -28,8 +28,8 @@ async fn tool_user_profile(
     let sender = sender_id.ok_or("user_profile requires a sender context (sender_id). This tool is only available when a user identity is provided.")?;
     let hd = home_dir.ok_or("user_profile requires home_dir")?;
     let an = agent_name.ok_or("user_profile requires agent_name")?;
-    let oid = crate::tools::sanitize_path_component(owner_id.unwrap_or(sender))?;
-    let sender = crate::tools::sanitize_path_component(sender)?;
+    let oid = crate::tools::sanitize_path_component(owner_id.unwrap_or(sender)).map_err(|e| e.to_string())?;
+    let sender = crate::tools::sanitize_path_component(sender).map_err(|e| e.to_string())?;
 
     let action = input["action"].as_str().unwrap_or("read");
     let profile_path = types::config::sender_data_dir(hd, oid, an, Some(sender)).join("profile.json");
@@ -121,14 +121,14 @@ async fn tool_delegate_subagent(
     owner_id: Option<&str>,
     sender_id: Option<&str>,
 ) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+    let kh = crate::tools::require_kernel(kernel).map_err(|e| e.to_string())?;
     let message = input["message"]
         .as_str()
         .ok_or("Missing 'message' parameter")?;
     let aid = caller_agent_id.ok_or("delegate_* requires caller_agent_id")?;
 
     // Check + increment inter-agent call depth
-    crate::tools::check_call_depth()?;
+    crate::tools::check_call_depth().map_err(|e| e.to_string())?;
     let current_depth = crate::tool_runner::AGENT_CALL_DEPTH
         .try_with(|d| d.get())
         .unwrap_or(0);

@@ -22,6 +22,7 @@
 
 use std::path::{Path, PathBuf};
 use tracing::warn;
+use types::error::{CarrierError, CarrierResult};
 
 /// A single operation in a patch.
 #[derive(Debug, Clone, PartialEq)]
@@ -103,7 +104,7 @@ impl PatchResult {
 /// Expects the format delimited by `*** Begin Patch` and `*** End Patch`.
 /// Within that block, each file operation starts with `*** Add File:`,
 /// `*** Update File:`, or `*** Delete File:`.
-pub fn parse_patch(input: &str) -> Result<Vec<PatchOp>, String> {
+pub fn parse_patch(input: &str) -> CarrierResult<Vec<PatchOp>> {
     let lines: Vec<&str> = input.lines().collect();
     let mut ops = Vec::new();
 
@@ -111,14 +112,20 @@ pub fn parse_patch(input: &str) -> Result<Vec<PatchOp>, String> {
     let begin = lines
         .iter()
         .position(|l| l.trim() == "*** Begin Patch")
-        .ok_or("Missing '*** Begin Patch' marker")?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing '*** Begin Patch' marker".to_string(),
+        ))?;
     let end = lines
         .iter()
         .rposition(|l| l.trim() == "*** End Patch")
-        .ok_or("Missing '*** End Patch' marker")?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing '*** End Patch' marker".to_string(),
+        ))?;
 
     if end <= begin {
-        return Err("'*** End Patch' must come after '*** Begin Patch'".to_string());
+        return Err(CarrierError::InvalidInput(
+            "'*** End Patch' must come after '*** Begin Patch'".to_string(),
+        ));
     }
 
     let body = &lines[begin + 1..end];
@@ -134,7 +141,9 @@ pub fn parse_patch(input: &str) -> Result<Vec<PatchOp>, String> {
                 .trim()
                 .to_string();
             if path.is_empty() {
-                return Err("Empty path in '*** Add File:'".to_string());
+                return Err(CarrierError::InvalidInput(
+                    "Empty path in '*** Add File:'".to_string(),
+                ));
             }
             i += 1;
 
@@ -145,10 +154,10 @@ pub fn parse_patch(input: &str) -> Result<Vec<PatchOp>, String> {
                 if let Some(stripped) = l.strip_prefix('+') {
                     content_lines.push(stripped.to_string());
                 } else if !l.trim().is_empty() {
-                    return Err(format!(
+                    return Err(CarrierError::InvalidInput(format!(
                         "Expected '+' prefix in Add File content, got: {}",
                         l
-                    ));
+                    )));
                 }
                 i += 1;
             }
@@ -165,7 +174,9 @@ pub fn parse_patch(input: &str) -> Result<Vec<PatchOp>, String> {
                 (rest.to_string(), None)
             };
             if path.is_empty() {
-                return Err("Empty path in '*** Update File:'".to_string());
+                return Err(CarrierError::InvalidInput(
+                    "Empty path in '*** Update File:'".to_string(),
+                ));
             }
             i += 1;
 
@@ -238,7 +249,10 @@ pub fn parse_patch(input: &str) -> Result<Vec<PatchOp>, String> {
             }
 
             if hunks.is_empty() {
-                return Err(format!("Update File '{}' has no hunks", path));
+                return Err(CarrierError::InvalidInput(format!(
+                    "Update File '{}' has no hunks",
+                    path
+                )));
             }
 
             ops.push(PatchOp::UpdateFile {
@@ -253,26 +267,33 @@ pub fn parse_patch(input: &str) -> Result<Vec<PatchOp>, String> {
                 .trim()
                 .to_string();
             if path.is_empty() {
-                return Err("Empty path in '*** Delete File:'".to_string());
+                return Err(CarrierError::InvalidInput(
+                    "Empty path in '*** Delete File:'".to_string(),
+                ));
             }
             i += 1;
             ops.push(PatchOp::DeleteFile { path });
         } else if line.is_empty() {
             i += 1;
         } else {
-            return Err(format!("Unexpected line in patch: {}", line));
+            return Err(CarrierError::InvalidInput(format!(
+                "Unexpected line in patch: {}",
+                line
+            )));
         }
     }
 
     if ops.is_empty() {
-        return Err("Patch contains no operations".to_string());
+        return Err(CarrierError::InvalidInput(
+            "Patch contains no operations".to_string(),
+        ));
     }
 
     Ok(ops)
 }
 
 /// Resolve a patch path through workspace confinement.
-fn resolve_patch_path(raw: &str, workspace_root: &Path) -> Result<PathBuf, String> {
+fn resolve_patch_path(raw: &str, workspace_root: &Path) -> CarrierResult<PathBuf> {
     crate::workspace_sandbox::resolve_sandbox_path(raw, workspace_root)
 }
 
@@ -431,7 +452,7 @@ pub async fn apply_patch(ops: &[PatchOp], workspace_root: &Path) -> PatchResult 
 /// Each hunk's `context_before` + `old_lines` are searched for in the content.
 /// When found, `old_lines` are replaced with `new_lines`. Includes fuzzy
 /// whitespace fallback on mismatch.
-fn apply_hunks(content: &str, hunks: &[Hunk]) -> Result<String, String> {
+fn apply_hunks(content: &str, hunks: &[Hunk]) -> CarrierResult<String> {
     let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
     // Track if original file ended with newline
@@ -455,10 +476,10 @@ fn apply_hunks(content: &str, hunks: &[Hunk]) -> Result<String, String> {
         let pos = find_anchor(&lines, &anchor)
             .or_else(|| find_anchor_fuzzy(&lines, &anchor))
             .ok_or_else(|| {
-                format!(
+                CarrierError::InvalidInput(format!(
                     "Hunk {} failed: could not find context/old lines in file",
                     hunk_idx + 1
-                )
+                ))
             })?;
 
         // Replace: remove context_before + old_lines, insert context_before + new_lines

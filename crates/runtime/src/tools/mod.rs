@@ -26,6 +26,7 @@ pub mod web_search;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -168,22 +169,24 @@ pub fn builtin_modules(cli_exec_config: types::config::CliExecConfig) -> Vec<Box
 /// Require a kernel handle, returning an error if none is available.
 pub(crate) fn require_kernel(
     kernel: Option<&Arc<dyn KernelHandle>>,
-) -> Result<&Arc<dyn KernelHandle>, String> {
+) -> CarrierResult<&Arc<dyn KernelHandle>> {
     kernel.ok_or_else(|| {
-        "Kernel handle not available. Inter-agent tools require a running kernel.".to_string()
+        CarrierError::Internal(
+            "Kernel handle not available. Inter-agent tools require a running kernel.".to_string(),
+        )
     })
 }
 
 /// Check that the inter-agent call depth has not exceeded the maximum.
-pub(crate) fn check_call_depth() -> Result<(), String> {
+pub(crate) fn check_call_depth() -> CarrierResult<()> {
     let current = crate::tool_runner::AGENT_CALL_DEPTH
         .try_with(|d| d.get())
         .unwrap_or(0);
     if current >= crate::tool_runner::MAX_AGENT_CALL_DEPTH {
-        Err(format!(
+        Err(CarrierError::Internal(format!(
             "Agent call depth exceeded (max {}). Use the task queue instead.",
             crate::tool_runner::MAX_AGENT_CALL_DEPTH
-        ))
+        )))
     } else {
         Ok(())
     }
@@ -193,22 +196,22 @@ pub(crate) fn check_call_depth() -> Result<(), String> {
 pub(crate) fn resolve_target_workspace(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
-) -> Result<PathBuf, String> {
-    let kh = kernel.ok_or("train_* tools require kernel access")?;
+) -> CarrierResult<PathBuf> {
+    let kh = kernel.ok_or(CarrierError::Internal("train_* tools require kernel access".to_string()))?;
     let target = input["target"]
         .as_str()
-        .ok_or("Missing 'target' parameter (target clone name)")?;
+        .ok_or(CarrierError::InvalidInput("Missing 'target' parameter (target clone name)".to_string()))?;
 
     let target_workspace = kh
         .resolve_agent_workspace(target)
-        .ok_or_else(|| format!("Agent '{}' not found or has no workspace", target))?;
+        .ok_or_else(|| CarrierError::InvalidInput(format!("Agent '{}' not found or has no workspace", target)))?;
 
     let path = PathBuf::from(&target_workspace);
     if !path.exists() {
-        return Err(format!(
+        return Err(CarrierError::InvalidInput(format!(
             "Workspace for '{}' does not exist: {}",
             target, target_workspace
-        ));
+        )));
     }
     Ok(path)
 }
@@ -218,14 +221,16 @@ pub(crate) fn resolve_target_workspace(
 // ---------------------------------------------------------------------------
 
 /// Reject path traversal attempts and absolute paths.
-pub fn validate_path(path: &str) -> Result<&str, String> {
+pub fn validate_path(path: &str) -> CarrierResult<&str> {
     for component in std::path::Path::new(path).components() {
         match component {
             std::path::Component::ParentDir => {
-                return Err("Path traversal denied: '..' components are forbidden".to_string());
+                return Err(CarrierError::InvalidInput(
+                    "Path traversal denied: '..' components are forbidden".to_string(),
+                ));
             }
             std::path::Component::RootDir | std::path::Component::Prefix(_) => {
-                return Err("Absolute paths are forbidden".to_string());
+                return Err(CarrierError::InvalidInput("Absolute paths are forbidden".to_string()));
             }
             _ => {}
         }
@@ -234,20 +239,26 @@ pub fn validate_path(path: &str) -> Result<&str, String> {
 }
 
 /// Sanitize a string before using it as a single path component.
-pub fn sanitize_path_component(name: &str) -> Result<&str, String> {
+pub fn sanitize_path_component(name: &str) -> CarrierResult<&str> {
     if name.is_empty() {
-        return Err("Empty path component".to_string());
+        return Err(CarrierError::InvalidInput("Empty path component".to_string()));
     }
     if name.contains('/') || name.contains('\\') || name == ".." || name.contains("..") {
-        return Err(format!("Invalid path component: {:?}", name));
+        return Err(CarrierError::InvalidInput(format!("Invalid path component: {:?}", name)));
     }
     for component in std::path::Path::new(name).components() {
         match component {
             std::path::Component::ParentDir => {
-                return Err(format!("Path traversal denied in component: {:?}", name));
+                return Err(CarrierError::InvalidInput(format!(
+                    "Path traversal denied in component: {:?}",
+                    name
+                )));
             }
             std::path::Component::RootDir | std::path::Component::Prefix(_) => {
-                return Err(format!("Absolute path denied in component: {:?}", name));
+                return Err(CarrierError::InvalidInput(format!(
+                    "Absolute path denied in component: {:?}",
+                    name
+                )));
             }
             _ => {}
         }
@@ -256,43 +267,47 @@ pub fn sanitize_path_component(name: &str) -> Result<&str, String> {
 }
 
 /// Validate a clone name: only lowercase alphanumeric and hyphens allowed.
-pub fn validate_clone_name(name: &str) -> Result<&str, String> {
+pub fn validate_clone_name(name: &str) -> CarrierResult<&str> {
     if name.is_empty() {
-        return Err("Clone name cannot be empty".to_string());
+        return Err(CarrierError::InvalidInput("Clone name cannot be empty".to_string()));
     }
     if name.len() > 64 {
-        return Err("Clone name too long (max 64 characters)".to_string());
+        return Err(CarrierError::InvalidInput(
+            "Clone name too long (max 64 characters)".to_string(),
+        ));
     }
     if name.starts_with('-') || name.ends_with('-') {
-        return Err("Clone name cannot start or end with a hyphen".to_string());
+        return Err(CarrierError::InvalidInput(
+            "Clone name cannot start or end with a hyphen".to_string(),
+        ));
     }
     if !name
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
-        return Err(
+        return Err(CarrierError::InvalidInput(
             "Clone name must contain only lowercase letters, digits, and hyphens (e.g. 'customer-support')".to_string()
-        );
+        ));
     }
     Ok(name)
 }
 
 /// Validate a file path key inside clone files map — no traversal, no absolute paths.
-pub fn validate_clone_file_path(path: &str) -> Result<&str, String> {
+pub fn validate_clone_file_path(path: &str) -> CarrierResult<&str> {
     if path.is_empty() {
-        return Err("File path cannot be empty".to_string());
+        return Err(CarrierError::InvalidInput("File path cannot be empty".to_string()));
     }
     if path.starts_with('/') || path.starts_with("..") {
-        return Err(format!(
+        return Err(CarrierError::InvalidInput(format!(
             "Invalid file path '{}': must be relative and not escape the archive",
             path
-        ));
+        )));
     }
     validate_path(path)
 }
 
 /// Resolve a file path through the workspace sandbox (if available) or legacy validation.
-pub fn resolve_file_path(raw_path: &str, workspace_root: Option<&Path>) -> Result<PathBuf, String> {
+pub fn resolve_file_path(raw_path: &str, workspace_root: Option<&Path>) -> CarrierResult<PathBuf> {
     if let Some(root) = workspace_root {
         crate::workspace_sandbox::resolve_sandbox_path(raw_path, root)
     } else {
@@ -307,7 +322,7 @@ pub fn resolve_file_path_for_read(
     workspace_root: Option<&Path>,
     sender_id: Option<&str>,
     agent_name: Option<&str>,
-) -> Result<PathBuf, String> {
+) -> CarrierResult<PathBuf> {
     if let Some(root) = workspace_root {
         crate::workspace_sandbox::resolve_sandbox_path_for_read(raw_path, root, sender_id, agent_name)
     } else {

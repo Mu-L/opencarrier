@@ -20,7 +20,7 @@ async fn tool_agent_send(
     owner_id: Option<&str>,
     sender_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let agent_id = input["agent_id"]
         .as_str()
         .ok_or(CarrierError::InvalidInput(
@@ -33,7 +33,7 @@ async fn tool_agent_send(
         ))?;
 
     // Check + increment inter-agent call depth
-    crate::tools::check_call_depth().map_err(CarrierError::Internal)?;
+    crate::tools::check_call_depth()?;
     let current_depth = crate::tool_runner::AGENT_CALL_DEPTH
         .try_with(|d| d.get())
         .unwrap_or(0);
@@ -51,7 +51,7 @@ async fn tool_agent_spawn(
     kernel: Option<&Arc<dyn KernelHandle>>,
     parent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let manifest_toml = input["manifest_toml"]
         .as_str()
         .ok_or(CarrierError::InvalidInput(
@@ -67,7 +67,7 @@ fn tool_agent_list(
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let agents = kh.list_agents();
     if agents.is_empty() {
         return Ok("No agents currently running.".to_string());
@@ -87,7 +87,7 @@ fn tool_agent_kill(
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let target_id = input["agent_id"]
         .as_str()
         .ok_or(CarrierError::InvalidInput(
@@ -102,7 +102,7 @@ fn tool_agent_restart(
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let kh = crate::tools::require_kernel(kernel)?;
     let target_id = input["agent_id"]
         .as_str()
         .ok_or(CarrierError::InvalidInput(

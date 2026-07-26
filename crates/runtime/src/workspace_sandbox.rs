@@ -4,6 +4,7 @@
 //! Prevents path traversal, symlink escapes, and access outside the sandbox.
 
 use std::path::{Path, PathBuf};
+use types::error::{CarrierError, CarrierResult};
 
 /// Check if a relative path is an internal workspace path that should NOT be
 /// auto-routed to the sender's output directory.
@@ -26,13 +27,15 @@ pub fn is_internal_path(rel: &str) -> bool {
 /// - Absolute paths are checked against the workspace root after canonicalization.
 /// - For new files: canonicalizes the parent directory and appends the filename.
 /// - The final canonical path must start with the canonical workspace root.
-pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<PathBuf, String> {
+pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> CarrierResult<PathBuf> {
     let path = Path::new(user_path);
 
     // Reject any `..` components
     for component in path.components() {
         if matches!(component, std::path::Component::ParentDir) {
-            return Err("Path traversal denied: '..' components are forbidden".to_string());
+            return Err(CarrierError::InvalidInput(
+                "Path traversal denied: '..' components are forbidden".to_string(),
+            ));
         }
     }
 
@@ -46,13 +49,13 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
     // Canonicalize the workspace root
     let canon_root = workspace_root
         .canonicalize()
-        .map_err(|e| format!("Failed to resolve workspace root: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to resolve workspace root: {e}")))?;
 
     // Canonicalize the candidate (or its parent for new files)
     let canon_candidate = if candidate.exists() {
         candidate
             .canonicalize()
-            .map_err(|e| format!("Failed to resolve path: {e}"))?
+            .map_err(|e| CarrierError::Internal(format!("Failed to resolve path: {e}")))?
     } else {
         // For new files: find the nearest existing ancestor, canonicalize it,
         // then re-append the remaining path components and create intermediate dirs.
@@ -63,24 +66,24 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
         loop {
             let name = ancestor
                 .file_name()
-                .ok_or_else(|| "Invalid path: no filename".to_string())?
+                .ok_or_else(|| CarrierError::InvalidInput("Invalid path: no filename".to_string()))?
                 .to_os_string();
             components.push(name);
 
             let parent = ancestor
                 .parent()
-                .ok_or_else(|| "Invalid path: no parent directory".to_string())?;
+                .ok_or_else(|| CarrierError::InvalidInput("Invalid path: no parent directory".to_string()))?;
 
             if parent.exists() {
                 let canon_parent = parent
                     .canonicalize()
-                    .map_err(|e| format!("Failed to resolve parent directory: {e}"))?;
+                    .map_err(|e| CarrierError::Internal(format!("Failed to resolve parent directory: {e}")))?;
                 // Verify the existing ancestor is inside the sandbox
                 if !canon_parent.starts_with(&canon_root) {
-                    return Err(format!(
+                    return Err(CarrierError::InvalidInput(format!(
                         "Access denied: path '{}' resolves outside workspace",
                         user_path
-                    ));
+                    )));
                 }
 
                 // components was collected leaf-to-ancestor, rev gives ancestor-to-leaf
@@ -92,7 +95,10 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
                     current = current.join(part);
                     if !current.exists() {
                         std::fs::create_dir(&current).map_err(|e| {
-                            format!("Failed to create directory '{}': {e}", current.display())
+                            CarrierError::Internal(format!(
+                                "Failed to create directory '{}': {e}",
+                                current.display()
+                            ))
                         })?;
                     }
                 }
@@ -105,11 +111,11 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> Result<Pa
 
     // Verify the canonical path is inside the workspace
     if !canon_candidate.starts_with(&canon_root) {
-        return Err(format!(
+        return Err(CarrierError::InvalidInput(format!(
             "Access denied: path '{}' resolves outside workspace. \
              file_read/file_write/file_list only work within the workspace directory.",
             user_path
-        ));
+        )));
     }
 
     Ok(canon_candidate)
@@ -131,14 +137,14 @@ pub fn resolve_sandbox_path_for_write(
     _sender_id: Option<&str>,
     _agent_name: Option<&str>,
     is_clone_admin: bool,
-) -> Result<PathBuf, String> {
+) -> CarrierResult<PathBuf> {
     let normalized = user_path.replace('\\', "/");
     let path = Path::new(&normalized);
 
     // Extract the relative path components for permission checking
     let relative = if path.is_absolute() {
         path.strip_prefix(workspace_root)
-            .map_err(|_| "Absolute path outside workspace".to_string())?
+            .map_err(|_| CarrierError::InvalidInput("Absolute path outside workspace".to_string()))?
             .to_path_buf()
     } else {
         path.to_path_buf()
@@ -149,10 +155,10 @@ pub fn resolve_sandbox_path_for_write(
     // Block writes to protected config files (unless clone admin).
     // These files define the clone's identity — only trainers should modify them.
     if (rel_str == "agent.toml" || rel_str == "SOUL.md" || rel_str == "system_prompt.md") && !is_clone_admin {
-        return Err(format!(
+        return Err(CarrierError::InvalidInput(format!(
             "Write denied: '{}' is a protected config file (only trainer may modify)",
             rel_str
-        ));
+        )));
     }
 
     // Block writes to identity-frozen files when EVOLUTION.md declares identity freeze
@@ -167,10 +173,10 @@ pub fn resolve_sandbox_path_for_write(
         let evolution_path = workspace_root.join("EVOLUTION.md");
         if let Ok(content) = std::fs::read_to_string(&evolution_path) {
             if content.contains("身份层不可修改") || content.contains("identity_frozen:") {
-                return Err(format!(
+                return Err(CarrierError::InvalidInput(format!(
                     "Write denied: '{}' is a frozen identity file (evolution system may not modify)",
                     rel_str
-                ));
+                )));
             }
         }
     }
@@ -189,13 +195,13 @@ pub fn resolve_sandbox_path_for_read(
     workspace_root: &Path,
     _sender_id: Option<&str>,
     _agent_name: Option<&str>,
-) -> Result<PathBuf, String> {
+) -> CarrierResult<PathBuf> {
     let normalized = user_path.replace('\\', "/");
     let path = Path::new(&normalized);
 
     let relative = if path.is_absolute() {
         path.strip_prefix(workspace_root)
-            .map_err(|_| "Absolute path outside workspace".to_string())?
+            .map_err(|_| CarrierError::InvalidInput("Absolute path outside workspace".to_string()))?
             .to_path_buf()
     } else {
         path.to_path_buf()
@@ -241,7 +247,7 @@ mod tests {
 
         let result = resolve_sandbox_path(outside.to_str().unwrap(), dir.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Access denied"));
+        assert!(result.unwrap_err().to_string().contains("Access denied"));
 
         let _ = std::fs::remove_file(&outside);
     }
@@ -251,7 +257,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let result = resolve_sandbox_path("../../../etc/passwd", dir.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Path traversal denied"));
+        assert!(result.unwrap_err().to_string().contains("Path traversal denied"));
     }
 
     #[test]
@@ -307,6 +313,6 @@ mod tests {
 
         let result = resolve_sandbox_path("escape/secret.txt", dir.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Access denied"));
+        assert!(result.unwrap_err().to_string().contains("Access denied"));
     }
 }
