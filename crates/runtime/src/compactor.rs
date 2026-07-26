@@ -77,6 +77,11 @@ pub struct CompactionResult {
     pub chunks_used: u32,
     /// Whether fallback was used (LLM unavailable).
     pub used_fallback: bool,
+    /// Structured key facts extracted during compaction (contact info,
+    /// preferences, decisions, entities). Flushed to the kv drawer by the
+    /// caller so that facts from turns whose per-turn summary failed are not
+    /// lost when `turn_summaries` is cleared. Empty for fallback / no-op.
+    pub key_facts: Vec<String>,
 }
 
 /// Check whether a session needs compaction (message-count trigger).
@@ -458,13 +463,14 @@ fn build_conversation_text(messages: &[Message], config: &CompactionConfig) -> S
 /// Summarize a slice of messages using the LLM.
 ///
 /// Builds the conversation text, applies chunking limits, and calls the LLM
-/// with a summarization prompt. Retries on transient failures.
+/// with a summarization prompt that also extracts durable key facts. Retries
+/// on transient failures. Returns `(summary, key_facts)`.
 async fn summarize_messages(
     driver: Arc<dyn LlmDriver>,
     model: &str,
     messages: &[Message],
     config: &CompactionConfig,
-) -> Result<String, String> {
+) -> Result<(String, Vec<String>), String> {
     let conversation_text = build_conversation_text(messages, config);
 
     // If conversation exceeds chunk limit, skip single-pass entirely.
@@ -481,7 +487,12 @@ async fn summarize_messages(
 
     let summarize_prompt = format!(
         "Summarize the following conversation preserving key facts, decisions, user preferences, \
-         and important context. Be concise but thorough. Output only the summary, no preamble.\n\n\
+         and important context. Be concise but thorough.\n\n\
+         Then list any durable facts worth remembering long-term (contact info, preferences, \
+         decisions, named entities, scheduled events) as a comma-separated list.\n\n\
+         Respond in this exact format:\n\
+         SUMMARY:\n<your summary>\n\
+         FACTS:\n<comma-separated key facts, or NONE>\n\n\
          ---\n{conversation_text}---"
     );
 
@@ -511,13 +522,14 @@ async fn summarize_messages(
     for attempt in 0..config.max_retries {
         match driver.complete(request.clone()).await {
             Ok(response) => {
-                let summary = response.text();
-                if summary.is_empty() {
+                let text = response.text();
+                if text.is_empty() {
                     last_error = "LLM returned empty summary".to_string();
                     warn!(attempt, "Empty summary from LLM, retrying");
                     continue;
                 }
-                return Ok(summary);
+                let (summary, facts) = parse_summary_and_facts(&text);
+                return Ok((summary, facts));
             }
             Err(e) => {
                 last_error = format!("LLM summarization failed: {e}");
@@ -531,6 +543,65 @@ async fn summarize_messages(
     Err(last_error)
 }
 
+/// Parse the `SUMMARY:` / `FACTS:` structured output from the compaction LLM.
+///
+/// Robust to misformatting: if the markers are absent the whole text becomes
+/// the summary and no facts are extracted — the summary is never lost. FACTS
+/// may span multiple lines and is split on commas; `NONE` yields no facts.
+fn parse_summary_and_facts(text: &str) -> (String, Vec<String>) {
+    let mut summary_lines: Vec<&str> = Vec::new();
+    let mut facts: Vec<String> = Vec::new();
+    // Current section: "summary" or "facts". None before any marker is seen.
+    let mut section: Option<&str> = None;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_lowercase();
+        if lower.starts_with("summary:") {
+            section = Some("summary");
+            let rest = trimmed["summary:".len()..].trim();
+            if !rest.is_empty() {
+                summary_lines.push(rest);
+            }
+            continue;
+        }
+        if lower.starts_with("facts:") {
+            section = Some("facts");
+            let rest = trimmed["facts:".len()..].trim();
+            if !rest.is_empty() && !rest.eq_ignore_ascii_case("NONE") {
+                facts.extend(
+                    rest.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                );
+            }
+            continue;
+        }
+        match section {
+            Some("summary") => summary_lines.push(trimmed),
+            Some("facts") => {
+                if !trimmed.eq_ignore_ascii_case("NONE") {
+                    facts.extend(
+                        trimmed
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty()),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let summary = if summary_lines.is_empty() {
+        // No SUMMARY: marker — treat the whole response as the summary.
+        text.trim().to_string()
+    } else {
+        summary_lines.join("\n")
+    };
+    (summary, facts)
+}
+
 /// Summarize messages in adaptive chunks, then merge the per-chunk summaries.
 ///
 /// Splits messages into chunks based on adaptive ratio (accounting for message size),
@@ -541,7 +612,7 @@ async fn summarize_in_chunks(
     model: &str,
     messages: &[Message],
     config: &CompactionConfig,
-) -> Result<String, String> {
+) -> Result<(String, Vec<String>), String> {
     let chunk_ratio = compute_adaptive_chunk_ratio(messages, config);
     let chunk_size = (messages.len() as f64 * chunk_ratio).ceil() as usize;
     let chunk_size = chunk_size.max(5); // minimum 5 messages per chunk
@@ -552,13 +623,19 @@ async fn summarize_in_chunks(
     );
 
     let mut summaries = Vec::new();
+    let mut all_facts: Vec<String> = Vec::new();
     let mut success_count = 0usize;
     let mut last_chunk_error = String::new();
     for (i, chunk) in messages.chunks(chunk_size).enumerate() {
         match summarize_messages(driver.clone(), model, chunk, config).await {
-            Ok(summary) => {
-                info!(chunk = i, summary_len = summary.len(), "Chunk summarized");
+            Ok((summary, facts)) => {
+                info!(chunk = i, summary_len = summary.len(), facts = facts.len(), "Chunk summarized");
                 summaries.push(summary);
+                for f in facts {
+                    if !all_facts.contains(&f) {
+                        all_facts.push(f);
+                    }
+                }
                 success_count += 1;
             }
             Err(e) => {
@@ -588,7 +665,7 @@ async fn summarize_in_chunks(
     }
 
     if summaries.len() == 1 {
-        return Ok(summaries.into_iter().next().unwrap());
+        return Ok((summaries.into_iter().next().unwrap(), all_facts));
     }
 
     // Merge summaries with another LLM call
@@ -630,15 +707,15 @@ async fn summarize_in_chunks(
             let merged = response.text();
             if merged.is_empty() {
                 // Fall back to concatenating the per-chunk summaries
-                Ok(summaries.join("\n\n"))
+                Ok((summaries.join("\n\n"), all_facts))
             } else {
-                Ok(merged)
+                Ok((merged, all_facts))
             }
         }
         Err(e) => {
             warn!(error = %e, "Merge summarization failed, concatenating chunks");
             // Fallback: just concatenate the chunk summaries
-            Ok(summaries.join("\n\n"))
+            Ok((summaries.join("\n\n"), all_facts))
         }
     }
 }
@@ -668,6 +745,7 @@ pub async fn compact_session(
             compacted_count: 0,
             chunks_used: 0,
             used_fallback: false,
+            key_facts: Vec::new(),
         });
     }
 
@@ -689,14 +767,16 @@ pub async fn compact_session(
 
     // Stage 1: Try full single-pass summarization
     match summarize_messages(driver.clone(), model, to_compact, config).await {
-        Ok(summary) => {
+        Ok((summary, facts)) => {
             info!(
                 summary_len = summary.len(),
+                facts = facts.len(),
                 compacted = compacted_count,
                 "Session compaction complete (single-pass)"
             );
             return Ok(CompactionResult {
                 summary,
+                key_facts: facts,
                 kept_messages,
                 compacted_count,
                 chunks_used: 1,
@@ -710,7 +790,7 @@ pub async fn compact_session(
 
     // Stage 2: Chunked summarization with adaptive ratio
     match summarize_in_chunks(driver.clone(), model, to_compact, config).await {
-        Ok(summary) => {
+        Ok((summary, facts)) => {
             let chunk_ratio = compute_adaptive_chunk_ratio(to_compact, config);
             let chunk_size = (to_compact.len() as f64 * chunk_ratio).ceil() as usize;
             let chunk_size = chunk_size.max(5);
@@ -718,12 +798,14 @@ pub async fn compact_session(
 
             info!(
                 summary_len = summary.len(),
+                facts = facts.len(),
                 compacted = compacted_count,
                 chunks = num_chunks,
                 "Session compaction complete (chunked)"
             );
             return Ok(CompactionResult {
                 summary,
+                key_facts: facts,
                 kept_messages,
                 compacted_count,
                 chunks_used: num_chunks.max(1),
@@ -754,6 +836,7 @@ pub async fn compact_session(
         compacted_count,
         chunks_used: 0,
         used_fallback: true,
+        key_facts: Vec::new(),
     })
 }
 
@@ -977,7 +1060,7 @@ mod tests {
             ) -> Result<CompletionResponse, LlmError> {
                 Ok(CompletionResponse {
                     content: vec![ContentBlock::Text {
-                        text: "Summary: discussed topics 0 through 79".to_string(),
+                        text: "SUMMARY:\ndiscussed topics 0 through 79\nFACTS:\nNONE".to_string(),
                         provider_metadata: None,
                     }],
                     stop_reason: types::message::StopReason::EndTurn,
@@ -1021,7 +1104,12 @@ mod tests {
         // 100 messages, keep_recent=10, alternating roles → split aligned to Assistant boundary
         assert_eq!(result.compacted_count, 91);
         assert_eq!(result.kept_messages.len(), 9);
-        assert!(result.summary.contains("Summary"));
+        assert!(
+            result.summary.contains("discussed topics 0 through 79"),
+            "parsed summary body should survive: {}",
+            result.summary
+        );
+        assert!(result.key_facts.is_empty(), "FACTS: NONE → no facts");
         assert_eq!(result.chunks_used, 1);
         assert!(!result.used_fallback);
     }
@@ -1208,7 +1296,7 @@ mod tests {
             .collect();
         let config = CompactionConfig::default();
 
-        let result =
+        let (summary, _facts) =
             summarize_in_chunks(Arc::new(CountingDriver), "test-model", &messages, &config)
                 .await
                 .unwrap();
@@ -1219,7 +1307,7 @@ mod tests {
             calls >= 2,
             "Should have made multiple LLM calls for chunked summary, got {calls}"
         );
-        assert!(!result.is_empty(), "Should produce a summary");
+        assert!(!summary.is_empty(), "Should produce a summary");
     }
 
     #[test]
@@ -1230,9 +1318,11 @@ mod tests {
             compacted_count: 10,
             chunks_used: 3,
             used_fallback: false,
+            key_facts: vec!["likes tea".to_string()],
         };
         assert_eq!(result.chunks_used, 3);
         assert!(!result.used_fallback);
+        assert_eq!(result.key_facts.len(), 1);
 
         let fallback_result = CompactionResult {
             summary: "fallback".to_string(),
@@ -1240,9 +1330,75 @@ mod tests {
             compacted_count: 5,
             chunks_used: 0,
             used_fallback: true,
+            key_facts: Vec::new(),
         };
         assert_eq!(fallback_result.chunks_used, 0);
         assert!(fallback_result.used_fallback);
+    }
+
+    #[test]
+    fn test_parse_summary_and_facts_robust() {
+        // Well-formed single-pass output
+        let (s, f) = parse_summary_and_facts("SUMMARY:\nfoo bar\nFACTS:\na, b, c");
+        assert_eq!(s, "foo bar");
+        assert_eq!(f, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+
+        // No markers → whole text is the summary, no facts (summary never lost)
+        let (s, f) = parse_summary_and_facts("just a plain summary with no markers");
+        assert_eq!(s, "just a plain summary with no markers");
+        assert!(f.is_empty());
+
+        // FACTS: NONE → no facts
+        let (s, f) = parse_summary_and_facts("SUMMARY:\nx\nFACTS:\nNONE");
+        assert_eq!(s, "x");
+        assert!(f.is_empty());
+
+        // Multi-line facts list
+        let (s, f) = parse_summary_and_facts("SUMMARY:\nx\nFACTS:\na, b\nc, d");
+        assert_eq!(s, "x");
+        assert_eq!(f, vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_summarize_extracts_facts() {
+        use crate::llm_driver::{CompletionResponse, LlmError};
+        use async_trait::async_trait;
+
+        struct FactDriver;
+        #[async_trait]
+        impl LlmDriver for FactDriver {
+            async fn complete(
+                &self,
+                _req: CompletionRequest,
+            ) -> Result<CompletionResponse, LlmError> {
+                Ok(CompletionResponse {
+                    content: vec![ContentBlock::Text {
+                        text: "SUMMARY:\nUser discussed shipping and tea.\nFACTS:\nlikes tea, decided to ship on Friday, email is a@b.com"
+                            .to_string(),
+                        provider_metadata: None,
+                    }],
+                    stop_reason: types::message::StopReason::EndTurn,
+                    tool_calls: vec![],
+                    usage: TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 10,
+                    },
+                    media: None,
+                })
+            }
+        }
+
+        let messages = vec![Message::user("hi"), Message::assistant("hello")];
+        let config = CompactionConfig::default();
+        let (summary, facts) =
+            summarize_messages(Arc::new(FactDriver), "test-model", &messages, &config)
+                .await
+                .unwrap();
+        assert!(summary.contains("tea"), "summary should survive: {summary}");
+        assert_eq!(facts.len(), 3, "three facts expected: {:?}", facts);
+        assert!(facts.iter().any(|f| f.contains("tea")));
+        assert!(facts.iter().any(|f| f.contains("Friday")));
+        assert!(facts.iter().any(|f| f.contains("a@b.com")));
     }
 
     #[test]

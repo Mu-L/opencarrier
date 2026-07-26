@@ -892,7 +892,7 @@ async fn handle_command(
             }
             Err(e) => serde_json::json!({"type": "error", "content": format!("Reset failed: {e}")}),
         },
-        "compact" => match state.kernel.compact_agent_session(agent_id, state.kernel.registry.get(agent_id).map(|e| e.session_id).unwrap_or_else(|| types::agent::SessionId(uuid::Uuid::nil()))).await {
+        "compact" => match state.kernel.compact_agent_session(agent_id, state.kernel.registry.get(agent_id).map(|e| e.session_id).unwrap_or_else(|| types::agent::SessionId(uuid::Uuid::nil())), None, None).await {
             Ok(msg) => {
                 serde_json::json!({"type": "command_result", "command": cmd, "message": msg})
             }

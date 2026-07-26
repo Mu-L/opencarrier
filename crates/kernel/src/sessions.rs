@@ -3,6 +3,8 @@
 //! Handles session CRUD, session compaction, agent configuration mutations
 //! (model, flows, MCP servers, tool filters), and agent termination.
 
+use std::sync::Arc;
+
 use types::agent::*;
 use types::error::CarrierError;
 use tracing::{debug, info, warn};
@@ -224,7 +226,12 @@ impl CarrierKernel {
                 .join("\n")
         );
 
-        // Save to structured memory store (key = "session_{date}_{slug}")
+        // Save to structured memory store (key = "session_{date}_{slug}").
+        // NOTE: owner_id="" / user_id="" is intentional, not a bug. reset_session
+        // is an owner-level action (HTTP/WS handlers carry no sender context), so
+        // there is no single user to attribute this archival summary to. It lands
+        // in the empty-string partition and is NOT picked up by the per-user
+        // drawer prefetch — that's fine, this is archival, not inference recall.
         let key = format!("session_{date}_{slug}");
         if let Err(e) = self.memory.system_kv_set(
             &agent_id.to_string(),
@@ -374,7 +381,13 @@ impl CarrierKernel {
     ///
     /// Replaces the existing text-truncation compaction with an intelligent
     /// LLM-generated summary of older messages, keeping only recent messages.
-    pub async fn compact_agent_session(&self, agent_id: AgentId, session_id: types::agent::SessionId) -> KernelResult<String> {
+    pub async fn compact_agent_session(
+        &self,
+        agent_id: AgentId,
+        session_id: types::agent::SessionId,
+        owner_id: Option<&str>,
+        user_id: Option<&str>,
+    ) -> KernelResult<String> {
         use runtime::compactor::{compact_session, needs_compaction, needs_compaction_by_tokens, estimate_token_count, CompactionConfig};
 
         let entry = self.registry.get(agent_id).ok_or_else(|| {
@@ -454,6 +467,71 @@ impl CarrierKernel {
         self.memory
             .save_session(&updated_session)
             .map_err(KernelError::Carrier)?;
+
+        // Write-back bridge: persist the compaction summary + extracted facts to
+        // the durable kv drawer so they survive a session reset and stay
+        // retrievable. The per-turn path already flushes each turn's key_facts
+        // to the drawer, so this mainly (a) saves the cross-turn prose summary
+        // and (b) rescues facts from turns whose per-turn summary failed.
+        // Skipped when no owner context is available (manual API/WS compact).
+        if let Some(owner) = owner_id {
+            // Resolve user: explicit param → session label ("user:{id}") → "".
+            let uid = user_id
+                .map(str::to_string)
+                .or_else(|| {
+                    updated_session
+                        .label
+                        .as_deref()
+                        .and_then(|l| l.strip_prefix("user:"))
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+
+            // 1. Persist the prose compaction summary under a non-state prefix
+            //    (session_compaction.*) — retrievable via memory_kv but it does
+            //    NOT auto-inject into the prompt (keeps the prompt lean).
+            if !result.summary.is_empty() {
+                let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                let summary_key = format!("session_compaction.{date}");
+                match self.memory.system_kv_set(
+                    &agent_id.to_string(),
+                    owner,
+                    &uid,
+                    &summary_key,
+                    serde_json::Value::String(result.summary.clone()),
+                ) {
+                    Ok(()) => info!(
+                        agent_id = %agent_id, key = %summary_key,
+                        facts = result.key_facts.len(),
+                        "Compaction summary persisted to kv"
+                    ),
+                    Err(e) => warn!(
+                        agent_id = %agent_id, error = %e,
+                        "Failed to persist compaction summary to kv"
+                    ),
+                }
+            }
+
+            // 2. Flush structured facts via the same idempotent merge the
+            //    per-turn path uses (state keys dedup, event.* now dedup too).
+            if !result.key_facts.is_empty() {
+                let handle: Arc<dyn runtime::memory_handle::MemoryHandle> = Arc::new(
+                    crate::handle::MemorySubstrateHandle::new(Arc::clone(&self.memory)),
+                );
+                runtime::agent_loop::merge_key_facts(
+                    &handle,
+                    &entry.name,
+                    owner,
+                    &uid,
+                    &result.key_facts,
+                );
+            }
+        } else {
+            debug!(
+                agent_id = %agent_id,
+                "Compaction write-back skipped (no owner context — manual compact)"
+            );
+        }
 
         // Build result message with audit summary
         let mut msg = format!(

@@ -19,6 +19,7 @@
 
 mod context;
 mod helpers;
+mod knowledge;
 mod state;
 mod end_turn;
 mod tool_use;
@@ -58,6 +59,9 @@ pub use max_tokens::MAX_CONTINUATIONS;
 // Re-export constants and functions used by tests via `use super::*`.
 pub use helpers::{MAX_RETRIES, BASE_RETRY_DELAY_MS, MAX_HISTORY_MESSAGES, LOOP_DETECTION_WINDOW, SOFT_LOOP_WINDOW};
 pub use helpers::{tool_input_hash, detect_tool_loop, detect_soft_loop};
+// Re-export the kv-drawer knowledge merge so the kernel's compaction path can
+// flush facts with the same idempotent semantics as the per-turn path.
+pub use knowledge::merge_key_facts;
 
 /// Maximum iterations in the agent loop before giving up.
 const MAX_ITERATIONS: u32 = 25;

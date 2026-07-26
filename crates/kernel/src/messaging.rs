@@ -1148,7 +1148,7 @@ impl CarrierKernel {
             // Auto-compact if the session is large before running the loop
             if needs_compact {
                 info!(agent_id = %agent_id, messages = session.messages.len(), "Auto-compacting session");
-                match kernel_clone.compact_agent_session(agent_id, session.id).await {
+                match kernel_clone.compact_agent_session(agent_id, session.id, owner_id.as_deref(), sender_id.as_deref()).await {
                     Ok(msg) => {
                         info!(agent_id = %agent_id, "{msg}");
                         // Reload the session after compaction
@@ -1294,10 +1294,14 @@ impl CarrierKernel {
                         let estimated = estimate_token_count(&session.messages, None, None);
                         if needs_compaction_by_tokens(estimated, &config) {
                             let compact_session_id = session.id;
+                            // Clone owner/sender so the background compaction can
+                            // write its summary back to the right kv partition.
+                            let oid = owner_id.clone();
+                            let sid = sender_id.clone();
                             let kc = kernel_clone.clone();
                             tokio::spawn(async move {
                                 info!(agent_id = %agent_id, estimated_tokens = estimated, "Post-loop compaction triggered");
-                                if let Err(e) = kc.compact_agent_session(agent_id, compact_session_id).await {
+                                if let Err(e) = kc.compact_agent_session(agent_id, compact_session_id, oid.as_deref(), sid.as_deref()).await {
                                     warn!(agent_id = %agent_id, "Post-loop compaction failed: {e}");
                                 }
                             });
@@ -1495,7 +1499,7 @@ impl CarrierKernel {
 
         // Execute compaction if needed
         if needs_compact {
-            match self.compact_agent_session(agent_id, session.id).await {
+            match self.compact_agent_session(agent_id, session.id, owner_id.as_deref(), sender_id.as_deref()).await {
                 Ok(msg) => {
                     info!(agent_id = %agent_id, "{msg}");
                     if let Ok(Some(reloaded)) = self.memory.get_session_async(session.id).await {
