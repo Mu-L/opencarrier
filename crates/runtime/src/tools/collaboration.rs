@@ -5,6 +5,7 @@ use super::ToolModule;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
@@ -17,9 +18,13 @@ fn tool_agent_find(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
-    let query = input["query"].as_str().ok_or("Missing 'query' parameter")?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let query = input["query"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'query' parameter".to_string(),
+        ))?;
     let agents = kh.find_agents(query);
     if agents.is_empty() {
         return Ok(format!("No agents found matching '{query}'."));
@@ -38,53 +43,81 @@ fn tool_agent_find(
             })
         })
         .collect();
-    serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize error: {e}"))
+    serde_json::to_string_pretty(&result).map_err(|e| CarrierError::Serialization(e.to_string()))
 }
 
 async fn tool_task_post(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
-    let title = input["title"].as_str().ok_or("Missing 'title' parameter")?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let title = input["title"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'title' parameter".to_string(),
+        ))?;
     let description = input["description"]
         .as_str()
-        .ok_or("Missing 'description' parameter")?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'description' parameter".to_string(),
+        ))?;
     let assigned_to = input["assigned_to"].as_str();
     let task_id = kh
         .task_post(title, description, assigned_to, caller_agent_id)
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
     Ok(format!("Task created with ID: {task_id}"))
 }
 
-fn tool_task_plan(input: &serde_json::Value) -> Result<String, String> {
-    let title = input["title"].as_str().ok_or("Missing 'title' parameter")?;
-    let steps = input["steps"].as_array().ok_or("Missing 'steps' parameter")?;
+fn tool_task_plan(input: &serde_json::Value) -> CarrierResult<String> {
+    let title = input["title"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'title' parameter".to_string(),
+        ))?;
+    let steps = input["steps"]
+        .as_array()
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'steps' parameter".to_string(),
+        ))?;
     if steps.is_empty() {
-        return Err("Steps array must not be empty".to_string());
+        return Err(CarrierError::InvalidInput(
+            "Steps array must not be empty".to_string(),
+        ));
     }
     let ids: Vec<&str> = steps.iter().filter_map(|s| s["id"].as_str()).collect();
     if ids.len() != steps.len() {
-        return Err("All steps must have an 'id' field".to_string());
+        return Err(CarrierError::InvalidInput(
+            "All steps must have an 'id' field".to_string(),
+        ));
     }
     let mut seen = std::collections::HashSet::new();
     for &id in &ids {
         if !seen.insert(id) {
-            return Err(format!("Duplicate step id: '{}'", id));
+            return Err(CarrierError::InvalidInput(format!(
+                "Duplicate step id: '{}'",
+                id
+            )));
         }
     }
     for step in steps {
-        let id = step["id"].as_str().ok_or("Step missing 'id'")?;
+        let id = step["id"]
+            .as_str()
+            .ok_or(CarrierError::InvalidInput("Step missing 'id'".to_string()))?;
         if step["prompt"].as_str().is_none() {
-            return Err(format!("Step '{}' missing 'prompt'", id));
+            return Err(CarrierError::InvalidInput(format!(
+                "Step '{}' missing 'prompt'",
+                id
+            )));
         }
         if let Some(deps) = step["depends_on"].as_array() {
             for dep in deps {
                 let dep_str = dep.as_str().unwrap_or("");
                 if !ids.contains(&dep_str) {
-                    return Err(format!("Step '{}' depends_on unknown step '{}'", id, dep_str));
+                    return Err(CarrierError::InvalidInput(format!(
+                        "Step '{}' depends_on unknown step '{}'",
+                        id, dep_str
+                    )));
                 }
             }
         }
@@ -95,12 +128,14 @@ fn tool_task_plan(input: &serde_json::Value) -> Result<String, String> {
 async fn tool_task_claim(
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
-    let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
-    match kh.task_claim(agent_id).await.map_err(|e| e.to_string())? {
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
+    let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
+        "Missing caller agent identity".to_string(),
+    ))?;
+    match kh.task_claim(agent_id).await? {
         Some(task) => {
-            serde_json::to_string_pretty(&task).map_err(|e| format!("Serialize error: {e}"))
+            serde_json::to_string_pretty(&task).map_err(|e| CarrierError::Serialization(e.to_string()))
         }
         None => Ok("No tasks available.".to_string()),
     }
@@ -110,15 +145,19 @@ async fn tool_task_complete(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
     let task_id = input["task_id"]
         .as_str()
-        .ok_or("Missing 'task_id' parameter")?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'task_id' parameter".to_string(),
+        ))?;
     let result = input["result"]
         .as_str()
-        .ok_or("Missing 'result' parameter")?;
-    kh.task_complete(task_id, result).await.map_err(|e| e.to_string())?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'result' parameter".to_string(),
+        ))?;
+    kh.task_complete(task_id, result).await?;
     Ok(format!("Task {task_id} marked as completed."))
 }
 
@@ -126,30 +165,32 @@ async fn tool_task_list(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
     let status = input["status"].as_str();
-    let tasks = kh.task_list(status).await.map_err(|e| e.to_string())?;
+    let tasks = kh.task_list(status).await?;
     if tasks.is_empty() {
         return Ok("No tasks found.".to_string());
     }
-    serde_json::to_string_pretty(&tasks).map_err(|e| format!("Serialize error: {e}"))
+    serde_json::to_string_pretty(&tasks).map_err(|e| CarrierError::Serialization(e.to_string()))
 }
 
 async fn tool_event_publish(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
     let event_type = input["event_type"]
         .as_str()
-        .ok_or("Missing 'event_type' parameter")?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'event_type' parameter".to_string(),
+        ))?;
     let payload = input
         .get("payload")
         .cloned()
         .unwrap_or(serde_json::json!({}));
-    kh.publish_event(event_type, payload).await.map_err(|e| e.to_string())?;
+    kh.publish_event(event_type, payload).await?;
     Ok(format!("Event '{event_type}' published successfully."))
 }
 
@@ -276,13 +317,13 @@ impl ToolModule for CollaborationTools {
 
         match name {
             // Collaboration tools
-            "agent_find" => Some(tool_agent_find(input, kernel, caller_agent_id)),
-            "task_post" => Some(tool_task_post(input, kernel, caller_agent_id).await),
-            "task_claim" => Some(tool_task_claim(kernel, caller_agent_id).await),
-            "task_complete" => Some(tool_task_complete(input, kernel, caller_agent_id).await),
-            "task_list" => Some(tool_task_list(input, kernel, caller_agent_id).await),
-            "task_plan" => Some(tool_task_plan(input)),
-            "event_publish" => Some(tool_event_publish(input, kernel, caller_agent_id).await),
+            "agent_find" => Some(tool_agent_find(input, kernel, caller_agent_id).map_err(|e| e.to_string())),
+            "task_post" => Some(tool_task_post(input, kernel, caller_agent_id).await.map_err(|e| e.to_string())),
+            "task_claim" => Some(tool_task_claim(kernel, caller_agent_id).await.map_err(|e| e.to_string())),
+            "task_complete" => Some(tool_task_complete(input, kernel, caller_agent_id).await.map_err(|e| e.to_string())),
+            "task_list" => Some(tool_task_list(input, kernel, caller_agent_id).await.map_err(|e| e.to_string())),
+            "task_plan" => Some(tool_task_plan(input).map_err(|e| e.to_string())),
+            "event_publish" => Some(tool_event_publish(input, kernel, caller_agent_id).await.map_err(|e| e.to_string())),
             _ => None,
         }
     }

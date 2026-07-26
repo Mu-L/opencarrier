@@ -6,6 +6,7 @@
 use crate::memory_handle::MemoryHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
@@ -75,9 +76,9 @@ impl super::ToolModule for KvTools {
         };
 
         match name {
-            "kv_get" => Some(handle_kv_get(input, memory, ctx).await),
-            "kv_set" => Some(handle_kv_set(input, memory, ctx).await),
-            "kv_list" => Some(handle_kv_list(input, memory, ctx).await),
+            "kv_get" => Some(handle_kv_get(input, memory, ctx).await.map_err(|e| e.to_string())),
+            "kv_set" => Some(handle_kv_set(input, memory, ctx).await.map_err(|e| e.to_string())),
+            "kv_list" => Some(handle_kv_list(input, memory, ctx).await.map_err(|e| e.to_string())),
             _ => None,
         }
     }
@@ -95,15 +96,18 @@ async fn handle_kv_get(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     ctx: &ToolContext<'_>,
-) -> Result<String, String> {
-    let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
-    let agent_id = ctx.caller_agent_id.ok_or("No agent context")?;
+) -> CarrierResult<String> {
+    let key = input["key"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput("Missing 'key' parameter".to_string()))?;
+    let agent_id = ctx
+        .caller_agent_id
+        .ok_or(CarrierError::Internal("No agent context".to_string()))?;
     let owner_id = ctx.owner_id.unwrap_or("");
     let user_id = ctx.sender_id.unwrap_or("");
 
-    match memory.kv_get(agent_id, owner_id, user_id, key).map_err(|e| e.to_string())? {
-        Some(val) => Ok(serde_json::to_string_pretty(&val)
-            .unwrap_or_else(|_| val.to_string())),
+    match memory.kv_get(agent_id, owner_id, user_id, key)? {
+        Some(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())),
         None => Ok(format!("No value found for key '{key}'.")),
     }
 }
@@ -112,14 +116,23 @@ async fn handle_kv_set(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     ctx: &ToolContext<'_>,
-) -> Result<String, String> {
-    let key = input["key"].as_str().ok_or("Missing 'key' parameter")?;
-    let value = input.get("value").cloned().ok_or("Missing 'value' parameter")?;
-    let agent_id = ctx.caller_agent_id.ok_or("No agent context")?;
+) -> CarrierResult<String> {
+    let key = input["key"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput("Missing 'key' parameter".to_string()))?;
+    let value = input
+        .get("value")
+        .cloned()
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'value' parameter".to_string(),
+        ))?;
+    let agent_id = ctx
+        .caller_agent_id
+        .ok_or(CarrierError::Internal("No agent context".to_string()))?;
     let owner_id = ctx.owner_id.unwrap_or("");
     let user_id = ctx.sender_id.unwrap_or("");
 
-    memory.kv_set(agent_id, owner_id, user_id, key, value).map_err(|e| e.to_string())?;
+    memory.kv_set(agent_id, owner_id, user_id, key, value)?;
     Ok(format!("Stored value for key '{key}'."))
 }
 
@@ -127,13 +140,15 @@ async fn handle_kv_list(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     ctx: &ToolContext<'_>,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let prefix = input["prefix"].as_str();
-    let agent_id = ctx.caller_agent_id.ok_or("No agent context")?;
+    let agent_id = ctx
+        .caller_agent_id
+        .ok_or(CarrierError::Internal("No agent context".to_string()))?;
     let owner_id = ctx.owner_id.unwrap_or("");
     let user_id = ctx.sender_id.unwrap_or("");
 
-    let pairs = memory.kv_list(agent_id, owner_id, user_id).map_err(|e| e.to_string())?;
+    let pairs = memory.kv_list(agent_id, owner_id, user_id)?;
     let filtered: Vec<_> = if let Some(p) = prefix {
         pairs.into_iter().filter(|(k, _)| k.starts_with(p)).collect()
     } else {

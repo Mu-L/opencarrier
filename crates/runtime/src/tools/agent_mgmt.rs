@@ -4,6 +4,7 @@ use super::ToolModule;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
@@ -18,17 +19,21 @@ async fn tool_agent_send(
     caller_agent_id: Option<&str>,
     owner_id: Option<&str>,
     sender_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
     let agent_id = input["agent_id"]
         .as_str()
-        .ok_or("Missing 'agent_id' parameter")?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'agent_id' parameter".to_string(),
+        ))?;
     let message = input["message"]
         .as_str()
-        .ok_or("Missing 'message' parameter")?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'message' parameter".to_string(),
+        ))?;
 
     // Check + increment inter-agent call depth
-    crate::tools::check_call_depth()?;
+    crate::tools::check_call_depth().map_err(CarrierError::Internal)?;
     let current_depth = crate::tool_runner::AGENT_CALL_DEPTH
         .try_with(|d| d.get())
         .unwrap_or(0);
@@ -37,7 +42,6 @@ async fn tool_agent_send(
         .scope(std::cell::Cell::new(current_depth + 1), async {
             kh.send_to_agent(agent_id, message, sender_id, None, caller_agent_id, owner_id, None)
                 .await
-                .map_err(|e| e.to_string())
         })
         .await
 }
@@ -46,12 +50,14 @@ async fn tool_agent_spawn(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     parent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
     let manifest_toml = input["manifest_toml"]
         .as_str()
-        .ok_or("Missing 'manifest_toml' parameter")?;
-    let (id, name) = kh.spawn_agent(manifest_toml, parent_id).await.map_err(|e| e.to_string())?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'manifest_toml' parameter".to_string(),
+        ))?;
+    let (id, name) = kh.spawn_agent(manifest_toml, parent_id).await?;
     Ok(format!(
         "Agent spawned successfully.\n  ID: {id}\n  Name: {name}"
     ))
@@ -60,8 +66,8 @@ async fn tool_agent_spawn(
 fn tool_agent_list(
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
     let agents = kh.list_agents();
     if agents.is_empty() {
         return Ok("No agents currently running.".to_string());
@@ -80,12 +86,14 @@ fn tool_agent_kill(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
     let target_id = input["agent_id"]
         .as_str()
-        .ok_or("Missing 'agent_id' parameter")?;
-    kh.kill_agent(target_id).map_err(|e| e.to_string())?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'agent_id' parameter".to_string(),
+        ))?;
+    kh.kill_agent(target_id)?;
     Ok(format!("Agent {target_id} killed successfully."))
 }
 
@@ -93,12 +101,14 @@ fn tool_agent_restart(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let kh = crate::tools::require_kernel(kernel)?;
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel).map_err(CarrierError::Internal)?;
     let target_id = input["agent_id"]
         .as_str()
-        .ok_or("Missing 'agent_id' parameter")?;
-    kh.restart_agent(target_id).map_err(|e| e.to_string())?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'agent_id' parameter".to_string(),
+        ))?;
+    kh.restart_agent(target_id)?;
     Ok(format!("Agent {target_id} restarted successfully."))
 }
 
@@ -184,11 +194,11 @@ impl ToolModule for AgentMgmtTools {
         let owner_id = ctx.owner_id;
 
         match name {
-            "agent_send" => Some(tool_agent_send(input, kernel, caller_agent_id, owner_id, sender_id).await),
-            "agent_spawn" => Some(tool_agent_spawn(input, kernel, caller_agent_id).await),
-            "agent_list" => Some(tool_agent_list(kernel, caller_agent_id)),
-            "agent_kill" => Some(tool_agent_kill(input, kernel, caller_agent_id)),
-            "agent_restart" => Some(tool_agent_restart(input, kernel, caller_agent_id)),
+            "agent_send" => Some(tool_agent_send(input, kernel, caller_agent_id, owner_id, sender_id).await.map_err(|e| e.to_string())),
+            "agent_spawn" => Some(tool_agent_spawn(input, kernel, caller_agent_id).await.map_err(|e| e.to_string())),
+            "agent_list" => Some(tool_agent_list(kernel, caller_agent_id).map_err(|e| e.to_string())),
+            "agent_kill" => Some(tool_agent_kill(input, kernel, caller_agent_id).map_err(|e| e.to_string())),
+            "agent_restart" => Some(tool_agent_restart(input, kernel, caller_agent_id).map_err(|e| e.to_string())),
             _ => None,
         }
     }

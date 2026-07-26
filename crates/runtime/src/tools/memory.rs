@@ -4,6 +4,7 @@
 use crate::tool_context::ToolContext;
 use crate::memory_handle::MemoryHandle;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
@@ -103,12 +104,12 @@ impl super::ToolModule for MemoryTools {
             None => return Some(Err("memory_tree: 'mode' parameter is required. Valid modes: search_entities, query_topic, query_source, query_global, drill_down, fetch_leaves".to_string())),
         };
         match mode {
-            "search_entities" => Some(handle_search_entities(input, memory, owner_id).await),
-            "query_topic" => Some(handle_query_topic(input, memory, owner_id).await),
-            "query_source" => Some(handle_query_source(input, memory, owner_id).await),
-            "query_global" => Some(handle_query_global(input, memory, owner_id).await),
-            "drill_down" => Some(handle_drill_down(input, memory, owner_id).await),
-            "fetch_leaves" => Some(handle_fetch_leaves(input, memory, owner_id).await),
+            "search_entities" => Some(handle_search_entities(input, memory, owner_id).await.map_err(|e| e.to_string())),
+            "query_topic" => Some(handle_query_topic(input, memory, owner_id).await.map_err(|e| e.to_string())),
+            "query_source" => Some(handle_query_source(input, memory, owner_id).await.map_err(|e| e.to_string())),
+            "query_global" => Some(handle_query_global(input, memory, owner_id).await.map_err(|e| e.to_string())),
+            "drill_down" => Some(handle_drill_down(input, memory, owner_id).await.map_err(|e| e.to_string())),
+            "fetch_leaves" => Some(handle_fetch_leaves(input, memory, owner_id).await.map_err(|e| e.to_string())),
             other => Some(Err(format!("memory_tree: unknown mode `{other}`. Valid modes: search_entities, query_topic, query_source, query_global, drill_down, fetch_leaves"))),
         }
     }
@@ -129,8 +130,12 @@ async fn handle_search_entities(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
-) -> Result<String, String> {
-    let query = input["query"].as_str().ok_or("query is required for search_entities")?;
+) -> CarrierResult<String> {
+    let query = input["query"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput(
+            "query is required for search_entities".to_string(),
+        ))?;
     let kind = input["kind"].as_str();
     let limit = input["limit"].as_u64().unwrap_or(5) as usize;
 
@@ -148,7 +153,7 @@ async fn handle_search_entities(
         user_id: None,
     };
 
-    let matches = memory.tree_search_entities(req).await.map_err(|e| e.to_string())?;
+    let matches = memory.tree_search_entities(req).await?;
 
     if matches.is_empty() {
         return Ok(format!("No entities matching '{}'.", query));
@@ -168,8 +173,12 @@ async fn handle_query_topic(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
-) -> Result<String, String> {
-    let entity_id = input["entity_id"].as_str().ok_or("entity_id is required for query_topic")?;
+) -> CarrierResult<String> {
+    let entity_id = input["entity_id"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput(
+            "entity_id is required for query_topic".to_string(),
+        ))?;
     let time_window_days = input["time_window_days"].as_u64().map(|d| d as u32);
     let query = input["query"].as_str();
     let limit = input["limit"].as_u64().unwrap_or(10) as usize;
@@ -183,7 +192,7 @@ async fn handle_query_topic(
         user_id: None,
     };
 
-    let resp = memory.tree_query_topic(req).await.map_err(|e| e.to_string())?;
+    let resp = memory.tree_query_topic(req).await?;
     format_hit_response(resp)
 }
 
@@ -191,7 +200,7 @@ async fn handle_query_source(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let source_id = input["source_id"].as_str();
     let source_kind = input["source_kind"].as_str();
     let time_window_days = input["time_window_days"].as_u64().map(|d| d as u32);
@@ -208,7 +217,7 @@ async fn handle_query_source(
         user_id: None,
     };
 
-    let resp = memory.tree_query_source(req).await.map_err(|e| e.to_string())?;
+    let resp = memory.tree_query_source(req).await?;
     format_hit_response(resp)
 }
 
@@ -216,7 +225,7 @@ async fn handle_query_global(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let time_window_days = input["time_window_days"].as_u64().map(|d| d as u32);
     let query = input["query"].as_str();
     let limit = input["limit"].as_u64().unwrap_or(10) as usize;
@@ -229,7 +238,7 @@ async fn handle_query_global(
         user_id: None,
     };
 
-    let resp = memory.tree_query_global(req).await.map_err(|e| e.to_string())?;
+    let resp = memory.tree_query_global(req).await?;
     format_hit_response(resp)
 }
 
@@ -237,8 +246,12 @@ async fn handle_drill_down(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
-) -> Result<String, String> {
-    let node_id = input["node_id"].as_str().ok_or("node_id is required for drill_down")?;
+) -> CarrierResult<String> {
+    let node_id = input["node_id"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput(
+            "node_id is required for drill_down".to_string(),
+        ))?;
     let max_depth = input["max_depth"].as_u64().unwrap_or(1) as u32;
     let limit = input["limit"].as_u64().unwrap_or(20) as usize;
 
@@ -250,7 +263,7 @@ async fn handle_drill_down(
         user_id: None,
     };
 
-    let resp = memory.tree_drill_down(req).await.map_err(|e| e.to_string())?;
+    let resp = memory.tree_drill_down(req).await?;
 
     if resp.hits.is_empty() {
         return Ok(format!("No children found for node '{}'.", node_id));
@@ -275,16 +288,20 @@ async fn handle_fetch_leaves(
     input: &Value,
     memory: &Arc<dyn MemoryHandle>,
     owner_id: &str,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let chunk_ids: Vec<String> = input["chunk_ids"]
         .as_array()
-        .ok_or("chunk_ids is required for fetch_leaves and must be an array")?
+        .ok_or(CarrierError::InvalidInput(
+            "chunk_ids is required for fetch_leaves and must be an array".to_string(),
+        ))?
         .iter()
         .filter_map(|v| v.as_str().map(String::from))
         .collect();
 
     if chunk_ids.is_empty() {
-        return Err("chunk_ids must not be empty".to_string());
+        return Err(CarrierError::InvalidInput(
+            "chunk_ids must not be empty".to_string(),
+        ));
     }
 
     let limit = input["limit"].as_u64().unwrap_or(20) as usize;
@@ -296,7 +313,7 @@ async fn handle_fetch_leaves(
         user_id: None,
     };
 
-    let resp = memory.tree_fetch_leaves(req).await.map_err(|e| e.to_string())?;
+    let resp = memory.tree_fetch_leaves(req).await?;
 
     if resp.hits.is_empty() {
         return Ok("No leaf chunks found for the given IDs.".to_string());
@@ -313,7 +330,7 @@ async fn handle_fetch_leaves(
 // Shared formatting helpers
 // ---------------------------------------------------------------------------
 
-fn format_hit_response(resp: types::memory_tree::QueryResponse) -> Result<String, String> {
+fn format_hit_response(resp: types::memory_tree::QueryResponse) -> CarrierResult<String> {
     if resp.hits.is_empty() {
         return Ok("No memories found matching your query. This query has been checked thoroughly — do not retry with the same query. Try a different query or proceed without this information.".to_string());
     }
