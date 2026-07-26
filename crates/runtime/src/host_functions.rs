@@ -455,7 +455,7 @@ fn host_agent_send(state: &GuestState, params: &serde_json::Value) -> serde_json
         .block_on(kernel.send_to_agent(target, message, None, None, None, None, None))
     {
         Ok(response) => json!({"ok": response}),
-        Err(e) => json!({"error": e}),
+        Err(e) => json!({"error": e.to_string()}),
     }
 }
 
@@ -478,7 +478,7 @@ fn host_agent_spawn(state: &GuestState, params: &serde_json::Value) -> serde_jso
         &state.capabilities,
     )) {
         Ok((id, name)) => json!({"ok": {"id": id, "name": name}}),
-        Err(e) => json!({"error": e}),
+        Err(e) => json!({"error": e.to_string()}),
     }
 }
 

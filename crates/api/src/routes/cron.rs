@@ -55,7 +55,7 @@ pub async fn create_cron_job(
         ),
         Err(e) => (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
+            Json(serde_json::json!({"error": e.to_string()})),
         ),
     }
 }

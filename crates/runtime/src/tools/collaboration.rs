@@ -54,7 +54,8 @@ async fn tool_task_post(
     let assigned_to = input["assigned_to"].as_str();
     let task_id = kh
         .task_post(title, description, assigned_to, caller_agent_id)
-        .await?;
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(format!("Task created with ID: {task_id}"))
 }
 
@@ -97,7 +98,7 @@ async fn tool_task_claim(
 ) -> Result<String, String> {
     let kh = crate::tools::require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Missing caller agent identity")?;
-    match kh.task_claim(agent_id).await? {
+    match kh.task_claim(agent_id).await.map_err(|e| e.to_string())? {
         Some(task) => {
             serde_json::to_string_pretty(&task).map_err(|e| format!("Serialize error: {e}"))
         }
@@ -117,7 +118,7 @@ async fn tool_task_complete(
     let result = input["result"]
         .as_str()
         .ok_or("Missing 'result' parameter")?;
-    kh.task_complete(task_id, result).await?;
+    kh.task_complete(task_id, result).await.map_err(|e| e.to_string())?;
     Ok(format!("Task {task_id} marked as completed."))
 }
 
@@ -128,7 +129,7 @@ async fn tool_task_list(
 ) -> Result<String, String> {
     let kh = crate::tools::require_kernel(kernel)?;
     let status = input["status"].as_str();
-    let tasks = kh.task_list(status).await?;
+    let tasks = kh.task_list(status).await.map_err(|e| e.to_string())?;
     if tasks.is_empty() {
         return Ok("No tasks found.".to_string());
     }
@@ -148,7 +149,7 @@ async fn tool_event_publish(
         .get("payload")
         .cloned()
         .unwrap_or(serde_json::json!({}));
-    kh.publish_event(event_type, payload).await?;
+    kh.publish_event(event_type, payload).await.map_err(|e| e.to_string())?;
     Ok(format!("Event '{event_type}' published successfully."))
 }
 

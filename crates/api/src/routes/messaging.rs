@@ -352,7 +352,7 @@ pub async fn deliver_content(
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
+            Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response(),
     }

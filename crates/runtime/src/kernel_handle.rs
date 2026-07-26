@@ -6,6 +6,7 @@
 //! it into the agent loop.
 
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 
 /// Agent info returned by list and discovery operations.
 #[derive(Debug, Clone)]
@@ -34,7 +35,7 @@ pub trait KernelHandle: Send + Sync {
         &self,
         manifest_toml: &str,
         parent_id: Option<&str>,
-    ) -> Result<(String, String), String>;
+    ) -> CarrierResult<(String, String)>;
 
     /// Send a message to another agent and get the response.
     /// `sender_id` and `sender_name` identify the originating user (e.g. WeChat user).
@@ -50,7 +51,7 @@ pub trait KernelHandle: Send + Sync {
         caller_agent_id: Option<&str>,
         owner_id: Option<&str>,
         channel_type: Option<&str>,
-    ) -> Result<String, String>;
+    ) -> CarrierResult<String>;
 
     /// Describe non-text content (image, voice, file, location) for the agent.
     ///
@@ -62,7 +63,7 @@ pub trait KernelHandle: Send + Sync {
         _content_type: &str,
         _url: &str,
         _metadata: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> CarrierResult<String> {
         Ok(format!("[用户发送了非文本内容: {_content_type}]"))
     }
 
@@ -70,10 +71,10 @@ pub trait KernelHandle: Send + Sync {
     fn list_agents(&self) -> Vec<AgentInfo>;
 
     /// Kill an agent by ID.
-    fn kill_agent(&self, agent_id: &str) -> Result<(), String>;
+    fn kill_agent(&self, agent_id: &str) -> CarrierResult<()>;
 
     /// Restart an agent by ID (reset state, re-read manifest from workspace).
-    fn restart_agent(&self, agent_id: &str) -> Result<(), String>;
+    fn restart_agent(&self, agent_id: &str) -> CarrierResult<()>;
 
     /// Find agents by query (matches on name substring, tag, or tool name; case-insensitive).
     fn find_agents(&self, query: &str) -> Vec<AgentInfo>;
@@ -85,23 +86,23 @@ pub trait KernelHandle: Send + Sync {
         description: &str,
         assigned_to: Option<&str>,
         created_by: Option<&str>,
-    ) -> Result<String, String>;
+    ) -> CarrierResult<String>;
 
     /// Claim the next available task.
-    async fn task_claim(&self, agent_id: &str) -> Result<Option<serde_json::Value>, String>;
+    async fn task_claim(&self, agent_id: &str) -> CarrierResult<Option<serde_json::Value>>;
 
     /// Mark a task as completed with a result string.
-    async fn task_complete(&self, task_id: &str, result: &str) -> Result<(), String>;
+    async fn task_complete(&self, task_id: &str, result: &str) -> CarrierResult<()>;
 
     /// List tasks, optionally filtered by status.
-    async fn task_list(&self, status: Option<&str>) -> Result<Vec<serde_json::Value>, String>;
+    async fn task_list(&self, status: Option<&str>) -> CarrierResult<Vec<serde_json::Value>>;
 
     /// Publish a custom event that can trigger proactive agents.
     async fn publish_event(
         &self,
         event_type: &str,
         payload: serde_json::Value,
-    ) -> Result<(), String>;
+    ) -> CarrierResult<()>;
 
     /// Create a cron job for the calling agent.
     async fn cron_create(
@@ -110,21 +111,25 @@ pub trait KernelHandle: Send + Sync {
         owner_id: Option<&str>,
         sender_id: Option<&str>,
         job_json: serde_json::Value,
-    ) -> Result<String, String> {
+    ) -> CarrierResult<String> {
         let _ = (agent_id, owner_id, sender_id, job_json);
-        Err("Cron scheduler not available".to_string())
+        Err(CarrierError::Internal("Cron scheduler not available".into()))
     }
 
     /// List cron jobs for the calling agent, optionally filtered by owner_id.
-    async fn cron_list(&self, agent_id: &str, owner_id: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
+    async fn cron_list(
+        &self,
+        agent_id: &str,
+        owner_id: Option<&str>,
+    ) -> CarrierResult<Vec<serde_json::Value>> {
         let _ = (agent_id, owner_id);
-        Err("Cron scheduler not available".to_string())
+        Err(CarrierError::Internal("Cron scheduler not available".into()))
     }
 
     /// Cancel a cron job by ID.
-    async fn cron_cancel(&self, job_id: &str) -> Result<(), String> {
+    async fn cron_cancel(&self, job_id: &str) -> CarrierResult<()> {
         let _ = job_id;
-        Err("Cron scheduler not available".to_string())
+        Err(CarrierError::Internal("Cron scheduler not available".into()))
     }
 
     /// List discovered external A2A agents as (name, url) pairs.
@@ -172,6 +177,10 @@ pub trait KernelHandle: Send + Sync {
     /// Returns `None` if no dispatcher is registered or the tool isn't a plugin
     /// tool (so the caller can fall through to other dispatch paths).
     /// Returns `Some(Ok(content))` on success, `Some(Err(message))` on failure.
+    ///
+    /// NOTE: still `Result<String, String>` — the plugin dispatcher
+    /// (`tool_dispatch.rs`) is the last String-error holdout; migrated in a
+    /// separate batch.
     fn execute_plugin_tool(
         &self,
         tool_name: &str,
@@ -191,8 +200,10 @@ pub trait KernelHandle: Send + Sync {
         &self,
         _prompt: &str,
         _out_dir: &str,
-    ) -> Result<String, String> {
-        Err("image generation not available on this kernel".to_string())
+    ) -> CarrierResult<String> {
+        Err(CarrierError::Internal(
+            "image generation not available on this kernel".into(),
+        ))
     }
 
     /// Get the home directory path (~/.opencarrier/).
@@ -216,8 +227,10 @@ pub trait KernelHandle: Send + Sync {
         _channel_type: &str,
         _bot_id: &str,
         _user_id: &str,
-    ) -> Result<(), String> {
-        Err("deliver_content not implemented by this kernel".into())
+    ) -> CarrierResult<()> {
+        Err(CarrierError::Internal(
+            "deliver_content not implemented by this kernel".into(),
+        ))
     }
 
     /// Spawn an agent with capability inheritance enforcement.
@@ -228,7 +241,7 @@ pub trait KernelHandle: Send + Sync {
         manifest_toml: &str,
         parent_id: Option<&str>,
         parent_caps: &[types::capability::Capability],
-    ) -> Result<(String, String), String> {
+    ) -> CarrierResult<(String, String)> {
         // Default: delegate to spawn_agent (no enforcement)
         // The kernel MUST override this with real enforcement
         let _ = parent_caps;

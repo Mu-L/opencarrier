@@ -147,6 +147,7 @@ async fn tool_delegate_subagent(
         .scope(std::cell::Cell::new(current_depth + 1), async {
             kh.send_to_agent(aid, message, sender_id, None, caller_agent_id, owner_id, Some(&subagent_channel))
                 .await
+                .map_err(|e| e.to_string())
         })
         .await
 }

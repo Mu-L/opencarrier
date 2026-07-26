@@ -37,6 +37,7 @@ async fn tool_agent_send(
         .scope(std::cell::Cell::new(current_depth + 1), async {
             kh.send_to_agent(agent_id, message, sender_id, None, caller_agent_id, owner_id, None)
                 .await
+                .map_err(|e| e.to_string())
         })
         .await
 }
@@ -50,7 +51,7 @@ async fn tool_agent_spawn(
     let manifest_toml = input["manifest_toml"]
         .as_str()
         .ok_or("Missing 'manifest_toml' parameter")?;
-    let (id, name) = kh.spawn_agent(manifest_toml, parent_id).await?;
+    let (id, name) = kh.spawn_agent(manifest_toml, parent_id).await.map_err(|e| e.to_string())?;
     Ok(format!(
         "Agent spawned successfully.\n  ID: {id}\n  Name: {name}"
     ))
@@ -84,7 +85,7 @@ fn tool_agent_kill(
     let target_id = input["agent_id"]
         .as_str()
         .ok_or("Missing 'agent_id' parameter")?;
-    kh.kill_agent(target_id)?;
+    kh.kill_agent(target_id).map_err(|e| e.to_string())?;
     Ok(format!("Agent {target_id} killed successfully."))
 }
 
@@ -97,7 +98,7 @@ fn tool_agent_restart(
     let target_id = input["agent_id"]
         .as_str()
         .ok_or("Missing 'agent_id' parameter")?;
-    kh.restart_agent(target_id)?;
+    kh.restart_agent(target_id).map_err(|e| e.to_string())?;
     Ok(format!("Agent {target_id} restarted successfully."))
 }
 

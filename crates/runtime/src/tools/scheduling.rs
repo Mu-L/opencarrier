@@ -255,7 +255,7 @@ async fn tool_cron_create(
     let kh = crate::tools::require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Agent ID required for cron_create")?;
     tracing::debug!(agent_id, ?input, "cron_create called");
-    kh.cron_create(agent_id, owner_id, sender_id, input.clone()).await
+    kh.cron_create(agent_id, owner_id, sender_id, input.clone()).await.map_err(|e| e.to_string())
 }
 
 async fn tool_cron_list(
@@ -265,7 +265,7 @@ async fn tool_cron_list(
 ) -> Result<String, String> {
     let kh = crate::tools::require_kernel(kernel)?;
     let agent_id = caller_agent_id.ok_or("Agent ID required for cron_list")?;
-    let jobs = kh.cron_list(agent_id, owner_id).await?;
+    let jobs = kh.cron_list(agent_id, owner_id).await.map_err(|e| e.to_string())?;
     serde_json::to_string_pretty(&jobs).map_err(|e| format!("Failed to serialize cron jobs: {e}"))
 }
 
@@ -281,14 +281,14 @@ async fn tool_cron_cancel(
         .as_str()
         .ok_or("Missing 'job_id' parameter")?;
     // Ownership check: verify this job belongs to the caller
-    let jobs = kh.cron_list(agent_id, owner_id).await?;
+    let jobs = kh.cron_list(agent_id, owner_id).await.map_err(|e| e.to_string())?;
     let owned = jobs
         .iter()
         .any(|j| j.get("id").and_then(|v| v.as_str()) == Some(job_id));
     if !owned {
         return Err("Cron job not found or does not belong to you".to_string());
     }
-    kh.cron_cancel(job_id).await?;
+    kh.cron_cancel(job_id).await.map_err(|e| e.to_string())?;
     Ok(format!("Cron job '{job_id}' cancelled."))
 }
 

@@ -8,7 +8,7 @@ use runtime::kernel_handle::{self, KernelHandle};
 use runtime::llm_driver::CompletionRequest;
 use runtime::memory_handle::MemoryHandle;
 use types::agent::{AgentId, AgentManifest};
-use types::error::CarrierResult;
+use types::error::{CarrierError, CarrierResult};
 use types::event::*;
 use types::message::{ContentBlock, Message, MessageContent, Role};
 use std::sync::Arc;
@@ -30,17 +30,15 @@ impl KernelHandle for CarrierKernel {
         &self,
         manifest_toml: &str,
         parent_id: Option<&str>,
-    ) -> Result<(String, String), String> {
+    ) -> CarrierResult<(String, String)> {
         let content_hash = types::manifest_signing::hash_manifest(manifest_toml);
         tracing::debug!(hash = %content_hash, "Manifest SHA-256 computed for integrity tracking");
 
-        let manifest: AgentManifest =
-            toml::from_str(manifest_toml).map_err(|e| format!("Invalid manifest: {e}"))?;
+        let manifest: AgentManifest = toml::from_str(manifest_toml)
+            .map_err(|e| CarrierError::ManifestParse(format!("Invalid manifest: {e}")))?;
         let name = manifest.name.clone();
         let parent = parent_id.and_then(|pid| pid.parse::<AgentId>().ok());
-        let id = self
-            .spawn_agent_with_parent(manifest, parent, None)
-            .map_err(|e| format!("Spawn failed: {e}"))?;
+        let id = self.spawn_agent_with_parent(manifest, parent, None)?;
         Ok((id.to_string(), name))
     }
 
@@ -53,9 +51,8 @@ impl KernelHandle for CarrierKernel {
         _caller_agent_id: Option<&str>,
         owner_id: Option<&str>,
         channel_type: Option<&str>,
-    ) -> Result<String, String> {
-        let (id, _target_entry) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
+    ) -> CarrierResult<String> {
+        let (id, _target_entry) = self.registry.resolve(agent_id)?;
 
         let handle: Option<Arc<dyn KernelHandle>> = self
             .coordination
@@ -76,8 +73,7 @@ impl KernelHandle for CarrierKernel {
                 None,
                 None,
             )
-            .await
-            .map_err(|e| format!("Send failed: {e}"))?;
+            .await?;
 
         Ok(result.response)
     }
@@ -87,7 +83,7 @@ impl KernelHandle for CarrierKernel {
         content_type: &str,
         url: &str,
         _metadata: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> CarrierResult<String> {
         if content_type != "image" {
             return Ok(format!("[用户发送了非文本内容: {content_type}]"));
         }
@@ -97,9 +93,7 @@ impl KernelHandle for CarrierKernel {
         let image_block = if url.starts_with("https://") || url.starts_with("http://") {
             // Soft SSRF guard: block obvious private-network targets even when
             // the provider does the fetch (we still don't want to pass them).
-            if let Err(e) = types::ssrf::check_ssrf(url) {
-                return Err(format!("Image URL rejected: {e}"));
-            }
+            types::ssrf::check_ssrf(url)?;
             let mime = mime_from_image_url(url);
             tracing::info!(%url, %mime, "Vision describe via public URL (no base64)");
             ContentBlock::Image {
@@ -109,12 +103,17 @@ impl KernelHandle for CarrierKernel {
             }
         } else if let Some(rest) = url.strip_prefix("data:") {
             // Legacy data-URI path (fallback only).
-            let sep = rest.find(";base64,").ok_or("Invalid data URI format")?;
+            let sep = rest
+                .find(";base64,")
+                .ok_or_else(|| CarrierError::InvalidInput("Invalid data URI format".into()))?;
             let mime = rest[..sep].to_string();
             let b64 = rest[sep + ";base64,".len()..].to_string();
             let max_b64 = 5 * 1024 * 1024 * 2;
             if b64.len() > max_b64 {
-                return Err(format!("Image too large (data URI): {} chars", b64.len()));
+                return Err(CarrierError::InvalidInput(format!(
+                    "Image too large (data URI): {} chars",
+                    b64.len()
+                )));
             }
             tracing::warn!(
                 b64_len = b64.len(),
@@ -127,9 +126,9 @@ impl KernelHandle for CarrierKernel {
             }
         } else {
             let preview: String = url.chars().take(80).collect();
-            return Err(format!(
+            return Err(CarrierError::InvalidInput(format!(
                 "Unsupported image reference (need https:// URL or data URI): {preview}"
-            ));
+            )));
         };
 
         let request = CompletionRequest {
@@ -153,17 +152,17 @@ impl KernelHandle for CarrierKernel {
         };
 
         let brain: Arc<dyn runtime::llm_driver::Brain> =
-            Arc::clone(&*self.brain.brain.read().map_err(|e| format!("Brain lock: {e}"))?)
+            Arc::clone(&*self.brain.brain.read().map_err(|e| CarrierError::Internal(format!("Brain lock: {e}")))?)
                 as Arc<dyn runtime::llm_driver::Brain>;
 
         let result = brain
             .complete("vision", request)
             .await
-            .map_err(|e| format!("Vision call failed: {e}"))?;
+            .map_err(|e| CarrierError::LlmDriver(format!("Vision call failed: {e}")))?;
 
         let description = result.text();
         if description.is_empty() {
-            return Err("Vision model returned empty description".into());
+            return Err(CarrierError::LlmDriver("Vision model returned empty description".into()));
         }
 
         tracing::info!(
@@ -196,17 +195,14 @@ impl KernelHandle for CarrierKernel {
             .collect()
     }
 
-    fn kill_agent(&self, agent_id: &str) -> Result<(), String> {
-        let (id, _) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
-        CarrierKernel::kill_agent(self, id).map_err(|e| format!("Kill failed: {e}"))
+    fn kill_agent(&self, agent_id: &str) -> CarrierResult<()> {
+        let (id, _) = self.registry.resolve(agent_id)?;
+        CarrierKernel::kill_agent(self, id).map_err(CarrierError::from)
     }
 
-    fn restart_agent(&self, agent_id: &str) -> Result<(), String> {
-        let (id, _) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
-        self.stop_agent_run(id)
-            .map_err(|e| format!("Stop failed: {e}"))?;
+    fn restart_agent(&self, agent_id: &str) -> CarrierResult<()> {
+        let (id, _) = self.registry.resolve(agent_id)?;
+        self.stop_agent_run(id)?;
 
         // Re-read agent.toml from workspace to pick up tool/capability changes
         if let Some(entry) = self.registry.get(id) {
@@ -237,8 +233,7 @@ impl KernelHandle for CarrierKernel {
                                     }
                                     // Update in-memory registry
                                     self.registry
-                                        .update_manifest(id, new_manifest.clone())
-                                        .map_err(|e| format!("Update manifest failed: {e}"))?;
+                                        .update_manifest(id, new_manifest.clone())?;
                                     // Re-grant capabilities
                                     let caps = manifest_to_capabilities(&new_manifest);
                                     self.coordination.capabilities.grant(id, caps);
@@ -276,8 +271,7 @@ impl KernelHandle for CarrierKernel {
         }
 
         self.registry
-            .set_state(id, types::agent::AgentState::Running)
-            .map_err(|e| format!("State reset failed: {e}"))?;
+            .set_state(id, types::agent::AgentState::Running)?;
         Ok(())
     }
 
@@ -321,43 +315,33 @@ impl KernelHandle for CarrierKernel {
         description: &str,
         assigned_to: Option<&str>,
         created_by: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> CarrierResult<String> {
         self.memory
             .task_post(title, description, assigned_to, created_by)
             .await
-            .map_err(|e| format!("Task post failed: {e}"))
     }
 
-    async fn task_claim(&self, agent_id: &str) -> Result<Option<serde_json::Value>, String> {
-        self.memory
-            .task_claim(agent_id)
-            .await
-            .map_err(|e| format!("Task claim failed: {e}"))
+    async fn task_claim(&self, agent_id: &str) -> CarrierResult<Option<serde_json::Value>> {
+        self.memory.task_claim(agent_id).await
     }
 
-    async fn task_complete(&self, task_id: &str, result: &str) -> Result<(), String> {
-        self.memory
-            .task_complete(task_id, result)
-            .await
-            .map_err(|e| format!("Task complete failed: {e}"))
+    async fn task_complete(&self, task_id: &str, result: &str) -> CarrierResult<()> {
+        self.memory.task_complete(task_id, result).await
     }
 
-    async fn task_list(&self, status: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
-        self.memory
-            .task_list(status)
-            .await
-            .map_err(|e| format!("Task list failed: {e}"))
+    async fn task_list(&self, status: Option<&str>) -> CarrierResult<Vec<serde_json::Value>> {
+        self.memory.task_list(status).await
     }
 
     async fn publish_event(
         &self,
         event_type: &str,
         payload: serde_json::Value,
-    ) -> Result<(), String> {
+    ) -> CarrierResult<()> {
         let system_agent = SYSTEM_AGENT_ID;
         let payload_bytes =
             serde_json::to_vec(&serde_json::json!({"type": event_type, "data": payload}))
-                .map_err(|e| format!("Serialize failed: {e}"))?;
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?;
         let event = Event::new(
             system_agent,
             EventTarget::Broadcast,
@@ -373,14 +357,14 @@ impl KernelHandle for CarrierKernel {
         owner_id: Option<&str>,
         sender_id: Option<&str>,
         job_json: serde_json::Value,
-    ) -> Result<String, String> {
+    ) -> CarrierResult<String> {
         use types::scheduler::{
             CronAction, CronDelivery, CronJob, CronJobId, CronSchedule,
         };
 
         let name = job_json["name"]
             .as_str()
-            .ok_or("'name' must be a string")?
+            .ok_or_else(|| CarrierError::InvalidInput("'name' must be a string".into()))?
             .to_string();
         let schedule: CronSchedule = {
             let schedule_val = job_json.get("schedule").cloned().unwrap_or(serde_json::Value::Null);
@@ -392,7 +376,7 @@ impl KernelHandle for CarrierKernel {
                 other => other.clone(),
             };
             serde_json::from_value(resolved)
-                .map_err(|e| format!("Invalid schedule: {e}"))?
+                .map_err(|e| CarrierError::Serialization(format!("Invalid schedule: {e}")))?
         };
         let action: CronAction = {
             let action_val = job_json.get("action").cloned().unwrap_or(serde_json::Value::Null);
@@ -403,7 +387,7 @@ impl KernelHandle for CarrierKernel {
                 other => other.clone(),
             };
             serde_json::from_value(resolved)
-                .map_err(|e| format!("Invalid action: {e}"))?
+                .map_err(|e| CarrierError::Serialization(format!("Invalid action: {e}")))?
         };
         let delivery: CronDelivery = {
             let val = job_json.get("delivery").cloned().unwrap_or(serde_json::Value::Null);
@@ -424,7 +408,7 @@ impl KernelHandle for CarrierKernel {
                 };
                 if resolved.is_object() {
                     serde_json::from_value(resolved)
-                        .map_err(|e| format!("Invalid delivery: {e}"))?
+                        .map_err(|e| CarrierError::Serialization(format!("Invalid delivery: {e}")))?
                 } else {
                     tracing::warn!("delivery is not an object, defaulting to None: {val}");
                     CronDelivery::None
@@ -441,8 +425,7 @@ impl KernelHandle for CarrierKernel {
         };
 
         tracing::debug!(agent_id, "cron_create resolving agent_id");
-        let (aid, _) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
+        let (aid, _) = self.registry.resolve(agent_id)?;
 
         let job = CronJob {
             id: CronJobId::new(),
@@ -459,10 +442,7 @@ impl KernelHandle for CarrierKernel {
             last_run: None,
         };
 
-        let id = self
-            .cron_scheduler
-            .add_job(job, one_shot)
-            .map_err(|e| format!("{e}"))?;
+        let id = self.cron_scheduler.add_job(job, one_shot)?;
 
         if let Err(e) = self.cron_scheduler.persist() {
             tracing::warn!("Failed to persist cron jobs: {e}");
@@ -475,9 +455,8 @@ impl KernelHandle for CarrierKernel {
         .to_string())
     }
 
-    async fn cron_list(&self, agent_id: &str, owner_id: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
-        let (aid, _) = self.registry.resolve(agent_id)
-            .map_err(|e| e.to_string())?;
+    async fn cron_list(&self, agent_id: &str, owner_id: Option<&str>) -> CarrierResult<Vec<serde_json::Value>> {
+        let (aid, _) = self.registry.resolve(agent_id)?;
         let mut jobs = self.cron_scheduler.list_jobs(aid);
         if let Some(oid) = owner_id {
             jobs.retain(|j| j.owner_id.as_deref() == Some(oid));
@@ -489,13 +468,12 @@ impl KernelHandle for CarrierKernel {
         Ok(json_jobs)
     }
 
-    async fn cron_cancel(&self, job_id: &str) -> Result<(), String> {
+    async fn cron_cancel(&self, job_id: &str) -> CarrierResult<()> {
         let id = types::scheduler::CronJobId(
-            uuid::Uuid::parse_str(job_id).map_err(|e| format!("Invalid job ID: {e}"))?,
+            uuid::Uuid::parse_str(job_id)
+                .map_err(|e| CarrierError::InvalidInput(format!("Invalid job ID: {e}")))?,
         );
-        self.cron_scheduler
-            .remove_job(id)
-            .map_err(|e| format!("{e}"))?;
+        self.cron_scheduler.remove_job(id)?;
 
         if let Err(e) = self.cron_scheduler.persist() {
             tracing::warn!("Failed to persist cron jobs: {e}");
@@ -536,13 +514,12 @@ impl KernelHandle for CarrierKernel {
         manifest_toml: &str,
         parent_id: Option<&str>,
         parent_caps: &[types::capability::Capability],
-    ) -> Result<(String, String), String> {
-        let child_manifest: AgentManifest =
-            toml::from_str(manifest_toml).map_err(|e| format!("Invalid manifest: {e}"))?;
+    ) -> CarrierResult<(String, String)> {
+        let child_manifest: AgentManifest = toml::from_str(manifest_toml)
+            .map_err(|e| CarrierError::ManifestParse(format!("Invalid manifest: {e}")))?;
         let child_caps = manifest_to_capabilities(&child_manifest);
 
-        types::capability::validate_capability_inheritance(parent_caps, &child_caps)
-            .map_err(|e| e.to_string())?;
+        types::capability::validate_capability_inheritance(parent_caps, &child_caps)?;
 
         tracing::info!(
             parent = parent_id.unwrap_or("kernel"),
@@ -579,32 +556,37 @@ impl KernelHandle for CarrierKernel {
         channel_type: &str,
         bot_id: &str,
         user_id: &str,
-    ) -> Result<(), String> {
+    ) -> CarrierResult<()> {
         let ws = self.resolve_agent_workspace(agent).ok_or_else(|| {
-            format!("deliver_content: agent {agent} not found or has no workspace")
+            CarrierError::AgentNotFound(format!(
+                "deliver_content: agent {agent} not found or has no workspace"
+            ))
         })?;
         let ws_path = std::path::Path::new(&ws);
         let config = runtime::outbound::ContentRegistry::global()
             .load(agent, ws_path)
             .ok_or_else(|| {
-                format!(
+                CarrierError::Internal(format!(
                     "deliver_content: failed to load content.toml for agent {agent} under {}",
                     ws_path.display()
-                )
+                ))
             })?;
         let desc = config.get(content_key).cloned().ok_or_else(|| {
-            format!(
+            CarrierError::Internal(format!(
                 "deliver_content: key '{content_key}' not found in {}/content.toml",
                 ws_path.display()
-            )
+            ))
         })?;
 
-        let guard = self.channel_deliver_fn.read().map_err(|e| e.to_string())?;
-        let deliver_fn = guard
-            .as_ref()
-            .ok_or_else(|| "deliver_content: channel_deliver_fn not wired".to_string())?;
+        let guard = self
+            .channel_deliver_fn
+            .read()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let deliver_fn = guard.as_ref().ok_or_else(|| {
+            CarrierError::Config("deliver_content: channel_deliver_fn not wired".into())
+        })?;
         deliver_fn(channel_type, bot_id, user_id, &desc)
-            .map_err(|e| format!("deliver_content: {e}"))
+            .map_err(|e| CarrierError::Network(format!("deliver_content: {e}")))
     }
 
     fn get_toolset_tools(
@@ -774,10 +756,10 @@ impl KernelHandle for CarrierKernel {
         &self,
         prompt: &str,
         out_dir: &str,
-    ) -> Result<String, String> {
+    ) -> CarrierResult<String> {
         use base64::Engine;
         let brain: Arc<dyn runtime::llm_driver::Brain> =
-            Arc::clone(&*self.brain.brain.read().map_err(|e| format!("Brain lock: {e}"))?)
+            Arc::clone(&*self.brain.brain.read().map_err(|e| CarrierError::Internal(format!("Brain lock: {e}")))?)
                 as Arc<dyn runtime::llm_driver::Brain>;
 
         // Build an image-gen request (mirrors runtime/src/tools/media.rs).
@@ -803,47 +785,43 @@ impl KernelHandle for CarrierKernel {
         let response = brain
             .complete("image", request)
             .await
-            .map_err(|e| format!("Image generation failed: {e}"))?;
+            .map_err(|e| CarrierError::LlmDriver(format!("Image generation failed: {e}")))?;
 
         let image = match response.media {
-            Some(types::media::MediaOutput::Images { items }) => {
-                items.into_iter().next().ok_or("image generation returned empty list")?
-            }
+            Some(types::media::MediaOutput::Images { items }) => items.into_iter().next().ok_or_else(|| {
+                CarrierError::LlmDriver("image generation returned empty list".into())
+            })?,
             Some(types::media::MediaOutput::Image { data, .. }) => types::media::GeneratedImage {
                 data_base64: base64::engine::general_purpose::STANDARD.encode(&data),
                 url: None,
             },
-            _ => return Err("image generation returned no media".into()),
+            _ => return Err(CarrierError::LlmDriver("image generation returned no media".into())),
         };
 
         let bytes = if !image.data_base64.is_empty() {
             base64::engine::general_purpose::STANDARD
                 .decode(&image.data_base64)
-                .map_err(|e| format!("decode image: {e}"))?
+                .map_err(|e| CarrierError::Internal(format!("decode image: {e}")))?
         } else if let Some(url) = image.url {
             reqwest::Client::new()
                 .get(&url)
                 .timeout(std::time::Duration::from_secs(60))
                 .send()
                 .await
-                .map_err(|e| format!("download image: {e}"))?
+                .map_err(|e| CarrierError::Network(format!("download image: {e}")))?
                 .bytes()
                 .await
-                .map_err(|e| format!("read image: {e}"))?
+                .map_err(|e| CarrierError::Network(format!("read image: {e}")))?
                 .to_vec()
         } else {
-            return Err("image has neither base64 data nor url".into());
+            return Err(CarrierError::Internal("image has neither base64 data nor url".into()));
         };
 
         let out_dir = std::path::PathBuf::from(out_dir);
-        tokio::fs::create_dir_all(&out_dir)
-            .await
-            .map_err(|e| format!("create out_dir: {e}"))?;
+        tokio::fs::create_dir_all(&out_dir).await?;
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
         let path = out_dir.join(format!("cover_{timestamp}.png"));
-        tokio::fs::write(&path, &bytes)
-            .await
-            .map_err(|e| format!("write image: {e}"))?;
+        tokio::fs::write(&path, &bytes).await?;
 
         let path_str = path.to_string_lossy().to_string();
         tracing::info!(path = %path_str, bytes = bytes.len(), "Cover image generated");
