@@ -5,6 +5,7 @@
 
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::ToolDefinition;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -57,8 +58,8 @@ impl super::ToolModule for SqliteTools {
         ctx: &ToolContext<'_>,
     ) -> Option<Result<String, String>> {
         match name {
-            "sqlite_query" => Some(tool_sqlite_query(input, ctx.workspace_root).await),
-            "sqlite_schema" => Some(tool_sqlite_schema(input, ctx.workspace_root).await),
+            "sqlite_query" => Some(tool_sqlite_query(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "sqlite_schema" => Some(tool_sqlite_schema(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
             _ => None,
         }
     }
@@ -80,11 +81,14 @@ const MAX_ROWS: usize = 200;
 const QUERY_TIMEOUT_SECS: u64 = 30;
 
 /// Resolve db_path: use explicit path, or auto-discover first .db in workspace.
-fn resolve_db_path(input: &Value, workspace_root: Option<&Path>) -> Result<PathBuf, String> {
+fn resolve_db_path(input: &Value, workspace_root: Option<&Path>) -> CarrierResult<PathBuf> {
     if let Some(path) = input["db_path"].as_str() {
-        let resolved = super::resolve_file_path(path, workspace_root).map_err(|e| e.to_string())?;
+        let resolved = super::resolve_file_path(path, workspace_root)?;
         if !resolved.extension().map(|e| e == "db").unwrap_or(false) {
-            return Err(format!("File must have .db extension: {}", resolved.display()));
+            return Err(CarrierError::InvalidInput(format!(
+                "File must have .db extension: {}",
+                resolved.display()
+            )));
         }
         // Allow a non-existent file: Connection::open will create it. This lets
         // agents CREATE TABLE / initialize a new database on first use.
@@ -126,14 +130,16 @@ fn resolve_db_path(input: &Value, workspace_root: Option<&Path>) -> Result<PathB
         }
     }
 
-    Err("No database file found. Provide db_path or place a .db file in the workspace.".to_string())
+    Err(CarrierError::InvalidInput(
+        "No database file found. Provide db_path or place a .db file in the workspace.".to_string(),
+    ))
 }
 
 /// Validate SQL — only block ATTACH/DETACH (path escape risk).
-fn validate_sql(sql: &str) -> Result<(), String> {
+fn validate_sql(sql: &str) -> CarrierResult<()> {
     let upper = sql.trim().to_uppercase();
     if upper.starts_with("ATTACH") || upper.starts_with("DETACH") {
-        return Err("ATTACH/DETACH is not allowed.".to_string());
+        return Err(CarrierError::InvalidInput("ATTACH/DETACH is not allowed.".to_string()));
     }
     Ok(())
 }
@@ -142,8 +148,10 @@ fn validate_sql(sql: &str) -> Result<(), String> {
 async fn tool_sqlite_query(
     input: &Value,
     workspace_root: Option<&Path>,
-) -> Result<String, String> {
-    let sql = input["sql"].as_str().ok_or("Missing 'sql' parameter")?;
+) -> CarrierResult<String> {
+    let sql = input["sql"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput("Missing 'sql' parameter".to_string()))?;
     validate_sql(sql)?;
 
     let db_path = resolve_db_path(input, workspace_root)?;
@@ -153,21 +161,19 @@ async fn tool_sqlite_query(
 
     let inner = tokio::time::timeout(
         Duration::from_secs(QUERY_TIMEOUT_SECS),
-        tokio::task::spawn_blocking(move || {
-            run_statement(&db_path_str, &sql)
-        }),
+        tokio::task::spawn_blocking(move || run_statement(&db_path_str, &sql)),
     )
     .await
-    .map_err(|_| "Query timed out".to_string())?
-    .map_err(|e| format!("Task failed: {e}"))?;
+    .map_err(|_| CarrierError::Internal("Query timed out".to_string()))?
+    .map_err(|e| CarrierError::Internal(format!("Task failed: {e}")))?;
     inner
 }
 
-fn run_statement(db_path: &str, sql: &str) -> Result<String, String> {
+fn run_statement(db_path: &str, sql: &str) -> CarrierResult<String> {
     use rusqlite::{Connection, types::ValueRef};
 
     let conn = Connection::open(db_path)
-        .map_err(|e| format!("Failed to open database: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to open database: {e}")))?;
 
     let trimmed = sql.trim().to_uppercase();
 
@@ -175,22 +181,25 @@ fn run_statement(db_path: &str, sql: &str) -> Result<String, String> {
     if !trimmed.starts_with("SELECT") && !trimmed.starts_with("PRAGMA") && !trimmed.starts_with("WITH")
         && !trimmed.starts_with("EXPLAIN")
     {
-        let affected = conn.execute(sql, [])
-            .map_err(|e| format!("Execution failed: {e}"))?;
+        let affected = conn
+            .execute(sql, [])
+            .map_err(|e| CarrierError::Internal(format!("Execution failed: {e}")))?;
         return Ok(format!("OK, {affected} row(s) affected."));
     }
 
     // SELECT / PRAGMA / WITH: return rows as markdown table
-    let mut stmt = conn.prepare(sql)
-        .map_err(|e| format!("Failed to prepare query: {e}"))?;
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| CarrierError::Internal(format!("Failed to prepare query: {e}")))?;
 
     let col_count = stmt.column_count();
     let col_names: Vec<String> = (0..col_count)
         .map(|i| stmt.column_name(i).unwrap_or("?").to_string())
         .collect();
 
-    let mut rows = stmt.query([])
-        .map_err(|e| format!("Failed to execute query: {e}"))?;
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| CarrierError::Internal(format!("Failed to execute query: {e}")))?;
 
     let mut result_rows: Vec<Vec<String>> = Vec::new();
     loop {
@@ -214,7 +223,7 @@ fn run_statement(db_path: &str, sql: &str) -> Result<String, String> {
                 }
             }
             Ok(None) => break,
-            Err(e) => return Err(format!("Row read error: {e}")),
+            Err(e) => return Err(CarrierError::Internal(format!("Row read error: {e}"))),
         }
     }
 
@@ -250,41 +259,39 @@ fn run_statement(db_path: &str, sql: &str) -> Result<String, String> {
 async fn tool_sqlite_schema(
     input: &Value,
     workspace_root: Option<&Path>,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let db_path = resolve_db_path(input, workspace_root)?;
     let db_path_str = db_path.display().to_string();
 
     let inner = tokio::time::timeout(
         Duration::from_secs(QUERY_TIMEOUT_SECS),
-        tokio::task::spawn_blocking(move || {
-            run_schema(&db_path_str)
-        }),
+        tokio::task::spawn_blocking(move || run_schema(&db_path_str)),
     )
     .await
-    .map_err(|_| "Schema query timed out".to_string())?
-    .map_err(|e| format!("Task failed: {e}"))?;
+    .map_err(|_| CarrierError::Internal("Schema query timed out".to_string()))?
+    .map_err(|e| CarrierError::Internal(format!("Task failed: {e}")))?;
     inner
 }
 
-fn run_schema(db_path: &str) -> Result<String, String> {
+fn run_schema(db_path: &str) -> CarrierResult<String> {
     use rusqlite::Connection;
 
     let conn = Connection::open(db_path)
-        .map_err(|e| format!("Failed to open database: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to open database: {e}")))?;
 
     let mut stmt = conn.prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-    ).map_err(|e| format!("Failed to list tables: {e}"))?;
+    ).map_err(|e| CarrierError::Internal(format!("Failed to list tables: {e}")))?;
 
     let table_iter = stmt.query_map([], |row| {
         row.get::<_, String>(0)
-    }).map_err(|e| format!("Query failed: {e}"))?;
+    }).map_err(|e| CarrierError::Internal(format!("Query failed: {e}")))?;
 
     let mut table_names = Vec::new();
     for name_result in table_iter {
         match name_result {
             Ok(name) => table_names.push(name),
-            Err(e) => return Err(format!("Row error: {e}")),
+            Err(e) => return Err(CarrierError::Internal(format!("Row error: {e}"))),
         }
     }
 
@@ -295,10 +302,10 @@ fn run_schema(db_path: &str) -> Result<String, String> {
 
         let pragma = format!("PRAGMA table_info({})", table);
         let mut stmt = conn.prepare(&pragma)
-            .map_err(|e| format!("Failed to get schema for {table}: {e}"))?;
+            .map_err(|e| CarrierError::Internal(format!("Failed to get schema for {table}: {e}")))?;
 
         let mut rows = stmt.query([])
-            .map_err(|e| format!("Query failed: {e}"))?;
+            .map_err(|e| CarrierError::Internal(format!("Query failed: {e}")))?;
 
         let mut columns: Vec<(String, String, String, String)> = Vec::new();
         loop {
@@ -322,7 +329,7 @@ fn run_schema(db_path: &str) -> Result<String, String> {
                     columns.push((name, ty, extra, if pk == 1 { "✓" } else { "" }.to_string()));
                 }
                 Ok(None) => break,
-                Err(e) => return Err(format!("Row error: {e}")),
+                Err(e) => return Err(CarrierError::Internal(format!("Row error: {e}"))),
             }
         }
 

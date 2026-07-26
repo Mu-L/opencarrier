@@ -4,6 +4,7 @@ use super::ToolModule;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
 use types::config::ExecSecurityMode;
+use types::error::{CarrierError, CarrierResult};
 use types::taint::{TaintLabel, TaintSink, TaintedValue};
 use types::tool::ToolDefinition;
 use serde_json::Value;
@@ -134,7 +135,7 @@ impl ToolModule for ShellTools {
     } else {
         exec_policy.map(|p| p.timeout_secs).unwrap_or(30)
     };
-    Some(exec_shell(input, allowed_env, workspace_root.as_deref(), exec_policy, default_timeout_secs).await)
+    Some(exec_shell(input, allowed_env, workspace_root.as_deref(), exec_policy, default_timeout_secs).await.map_err(|e| e.to_string()))
     }
 
     fn permission_level(&self, _tool_name: &str) -> types::tool::PermissionLevel {
@@ -155,10 +156,10 @@ async fn exec_shell(
     workspace_root: Option<&Path>,
     exec_policy: Option<&types::config::ExecPolicy>,
     default_timeout_secs: u64,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     let command = input["command"]
         .as_str()
-        .ok_or("Missing 'command' parameter")?;
+        .ok_or(CarrierError::InvalidInput("Missing 'command' parameter".to_string()))?;
     let timeout_secs = input["timeout_seconds"].as_u64().unwrap_or(default_timeout_secs);
 
     let use_direct_exec = exec_policy
@@ -167,10 +168,12 @@ async fn exec_shell(
 
     let mut cmd = if use_direct_exec {
         let argv = shlex::split(command).ok_or_else(|| {
-            "Command contains unmatched quotes or invalid shell syntax".to_string()
+            CarrierError::InvalidInput(
+                "Command contains unmatched quotes or invalid shell syntax".to_string(),
+            )
         })?;
         if argv.is_empty() {
-            return Err("Empty command after parsing".to_string());
+            return Err(CarrierError::InvalidInput("Empty command after parsing".to_string()));
         }
         let mut c = tokio::process::Command::new(&argv[0]);
         if argv.len() > 1 {
@@ -257,8 +260,8 @@ async fn exec_shell(
                 "Exit code: {exit_code}\n\nSTDOUT:\n{stdout_str}\nSTDERR:\n{stderr_str}"
             ))
         }
-        Ok(Err(e)) => Err(format!("Failed to execute command: {e}")),
-        Err(_) => Err(format!("Command timed out after {timeout_secs}s")),
+        Ok(Err(e)) => Err(CarrierError::Internal(format!("Failed to execute command: {e}"))),
+        Err(_) => Err(CarrierError::Internal(format!("Command timed out after {timeout_secs}s"))),
     }
 }
 
