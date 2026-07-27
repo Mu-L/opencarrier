@@ -559,34 +559,23 @@ pub struct FlowMatch {
     /// Full parsed flow definition (includes `steps` for multi-step DAG flows).
     /// `flow_def.steps` non-empty => multi-step flow to be executed by `run_flow`.
     pub flow_def: types::flow::FlowDef,
-    /// True when the definition was loaded from shared `~/.opencarrier/flows`
-    /// (not a private workspace overlay). Required for system-flow elevation.
-    pub is_system_shared: bool,
 }
 
 impl FlowMatch {
     /// Turn-scoped tool elevation for this matched flow.
     ///
-    /// 1. **Shared system flow** with `privilege: system` (platform capabilities).
-    /// 2. **Private workspace flow** that declares both `shell_exec` and a non-empty
-    ///    `shell_allow` — clone-local brand skills (e.g. 86 班次海报) can run
-    ///    allowlisted python without permanent agent shell / without living under
-    ///    shared `~/.opencarrier/flows/`.
+    /// A workspace flow that declares both `shell_exec` (or `process_start`)
+    /// and a non-empty `shell_allow` elevates for the turn — clone-local skills
+    /// can run allowlisted commands without permanent agent shell access.
+    /// (System-shared `privilege: system` elevation is gone — system flows were
+    /// abolished in favor of "全进分身".)
     pub fn elevates(&self) -> bool {
-        if self.is_system_shared && self.flow_def.elevates_when_system_shared() {
-            return true;
-        }
-        if !self.is_system_shared
-            && !self.flow_def.shell_allow.is_empty()
+        !self.flow_def.shell_allow.is_empty()
             && self
                 .flow_def
                 .tools
                 .iter()
                 .any(|t| t == "shell_exec" || t == "process_start")
-        {
-            return true;
-        }
-        false
     }
 }
 
@@ -601,43 +590,31 @@ pub async fn classify_flow_with_llm(
 ) -> Option<FlowMatch> {
     // Collect flow summaries from two sources, private first so it wins
     // on name collisions with shared system flows:
-    //   1. workspace/flows/  — agent's private flows
-    //   2. ~/.opencarrier/flows/ — system-level shared flows (see docs/SKILL-STANDARD.md)
-    // Each entry: (name, description, path, is_system_shared)
+    // Candidates come only from the clone's own workspace/flows ("全进分身" —
+    // system-shared flows are abolished). Each entry: (name, description, path).
     let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut flow_summaries: Vec<(String, String, std::path::PathBuf, bool)> = Vec::new();
+    let mut flow_summaries: Vec<(String, String, std::path::PathBuf)> = Vec::new();
 
-    // Only the clone's own workspace flows are candidates — system-shared flows
-    // (~/.opencarrier/flows/) are no longer scanned ("全进分身"), so every
-    // candidate is a private workspace flow (is_system_shared = false).
     for dir in [workspace.join("flows")] {
         for (name, description, path) in collect_flow_summaries(&dir) {
             if seen_names.insert(name.to_lowercase()) {
-                flow_summaries.push((name, description, path, false));
+                flow_summaries.push((name, description, path));
             }
         }
     }
 
     // If the agent declared a flow allowlist (agent.toml `flows = [...]`),
-    // restrict candidates to those names — the agent explicitly opts into a
-    // fixed flow set and must not fall through to a generic system flow.
-    // (e.g. an agent built around `product-short-drama` should never be
-    // intercepted by the shared `short-video` flow.) Empty declared list
-    // = consider all candidates (default, backward-compatible).
+    // restrict candidates to those names. Empty list = consider all (default).
     //
     // Clone self-heal: a clone's `flows` list is auto-generated at install
     // (scan_flows) and dup does not track agent.toml, so it goes stale when
-    // flows are added to workspace/flows/ (e.g. art-director added later but
-    // never in the stale list). For clones, don't let a stale list hide the
-    // clone's OWN workspace flows — only restrict shared system flows (the
-    // allowlist's actual purpose: avoid falling through to a generic flow).
+    // flows are added to workspace/flows/. For clones, don't let a stale list
+    // hide the clone's OWN workspace flows — bypass the allowlist for clones.
     if !declared_flows.is_empty() {
         let allow: std::collections::HashSet<String> =
             declared_flows.iter().map(|f| f.to_lowercase()).collect();
-        flow_summaries.retain(|(name, _, _, is_shared)| {
-            if *is_shared {
-                allow.contains(&name.to_lowercase())
-            } else if is_clone {
+        flow_summaries.retain(|(name, _, _)| {
+            if is_clone {
                 true
             } else {
                 allow.contains(&name.to_lowercase())
@@ -651,7 +628,7 @@ pub async fn classify_flow_with_llm(
 
     // Build classification prompt
     let mut prompt = String::from("Available flows:\n");
-    for (name, description, _, _) in &flow_summaries {
+    for (name, description, _) in &flow_summaries {
         prompt.push_str(&format!("- {}: {}\n", name, description));
     }
 
@@ -732,9 +709,9 @@ pub async fn classify_flow_with_llm(
     // Find matching flow (exact or case-insensitive)
     let matched = flow_summaries
         .iter()
-        .find(|(name, _, _, _)| name.to_lowercase() == flow_name)
+        .find(|(name, _, _)| name.to_lowercase() == flow_name)
         .or_else(|| {
-            flow_summaries.iter().find(|(name, _, _, _)| {
+            flow_summaries.iter().find(|(name, _, _)| {
                 name.to_lowercase().contains(&flow_name)
                     || flow_name.contains(&name.to_lowercase())
             })
@@ -742,7 +719,7 @@ pub async fn classify_flow_with_llm(
         // Fallback: some LLMs (e.g. DeepSeek) output a reasoning chain instead of
         // just the flow name. Scan the full response for any known flow name.
         .or_else(|| {
-            flow_summaries.iter().find(|(name, _, _, _)| {
+            flow_summaries.iter().find(|(name, _, _)| {
                 raw.contains(&name.to_lowercase())
             })
         });
@@ -752,24 +729,21 @@ pub async fn classify_flow_with_llm(
         None => {
             tracing::warn!(
                 flow_name = %flow_name,
-                available = ?flow_summaries.iter().map(|(n, _, _, _)| n.clone()).collect::<Vec<_>>(),
+                available = ?flow_summaries.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>(),
                 "LLM returned unknown flow name"
             );
             return None;
         }
     };
 
-    // Load full flow content from the recorded path (private or shared system dir)
+    // Load full flow content from the recorded workspace path.
     let content = std::fs::read_to_string(&matched_flow.2).ok()?;
     let flow_def = types::flow::parse_flow_def(&content);
-    let is_system_shared = matched_flow.3;
 
     tracing::info!(
         flow = %flow_def.name,
         tools = ?flow_def.tools,
         multi_step = !flow_def.steps.is_empty(),
-        is_system_shared,
-        privilege = ?flow_def.privilege,
         "Flow classified by LLM"
     );
 
@@ -779,17 +753,14 @@ pub async fn classify_flow_with_llm(
         max_iterations: flow_def.max_iterations,
         tools: flow_def.tools.clone(),
         flow_def,
-        is_system_shared,
     })
 }
 
 /// Load a flow definition by name **without an LLM call** (used by flow resume:
 /// the user's reply continues an already-matched flow, so re-classifying would
-/// be wrong and wasteful). Searches the agent's `workspace/flows` then the
-/// shared `~/.opencarrier/flows` (same discovery order as
-/// [`classify_flow_with_llm`]) and matches by the parsed `name:` field
-/// (case-insensitive). Returns `None` if no such flow exists (e.g. it was
-/// deleted/renamed between suspend and resume).
+/// be wrong and wasteful). Searches the agent's `workspace/flows` and matches
+/// by the parsed `name:` field (case-insensitive). Returns `None` if no such
+/// flow exists (e.g. it was deleted/renamed between suspend and resume).
 pub fn load_flow_by_name(workspace: &std::path::Path, flow_name: &str) -> Option<FlowMatch> {
     // Only the clone's own workspace flows are loadable — system-shared flows
     // (~/.opencarrier/flows/) are no longer scanned ("全进分身").
@@ -806,7 +777,6 @@ pub fn load_flow_by_name(workspace: &std::path::Path, flow_name: &str) -> Option
                     max_iterations: flow_def.max_iterations,
                     tools: flow_def.tools.clone(),
                     flow_def,
-                    is_system_shared: false,
                 });
             }
         }

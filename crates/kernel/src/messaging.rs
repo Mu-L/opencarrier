@@ -213,68 +213,6 @@ impl CarrierKernel {
         Some((flow_prompt, flow_max_iter, flow))
     }
 
-    /// Expose a matched system-shared flow's bundled `scripts/` into the turn's
-    /// shell cwd, so the agent can run deterministic helpers shipped with the
-    /// flow (e.g. `validate_*.py` for the writing pipeline). System flows live
-    /// under `~/.opencarrier/flows/<name>/` — outside the agent's cwd and out of
-    /// reach of workspace-relative `shell_allow` patterns — so we symlink the
-    /// flow dir to `<cwd>/.flows/<name>`; flows then reference scripts as
-    /// `python3 .flows/<name>/scripts/...`. Workspace (clone) flows already
-    /// reach their scripts via workspace paths and are skipped. Idempotent:
-    /// re-created every turn (self-heals if the agent overwrote the link).
-    fn expose_flow_scripts(
-        home: &Path,
-        flow: &crate::prompt_sources::FlowMatch,
-        agent_name: &str,
-        sender_id: &Option<String>,
-        owner_id: &Option<String>,
-        workspace: Option<&Path>,
-    ) {
-        if !flow.is_system_shared {
-            return;
-        }
-        let flow_dir = home.join("flows").join(&flow.name);
-        if !flow_dir.join("scripts").is_dir() {
-            return;
-        }
-        // Mirror runtime::tools::shell::resolve_shell_cwd so the symlink lands
-        // exactly where shell_exec will cd for the turn.
-        let cwd: Option<PathBuf> = match sender_id.as_deref() {
-            Some(sender) => {
-                let owner = owner_id.as_deref().unwrap_or(sender);
-                Some(types::config::sender_data_dir(home, owner, agent_name, Some(sender)))
-            }
-            None => {
-                let Some(ws) = workspace else { return };
-                Some(types::config::resolve_turn_cwd(home, ws, agent_name, None, None))
-            },
-        };
-        let Some(cwd) = cwd else {
-            return;
-        };
-        let link_dir = cwd.join(".flows");
-        let _ = std::fs::create_dir_all(&link_dir);
-        let link = link_dir.join(&flow.name);
-        let _ = std::fs::remove_file(&link);
-        #[cfg(unix)]
-        {
-            let _ = std::os::unix::fs::symlink(&flow_dir, &link);
-        }
-        #[cfg(not(unix))]
-        {
-            tracing::warn!(
-                agent = agent_name,
-                flow = %flow.name,
-                "symlink not supported on this platform; .flows/ scripts unavailable"
-            );
-        }
-        tracing::debug!(
-            agent = agent_name,
-            flow = %flow.name,
-            "Exposed system flow scripts via .flows/ symlink"
-        );
-    }
-
     #[allow(clippy::too_many_arguments)]
     async fn prepare_agent_context(
         &self,
@@ -346,20 +284,6 @@ impl CarrierKernel {
         let (auto_matched_flow, flow_max_iterations, matched_flow) = self
             .resolve_matched_flow(entry, message, &mut tools, &brain_ref, resume_flow, active_flow, &session)
             .await;
-
-        // Expose a system-shared flow's bundled scripts/ (deterministic
-        // validators/helpers) into the turn cwd as .flows/<name>, so the agent
-        // can invoke them via workspace-relative shell_allow patterns.
-        if let Some(ref flow) = matched_flow {
-            Self::expose_flow_scripts(
-                &types::config::home_dir(),
-                flow,
-                &agent_name,
-                sender_id,
-                owner_id,
-                entry.manifest.workspace.as_deref(),
-            );
-        }
 
         // Auto-match subagent trigger (only when no flow matched) + subagent
         // delegation from channel_type.
@@ -582,34 +506,14 @@ impl CarrierKernel {
 
         // Explicit active_flow (HTTP/cron caller): also bypasses the
         // classifier. If the named flow is missing, fall through to classify
-        // rather than giving up silently. SHARED system flows must be in the
-        // agent's declared allowlist (manifest.flows) to prevent privilege
-        // escalation via unvetted flows — workspace private flows are always
-        // allowed since they belong to the agent.
+        // rather than giving up silently. All flows are workspace flows now
+        // ("全进分身"), so always allowed (no system-flow allowlist gate).
         let from_active = if from_resume.is_none() {
             if let Some(name) = active_flow {
                 match self.load_named_flow_for_turn(entry, tools, name) {
                     Some((prompt, max_iter, flow)) => {
-                        let allowed = || -> bool {
-                            if !flow.is_system_shared {
-                                return true; // workspace flow: always allowed
-                            }
-                            let allow = &entry.manifest.flows;
-                            allow.is_empty() // empty allowlist = no restriction
-                                || allow.iter().any(|f| f.eq_ignore_ascii_case(name))
-                        };
-                        if !allowed() {
-                            warn!(
-                                agent = %entry.name,
-                                flow = %name,
-                                "active_flow: system flow '{}' not in manifest.flows allowlist",
-                                name,
-                            );
-                            None
-                        } else {
-                            info!(agent = %entry.name, flow = %name, "Flow loaded by active_flow (explicit)");
-                            Some((prompt, max_iter, flow))
-                        }
+                        info!(agent = %entry.name, flow = %name, "Flow loaded by active_flow (explicit)");
+                        Some((prompt, max_iter, flow))
                     }
                     None => {
                         warn!(agent = %entry.name, flow = %name, "active_flow not found — falling back to classifier");
@@ -661,7 +565,6 @@ impl CarrierKernel {
                         agent = %entry.name,
                         flow = %flow_name,
                         elevate,
-                        is_system_shared = flow.is_system_shared,
                         "Flow classified by LLM"
                     );
 
@@ -767,7 +670,6 @@ impl CarrierKernel {
                 info!(
                     agent = %agent_name,
                     flow = %flow.name,
-                    is_system_shared = flow.is_system_shared,
                     from = ?manifest.max_tool_level,
                     to = ?required,
                     "Flow elevates max_tool_level for this turn"
@@ -2068,92 +1970,4 @@ fn partition_steps_by_layers(steps: &[runtime::agent_loop::TaskStep]) -> Vec<Vec
     }
 
     layers
-}
-
-#[cfg(test)]
-mod expose_flow_scripts_tests {
-    use super::*;
-    use crate::prompt_sources::FlowMatch;
-
-    fn mk_flow(name: &str, is_system_shared: bool) -> FlowMatch {
-        FlowMatch {
-            name: name.to_string(),
-            body: String::new(),
-            max_iterations: None,
-            tools: vec![],
-            flow_def: types::flow::FlowDef::default(),
-            is_system_shared,
-        }
-    }
-
-    #[test]
-    fn system_flow_with_scripts_is_symlinked_into_cwd() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        // Deployed system flow ships a scripts/ dir.
-        let flow_dir = home.join("flows").join("myflow");
-        std::fs::create_dir_all(flow_dir.join("scripts")).unwrap();
-        std::fs::write(flow_dir.join("scripts").join("validate.py"), "# ok").unwrap();
-
-        let flow = mk_flow("myflow", true);
-        CarrierKernel::expose_flow_scripts(
-            home,
-            &flow,
-            "agent-x",
-            &Some("user-1".to_string()),
-            &Some("owner-1".to_string()),
-            None,
-        );
-
-        // cwd mirrors resolve_shell_cwd: sender present -> sender_data_dir.
-        let cwd = types::config::sender_data_dir(home, "owner-1", "agent-x", Some("user-1"));
-        let link = cwd.join(".flows").join("myflow");
-        assert!(
-            link.is_symlink(),
-            ".flows/<name> symlink should be created under sender cwd"
-        );
-        #[cfg(unix)]
-        assert_eq!(std::fs::read_link(&link).unwrap(), flow_dir);
-    }
-
-    #[test]
-    fn no_op_for_missing_scripts_or_workspace_flows() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let sender = Some("user-1".to_string());
-        let owner = Some("owner-1".to_string());
-
-        // System flow but NO scripts/ shipped -> no link.
-        std::fs::create_dir_all(home.join("flows").join("bareflow")).unwrap();
-        let bare = mk_flow("bareflow", true);
-        CarrierKernel::expose_flow_scripts(home, &bare, "agent-x", &sender, &owner, None);
-        let cwd = types::config::sender_data_dir(home, "owner-1", "agent-x", Some("user-1"));
-        assert!(!cwd.join(".flows").join("bareflow").exists());
-
-        // Workspace (clone) flow with scripts -> still skipped (not system-shared).
-        let clone = mk_flow("cloneflow", false);
-        CarrierKernel::expose_flow_scripts(home, &clone, "agent-x", &sender, &owner, None);
-        assert!(!cwd.join(".flows").join("cloneflow").exists());
-    }
-
-    #[test]
-    fn no_sender_falls_back_to_workspace_cwd() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let flow_dir = home.join("flows").join("wsflow");
-        std::fs::create_dir_all(flow_dir.join("scripts")).unwrap();
-        std::fs::write(flow_dir.join("scripts").join("v.py"), "# ok").unwrap();
-
-        let ws = tmp.path().join("workspace_root");
-        std::fs::create_dir_all(&ws).unwrap();
-        let flow = mk_flow("wsflow", true);
-        // No sender -> cwd falls back to workspace_root.
-        CarrierKernel::expose_flow_scripts(home, &flow, "agent-x", &None, &None, Some(ws.as_path()));
-
-        let link = ws.join(".flows").join("wsflow");
-        assert!(
-            link.is_symlink(),
-            "without sender, symlink should land under workspace_root"
-        );
-    }
 }

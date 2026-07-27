@@ -688,25 +688,16 @@ async fn tool_flow_update(
         ));
     }
 
+    // Only workspace flows are updateable — system-shared flows are abolished
+    // ("全进分身"), every flow lives in the clone's workspace/flows/.
     let private_flows = root.join("flows");
-    let shared_flows = types::config::home_dir().join("flows");
-
-    // Private workspace flows can be updated in place. Shared system flows are
-    // READ-ONLY: agents must NOT fork them via copy-on-write — evolve shared
-    // flows through the human platform path instead.
     let private_path = find_flow_path(&private_flows, name).await;
-    let shared_path = find_flow_path(&shared_flows, name).await;
 
-    let source_path = match (&private_path, &shared_path) {
-        (Some(p), _) => p.clone(),
-        (None, Some(_)) => {
+    let source_path = match &private_path {
+        Some(p) => p.clone(),
+        None => {
             return Err(CarrierError::InvalidInput(format!(
-                "Flow '{name}' is a shared system flow and read-only. Agents cannot modify shared flows (copy-on-write is disabled). Ask a human to update it in the platform flows source, or create a clone-specific variant with flow_create."
-            )));
-        }
-        (None, None) => {
-            return Err(CarrierError::InvalidInput(format!(
-                "Flow '{name}' not found in workspace or shared flows."
+                "Flow '{name}' not found in workspace flows."
             )));
         }
     };
@@ -1178,35 +1169,4 @@ mod flow_evolution_tests {
         assert!(body.contains("# Body"));
     }
 
-    #[tokio::test]
-    async fn flow_update_shared_flow_is_readonly() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        // Point OPENCARRIER_HOME at temp so shared flows resolve under it
-        // SAFETY: test-only env mutation
-        std::env::set_var("OPENCARRIER_HOME", home.path());
-        let shared = home.path().join("flows");
-        std::fs::create_dir_all(&shared).unwrap();
-        std::fs::write(
-            shared.join("demo.md"),
-            "---\nname: demo\ntools:\n  - file_read\n---\n\nold body\n",
-        )
-        .unwrap();
-
-        let input = serde_json::json!({
-            "name": "demo",
-            "tools": ["file_read", "file_write"],
-            "body": "new hard rules\n"
-        });
-        let err = tool_flow_update(&input, Some(tmp.path()))
-            .await
-            .expect_err("shared flow must be read-only (no copy-on-write)");
-        assert!(err.to_string().contains("read-only"), "got: {err}");
-        // No private overlay created — shared flows are never forked.
-        assert!(!tmp.path().join("flows/demo.md").exists(), "no COW private flow");
-        // Shared unchanged
-        let shared_content = std::fs::read_to_string(shared.join("demo.md")).unwrap();
-        assert!(shared_content.contains("old body"));
-        std::env::remove_var("OPENCARRIER_HOME");
-    }
 }

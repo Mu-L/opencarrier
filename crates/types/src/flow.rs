@@ -207,12 +207,6 @@ impl FlowDef {
         !self.steps.is_empty()
     }
 
-    /// True when this flow may elevate agent tool permissions for the turn.
-    /// Callers must also confirm the flow was loaded from the shared system dir.
-    pub fn elevates_when_system_shared(&self) -> bool {
-        self.privilege == FlowPrivilege::System
-    }
-
     /// Highest permission level among declared tools (for turn elevation).
     pub fn required_max_tool_level(&self) -> crate::tool::PermissionLevel {
         self.tools
@@ -1214,7 +1208,6 @@ shell_allow:
 body"#;
         let f = parse_flow_def(content);
         assert_eq!(f.privilege, FlowPrivilege::System);
-        assert!(f.elevates_when_system_shared());
         assert_eq!(f.tools, vec!["file_write", "shell_exec"]);
         assert_eq!(
             f.shell_allow,
@@ -1239,7 +1232,6 @@ tools: [file_read]
 b"#;
         let f = parse_flow_def(content);
         assert_eq!(f.privilege, FlowPrivilege::Agent);
-        assert!(!f.elevates_when_system_shared());
         assert!(f.shell_allow.is_empty());
     }
 

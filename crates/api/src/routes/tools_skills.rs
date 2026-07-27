@@ -138,128 +138,10 @@ fn deprecated_capabilities() -> Vec<serde_json::Value> {
     ]
 }
 
-/// Scan shared system flows (`~/.opencarrier/flows`) for name + tools frontmatter.
-fn scan_shared_flows() -> Vec<serde_json::Value> {
-    let flows_dir = types::config::home_dir().join("flows");
-    if !flows_dir.is_dir() {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&flows_dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let (name, content) = if path.is_dir() {
-            let flow_md = path.join("flow.md");
-            let skill_md = path.join("SKILL.md");
-            let md = if flow_md.exists() {
-                flow_md
-            } else if skill_md.exists() {
-                skill_md
-            } else {
-                continue;
-            };
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
-            let Ok(c) = std::fs::read_to_string(&md) else {
-                continue;
-            };
-            (name, c)
-        } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            let name = path
-                .file_stem()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string();
-            let Ok(c) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            (name, c)
-        } else {
-            continue;
-        };
-        if name.is_empty() || name == "SKILLS" {
-            continue;
-        }
-        let tools = parse_flow_tools_frontmatter(&content);
-        let description = parse_flow_description_frontmatter(&content);
-        out.push(serde_json::json!({
-            "name": name,
-            "description": description,
-            "tools": tools,
-        }));
-    }
-    out.sort_by(|a, b| {
-        a["name"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(b["name"].as_str().unwrap_or(""))
-    });
-    out
-}
-
-fn parse_flow_tools_frontmatter(content: &str) -> Vec<String> {
-    let Some(rest) = content.strip_prefix("---") else {
-        return Vec::new();
-    };
-    let Some(end) = rest.find("\n---") else {
-        return Vec::new();
-    };
-    let fm = &rest[..end];
-    let mut tools = Vec::new();
-    let mut in_tools = false;
-    for line in fm.lines() {
-        let trimmed = line.trim();
-        if let Some(val) = trimmed.strip_prefix("tools:") {
-            let val = val.trim();
-            if val.starts_with('[') && val.ends_with(']') {
-                let inner = &val[1..val.len() - 1];
-                return inner
-                    .split(',')
-                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
-            }
-            in_tools = true;
-            continue;
-        }
-        if in_tools {
-            if let Some(item) = trimmed.strip_prefix('-') {
-                let t = item.trim().trim_matches('"').trim_matches('\'').to_string();
-                if !t.is_empty() {
-                    tools.push(t);
-                }
-            } else if !trimmed.is_empty() {
-                break;
-            }
-        }
-    }
-    tools
-}
-
-fn parse_flow_description_frontmatter(content: &str) -> String {
-    let Some(rest) = content.strip_prefix("---") else {
-        return String::new();
-    };
-    let Some(end) = rest.find("\n---") else {
-        return String::new();
-    };
-    for line in rest[..end].lines() {
-        if let Some(val) = line.trim().strip_prefix("description:") {
-            return val.trim().trim_matches('"').to_string();
-        }
-    }
-    String::new()
-}
-
 /// GET /api/v1/capability-catalog
 ///
 /// Real-time capability surface for clone-creator (generate / upgrade / evaluate).
-/// Combines core tools, builtin tools, live MCP servers, deprecations, and shared flows.
+/// Combines core tools, builtin tools, live MCP servers, and deprecations.
 pub async fn capability_catalog(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -371,7 +253,6 @@ pub async fn capability_catalog(
             .cmp(b["name"].as_str().unwrap_or(""))
     });
 
-    let shared_flows = scan_shared_flows();
     let deprecated = deprecated_capabilities();
 
     // Declarable names (non-core builtins + connected MCP tools) for compact prompt injection
@@ -403,7 +284,6 @@ pub async fn capability_catalog(
         "builtin_tools": builtin_tools,
         "mcp_servers": mcp_servers,
         "deprecated": deprecated,
-        "shared_flows": shared_flows,
         "declarable_tools": declarable,
         "notes": [
             "core_tools are always loaded — do not list them in flow frontmatter tools:",
