@@ -758,12 +758,9 @@ async fn tool_flow_load(
     let root = workspace_root.ok_or(CarrierError::Internal("flow_load requires a workspace root".to_string()))?;
     let name = input["name"].as_str().ok_or(CarrierError::InvalidInput("Missing 'name' parameter".to_string()))?;
 
-    // Search private flows first (workspace/flows), then fall back to
-    // shared system flows (~/.opencarrier/flows). Private wins on collision.
-    let dirs = [
-        root.join("flows"),
-        types::config::home_dir().join("flows"),
-    ];
+    // Only the clone's own workspace flows are loadable — system-shared flows
+    // (~/.opencarrier/flows/) are no longer scanned ("全进分身").
+    let dirs = [root.join("flows")];
     for flows_dir in dirs {
         if let Some(path) = find_flow_path(&flows_dir, name).await {
             return tokio::fs::read_to_string(&path)

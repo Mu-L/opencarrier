@@ -133,7 +133,7 @@ pub fn read_flows_catalog(workspace: &Path) -> Option<String> {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut entries: Vec<(String, String)> = Vec::new();
 
-    for dir in [workspace.join("flows"), types::config::home_dir().join("flows")] {
+    for dir in [workspace.join("flows")] {
         for (name, description, _) in collect_flow_summaries(&dir) {
             if seen.insert(name.to_lowercase()) {
                 entries.push((name, description));
@@ -607,14 +607,13 @@ pub async fn classify_flow_with_llm(
     let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut flow_summaries: Vec<(String, String, std::path::PathBuf, bool)> = Vec::new();
 
-    let shared_dir = types::config::home_dir().join("flows");
-    for (dir, is_system_shared) in [
-        (workspace.join("flows"), false),
-        (shared_dir, true),
-    ] {
+    // Only the clone's own workspace flows are candidates — system-shared flows
+    // (~/.opencarrier/flows/) are no longer scanned ("全进分身"), so every
+    // candidate is a private workspace flow (is_system_shared = false).
+    for dir in [workspace.join("flows")] {
         for (name, description, path) in collect_flow_summaries(&dir) {
             if seen_names.insert(name.to_lowercase()) {
-                flow_summaries.push((name, description, path, is_system_shared));
+                flow_summaries.push((name, description, path, false));
             }
         }
     }
@@ -792,11 +791,9 @@ pub async fn classify_flow_with_llm(
 /// (case-insensitive). Returns `None` if no such flow exists (e.g. it was
 /// deleted/renamed between suspend and resume).
 pub fn load_flow_by_name(workspace: &std::path::Path, flow_name: &str) -> Option<FlowMatch> {
-    let shared_dir = types::config::home_dir().join("flows");
-    for (dir, is_system_shared) in [
-        (workspace.join("flows"), false),
-        (shared_dir, true),
-    ] {
+    // Only the clone's own workspace flows are loadable — system-shared flows
+    // (~/.opencarrier/flows/) are no longer scanned ("全进分身").
+    for dir in [workspace.join("flows")] {
         for (name, _description, path) in collect_flow_summaries(&dir) {
             if !name.eq_ignore_ascii_case(flow_name) {
                 continue;
@@ -809,7 +806,7 @@ pub fn load_flow_by_name(workspace: &std::path::Path, flow_name: &str) -> Option
                     max_iterations: flow_def.max_iterations,
                     tools: flow_def.tools.clone(),
                     flow_def,
-                    is_system_shared,
+                    is_system_shared: false,
                 });
             }
         }

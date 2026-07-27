@@ -9,6 +9,7 @@ pub mod agent_mgmt;
 pub mod browser;
 pub mod collaboration;
 pub mod data_analyze;
+pub mod document;
 pub mod filesystem;
 pub mod knowledge;
 pub mod kv;
@@ -93,6 +94,7 @@ pub trait ToolModule: Send + Sync {
 pub fn builtin_modules(cli_exec_config: types::config::CliExecConfig) -> Vec<Box<dyn ToolModule>> {
     let mut modules: Vec<Box<dyn ToolModule>> = vec![
         Box::new(filesystem::FilesystemTools),
+        Box::new(document::DocumentTools),
         Box::new(sqlite::SqliteTools),
         Box::new(shell::ShellTools),
         Box::new(browser::BrowserTools),
