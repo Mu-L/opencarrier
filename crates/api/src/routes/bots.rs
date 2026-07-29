@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use crate::routes::state::AppState;
+use types::error::{CarrierError, CarrierResult};
 
 // ---------------------------------------------------------------------------
 // POST /api/senders/wecom/smartbot/generate — step 1: get auth URL
@@ -1422,12 +1423,12 @@ async fn register_bot_from_scan(
     platform: &str,
     credentials: &serde_json::Value,
     agent_name: &str,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     // Resolve agent_name: accept name or UUID, store as name
     let agent_ref = crate::routes::common::resolve_to_name(agent_name, &state.kernel.registry)
         .map_err(|(_, json)| {
             let msg = json.0.get("error").and_then(|v| v.as_str()).unwrap_or("Agent not found");
-            msg.to_string()
+            CarrierError::AgentNotFound(msg.to_string())
         })?;
 
     // Write session file to senders/{sender_id}/session.json + set route
@@ -1518,7 +1519,9 @@ async fn register_bot_from_scan(
 
             complete_bot_registration(state, "dingtalk", "DingTalk", app_key, &agent_ref).await
         }
-        _ => Err(format!("不支持的平台: {platform}")),
+        _ => Err(CarrierError::InvalidInput(format!(
+            "不支持的平台: {platform}"
+        ))),
     }
 }
 
@@ -1534,7 +1537,7 @@ async fn complete_bot_registration(
     label: &str,
     sender_id: String,
     agent_ref: &str,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     if let Some(ref pm) = state.channel_manager {
         let pm = pm.lock().await;
         pm.set_sender_route(&sender_id, agent_ref);

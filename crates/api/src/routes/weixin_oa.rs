@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use channel_weixin_oa::api::{check_sign, get_access_token, get_user_unionid};
 use channel_weixin_oa::{build_plugin_message, parse_xml_message, ProxyMessage};
+use types::error::{CarrierError, CarrierResult};
 
 /// Shared HTTP client for WeChat API + 86bus `bind-openid` calls.
 /// The whole bind-resolution is bounded by an outer `tokio::time::timeout`,
@@ -39,7 +40,7 @@ static OA_TOKENS: LazyLock<Mutex<HashMap<String, CachedToken>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Cached access_token for the given app_id/app_secret.
-async fn oa_access_token(app_id: &str, app_secret: &str) -> Result<String, String> {
+async fn oa_access_token(app_id: &str, app_secret: &str) -> CarrierResult<String> {
     {
         let cache = OA_TOKENS.lock().unwrap();
         if let Some(t) = cache.get(app_id) {
@@ -48,8 +49,12 @@ async fn oa_access_token(app_id: &str, app_secret: &str) -> Result<String, Strin
             }
         }
     }
-    let tok = get_access_token(&BIND_CLIENT, app_id, app_secret).await.map_err(|e| e.to_string())?;
-    let token = tok.access_token.ok_or("no access_token in response")?;
+    let tok = get_access_token(&BIND_CLIENT, app_id, app_secret)
+        .await
+        .map_err(|e| CarrierError::Network(e.to_string()))?;
+    let token = tok
+        .access_token
+        .ok_or_else(|| CarrierError::Network("no access_token in response".to_string()))?;
     let expires_in = tok.expires_in.unwrap_or(7200);
     // Re-check cache — another request may have refreshed while we were fetching.
     // If a concurrent fetch already cached a newer token, don't overwrite it
@@ -358,7 +363,7 @@ async fn resolve_and_bind(
     app_secret: &str,
     openid_sa: &str,
     event_unionid: Option<&str>,
-) -> Result<String, String> {
+) -> CarrierResult<String> {
     // 1. Resolve unionid — prefer event XML, fall back to cached/fetched.
     let unionid: Option<String> = match event_unionid {
         Some(u) if !u.is_empty() => {
@@ -418,8 +423,11 @@ async fn resolve_and_bind(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("bind-openid request failed: {e}"))?;
-    let val: serde_json::Value = resp.json().await.map_err(|e| format!("bind-openid parse failed: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("bind-openid request failed: {e}")))?;
+    let val: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| CarrierError::Network(format!("bind-openid parse failed: {e}")))?;
     Ok(val
         .get("matched")
         .and_then(|v| v.as_str())
