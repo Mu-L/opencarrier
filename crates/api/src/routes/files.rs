@@ -1079,11 +1079,15 @@ mod tests {
 
     #[test]
     fn non_output_paths_require_auth() {
-        // The whole point: profile.json (OA secrets), session.json, memory/, input/
+        // The whole point: profile.json (OA secrets), session.json, memory/ stay
+        // auth-gated. input/ image files are public (1a3dc0c: external vision
+        // fetch), but non-image input/ files stay auth-gated.
         assert!(!is_public_output_path("profile.json"));
         assert!(!is_public_output_path("session.json"));
         assert!(!is_public_output_path("memory/note.md"));
-        assert!(!is_public_output_path("input/upload.jpg"));
+        assert!(!is_public_output_path("input/secret.json")); // input/ non-image stays auth
+        assert!(!is_public_output_path("input/document.txt"));
+        assert!(is_public_output_path("input/upload.jpg")); // input/ image public (vision)
         // look-alikes that must NOT be treated as output
         assert!(!is_public_output_path("Output/x.md")); // case-sensitive
         assert!(!is_public_output_path("outputfile.txt"));
