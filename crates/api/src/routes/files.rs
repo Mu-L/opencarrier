@@ -985,7 +985,15 @@ pub async fn view_file(
             .canonicalize()
             .map(|out| target_canonical.starts_with(&out))
             .unwrap_or(false);
-        if !inside_output {
+        let inside_input_image = safe_base
+            .join("input")
+            .canonicalize()
+            .map(|inp| {
+                target_canonical.starts_with(&inp)
+                    && is_image_extension(&target_canonical.to_string_lossy())
+            })
+            .unwrap_or(false);
+        if !inside_output && !inside_input_image {
             return err(StatusCode::FORBIDDEN, "Path traversal denied");
         }
     }
