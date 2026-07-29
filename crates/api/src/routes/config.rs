@@ -72,7 +72,7 @@ pub async fn config_reload(State(state): State<Arc<AppState>>) -> impl IntoRespo
         }
         Err(e) => (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"status": "error", "error": e})),
+            Json(serde_json::json!({"status": "error", "error": e.to_string()})),
         ),
     }
 }

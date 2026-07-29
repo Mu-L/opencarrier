@@ -788,7 +788,7 @@ pub async fn update_agent_identity(
     if let Err(e) = req.validate() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
+            Json(serde_json::json!({"error": e.to_string()})),
         );
     }
 

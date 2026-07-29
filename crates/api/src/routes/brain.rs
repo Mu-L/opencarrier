@@ -109,7 +109,7 @@ pub async fn set_brain_modality(
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
+            Json(serde_json::json!({"error": e.to_string()})),
         ),
     }
 }
@@ -149,7 +149,7 @@ pub async fn delete_brain_modality(
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
+            Json(serde_json::json!({"error": e.to_string()})),
         ),
     }
 }
@@ -194,7 +194,7 @@ pub async fn set_brain_default_modality(
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
+            Json(serde_json::json!({"error": e.to_string()})),
         ),
     }
 }
@@ -216,7 +216,7 @@ pub async fn reload_brain(State(state): State<Arc<AppState>>) -> impl IntoRespon
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
+            Json(serde_json::json!({"error": e.to_string()})),
         ),
     }
 }

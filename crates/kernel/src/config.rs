@@ -4,6 +4,7 @@
 //! to load and deep-merge before the root config (root overrides includes).
 
 use types::config::KernelConfig;
+use types::error::{CarrierError, CarrierResult};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::info;
@@ -118,11 +119,11 @@ fn resolve_config_includes(
     config_dir: &Path,
     visited: &mut HashSet<PathBuf>,
     depth: u32,
-) -> Result<(), String> {
+) -> CarrierResult<()> {
     if depth > MAX_INCLUDE_DEPTH {
-        return Err(format!(
+        return Err(CarrierError::Internal(format!(
             "Config include depth exceeded maximum of {MAX_INCLUDE_DEPTH}"
-        ));
+        )));
     }
 
     // Extract include list from the current value
@@ -151,49 +152,49 @@ fn resolve_config_includes(
         // SECURITY: reject absolute paths
         let include_path = Path::new(include_path_str);
         if include_path.is_absolute() {
-            return Err(format!(
+            return Err(CarrierError::Internal(format!(
                 "Config include rejects absolute path: {include_path_str}"
-            ));
+            )));
         }
         // SECURITY: reject `..` components
         for component in include_path.components() {
             if let std::path::Component::ParentDir = component {
-                return Err(format!(
+                return Err(CarrierError::Internal(format!(
                     "Config include rejects path traversal: {include_path_str}"
-                ));
+                )));
             }
         }
 
         let resolved = config_dir.join(include_path);
         // SECURITY: verify resolved path stays within config dir
         let canonical = std::fs::canonicalize(&resolved).map_err(|e| {
-            format!(
+            CarrierError::Internal(format!(
                 "Config include '{}' cannot be resolved: {e}",
                 include_path_str
-            )
+            ))
         })?;
         let canonical_dir = std::fs::canonicalize(config_dir)
-            .map_err(|e| format!("Config dir cannot be canonicalized: {e}"))?;
+            .map_err(|e| CarrierError::Internal(format!("Config dir cannot be canonicalized: {e}")))?;
         if !canonical.starts_with(&canonical_dir) {
-            return Err(format!(
+            return Err(CarrierError::Internal(format!(
                 "Config include '{}' escapes config directory",
                 include_path_str
-            ));
+            )));
         }
 
         // SECURITY: circular detection
         if !visited.insert(canonical.clone()) {
-            return Err(format!(
+            return Err(CarrierError::Internal(format!(
                 "Circular config include detected: {include_path_str}"
-            ));
+            )));
         }
 
         info!(include = %include_path_str, "Loading config include");
 
         let contents = std::fs::read_to_string(&canonical)
-            .map_err(|e| format!("Failed to read config include '{}': {e}", include_path_str))?;
+            .map_err(|e| CarrierError::Internal(format!("Failed to read config include '{}': {e}", include_path_str)))?;
         let mut include_value: toml::Value = toml::from_str(&contents)
-            .map_err(|e| format!("Failed to parse config include '{}': {e}", include_path_str))?;
+            .map_err(|e| CarrierError::Internal(format!("Failed to parse config include '{}': {e}", include_path_str)))?;
 
         // Recursively resolve includes in the included file
         let include_dir = canonical.parent().unwrap_or(config_dir).to_path_buf();

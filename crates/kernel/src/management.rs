@@ -5,11 +5,11 @@
 //! and Brain read/write/reload operations.
 
 use crate::brain::Brain;
+use types::error::{CarrierError, CarrierResult};
 use crate::error::{KernelError, KernelResult};
 use crate::kernel::CarrierKernel;
 use runtime::llm_driver::LlmDriver;
 use types::agent::*;
-use types::error::CarrierError;
 use types::event::*;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -75,7 +75,7 @@ impl CarrierKernel {
 
     /// Reload configuration: read the config file, diff against current, and
     /// apply hot-reloadable actions. Returns the reload plan for API response.
-    pub fn reload_config(&self) -> Result<crate::config_reload::ReloadPlan, String> {
+    pub fn reload_config(&self) -> CarrierResult<crate::config_reload::ReloadPlan> {
         use crate::config_reload::{
             build_reload_plan, should_apply_hot, validate_config_for_reload,
         };
@@ -85,12 +85,12 @@ impl CarrierKernel {
         let new_config = if config_path.exists() {
             crate::config::load_config(Some(&config_path))
         } else {
-            return Err("Config file not found".to_string());
+            return Err(CarrierError::Internal("Config file not found".into()));
         };
 
         // Validate new config
         if let Err(errors) = validate_config_for_reload(&new_config) {
-            return Err(format!("Validation failed: {}", errors.join("; ")));
+            return Err(CarrierError::Internal(format!("Validation failed: {}", errors.join("; "))));
         }
 
         // Build the reload plan
@@ -282,12 +282,12 @@ impl CarrierKernel {
     }
 
     /// Reload Brain from disk (brain.json). Used by the API to hot-reload after config changes.
-    pub fn reload_brain(&self) -> Result<(), String> {
+    pub fn reload_brain(&self) -> CarrierResult<()> {
         let json_str = std::fs::read_to_string(&self.brain.brain_path)
-            .map_err(|e| format!("Cannot read {}: {e}", self.brain.brain_path.display()))?;
+            .map_err(|e| CarrierError::Internal(format!("Cannot read {}: {e}", self.brain.brain_path.display())))?;
         let config: types::brain::BrainConfig =
-            serde_json::from_str(&json_str).map_err(|e| format!("Invalid brain.json: {e}"))?;
-        let brain = Brain::new(config).map_err(|e| format!("Brain init failed: {e}"))?;
+            serde_json::from_str(&json_str).map_err(|e| CarrierError::Internal(format!("Invalid brain.json: {e}")))?;
+        let brain = Brain::new(config).map_err(|e| CarrierError::Internal(format!("Brain init failed: {e}")))?;
         *self.brain.brain.write().unwrap_or_else(|e| {
             warn!("Brain RwLock poisoned, recovering");
             e.into_inner()
@@ -297,7 +297,7 @@ impl CarrierKernel {
     }
 
     /// Update Brain config: clone config, apply mutation, persist to disk, hot-reload.
-    pub fn update_brain<F>(&self, f: F) -> Result<(), String>
+    pub fn update_brain<F>(&self, f: F) -> CarrierResult<()>
     where
         F: FnOnce(&mut types::brain::BrainConfig),
     {
@@ -315,13 +315,13 @@ impl CarrierKernel {
 
         // Persist to disk
         let json_str = serde_json::to_string_pretty(&config)
-            .map_err(|e| format!("Cannot serialize brain config: {e}"))?;
+            .map_err(|e| CarrierError::Internal(format!("Cannot serialize brain config: {e}")))?;
         std::fs::write(&self.brain.brain_path, &json_str)
-            .map_err(|e| format!("Cannot write {}: {e}", self.brain.brain_path.display()))?;
+            .map_err(|e| CarrierError::Internal(format!("Cannot write {}: {e}", self.brain.brain_path.display())))?;
 
         // Hot-reload: create new Brain from updated config
         let brain =
-            Brain::new(config).map_err(|e| format!("Brain init failed after update: {e}"))?;
+            Brain::new(config).map_err(|e| CarrierError::Internal(format!("Brain init failed after update: {e}")))?;
         *self.brain.brain.write().unwrap_or_else(|e| {
             warn!("Brain RwLock poisoned, recovering");
             e.into_inner()

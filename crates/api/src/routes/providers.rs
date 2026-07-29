@@ -60,7 +60,7 @@ pub async fn set_provider_key(
     if let Err(e) = kernel::dotenv::save_env_key(&config.api_key_env, key) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
+            Json(serde_json::json!({"error": e.to_string()})),
         );
     }
 
