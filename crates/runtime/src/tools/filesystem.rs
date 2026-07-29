@@ -76,12 +76,12 @@ impl super::ToolModule for FilesystemTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         match name {
-            "file_read" => Some(tool_file_read(input, ctx).await.map_err(|e| e.to_string())),
-            "file_write" => Some(tool_file_write(input, ctx).await.map_err(|e| e.to_string())),
-            "file_list" => Some(tool_file_list(input, ctx).await.map_err(|e| e.to_string())),
-            "file_convert" => Some(tool_file_convert(input, ctx).await.map_err(|e| e.to_string())),
+            "file_read" => Some(tool_file_read(input, ctx).await),
+            "file_write" => Some(tool_file_write(input, ctx).await),
+            "file_list" => Some(tool_file_list(input, ctx).await),
+            "file_convert" => Some(tool_file_convert(input, ctx).await),
             _ => None,
         }
     }

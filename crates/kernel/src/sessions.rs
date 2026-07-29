@@ -440,7 +440,7 @@ impl CarrierKernel {
 
         let result = compact_session(driver, &compaction_model, &session, &config)
             .await
-            .map_err(|e| KernelError::Carrier(CarrierError::Internal(e)))?;
+            .map_err(KernelError::Carrier)?;
 
         // Post-compaction audit: validate and repair the kept messages
         let (repaired_messages, repair_stats) =
@@ -627,7 +627,7 @@ impl CarrierKernel {
 
         let classification = classify_intent(driver, &model, last_assistant.as_deref(), new_user_msg)
             .await
-            .map_err(|e| KernelError::Carrier(CarrierError::Internal(e)))?;
+            .map_err(KernelError::Carrier)?;
 
         if classification.is_new {
             tracing::info!(

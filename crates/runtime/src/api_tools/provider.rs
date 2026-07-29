@@ -8,6 +8,7 @@
 use crate::tools::ToolModule;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::api_tool::ApiToolDef;
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
@@ -132,7 +133,7 @@ impl DeclarativeApiModule {
     /// Resolve parameters that have a [tool.resolve] config.
     /// For each param with a resolve rule, if the condition is met, call the
     /// specified tool to transform the value (e.g. geocode place name → coordinates).
-    async fn resolve_params(&self, config: &ApiToolDef, args: &Value) -> Result<Value, String> {
+    async fn resolve_params(&self, config: &ApiToolDef, args: &Value) -> CarrierResult<Value> {
         if config.resolve.is_empty() {
             return Ok(args.clone());
         }
@@ -215,11 +216,11 @@ impl DeclarativeApiModule {
         Ok(resolved)
     }
 
-    async fn execute_api_call(&self, config: &ApiToolDef, args: &Value) -> Result<String, String> {
+    async fn execute_api_call(&self, config: &ApiToolDef, args: &Value) -> CarrierResult<String> {
         // Validate required params
         for (name, param_def) in &config.params {
             if param_def.required && args.get(name).is_none() && param_def.default.is_none() {
-                return Err(format!("Missing required parameter: {}", name));
+                return Err(CarrierError::InvalidInput(format!("Missing required parameter: {}", name)));
             }
         }
 
@@ -241,14 +242,14 @@ impl DeclarativeApiModule {
             req = req.header(k.as_str(), v.as_str());
         }
 
-        let resp = req.send().await.map_err(|e| format!("{} request failed: {}", config.name, e))?;
+        let resp = req.send().await.map_err(|e| CarrierError::Network(format!("{} request failed: {}", config.name, e)))?;
 
         let status = resp.status();
         if !status.is_success() {
-            return Err(format!("{} HTTP error: {}", config.name, status));
+            return Err(CarrierError::Network(format!("{} HTTP error: {}", config.name, status)));
         }
 
-        let body: Value = resp.json().await.map_err(|e| format!("{} parse error: {}", config.name, e))?;
+        let body: Value = resp.json().await.map_err(|e| CarrierError::Serialization(format!("{} parse error: {}", config.name, e)))?;
 
         // Error check
         if let Some(ref check) = config.error_check {
@@ -256,7 +257,7 @@ impl DeclarativeApiModule {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if actual != check.expect {
-                return Err(format!("{} API error: {}='{}', expected='{}'", config.name, check.field, actual, check.expect));
+                return Err(CarrierError::Network(format!("{} API error: {}='{}', expected='{}'", config.name, check.field, actual, check.expect)));
             }
         }
 
@@ -345,7 +346,7 @@ impl ToolModule for DeclarativeApiModule {
         name: &str,
         input: &Value,
         _ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         let config = self.find_config(name)?;
         let result = self.execute_api_call(config, input).await;
         Some(result)

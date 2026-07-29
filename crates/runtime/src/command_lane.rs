@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 use tokio::sync::Semaphore;
+use types::error::{CarrierError, CarrierResult};
 
 /// Command lane type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,7 +81,7 @@ impl CommandQueue {
     /// Submit work to a lane. Acquires a permit, executes the future, releases.
     ///
     /// Returns `Err` if the semaphore is closed (shutdown).
-    pub async fn submit<F, T>(&self, lane: Lane, work: F) -> Result<T, String>
+    pub async fn submit<F, T>(&self, lane: Lane, work: F) -> CarrierResult<T>
     where
         F: std::future::Future<Output = T>,
     {
@@ -88,7 +89,7 @@ impl CommandQueue {
         let _permit = sem
             .acquire()
             .await
-            .map_err(|_| format!("Lane {} is closed", lane))?;
+            .map_err(|_| CarrierError::ShuttingDown)?;
 
         Ok(work.await)
     }

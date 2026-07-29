@@ -61,7 +61,7 @@ impl ToolModule for ShellTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         if name != "shell_exec" {
             return None;
         }
@@ -73,10 +73,10 @@ impl ToolModule for ShellTools {
 
         // SECURITY: Always check for shell metacharacters, even in Full mode.
         if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(command) {
-            return Some(Err(format!(
+            return Some(Err(CarrierError::Sandbox(format!(
                 "shell_exec blocked: command contains {reason}. \
                  Shell metacharacters are never allowed."
-            )));
+            ))));
         }
 
         // Flow-scoped shell_allow (private brand skills / system office flows):
@@ -95,11 +95,11 @@ impl ToolModule for ShellTools {
                 if let Err(reason) =
                     crate::subprocess_sandbox::validate_command_allowlist(command, policy)
                 {
-                    return Some(Err(format!(
+                    return Some(Err(CarrierError::Sandbox(format!(
                         "shell_exec blocked: {reason}. Current exec_policy.mode = '{:?}'. \
                          To allow shell commands, set exec_policy.mode = 'full' in the agent manifest or config.toml.",
                         policy.mode
-                    )));
+                    ))));
                 }
             }
         }
@@ -120,7 +120,7 @@ impl ToolModule for ShellTools {
                             %violation,
                             "Shell taint check failed"
                         );
-                        return Some(Err(format!("Taint violation: {violation}")));
+                        return Some(Err(CarrierError::Sandbox(format!("Taint violation: {violation}"))));
                     }
                 }
             }
@@ -135,7 +135,7 @@ impl ToolModule for ShellTools {
     } else {
         exec_policy.map(|p| p.timeout_secs).unwrap_or(30)
     };
-    Some(exec_shell(input, allowed_env, workspace_root.as_deref(), exec_policy, default_timeout_secs).await.map_err(|e| e.to_string()))
+    Some(exec_shell(input, allowed_env, workspace_root.as_deref(), exec_policy, default_timeout_secs).await)
     }
 
     fn permission_level(&self, _tool_name: &str) -> types::tool::PermissionLevel {
@@ -326,7 +326,7 @@ impl ToolModule for CliExecTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         if name != "cli_exec" {
             return None;
         }
@@ -337,10 +337,10 @@ impl ToolModule for CliExecTools {
         let allowed = self.config.commands.iter().find(|c| c.name == command_name);
         if allowed.is_none() {
             let available: Vec<&str> = self.config.commands.iter().map(|c| c.name.as_str()).collect();
-            return Some(Err(format!(
+            return Some(Err(CarrierError::Sandbox(format!(
                 "Command '{command_name}' not in cli_exec allowlist. Available: {}",
                 available.join(", ")
-            )));
+            ))));
         }
 
         // 2. Parse args with shlex — never start a shell
@@ -349,13 +349,13 @@ impl ToolModule for CliExecTools {
         if !args_str.is_empty() {
             // SECURITY: reject shell metacharacters in args
             if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(args_str) {
-                return Some(Err(format!(
+                return Some(Err(CarrierError::Sandbox(format!(
                     "cli_exec blocked: args contain {reason}. \
                      Shell metacharacters (pipes, redirects, subshells) are not allowed."
-                )));
+                ))));
             }
             let parsed = shlex::split(args_str).ok_or_else(|| {
-                "Arguments contain unmatched quotes or invalid syntax".to_string()
+                CarrierError::InvalidInput("Arguments contain unmatched quotes or invalid syntax".to_string())
             });
             match parsed {
                 Ok(parts) => argv.extend(parts),
@@ -426,8 +426,8 @@ impl ToolModule for CliExecTools {
                     "Exit code: {exit_code}\n\nSTDOUT:\n{stdout_str}\nSTDERR:\n{stderr_str}"
                 )))
             }
-            Ok(Err(e)) => Some(Err(format!("Failed to execute command: {e}"))),
-            Err(_) => Some(Err(format!("Command timed out after {timeout_secs}s"))),
+            Ok(Err(e)) => Some(Err(CarrierError::Sandbox(format!("Failed to execute command: {e}")))),
+            Err(_) => Some(Err(CarrierError::Sandbox(format!("Command timed out after {timeout_secs}s")))),
         }
     }
 

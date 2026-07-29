@@ -187,18 +187,18 @@ impl ToolModule for AgentMgmtTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         let kernel = ctx.kernel;
         let caller_agent_id = ctx.caller_agent_id;
         let sender_id = ctx.sender_id;
         let owner_id = ctx.owner_id;
 
         match name {
-            "agent_send" => Some(tool_agent_send(input, kernel, caller_agent_id, owner_id, sender_id).await.map_err(|e| e.to_string())),
-            "agent_spawn" => Some(tool_agent_spawn(input, kernel, caller_agent_id).await.map_err(|e| e.to_string())),
-            "agent_list" => Some(tool_agent_list(kernel, caller_agent_id).map_err(|e| e.to_string())),
-            "agent_kill" => Some(tool_agent_kill(input, kernel, caller_agent_id).map_err(|e| e.to_string())),
-            "agent_restart" => Some(tool_agent_restart(input, kernel, caller_agent_id).map_err(|e| e.to_string())),
+            "agent_send" => Some(tool_agent_send(input, kernel, caller_agent_id, owner_id, sender_id).await),
+            "agent_spawn" => Some(tool_agent_spawn(input, kernel, caller_agent_id).await),
+            "agent_list" => Some(tool_agent_list(kernel, caller_agent_id)),
+            "agent_kill" => Some(tool_agent_kill(input, kernel, caller_agent_id)),
+            "agent_restart" => Some(tool_agent_restart(input, kernel, caller_agent_id)),
             _ => None,
         }
     }

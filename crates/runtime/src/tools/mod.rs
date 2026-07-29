@@ -73,7 +73,7 @@ pub trait ToolModule: Send + Sync {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>>;
+    ) -> Option<CarrierResult<String>>;
 
     /// Return the permission level for a tool in this module.
     ///

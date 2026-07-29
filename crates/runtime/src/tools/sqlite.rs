@@ -56,10 +56,10 @@ impl super::ToolModule for SqliteTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         match name {
-            "sqlite_query" => Some(tool_sqlite_query(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
-            "sqlite_schema" => Some(tool_sqlite_schema(input, ctx.workspace_root).await.map_err(|e| e.to_string())),
+            "sqlite_query" => Some(tool_sqlite_query(input, ctx.workspace_root).await),
+            "sqlite_schema" => Some(tool_sqlite_schema(input, ctx.workspace_root).await),
             _ => None,
         }
     }

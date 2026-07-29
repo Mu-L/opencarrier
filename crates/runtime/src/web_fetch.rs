@@ -61,8 +61,8 @@ impl WebFetchEngine {
     }
 
     /// Fetch a URL with full security pipeline (GET only, for backwards compat).
-    pub async fn fetch(&self, url: &str) -> Result<String, String> {
-        self.fetch_with_options(url, "GET", None, None).await.map_err(|e| e.to_string())
+    pub async fn fetch(&self, url: &str) -> CarrierResult<String> {
+        self.fetch_with_options(url, "GET", None, None).await
     }
 
     /// Fetch a URL with configurable HTTP method, headers, and body.
@@ -216,7 +216,7 @@ impl WebFetchEngine {
 
     /// 调外挂 AginxBrowser 的 /fetch，返回 markdown 正文。失败返回 Err（调用方回退 reqwest）。
     /// 请求格式对齐 browser.rs 的 do_fetch_request；响应解析 {content, title, url}。
-    async fn fetch_via_aginxbrowser(&self, url: &str) -> Result<String, String> {
+    async fn fetch_via_aginxbrowser(&self, url: &str) -> CarrierResult<String> {
         let base = aginxbrowser_url().expect("caller guards aginxbrowser_url().is_some()");
         let body = serde_json::json!({
             "url": url,
@@ -228,15 +228,15 @@ impl WebFetchEngine {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("AginxBrowser request failed: {e}"))?
+            .map_err(|e| CarrierError::Network(format!("AginxBrowser request failed: {e}")))?
             .json()
             .await
-            .map_err(|e| format!("AginxBrowser parse failed: {e}"))?;
+            .map_err(|e| CarrierError::Serialization(format!("AginxBrowser parse failed: {e}")))?;
         resp.get("content")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .filter(|s| !s.trim().is_empty())
-            .ok_or_else(|| "AginxBrowser response missing/empty content".into())
+            .ok_or_else(|| CarrierError::Network("AginxBrowser response missing/empty content".into()))
     }
 }
 

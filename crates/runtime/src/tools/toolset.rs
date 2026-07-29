@@ -3,6 +3,7 @@
 use crate::tool_context::ToolContext;
 use crate::tools::ToolModule;
 use async_trait::async_trait;
+use types::error::CarrierResult;
 use serde_json::Value;
 use types::tool::ToolDefinition;
 
@@ -32,7 +33,7 @@ impl ToolModule for ToolSearchTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         if name != "tool_search" {
             return None;
         }

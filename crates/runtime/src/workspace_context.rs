@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tracing::debug;
+use types::error::{CarrierError, CarrierResult};
 
 /// Maximum file size to read for context files (32KB).
 const MAX_FILE_SIZE: u64 = 32_768;
@@ -242,13 +243,13 @@ impl WorkspaceState {
     }
 
     /// Save state to the workspace's `.opencarrier/workspace-state.json`.
-    pub fn save(&self, workspace_root: &Path) -> Result<(), String> {
+    pub fn save(&self, workspace_root: &Path) -> CarrierResult<()> {
         let dir = workspace_root.join(".opencarrier");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create .opencarrier dir: {e}"))?;
+        std::fs::create_dir_all(&dir).map_err(CarrierError::Io)?;
         let path = dir.join("workspace-state.json");
         let json = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("Failed to serialize state: {e}"))?;
-        std::fs::write(&path, json).map_err(|e| format!("Failed to write state: {e}"))
+            .map_err(|e| CarrierError::Serialization(format!("Failed to serialize state: {e}")))?;
+        std::fs::write(&path, json).map_err(CarrierError::Io)
     }
 }
 

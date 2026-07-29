@@ -4,6 +4,7 @@
 //! LLM. Results are stored directly to SQLite — zero token cost.
 
 use types::api_tool::{ApiToolDef, ApiCronDef};
+use types::error::{CarrierError, CarrierResult};
 use std::path::PathBuf;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -60,26 +61,26 @@ async fn cron_loop(home_dir: PathBuf) {
     }
 }
 
-async fn execute_cron_api_call(tool: &ApiToolDef, home_dir: &std::path::Path) -> Result<(), String> {
+async fn execute_cron_api_call(tool: &ApiToolDef, home_dir: &std::path::Path) -> CarrierResult<()> {
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .map_err(|e| format!("HTTP client: {e}"))?;
+        .map_err(|e| CarrierError::Network(format!("HTTP client: {e}")))?;
 
     let url = build_cron_url(tool);
     let mut req = http.get(&url);
     for (k, v) in &tool.headers {
         req = req.header(k, v);
     }
-    let resp = req.send().await.map_err(|e| format!("Request: {e}"))?;
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("Parse: {e}"))?;
+    let resp = req.send().await.map_err(|e| CarrierError::Network(format!("Request: {e}")))?;
+    let body: serde_json::Value = resp.json().await.map_err(|e| CarrierError::Serialization(format!("Parse: {e}")))?;
 
     if let Some(ref check) = tool.error_check {
         let actual = navigate(&body, &check.field)
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_default();
         if actual != check.expect {
-            return Err(format!("API error: {}='{}'", check.field, actual));
+            return Err(CarrierError::Network(format!("API error: {}='{}'", check.field, actual)));
         }
     }
 
@@ -192,24 +193,24 @@ fn navigate<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_jso
     Some(current)
 }
 
-fn store_to_sqlite(home_dir: &std::path::Path, db_path: &str, table: &str, tool_name: &str, body: &serde_json::Value) -> Result<(), String> {
+fn store_to_sqlite(home_dir: &std::path::Path, db_path: &str, table: &str, tool_name: &str, body: &serde_json::Value) -> CarrierResult<()> {
     let full_path = if db_path.starts_with('/') {
         std::path::PathBuf::from(db_path)
     } else {
         home_dir.join(db_path)
     };
-    let conn = rusqlite::Connection::open(&full_path).map_err(|e| format!("SQLite open: {e}"))?;
+    let conn = rusqlite::Connection::open(&full_path).map_err(|e| CarrierError::Internal(format!("SQLite open: {e}")))?;
     conn.execute(
         &format!(
             "CREATE TABLE IF NOT EXISTS {} (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, raw_response TEXT, fetched_at TEXT DEFAULT (datetime('now','localtime')))",
             table
         ),
         [],
-    ).map_err(|e| format!("Create table: {e}"))?;
+    ).map_err(|e| CarrierError::Internal(format!("Create table: {e}")))?;
     let raw = serde_json::to_string(body).unwrap_or_default();
     conn.execute(
         &format!("INSERT INTO {} (tool_name, raw_response) VALUES (?1, ?2)", table),
         rusqlite::params![tool_name, raw],
-    ).map_err(|e| format!("Insert: {e}"))?;
+    ).map_err(|e| CarrierError::Internal(format!("Insert: {e}")))?;
     Ok(())
 }

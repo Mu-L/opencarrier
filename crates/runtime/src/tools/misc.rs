@@ -33,9 +33,9 @@ impl ToolModule for MiscTools {
         name: &str,
         _input: &Value,
         _ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         match name {
-            "location_get" => Some(location_get().await.map_err(|e| e.to_string())),
+            "location_get" => Some(location_get().await),
             "system_time" => Some(Ok(system_time())),
             _ => None,
         }

@@ -88,30 +88,30 @@ impl super::ToolModule for MemoryTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         if name != "memory_tree" {
             return None;
         }
 
         let memory = match ctx.memory {
             Some(m) => m,
-            None => return Some(Err("memory_tree: memory not available".to_string())),
+            None => return Some(Err(CarrierError::Internal("memory_tree: memory not available".to_string()))),
         };
         let owner_id = ctx.owner_id.unwrap_or("default");
         let user_id = ctx.sender_id;
 
         let mode = match input.get("mode").and_then(|v| v.as_str()) {
             Some(m) => m,
-            None => return Some(Err("memory_tree: 'mode' parameter is required. Valid modes: search_entities, query_topic, query_source, query_global, drill_down, fetch_leaves".to_string())),
+            None => return Some(Err(CarrierError::InvalidInput("memory_tree: 'mode' parameter is required. Valid modes: search_entities, query_topic, query_source, query_global, drill_down, fetch_leaves".to_string()))),
         };
         match mode {
-            "search_entities" => Some(handle_search_entities(input, memory, owner_id, user_id).await.map_err(|e| e.to_string())),
-            "query_topic" => Some(handle_query_topic(input, memory, owner_id, user_id).await.map_err(|e| e.to_string())),
-            "query_source" => Some(handle_query_source(input, memory, owner_id, user_id).await.map_err(|e| e.to_string())),
-            "query_global" => Some(handle_query_global(input, memory, owner_id, user_id).await.map_err(|e| e.to_string())),
-            "drill_down" => Some(handle_drill_down(input, memory, owner_id, user_id).await.map_err(|e| e.to_string())),
-            "fetch_leaves" => Some(handle_fetch_leaves(input, memory, owner_id, user_id).await.map_err(|e| e.to_string())),
-            other => Some(Err(format!("memory_tree: unknown mode `{other}`. Valid modes: search_entities, query_topic, query_source, query_global, drill_down, fetch_leaves"))),
+            "search_entities" => Some(handle_search_entities(input, memory, owner_id, user_id).await),
+            "query_topic" => Some(handle_query_topic(input, memory, owner_id, user_id).await),
+            "query_source" => Some(handle_query_source(input, memory, owner_id, user_id).await),
+            "query_global" => Some(handle_query_global(input, memory, owner_id, user_id).await),
+            "drill_down" => Some(handle_drill_down(input, memory, owner_id, user_id).await),
+            "fetch_leaves" => Some(handle_fetch_leaves(input, memory, owner_id, user_id).await),
+            other => Some(Err(CarrierError::InvalidInput(format!("memory_tree: unknown mode `{other}`. Valid modes: search_entities, query_topic, query_source, query_global, drill_down, fetch_leaves")))),
         }
     }
 

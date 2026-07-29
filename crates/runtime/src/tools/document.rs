@@ -38,10 +38,10 @@ impl super::ToolModule for DocumentTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         match name {
             "document_generate" => {
-                Some(tool_document_generate(input, ctx).await.map_err(|e| e.to_string()))
+                Some(tool_document_generate(input, ctx).await)
             }
             _ => None,
         }

@@ -13,6 +13,7 @@
 use crate::llm_driver::{CompletionRequest, LlmDriver};
 use crate::str_utils::safe_truncate_str;
 use memory::session::Session;
+use types::error::{CarrierError, CarrierResult};
 use types::message::{ContentBlock, Message, MessageContent, Role};
 use types::tool::ToolDefinition;
 use serde::Serialize;
@@ -470,7 +471,7 @@ async fn summarize_messages(
     model: &str,
     messages: &[Message],
     config: &CompactionConfig,
-) -> Result<(String, Vec<String>), String> {
+) -> CarrierResult<(String, Vec<String>)> {
     let conversation_text = build_conversation_text(messages, config);
 
     // If conversation exceeds chunk limit, skip single-pass entirely.
@@ -478,11 +479,11 @@ async fn summarize_messages(
     // truncation would discard parts of the conversation.
     let effective_max = (config.max_chunk_chars as f64 / config.safety_margin) as usize;
     if conversation_text.len() > effective_max {
-        return Err(format!(
+        return Err(CarrierError::Internal(format!(
             "Conversation too large for single-pass ({} chars > {} limit). Use chunked instead.",
             conversation_text.len(),
             effective_max
-        ));
+        )));
     }
 
     let summarize_prompt = format!(
@@ -540,7 +541,7 @@ async fn summarize_messages(
         }
     }
 
-    Err(last_error)
+    Err(CarrierError::LlmDriver(last_error))
 }
 
 /// Parse the `SUMMARY:` / `FACTS:` structured output from the compaction LLM.
@@ -612,7 +613,7 @@ async fn summarize_in_chunks(
     model: &str,
     messages: &[Message],
     config: &CompactionConfig,
-) -> Result<(String, Vec<String>), String> {
+) -> CarrierResult<(String, Vec<String>)> {
     let chunk_ratio = compute_adaptive_chunk_ratio(messages, config);
     let chunk_size = (messages.len() as f64 * chunk_ratio).ceil() as usize;
     let chunk_size = chunk_size.max(5); // minimum 5 messages per chunk
@@ -625,7 +626,7 @@ async fn summarize_in_chunks(
     let mut summaries = Vec::new();
     let mut all_facts: Vec<String> = Vec::new();
     let mut success_count = 0usize;
-    let mut last_chunk_error = String::new();
+    let mut last_chunk_error = CarrierError::Internal("unknown".to_string());
     for (i, chunk) in messages.chunks(chunk_size).enumerate() {
         match summarize_messages(driver.clone(), model, chunk, config).await {
             Ok((summary, facts)) => {
@@ -654,14 +655,14 @@ async fn summarize_in_chunks(
 
     // If ALL chunks failed, propagate the error to trigger fallback
     if success_count == 0 {
-        return Err(format!(
+        return Err(CarrierError::LlmDriver(format!(
             "All {} chunks failed to summarize: {last_chunk_error}",
             summaries.len()
-        ));
+        )));
     }
 
     if summaries.is_empty() {
-        return Err("No chunks were summarized".to_string());
+        return Err(CarrierError::Internal("No chunks were summarized".to_string()));
     }
 
     if summaries.len() == 1 {
@@ -736,7 +737,7 @@ pub async fn compact_session(
     model: &str,
     session: &Session,
     config: &CompactionConfig,
-) -> Result<CompactionResult, String> {
+) -> CarrierResult<CompactionResult> {
     let msg_count = session.messages.len();
     if msg_count <= config.keep_recent {
         return Ok(CompactionResult {

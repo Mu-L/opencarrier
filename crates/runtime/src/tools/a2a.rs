@@ -116,12 +116,12 @@ impl ToolModule for A2aTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         let kernel = ctx.kernel;
 
         match name {
-            "a2a_discover" => Some(tool_a2a_discover(input).await.map_err(|e| e.to_string())),
-            "a2a_send" => Some(tool_a2a_send(input, kernel).await.map_err(|e| e.to_string())),
+            "a2a_discover" => Some(tool_a2a_discover(input).await),
+            "a2a_send" => Some(tool_a2a_send(input, kernel).await),
             _ => None,
         }
     }

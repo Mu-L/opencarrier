@@ -69,16 +69,16 @@ impl super::ToolModule for KvTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         let memory = match ctx.memory {
             Some(m) => m,
-            None => return Some(Err("kv tools: memory not available".to_string())),
+            None => return Some(Err(CarrierError::Internal("kv tools: memory not available".to_string()))),
         };
 
         match name {
-            "kv_get" => Some(handle_kv_get(input, memory, ctx).await.map_err(|e| e.to_string())),
-            "kv_set" => Some(handle_kv_set(input, memory, ctx).await.map_err(|e| e.to_string())),
-            "kv_list" => Some(handle_kv_list(input, memory, ctx).await.map_err(|e| e.to_string())),
+            "kv_get" => Some(handle_kv_get(input, memory, ctx).await),
+            "kv_set" => Some(handle_kv_set(input, memory, ctx).await),
+            "kv_list" => Some(handle_kv_list(input, memory, ctx).await),
             _ => None,
         }
     }

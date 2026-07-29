@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use crate::llm_driver::{CompletionRequest, LlmDriver};
+use types::error::{CarrierError, CarrierResult};
 use types::message::{Message, MessageContent};
 
 /// Result of intent classification.
@@ -99,7 +100,7 @@ pub async fn classify_intent(
     model: &str,
     last_assistant: Option<&str>,
     new_user: &str,
-) -> Result<IntentClassification, String> {
+) -> CarrierResult<IntentClassification> {
     let user_prompt = build_prompt(last_assistant, new_user);
 
     let request = CompletionRequest {
@@ -132,12 +133,12 @@ pub async fn classify_intent(
     .await
     {
         Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(format!("intent LLM call failed: {e}")),
-        Err(_) => return Err("intent LLM call timed out after 30s".to_string()),
+        Ok(Err(e)) => return Err(CarrierError::LlmDriver(format!("intent LLM call failed: {e}"))),
+        Err(_) => return Err(CarrierError::LlmDriver("intent LLM call timed out after 30s".to_string())),
     };
 
     let text = response.text();
-    parse_response(&text).ok_or_else(|| format!("intent response parse failed: {text}"))
+    parse_response(&text).ok_or_else(|| CarrierError::Internal(format!("intent response parse failed: {text}")))
 }
 
 #[cfg(test)]

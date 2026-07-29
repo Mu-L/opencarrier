@@ -198,16 +198,16 @@ Use browser_navigate to extract page content instead."
         name: &str,
         input: &Value,
         _ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         match name {
-            "browser_navigate" | "browser_read_page" => Some(browser_navigate(input).await.map_err(|e| e.to_string())),
-            "browser_click" => Some(browser_click(input).await.map_err(|e| e.to_string())),
-            "browser_evaluate" => Some(browser_evaluate(input).await.map_err(|e| e.to_string())),
-            "browser_type" => Some(browser_type(input).await.map_err(|e| e.to_string())),
-            "browser_scroll" => Some(browser_scroll(input).await.map_err(|e| e.to_string())),
-            "browser_back" => Some(browser_back(input).await.map_err(|e| e.to_string())),
-            "browser_screenshot" => Some(browser_screenshot(input).await.map_err(|e| e.to_string())),
-            "browser_wait" => Some(browser_wait(input).await.map_err(|e| e.to_string())),
+            "browser_navigate" | "browser_read_page" => Some(browser_navigate(input).await),
+            "browser_click" => Some(browser_click(input).await),
+            "browser_evaluate" => Some(browser_evaluate(input).await),
+            "browser_type" => Some(browser_type(input).await),
+            "browser_scroll" => Some(browser_scroll(input).await),
+            "browser_back" => Some(browser_back(input).await),
+            "browser_screenshot" => Some(browser_screenshot(input).await),
+            "browser_wait" => Some(browser_wait(input).await),
             "browser_close" => Some(Ok("Browser session closed (AginxBrowser is stateless).".to_string())),
             _ => None,
         }

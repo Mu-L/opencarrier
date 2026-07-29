@@ -220,7 +220,7 @@ pub async fn audit_verify(State(state): State<Arc<AppState>>) -> axum::response:
         }
         Err(msg) => Json(serde_json::json!({
             "valid": false,
-            "error": msg,
+            "error": msg.to_string(),
             "entries": entry_count,
         }))
         .into_response(),

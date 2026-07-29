@@ -53,7 +53,7 @@ impl ToolModule for DataAnalyzeTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         if name != "data_analyze" {
             return None;
         }
@@ -64,7 +64,7 @@ impl ToolModule for DataAnalyzeTools {
         Some(
             run_data_analyze(input, memory, agent_id, ctx.is_clone_admin)
                 .await
-                .map_err(|e| e.to_string()),
+                ,
         )
     }
 

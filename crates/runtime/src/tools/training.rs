@@ -4,6 +4,7 @@ use super::ToolModule;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
@@ -16,34 +17,34 @@ async fn tool_train_read(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let target_root = crate::tools::resolve_target_workspace(input, kernel).map_err(|e| e.to_string())?;
-    let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
-    let full_path = crate::workspace_sandbox::resolve_sandbox_path(path, &target_root).map_err(|e| e.to_string())?;
+) -> CarrierResult<String> {
+    let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
+    let path = input["path"].as_str().ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
+    let full_path = crate::workspace_sandbox::resolve_sandbox_path(path, &target_root)?;
     tokio::fs::read_to_string(&full_path)
         .await
-        .map_err(|e| format!("Failed to read file: {e}"))
+        .map_err(CarrierError::Io)
 }
 
 async fn tool_train_write(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let target_root = crate::tools::resolve_target_workspace(input, kernel).map_err(|e| e.to_string())?;
-    let path = input["path"].as_str().ok_or("Missing 'path' parameter")?;
+) -> CarrierResult<String> {
+    let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
+    let path = input["path"].as_str().ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
     let content = input["content"]
         .as_str()
-        .ok_or("Missing 'content' parameter")?;
-    let full_path = crate::workspace_sandbox::resolve_sandbox_path(path, &target_root).map_err(|e| e.to_string())?;
+        .ok_or(CarrierError::InvalidInput("Missing 'content' parameter".to_string()))?;
+    let full_path = crate::workspace_sandbox::resolve_sandbox_path(path, &target_root)?;
     if let Some(parent) = full_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .map_err(|e| format!("Failed to create directories: {e}"))?;
+            .map_err(CarrierError::Io)?;
     }
     tokio::fs::write(&full_path, content)
         .await
-        .map_err(|e| format!("Failed to write file: {e}"))?;
+        .map_err(CarrierError::Io)?;
     Ok(format!(
         "Successfully wrote {} bytes to {}",
         content.len(),
@@ -55,18 +56,18 @@ async fn tool_train_list(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let target_root = crate::tools::resolve_target_workspace(input, kernel).map_err(|e| e.to_string())?;
+) -> CarrierResult<String> {
+    let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
     let sub_path = input["path"].as_str().unwrap_or(".");
-    let full_path = crate::workspace_sandbox::resolve_sandbox_path(sub_path, &target_root).map_err(|e| e.to_string())?;
+    let full_path = crate::workspace_sandbox::resolve_sandbox_path(sub_path, &target_root)?;
     let mut entries = tokio::fs::read_dir(&full_path)
         .await
-        .map_err(|e| format!("Failed to list directory: {e}"))?;
+        .map_err(CarrierError::Io)?;
     let mut files = Vec::new();
     while let Some(entry) = entries
         .next_entry()
         .await
-        .map_err(|e| format!("Failed to read entry: {e}"))?
+        .map_err(CarrierError::Io)?
     {
         let name = entry.file_name().to_string_lossy().to_string();
         let metadata = entry.metadata().await;
@@ -84,9 +85,9 @@ async fn tool_train_evaluate(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     _caller_agent_id: Option<&str>,
-) -> Result<String, String> {
-    let target_root = crate::tools::resolve_target_workspace(input, kernel).map_err(|e| e.to_string())?;
-    crate::tools::knowledge::tool_clone_evaluate(Some(&target_root)).await.map_err(|e| e.to_string())
+) -> CarrierResult<String> {
+    let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
+    crate::tools::knowledge::tool_clone_evaluate(Some(&target_root)).await
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +157,7 @@ impl ToolModule for TrainingTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         let kernel = ctx.kernel;
         let caller_agent_id = ctx.caller_agent_id;
 

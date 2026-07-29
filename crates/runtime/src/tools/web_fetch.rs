@@ -7,6 +7,7 @@
 use super::ToolModule;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use types::error::{CarrierError, CarrierResult};
 use std::collections::HashSet;
 use tracing::warn;
 use types::taint::{TaintLabel, TaintSink, TaintedValue};
@@ -41,7 +42,7 @@ impl ToolModule for WebFetchModule {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         if name != "web_fetch" {
             return None;
         }
@@ -50,19 +51,19 @@ impl ToolModule for WebFetchModule {
 
         // Taint check — block URLs containing API keys/tokens/secrets
         if let Some(violation) = check_taint_net_fetch(url) {
-            return Some(Err(format!("Taint violation: {violation}")));
+            return Some(Err(CarrierError::Network(format!("Taint violation: {violation}"))));
         }
 
         let engine = match ctx.fetch_engine {
             Some(e) => e,
-            None => return Some(Err("Web fetch not available".to_string())),
+            None => return Some(Err(CarrierError::Internal("Web fetch not available".to_string()))),
         };
 
         let method = input["method"].as_str().unwrap_or("GET");
         let headers = input.get("headers").and_then(|v| v.as_object());
         let body = input["body"].as_str();
 
-        Some(engine.fetch_with_options(url, method, headers, body).await.map_err(|e| e.to_string()))
+        Some(engine.fetch_with_options(url, method, headers, body).await)
     }
 
     fn permission_level(&self, _tool_name: &str) -> PermissionLevel {

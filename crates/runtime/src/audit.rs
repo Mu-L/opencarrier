@@ -12,6 +12,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex};
+use types::error::{CarrierError, CarrierResult};
 
 /// Categories of auditable actions within the agent runtime.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,16 +239,16 @@ impl AuditLog {
     ///
     /// Returns `Ok(())` if the chain is intact, or `Err(msg)` describing
     /// the first inconsistency found.
-    pub fn verify_integrity(&self) -> Result<(), String> {
+    pub fn verify_integrity(&self) -> CarrierResult<()> {
         let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let mut expected_prev = "0".repeat(64);
 
         for entry in entries.iter() {
             if entry.prev_hash != expected_prev {
-                return Err(format!(
+                return Err(CarrierError::Internal(format!(
                     "chain break at seq {}: expected prev_hash {} but found {}",
                     entry.seq, expected_prev, entry.prev_hash
-                ));
+                )));
             }
 
             let recomputed = compute_entry_hash(
@@ -261,10 +262,10 @@ impl AuditLog {
             );
 
             if recomputed != entry.hash {
-                return Err(format!(
+                return Err(CarrierError::Internal(format!(
                     "hash mismatch at seq {}: expected {} but found {}",
                     entry.seq, recomputed, entry.hash
-                ));
+                )));
             }
 
             expected_prev = entry.hash.clone();
@@ -354,7 +355,7 @@ mod tests {
 
         let result = log.verify_integrity();
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("hash mismatch at seq 1"));
+        assert!(result.unwrap_err().to_string().contains("hash mismatch at seq 1"));
     }
 
     #[test]

@@ -311,19 +311,19 @@ impl ToolModule for CollaborationTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         let kernel = ctx.kernel;
         let caller_agent_id = ctx.caller_agent_id;
 
         match name {
             // Collaboration tools
-            "agent_find" => Some(tool_agent_find(input, kernel, caller_agent_id).map_err(|e| e.to_string())),
-            "task_post" => Some(tool_task_post(input, kernel, caller_agent_id).await.map_err(|e| e.to_string())),
-            "task_claim" => Some(tool_task_claim(kernel, caller_agent_id).await.map_err(|e| e.to_string())),
-            "task_complete" => Some(tool_task_complete(input, kernel, caller_agent_id).await.map_err(|e| e.to_string())),
-            "task_list" => Some(tool_task_list(input, kernel, caller_agent_id).await.map_err(|e| e.to_string())),
-            "task_plan" => Some(tool_task_plan(input).map_err(|e| e.to_string())),
-            "event_publish" => Some(tool_event_publish(input, kernel, caller_agent_id).await.map_err(|e| e.to_string())),
+            "agent_find" => Some(tool_agent_find(input, kernel, caller_agent_id)),
+            "task_post" => Some(tool_task_post(input, kernel, caller_agent_id).await),
+            "task_claim" => Some(tool_task_claim(kernel, caller_agent_id).await),
+            "task_complete" => Some(tool_task_complete(input, kernel, caller_agent_id).await),
+            "task_list" => Some(tool_task_list(input, kernel, caller_agent_id).await),
+            "task_plan" => Some(tool_task_plan(input)),
+            "event_publish" => Some(tool_event_publish(input, kernel, caller_agent_id).await),
             _ => None,
         }
     }

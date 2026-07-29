@@ -192,14 +192,14 @@ impl ToolModule for MediaTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         match name {
             // Image analysis
-            "image_analyze" => Some(tool_image_analyze(input, ctx).await.map_err(|e| e.to_string())),
+            "image_analyze" => Some(tool_image_analyze(input, ctx).await),
 
             // Media understanding
-            "media_describe" => Some(tool_media_describe(input, ctx).await.map_err(|e| e.to_string())),
-            "media_transcribe" => Some(tool_media_transcribe(input, ctx.brain).await.map_err(|e| e.to_string())),
+            "media_describe" => Some(tool_media_describe(input, ctx).await),
+            "media_transcribe" => Some(tool_media_transcribe(input, ctx.brain).await),
 
             // Image generation
             "image_generate" => {
@@ -214,13 +214,13 @@ impl ToolModule for MediaTools {
                         ctx.external_url,
                     )
                     .await
-                    .map_err(|e| e.to_string()),
+                    ,
                 )
             }
 
             // Video generation
             "video_generate" => {
-                Some(tool_video_generate(input, ctx.brain).await.map_err(|e| e.to_string()))
+                Some(tool_video_generate(input, ctx.brain).await)
             }
 
             // TTS/STT
@@ -236,11 +236,11 @@ impl ToolModule for MediaTools {
                         ctx.external_url,
                     )
                     .await
-                    .map_err(|e| e.to_string()),
+                    ,
                 )
             }
             "speech_to_text" => {
-                Some(tool_speech_to_text(input, ctx.brain, ctx.workspace_root).await.map_err(|e| e.to_string()))
+                Some(tool_speech_to_text(input, ctx.brain, ctx.workspace_root).await)
             }
 
             // Persistent process tools
@@ -251,19 +251,19 @@ impl ToolModule for MediaTools {
                     ctx.caller_agent_id,
                     ctx.exec_policy,
                     ctx.allowed_env_vars,
-                ).await.map_err(|e| e.to_string()))
+                ).await)
             }
             "process_poll" => {
-                Some(tool_process_poll(input, ctx.process_manager, ctx.caller_agent_id).await.map_err(|e| e.to_string()))
+                Some(tool_process_poll(input, ctx.process_manager, ctx.caller_agent_id).await)
             }
             "process_write" => {
-                Some(tool_process_write(input, ctx.process_manager, ctx.caller_agent_id).await.map_err(|e| e.to_string()))
+                Some(tool_process_write(input, ctx.process_manager, ctx.caller_agent_id).await)
             }
             "process_kill" => {
-                Some(tool_process_kill(input, ctx.process_manager, ctx.caller_agent_id).await.map_err(|e| e.to_string()))
+                Some(tool_process_kill(input, ctx.process_manager, ctx.caller_agent_id).await)
             }
             "process_list" => {
-                Some(tool_process_list(ctx.process_manager, ctx.caller_agent_id).await.map_err(|e| e.to_string()))
+                Some(tool_process_list(ctx.process_manager, ctx.caller_agent_id).await)
             }
 
             // Canvas / A2UI
@@ -279,7 +279,7 @@ impl ToolModule for MediaTools {
                         ctx.external_url,
                     )
                     .await
-                    .map_err(|e| e.to_string()),
+                    ,
                 )
             }
 

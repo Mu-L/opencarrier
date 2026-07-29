@@ -439,7 +439,7 @@ impl ToolModule for SchedulingTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         let kernel = ctx.kernel;
         let memory = ctx.memory;
         let caller_agent_id = ctx.caller_agent_id;
@@ -448,14 +448,14 @@ impl ToolModule for SchedulingTools {
 
         match name {
             // Scheduling tools
-            "schedule_create" => Some(tool_schedule_create(input, memory, caller_agent_id).await.map_err(|e| e.to_string())),
-            "schedule_list" => Some(tool_schedule_list(memory, caller_agent_id).await.map_err(|e| e.to_string())),
-            "schedule_delete" => Some(tool_schedule_delete(input, memory, caller_agent_id).await.map_err(|e| e.to_string())),
+            "schedule_create" => Some(tool_schedule_create(input, memory, caller_agent_id).await),
+            "schedule_list" => Some(tool_schedule_list(memory, caller_agent_id).await),
+            "schedule_delete" => Some(tool_schedule_delete(input, memory, caller_agent_id).await),
 
             // Cron scheduling tools
-            "cron_create" => Some(tool_cron_create(input, kernel, caller_agent_id, owner_id, sender_id).await.map_err(|e| e.to_string())),
-            "cron_list" => Some(tool_cron_list(kernel, caller_agent_id, owner_id).await.map_err(|e| e.to_string())),
-            "cron_cancel" => Some(tool_cron_cancel(input, kernel, caller_agent_id, owner_id).await.map_err(|e| e.to_string())),
+            "cron_create" => Some(tool_cron_create(input, kernel, caller_agent_id, owner_id, sender_id).await),
+            "cron_list" => Some(tool_cron_list(kernel, caller_agent_id, owner_id).await),
+            "cron_cancel" => Some(tool_cron_cancel(input, kernel, caller_agent_id, owner_id).await),
 
             _ => None,
         }

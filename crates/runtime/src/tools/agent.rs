@@ -187,7 +187,7 @@ impl ToolModule for DelegationTools {
         name: &str,
         input: &Value,
         ctx: &ToolContext<'_>,
-    ) -> Option<Result<String, String>> {
+    ) -> Option<CarrierResult<String>> {
         let kernel = ctx.kernel;
         let caller_agent_id = ctx.caller_agent_id;
         let sender_id = ctx.sender_id;
@@ -195,14 +195,14 @@ impl ToolModule for DelegationTools {
 
         match name {
             // User profile
-            "user_profile" => Some(tool_user_profile(input, ctx.home_dir, ctx.agent_name, owner_id, sender_id).await.map_err(|e| e.to_string())),
+            "user_profile" => Some(tool_user_profile(input, ctx.home_dir, ctx.agent_name, owner_id, sender_id).await),
 
             // Subagent delegation (delegate_{name})
             name if name.starts_with("delegate_") => {
                 let subagent_name = &name["delegate_".len()..];
                 Some(tool_delegate_subagent(
                     subagent_name, input, kernel, caller_agent_id, owner_id, sender_id,
-                ).await.map_err(|e| e.to_string()))
+                ).await)
             }
 
             _ => None,
