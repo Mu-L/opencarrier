@@ -10,6 +10,7 @@ use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
 use super::instance::PluginInstance;
+use types::error::{CarrierError, CarrierResult};
 use types::plugin::{
     BotConfig, ChannelDescriptor, FfiJsonCallback, PluginConfig, PluginToolDef, PLUGIN_ABI_VERSION,
 };
@@ -108,18 +109,20 @@ unsafe impl Sync for LoadedPlugin {}
 
 impl LoadedPlugin {
     /// Start a channel (begin receiving messages).
-    pub fn start_channel(&self, channel: &LoadedChannel) -> Result<(), String> {
+    pub fn start_channel(&self, channel: &LoadedChannel) -> CarrierResult<()> {
         if let Some(fn_start) = self.fn_channel_start {
             let ret = unsafe { fn_start(channel.handle) };
             if ret != 0 {
-                return Err(format!(
+                return Err(CarrierError::Internal(format!(
                     "Channel {} start returned error code {}",
                     channel.channel_type, ret
-                ));
+                )));
             }
             Ok(())
         } else {
-            Err("Plugin does not export oc_channel_start".to_string())
+            Err(CarrierError::Internal(
+                "Plugin does not export oc_channel_start".to_string(),
+            ))
         }
     }
 
@@ -130,25 +133,30 @@ impl LoadedPlugin {
         bot_id: &str,
         user_id: &str,
         text: &str,
-    ) -> Result<(), String> {
+    ) -> CarrierResult<()> {
         if let Some(fn_send) = self.fn_channel_send {
             let msg = serde_json::json!({
                 "bot_id": bot_id,
                 "user_id": user_id,
                 "text": text,
             });
-            let c_msg = CString::new(serde_json::to_string(&msg).map_err(|e| e.to_string())?)
-                .map_err(|e| e.to_string())?;
+            let c_msg = CString::new(
+                serde_json::to_string(&msg)
+                    .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            )
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
             let ret = unsafe { fn_send(channel.handle, c_msg.as_ptr()) };
             if ret != 0 {
-                return Err(format!(
+                return Err(CarrierError::Internal(format!(
                     "Channel {} send returned error code {}",
                     channel.channel_type, ret
-                ));
+                )));
             }
             Ok(())
         } else {
-            Err("Plugin does not export oc_channel_send".to_string())
+            Err(CarrierError::Internal(
+                "Plugin does not export oc_channel_send".to_string(),
+            ))
         }
     }
 
@@ -158,11 +166,14 @@ impl LoadedPlugin {
         tool_name: &str,
         args_json: &str,
         context_json: &str,
-    ) -> Result<String, String> {
+    ) -> CarrierResult<String> {
         if let Some(fn_exec) = self.fn_tool_execute {
-            let c_tool = CString::new(tool_name).map_err(|e| e.to_string())?;
-            let c_args = CString::new(args_json).map_err(|e| e.to_string())?;
-            let c_ctx = CString::new(context_json).map_err(|e| e.to_string())?;
+            let c_tool =
+                CString::new(tool_name).map_err(|e| CarrierError::Internal(e.to_string()))?;
+            let c_args =
+                CString::new(args_json).map_err(|e| CarrierError::Internal(e.to_string()))?;
+            let c_ctx =
+                CString::new(context_json).map_err(|e| CarrierError::Internal(e.to_string()))?;
 
             let mut buf = vec![0u8; TOOL_RESULT_BUF_SIZE as usize];
             let ret = unsafe {
@@ -182,27 +193,35 @@ impl LoadedPlugin {
                         .to_string_lossy()
                         .into_owned()
                 };
-                return Err(if error_msg.is_empty() {
-                    format!("Tool {} returned error code {}", tool_name, ret)
-                } else {
-                    error_msg
+                return Err(CarrierError::ToolExecution {
+                    tool_id: tool_name.to_string(),
+                    reason: if error_msg.is_empty() {
+                        format!("Tool {} returned error code {}", tool_name, ret)
+                    } else {
+                        error_msg
+                    },
                 });
             }
 
             let len = ret as usize;
             if len > buf.len() {
-                return Err(format!(
-                    "Tool {} returned {} bytes, exceeding buffer size {}",
-                    tool_name,
-                    len,
-                    buf.len()
-                ));
+                return Err(CarrierError::ToolExecution {
+                    tool_id: tool_name.to_string(),
+                    reason: format!(
+                        "Tool {} returned {} bytes, exceeding buffer size {}",
+                        tool_name,
+                        len,
+                        buf.len()
+                    ),
+                });
             }
 
             let result = String::from_utf8_lossy(&buf[..len]).into_owned();
             Ok(result)
         } else {
-            Err("Plugin does not export oc_plugin_tool_execute".to_string())
+            Err(CarrierError::Internal(
+                "Plugin does not export oc_plugin_tool_execute".to_string(),
+            ))
         }
     }
 
@@ -266,7 +285,7 @@ impl super::instance::PluginInstance for LoadedPlugin {
         &self.tools
     }
 
-    fn start_channel(&self, channel: &LoadedChannel) -> Result<(), String> {
+    fn start_channel(&self, channel: &LoadedChannel) -> CarrierResult<()> {
         self.start_channel(channel)
     }
 
@@ -276,7 +295,7 @@ impl super::instance::PluginInstance for LoadedPlugin {
         bot_id: &str,
         user_id: &str,
         text: &str,
-    ) -> Result<(), String> {
+    ) -> CarrierResult<()> {
         self.channel_send(channel, bot_id, user_id, text)
     }
 
@@ -285,7 +304,7 @@ impl super::instance::PluginInstance for LoadedPlugin {
         tool_name: &str,
         args_json: &str,
         context_json: &str,
-    ) -> Result<String, String> {
+    ) -> CarrierResult<String> {
         self.tool_execute(tool_name, args_json, context_json)
     }
 
@@ -314,7 +333,7 @@ impl PluginLoader {
     pub fn load_all(
         plugins_dir: &Path,
         message_tx: mpsc::Sender<types::plugin::PluginMessage>,
-    ) -> Vec<Result<LoadedPlugin, String>> {
+    ) -> Vec<CarrierResult<LoadedPlugin>> {
         let mut results = Vec::new();
 
         let entries = match std::fs::read_dir(plugins_dir) {
@@ -454,13 +473,14 @@ impl PluginLoader {
     fn load_plugin(
         plugin_dir: &Path,
         message_tx: &mpsc::Sender<types::plugin::PluginMessage>,
-    ) -> Result<LoadedPlugin, String> {
+    ) -> CarrierResult<LoadedPlugin> {
         // 1. Read plugin.toml
         let config_path = plugin_dir.join("plugin.toml");
-        let config_content = std::fs::read_to_string(&config_path)
-            .map_err(|e| format!("Failed to read {}: {}", config_path.display(), e))?;
-        let mut config: PluginConfig =
-            toml::from_str(&config_content).map_err(|e| format!("Invalid plugin.toml: {}", e))?;
+        let config_content = std::fs::read_to_string(&config_path).map_err(|e| {
+            CarrierError::Internal(format!("Failed to read {}: {}", config_path.display(), e))
+        })?;
+        let mut config: PluginConfig = toml::from_str(&config_content)
+            .map_err(|e| CarrierError::Config(format!("Invalid plugin.toml: {}", e)))?;
 
         // 2. Discover bot configs from <plugin-dir>/<uuid>/bot.toml
         let discovered_bots = Self::discover_bots(plugin_dir);
@@ -478,37 +498,39 @@ impl PluginLoader {
 
         // 3. Check ABI version
         if config.meta.abi_version != 0 && config.meta.abi_version != PLUGIN_ABI_VERSION {
-            return Err(format!(
+            return Err(CarrierError::Internal(format!(
                 "ABI version mismatch: plugin expects {}, host provides {}",
                 config.meta.abi_version, PLUGIN_ABI_VERSION
-            ));
+            )));
         }
 
         // 4. Find shared library
-        let lib_path = Self::find_shared_library(plugin_dir)
-            .ok_or_else(|| format!("No shared library found in {}", plugin_dir.display()))?;
+        let lib_path = Self::find_shared_library(plugin_dir).ok_or_else(|| {
+            CarrierError::Internal(format!("No shared library found in {}", plugin_dir.display()))
+        })?;
 
         // 4. dlopen
-        let library = unsafe { Library::new(&lib_path) }
-            .map_err(|e| format!("Failed to load {}: {}", lib_path.display(), e))?;
+        let library = unsafe { Library::new(&lib_path) }.map_err(|e| {
+            CarrierError::Internal(format!("Failed to load {}: {}", lib_path.display(), e))
+        })?;
 
         // 5. Load symbols
         let fn_name: FnPluginName = unsafe {
             *library
                 .get(b"oc_plugin_name\0")
-                .map_err(|e| format!("Missing oc_plugin_name: {}", e))?
+                .map_err(|e| CarrierError::Internal(format!("Missing oc_plugin_name: {}", e)))?
         };
         let fn_version: FnPluginVersion = unsafe {
             *library
                 .get(b"oc_plugin_version\0")
-                .map_err(|e| format!("Missing oc_plugin_version: {}", e))?
+                .map_err(|e| CarrierError::Internal(format!("Missing oc_plugin_version: {}", e)))?
         };
         let fn_abi: Option<FnPluginAbiVersion> =
             unsafe { library.get(b"oc_plugin_abi_version\0").ok().map(|s| *s) };
         let fn_init: FnPluginInit = unsafe {
             *library
                 .get(b"oc_plugin_init\0")
-                .map_err(|e| format!("Missing oc_plugin_init: {}", e))?
+                .map_err(|e| CarrierError::Internal(format!("Missing oc_plugin_init: {}", e)))?
         };
         let fn_stop: Option<FnPluginStop> =
             unsafe { library.get(b"oc_plugin_stop\0").ok().map(|s| *s) };
@@ -527,10 +549,10 @@ impl PluginLoader {
         if let Some(fn_abi) = fn_abi {
             let abi = unsafe { fn_abi() };
             if abi != PLUGIN_ABI_VERSION {
-                return Err(format!(
+                return Err(CarrierError::Internal(format!(
                     "ABI version mismatch: plugin reports {}, host expects {}",
                     abi, PLUGIN_ABI_VERSION
-                ));
+                )));
             }
         }
 
@@ -543,9 +565,10 @@ impl PluginLoader {
             .into_owned();
 
         // 8. Initialize plugin
-        let config_json_str =
-            serde_json::to_string(&config).map_err(|e| format!("Config serialization: {}", e))?;
-        let c_config = CString::new(config_json_str).map_err(|e| e.to_string())?;
+        let config_json_str = serde_json::to_string(&config)
+            .map_err(|e| CarrierError::Serialization(format!("Config serialization: {}", e)))?;
+        let c_config =
+            CString::new(config_json_str).map_err(|e| CarrierError::Internal(e.to_string()))?;
 
         // Create a boxed sender that we pass as user_data
         let tx_box = Box::new(message_tx.clone());
@@ -553,7 +576,9 @@ impl PluginLoader {
 
         let handle = unsafe { fn_init(c_config.as_ptr(), message_callback, user_data) };
         if handle.is_null() {
-            return Err("oc_plugin_init returned null handle".to_string());
+            return Err(CarrierError::Internal(
+                "oc_plugin_init returned null handle".to_string(),
+            ));
         }
 
         // 9. Load channels (JSON)

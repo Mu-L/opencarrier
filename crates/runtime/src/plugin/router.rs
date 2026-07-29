@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tracing::{info, warn};
+use types::error::{CarrierError, CarrierResult};
 
 /// A clone bound to a sender.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -298,16 +299,20 @@ impl SenderRouter {
 
     /// Write a sender's route config and create directory structure.
     /// Adds the agent to clones if not already present.
-    fn persist_route(&self, sender_id: &str, agent_id: &str) -> Result<(), String> {
+    fn persist_route(&self, sender_id: &str, agent_id: &str) -> CarrierResult<()> {
         let sender_dir = self.senders_dir.join(sender_id);
         if let Err(e) = std::fs::create_dir_all(&sender_dir) {
-            return Err(format!("Failed to create sender dir: {e}"));
+            return Err(CarrierError::Internal(format!(
+                "Failed to create sender dir: {e}"
+            )));
         }
 
         // Create per-agent directory
         let agent_dir = sender_dir.join(agent_id);
         if let Err(e) = std::fs::create_dir_all(&agent_dir) {
-            return Err(format!("Failed to create sender/agent dir: {e}"));
+            return Err(CarrierError::Internal(format!(
+                "Failed to create sender/agent dir: {e}"
+            )));
         }
 
         // Add to clones if not present
@@ -384,14 +389,15 @@ impl SenderRouter {
     }
 
     /// Atomic write: write to temp file then rename (crash-safe on POSIX).
-    fn write_config_atomic(&self, sender_id: &str, config: &SenderConfig) -> Result<(), String> {
+    fn write_config_atomic(&self, sender_id: &str, config: &SenderConfig) -> CarrierResult<()> {
         let config_path = self.senders_dir.join(sender_id).join("config.json");
-        let json = serde_json::to_string_pretty(config).map_err(|e| format!("Serialize error: {e}"))?;
+        let json = serde_json::to_string_pretty(config)
+            .map_err(|e| CarrierError::Serialization(format!("Serialize error: {e}")))?;
         let tmp_path = config_path.with_extension("tmp");
-        std::fs::write(&tmp_path, &json).map_err(|e| format!("Write error: {e}"))?;
+        std::fs::write(&tmp_path, &json).map_err(CarrierError::Io)?;
         std::fs::rename(&tmp_path, &config_path).map_err(|e| {
             let _ = std::fs::remove_file(&tmp_path);
-            format!("Rename error: {e}")
+            CarrierError::Io(e)
         })
     }
 

@@ -103,7 +103,7 @@ impl PluginToolDispatcher {
             .tool_execute(tool_name, &args_json, &context_json)
             .map_err(|e| CarrierError::ToolExecution {
                 tool_id: tool_name.to_string(),
-                reason: e,
+                reason: e.to_string(),
             })
     }
 }

@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use types::error::CarrierResult;
 use types::plugin::PluginToolDef;
 
 use super::loader::LoadedChannel;
@@ -20,7 +21,7 @@ pub trait PluginInstance: Send + Sync {
     fn tools(&self) -> &[PluginToolDef];
 
     /// Start a channel (begin receiving messages).
-    fn start_channel(&self, channel: &LoadedChannel) -> Result<(), String>;
+    fn start_channel(&self, channel: &LoadedChannel) -> CarrierResult<()>;
     /// Send a text message through a channel.
     fn channel_send(
         &self,
@@ -28,14 +29,14 @@ pub trait PluginInstance: Send + Sync {
         bot_id: &str,
         user_id: &str,
         text: &str,
-    ) -> Result<(), String>;
+    ) -> CarrierResult<()>;
     /// Execute a plugin tool.
     fn tool_execute(
         &self,
         tool_name: &str,
         args_json: &str,
         context_json: &str,
-    ) -> Result<String, String>;
+    ) -> CarrierResult<String>;
     /// Stop the plugin and release resources.
     fn stop(&self);
     /// Check whether this plugin has been stopped.

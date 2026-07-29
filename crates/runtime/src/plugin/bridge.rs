@@ -131,13 +131,13 @@ impl PluginBridgeManager {
             // Try exact match first
             for channel in plugin.channels() {
                 if channel.channel_type == channel_type && channel.bot_id == bot_id {
-                    return plugin.channel_send(channel, bot_id, user_id, text).map_err(CarrierError::Internal);
+                    return plugin.channel_send(channel, bot_id, user_id, text);
                 }
             }
             // Fallback: any channel of the same type
             for channel in plugin.channels() {
                 if channel.channel_type == channel_type {
-                    return plugin.channel_send(channel, bot_id, user_id, text).map_err(CarrierError::Internal);
+                    return plugin.channel_send(channel, bot_id, user_id, text);
                 }
             }
             Err(CarrierError::InvalidInput(format!("No plugin channel found for type: {}", channel_type)))
