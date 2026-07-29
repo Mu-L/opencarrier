@@ -28,23 +28,32 @@ use types::tool_compat::normalize_tool_name;
 /// this codebase already strips and nudges around, and it is provider-independent.
 /// If production telemetry shows the detector missing real cases, extend here
 /// rather than reviving dialect-specific parsers.
+/// Narration markers some models emit as text instead of structured tool_use.
+/// `[Called ` is the English convention; `[调用 `/`[执行 ` are the Chinese
+/// equivalents (调用=invoke, 执行=execute) seen from CN-leaning models routed
+/// via aginxbrain (Qwen/Kimi) - e.g. car-finder-v2 emitted `[调用 sqlite_query]`
+/// which the English-only detector missed, sending raw text to the user with no
+/// tool executed. Each marker expects a tool name then `]`.
+const NARRATION_MARKERS: &[&str] = &["[Called ", "[调用 ", "[执行 "];
+
 pub fn detect_text_tool_mentions(text: &str) -> Vec<String> {
-    const MARKER: &str = "[Called ";
     let mut seen = std::collections::HashSet::new();
     let mut out: Vec<String> = Vec::new();
-    let mut search_from = 0;
-    while let Some(pos) = text[search_from..].find(MARKER) {
-        let abs = search_from + pos;
-        let after = &text[abs + MARKER.len()..];
-        match after.find(']') {
-            Some(close) => {
-                let name = normalize_tool_name(after[..close].trim()).to_string();
-                if !name.is_empty() && seen.insert(name.clone()) {
-                    out.push(name);
+    for marker in NARRATION_MARKERS {
+        let mut search_from = 0;
+        while let Some(pos) = text[search_from..].find(marker) {
+            let abs = search_from + pos;
+            let after = &text[abs + marker.len()..];
+            match after.find(']') {
+                Some(close) => {
+                    let name = normalize_tool_name(after[..close].trim()).to_string();
+                    if !name.is_empty() && seen.insert(name.clone()) {
+                        out.push(name);
+                    }
+                    search_from = abs + marker.len() + close + 1;
                 }
-                search_from = abs + MARKER.len() + close + 1;
+                None => break,
             }
-            None => break,
         }
     }
     out
@@ -54,16 +63,18 @@ pub fn detect_text_tool_mentions(text: &str) -> Vec<String> {
 /// raw tool-call syntax, even when text-based recovery gave up.
 pub fn strip_tool_call_artifacts(text: &str) -> String {
     let mut result = text.to_string();
-    let mut search_from = 0;
-    while let Some(pos) = result[search_from..].find("[Called ") {
-        let abs_pos = search_from + pos;
-        let after = &result[abs_pos + "[Called ".len()..];
-        if let Some(close) = after.find(']') {
-            result.replace_range(abs_pos..abs_pos + "[Called ".len() + close + 1, "");
-            // Don't advance — re-scan from same position since text shifted
-            search_from = abs_pos;
-        } else {
-            break;
+    for marker in NARRATION_MARKERS {
+        let mut search_from = 0;
+        while let Some(pos) = result[search_from..].find(marker) {
+            let abs_pos = search_from + pos;
+            let after = &result[abs_pos + marker.len()..];
+            if let Some(close) = after.find(']') {
+                result.replace_range(abs_pos..abs_pos + marker.len() + close + 1, "");
+                // Don't advance - re-scan from same position since text shifted
+                search_from = abs_pos;
+            } else {
+                break;
+            }
         }
     }
     result
@@ -141,6 +152,39 @@ mod tests {
         assert_eq!(
             strip_tool_call_artifacts("这里有个 [Called tool 没有闭合"),
             "这里有个 [Called tool 没有闭合"
+        );
+    }
+
+    #[test]
+    fn test_detect_chinese_diaoyong() {
+        // Regression: car-finder-v2 emitted `[调用 sqlite_query]` as text.
+        // The English-only `[Called ` detector missed it, so no recovery fired
+        // and the raw text reached the user with no tool executed.
+        let mentions = detect_text_tool_mentions("正在查库。[调用 sqlite_query]");
+        assert_eq!(mentions, vec!["sqlite_query".to_string()]);
+    }
+
+    #[test]
+    fn test_detect_chinese_zhixing() {
+        let mentions = detect_text_tool_mentions("[执行 web_search] 然后处理。");
+        assert_eq!(mentions, vec!["web_search".to_string()]);
+    }
+
+    #[test]
+    fn test_detect_mixed_en_cn() {
+        let mentions =
+            detect_text_tool_mentions("[Called knowledge_read] 再 [调用 sqlite_query]");
+        assert_eq!(
+            mentions,
+            vec!["knowledge_read".to_string(), "sqlite_query".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_strip_chinese_diaoyong() {
+        assert_eq!(
+            strip_tool_call_artifacts("正在查库。[调用 sqlite_query]"),
+            "正在查库。"
         );
     }
 }
