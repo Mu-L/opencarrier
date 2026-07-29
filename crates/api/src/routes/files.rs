@@ -876,7 +876,24 @@ fn mime_for_path(path: &str) -> &'static str {
 fn is_public_output_path(file_path: &str) -> bool {
     let normalized = file_path.replace('\\', "/");
     let rel = normalized.strip_prefix('/').unwrap_or(&normalized);
-    rel == "output" || rel.starts_with("output/")
+    if rel == "output" || rel.starts_with("output/") {
+        return true;
+    }
+    // Allow anonymous read of image files under input/ so external vision
+    // providers (AginxBrain -> Kimi K3) can fetch them for analysis without
+    // opencarrier API credentials. Only image extensions are opened - secrets
+    // like profile.json / session.json / memory/ stay auth-gated. The path
+    // already carries the sender_id, and received images are not sensitive.
+    if rel.starts_with("input/") && is_image_extension(rel) {
+        return true;
+    }
+    false
+}
+
+/// True if `path` ends with a common image extension (case-insensitive).
+fn is_image_extension(path: &str) -> bool {
+    let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
+    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp")
 }
 
 /// GET /api/files/view/{agent}/{*path}?sender_id=xxx — Serve file for browser viewing.
