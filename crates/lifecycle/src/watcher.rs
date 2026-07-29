@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tracing::{debug, info, warn};
+use types::error::{CarrierError, CarrierResult};
 
 use crate::compile::{run_compile, CompileResult};
 use crate::evolution_config::EvolutionConfig;
@@ -53,12 +54,12 @@ pub fn spawn_watcher(
     config: EvolutionConfig,
     llm_call: Arc<LlmCallback>,
     on_compile: Option<Arc<CompileCallback>>,
-) -> Result<WatcherHandle, String> {
+) -> CarrierResult<WatcherHandle> {
     let knowledge_dir = workspace.join("knowledge");
 
     if !knowledge_dir.exists() {
         std::fs::create_dir_all(&knowledge_dir)
-            .map_err(|e| format!("Failed to create knowledge dir: {e}"))?;
+            .map_err(|e| CarrierError::Internal(format!("Failed to create knowledge dir: {e}")))?;
     }
 
     let last_trigger = Arc::new(std::sync::Mutex::new(
@@ -121,11 +122,11 @@ pub fn spawn_watcher(
             cb(&result);
         }
     })
-    .map_err(|e| format!("Failed to create watcher: {e}"))?;
+    .map_err(|e| CarrierError::Internal(format!("Failed to create watcher: {e}")))?;
 
     watcher
         .watch(&knowledge_dir, RecursiveMode::Recursive)
-        .map_err(|e| format!("Failed to watch knowledge dir: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Failed to watch knowledge dir: {e}")))?;
 
     info!(
         dir = %knowledge_dir.display(),

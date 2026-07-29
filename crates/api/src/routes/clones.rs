@@ -546,7 +546,7 @@ pub async fn upgrade_clone(
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
+            Json(serde_json::json!({"error": e.to_string()})),
         ),
     }
 }

@@ -55,7 +55,7 @@ pub async fn install_hub_template(
     tracing::info!(template = %name, "Installing from Hub");
 
     // File-level install (dup manifest + per-file).
-    let install_result: Result<(String, String, usize), String> =
+    let install_result =
         match clone::hub::fetch_dup_files(&hub_url, &hub_api_key, &name, None).await {
             Ok((_manifest, files)) => {
                 let size: usize = files.values().map(|b| b.len()).sum();
@@ -108,7 +108,7 @@ pub async fn install_hub_template(
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
+            Json(serde_json::json!({"error": e.to_string()})),
         ),
     }
 }

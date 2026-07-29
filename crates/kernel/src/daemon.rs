@@ -284,7 +284,7 @@ pub(super) async fn cron_deliver_response(
             let sender_id = owner_id.ok_or_else(|| {
                 CarrierError::Config("LastChannel delivery requires owner_id on the cron job".to_string())
             })?;
-            deliver_via_last_channel(kernel, agent_id, sender_id, response).await.map_err(CarrierError::Network)
+            deliver_via_last_channel(kernel, agent_id, sender_id, response).await
         }
         CronDelivery::Webhook { url } => {
             tracing::debug!(url = %url, "Cron: delivering via webhook");
@@ -344,11 +344,11 @@ async fn deliver_via_last_channel(
     agent_id: AgentId,
     sender_id: &str,
     response: &str,
-) -> Result<(), String> {
+) -> Result<(), CarrierError> {
     let store = kernel.memory.cron_delivery();
     let last = match store
         .get_last_channel(sender_id)
-        .map_err(|e| format!("get_last_channel failed: {e}"))?
+        .map_err(|e| CarrierError::Internal(format!("get_last_channel failed: {e}")))?
     {
         Some(c) => c,
         None => {
@@ -362,7 +362,7 @@ async fn deliver_via_last_channel(
                     "cron",
                     memory::cron_delivery::DEFAULT_TTL_SECS,
                 )
-                .map_err(|e| format!("buffer notification failed: {e}"))?;
+                .map_err(|e| CarrierError::Internal(format!("buffer notification failed: {e}")))?;
             tracing::info!(sender = %sender_id, "Cron: buffered (no last channel)");
             return Ok(());
         }
@@ -385,7 +385,7 @@ async fn deliver_via_last_channel(
                 "cron",
                 memory::cron_delivery::DEFAULT_TTL_SECS,
             )
-            .map_err(|e| format!("buffer notification failed: {e}"))?;
+            .map_err(|e| CarrierError::Internal(format!("buffer notification failed: {e}")))?;
         tracing::info!(
             sender = %sender_id,
             channel = %last.channel_type,
@@ -403,7 +403,7 @@ async fn deliver_via_last_channel(
     let send_fn = match send_fn {
         Some(f) => f,
         None => {
-            return Err("channel_send_fn not configured".to_string());
+            return Err(CarrierError::Config("channel_send_fn not configured".into()));
         }
     };
 
@@ -431,7 +431,7 @@ async fn deliver_via_last_channel(
                     "cron",
                     memory::cron_delivery::DEFAULT_TTL_SECS,
                 )
-                .map_err(|e| format!("buffer notification failed: {e}"))?;
+                .map_err(|e| CarrierError::Internal(format!("buffer notification failed: {e}")))?;
             Ok(())
         }
     }

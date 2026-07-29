@@ -6,6 +6,7 @@
 use crate::kernel::CarrierKernel;
 use runtime::kernel_handle::KernelHandle;
 use tracing::info;
+use types::error::{CarrierError, CarrierResult};
 
 impl CarrierKernel {
     /// Resolve plugin dependencies for a newly installed clone.
@@ -93,11 +94,11 @@ impl CarrierKernel {
         &self,
         name: &str,
         version: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> CarrierResult<String> {
         let entry = self
             .registry
             .find_by_name(name)
-            .ok_or_else(|| format!("Agent '{name}' not found"))?;
+            .ok_or_else(|| CarrierError::Internal(format!("Agent '{name}' not found")))?;
 
         let cs = entry.manifest.clone_source.clone();
         let (template_name, hub_template_id, auto_upgrade) = match cs {
@@ -117,15 +118,15 @@ impl CarrierKernel {
 
         let workspace_str = self
             .resolve_agent_workspace(name)
-            .ok_or_else(|| format!("Agent '{name}' has no workspace"))?;
+            .ok_or_else(|| CarrierError::Internal(format!("Agent '{name}' has no workspace")))?;
         let workspace = std::path::Path::new(&workspace_str);
 
         let hub_url = self.config.hub.url.trim().to_string();
         if hub_url.is_empty() {
-            return Err("Hub URL not configured ([hub] url)".to_string());
+            return Err(CarrierError::Internal("Hub URL not configured ([hub] url)".into()));
         }
         let api_key = clone::hub::read_api_key(&self.config.hub.api_key_env)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
 
         let remote_version = clone::hub::upgrade_workspace_from_hub(
             &hub_url,
@@ -136,7 +137,7 @@ impl CarrierKernel {
             hub_template_id.as_deref(),
         )
         .await
-        .map_err(|e| format!("Hub upgrade failed: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Hub upgrade failed: {e}")))?;
 
         // Preserve auto_upgrade flag; re-read agent.toml into registry
         if let Ok(toml_str) = std::fs::read_to_string(workspace.join("agent.toml")) {

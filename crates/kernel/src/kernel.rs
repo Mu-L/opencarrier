@@ -17,6 +17,7 @@ use runtime::audit::AuditLog;
 use runtime::sandbox::WasmSandbox;
 use types::agent::*;
 use types::config::KernelConfig;
+use types::error::{CarrierError, CarrierResult};
 use types::tool::ToolDefinition;
 
 use std::path::Path;
@@ -171,28 +172,28 @@ impl CarrierKernel {
     fn fetch_brain_from_hub(
         hub: &types::config::HubConfig,
         brain_path: &std::path::Path,
-    ) -> Result<types::brain::BrainConfig, String> {
+    ) -> CarrierResult<types::brain::BrainConfig> {
         let api_key = std::env::var(&hub.api_key_env)
-            .map_err(|_| format!("Environment variable {} not set", hub.api_key_env))?;
+            .map_err(|_| CarrierError::Config(format!("Environment variable {} not set", hub.api_key_env)))?;
 
         let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| format!("Failed to create tokio runtime: {e}"))?;
+            .map_err(|e| CarrierError::Internal(format!("Failed to create tokio runtime: {e}")))?;
         let json_value = rt.block_on(
             clone::hub::fetch_brain_config(&hub.url, &api_key)
         )
-        .map_err(|e| format!("Hub brain config fetch failed: {e}"))?;
+        .map_err(|e| CarrierError::Internal(format!("Hub brain config fetch failed: {e}")))?;
 
         let json_str = serde_json::to_string(&json_value)
-            .map_err(|e| format!("Failed to serialize brain config: {e}"))?;
+            .map_err(|e| CarrierError::Internal(format!("Failed to serialize brain config: {e}")))?;
 
         let config: types::brain::BrainConfig = serde_json::from_str(&json_str)
-            .map_err(|e| format!("Invalid brain config from Hub: {e}"))?;
+            .map_err(|e| CarrierError::Internal(format!("Invalid brain config from Hub: {e}")))?;
 
         if let Some(parent) = brain_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         std::fs::write(brain_path, &json_str)
-            .map_err(|e| format!("Failed to write brain.json: {e}"))?;
+            .map_err(|e| CarrierError::Internal(format!("Failed to write brain.json: {e}")))?;
 
         Ok(config)
     }
