@@ -72,6 +72,11 @@
   <details style="margin-top:16px">
     <summary style="cursor:pointer;font-size:14px;font-weight:500">+ 绑定微信客服</summary>
     <div style="margin-top:12px;display:grid;gap:10px;max-width:480px">
+      <p style="font-size:13px;color:var(--text-dim);margin:0;line-height:1.5">
+        <strong>第一步</strong>：企业微信管理后台 →「微信客服」创建客服账号，记录 <code>corp_id</code>（企业ID，ww…）、<code>open_kfid</code>（客服ID，wk…）、<code>secret</code>（客服密钥）。<br>
+        <strong>第二步</strong>：在同页「回调 / 接收消息」里填回调 URL <code>https://你的域名/wecom/webhook</code>，记录系统给的 <code>callback_token</code> 与 <code>encoding_aes_key</code>（消息实际由系统主动 <code>sync_msg</code> 拉取，回调仅校验签名）。<br>
+        <strong>第三步</strong>：webhook 端口（默认 9100，只监听本机）需 nginx 反代到公网 https（企微只认 https）。把上述凭证填入下方表单保存，本分身即接待该客服会话。
+      </p>
       <label style="font-size:13px">名称（标识）<input id="kf-name" class="input" placeholder="如 86bus-kf" style="width:100%;margin-top:4px"></label>
       <label style="font-size:13px">corp_id<input id="kf-corp-id" class="input" placeholder="ww…" style="width:100%;margin-top:4px"></label>
       <label style="font-size:13px">open_kfid<input id="kf-open-kfid" class="input" placeholder="wk…" style="width:100%;margin-top:4px"></label>
