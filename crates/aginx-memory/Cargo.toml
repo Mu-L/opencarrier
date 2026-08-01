@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 types = { path = "../types" }
+memory = { path = "../memory" }
 tokio = { workspace = true }
 axum = { workspace = true }
 tokio-postgres = { workspace = true }

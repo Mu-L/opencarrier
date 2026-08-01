@@ -179,7 +179,7 @@ mod tests {
         // `Object` derefs to a `ClientWrapper` that doesn't impl it.
         let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
         tokio::spawn(async move { let _ = conn.await; });
-        crate::migrations::runner().run_async(&mut client).await.ok()?;
+        crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         // KvStore uses a deadpool pool for concurrent queries.
         let cfg: tokio_postgres::Config = url.parse().ok()?;
