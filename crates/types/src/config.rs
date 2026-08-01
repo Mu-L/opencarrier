@@ -588,6 +588,10 @@ pub struct KernelConfig {
     pub brain: BrainSourceConfig,
     /// Memory substrate configuration.
     pub memory: MemoryConfig,
+    /// aginxMemory external service (kv+tree memory delegation).
+    /// Default: off (in-process memory). Set `database_url` to enable.
+    #[serde(default)]
+    pub aginx_memory: AginxMemoryConfig,
     /// API authentication key. When set, all API endpoints (except /api/health)
     /// require a `Authorization: Bearer <key>` header.
     /// If empty, the API is unauthenticated (local development only).
@@ -892,6 +896,7 @@ impl Default for KernelConfig {
             default_model: DefaultModelConfig::default(),
             brain: BrainSourceConfig::default(),
             memory: MemoryConfig::default(),
+            aginx_memory: AginxMemoryConfig::default(),
             api_key: String::new(),
             mode: KernelMode::default(),
             language: "en".to_string(),
@@ -950,6 +955,10 @@ impl std::fmt::Debug for KernelConfig {
             .field("api_listen", &self.api_listen)
             .field("default_model", &self.default_model)
             .field("memory", &self.memory)
+            .field(
+                "aginx_memory",
+                &format!("enabled={}", self.aginx_memory.database_url.is_some()),
+            )
             .field(
                 "api_key",
                 &if self.api_key.is_empty() {
@@ -1283,6 +1292,57 @@ impl Default for MemoryConfig {
             embedding_api_key_env: None,
             consolidation_interval_hours: default_consolidation_interval(),
             tree: TreeMemoryConfig::default(),
+        }
+    }
+}
+
+/// aginxMemory external service configuration.
+///
+/// aginxMemory is a standalone daemon (`crates/aginx-memory`) that owns the
+/// kv+tree memory subsystem backed by PostgreSQL + Obsidian-compatible .md
+/// files. opencarrier delegates kv/tree operations to it over HTTP
+/// (`HttpMemoryHandle`); sessions and other runtime state stay in-process
+/// SQLite. When `database_url` is unset, memory stays fully in-process — this
+/// is the default and the migration-period fallback (gated by the
+/// `AGINXMEMORY_URL` env switch on the opencarrier side).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AginxMemoryConfig {
+    /// PostgreSQL connection string for the aginxMemory service.
+    /// None = aginxMemory disabled (memory stays in-process SQLite).
+    #[serde(default)]
+    pub database_url: Option<String>,
+    /// Listen address for the aginxMemory HTTP server (e.g. "127.0.0.1:4300").
+    #[serde(default)]
+    pub listen: Option<String>,
+    /// Root directory for tree memory .md content files.
+    /// Default: {data_dir}/memory_tree/content (same location as in-process tree).
+    #[serde(default)]
+    pub content_root: Option<PathBuf>,
+    /// Number of background tree-job workers. Default 0 — jobs are enqueued on
+    /// ingest but not consumed until this is raised, so the tree background
+    /// pipeline (seal/digest/topic_route, which has never run in-process) can be
+    /// ramped up cautiously after first activation.
+    #[serde(default = "default_aginx_worker_count")]
+    pub worker_count: usize,
+    /// Whether the daily digest / stale-flush scheduler runs. Default false —
+    /// enable only after validating the digest path manually.
+    #[serde(default)]
+    pub scheduler_enabled: bool,
+}
+
+fn default_aginx_worker_count() -> usize {
+    0
+}
+
+impl Default for AginxMemoryConfig {
+    fn default() -> Self {
+        Self {
+            database_url: None,
+            listen: None,
+            content_root: None,
+            worker_count: default_aginx_worker_count(),
+            scheduler_enabled: false,
         }
     }
 }
