@@ -36,6 +36,7 @@ dependencies = [
  "axum",
  "chrono",
  "deadpool-postgres",
+ "memory",
  "refinery",
  "serde",
  "serde_json",
@@ -46,6 +47,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "types",
+ "uuid",
 ]
 
 [[package]]

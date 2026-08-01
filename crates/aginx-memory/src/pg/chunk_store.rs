@@ -94,7 +94,7 @@ impl ChunkStore {
                 .await
         }
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
-        Ok(row.map(|r| Self::row_to_chunk(&r)).transpose()?)
+        row.map(|r| Self::row_to_chunk(&r)).transpose()
     }
 
     pub async fn list_chunks(
