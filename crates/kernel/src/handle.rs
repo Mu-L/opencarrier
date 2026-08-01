@@ -1241,6 +1241,32 @@ impl MemoryHandle for MemorySubstrateHandle {
     }
 }
 
+/// Build the memory handle for injection into agent_loop/tools/compaction.
+///
+/// Branches on the `AGINXMEMORY_URL` env switch (see `runtime::http_memory`):
+/// set -> `HttpMemoryHandle` (kv+tree delegated to the external aginxMemory
+/// service over HTTP); unset or empty -> `MemorySubstrateHandle` (in-process,
+/// the default and the migration-period fallback).
+pub fn make_memory_handle(
+    memory: Arc<MemorySubstrate>,
+) -> Arc<dyn runtime::memory_handle::MemoryHandle> {
+    if let Some(url) = runtime::http_memory::aginx_memory_url_opt() {
+        match runtime::http_memory::HttpMemoryHandle::new(url.clone(), memory.clone()) {
+            Ok(h) => {
+                tracing::info!(url = %url, "memory: routing kv+tree to aginxMemory");
+                return Arc::new(h);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "memory: HttpMemoryHandle build failed, falling back to in-process MemorySubstrate"
+                );
+            }
+        }
+    }
+    Arc::new(MemorySubstrateHandle::new(memory))
+}
+
 fn mime_from_image_url(url: &str) -> String {
     // Strip query string for extension detection.
     let path = url.split('?').next().unwrap_or(url);

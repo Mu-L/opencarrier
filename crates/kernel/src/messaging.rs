@@ -1044,8 +1044,7 @@ impl CarrierKernel {
 
             // Extract MemoryHandle from kernel.
             let memory_handle: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
-                Some(Arc::new(crate::handle::MemorySubstrateHandle::new(Arc::clone(&kernel_clone.memory)))
-                    as Arc<dyn runtime::memory_handle::MemoryHandle>);
+                Some(crate::handle::make_memory_handle(Arc::clone(&kernel_clone.memory)));
 
             // Auto-compact if the session is large before running the loop
             if needs_compact {
@@ -1424,7 +1423,7 @@ impl CarrierKernel {
 
         // Extract MemoryHandle from kernel.
         let memory_handle: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
-            Some(Arc::new(crate::handle::MemorySubstrateHandle::new(Arc::clone(&self.memory))));
+            Some(crate::handle::make_memory_handle(Arc::clone(&self.memory)));
 
         // Model routing is handled by Brain
 
@@ -1820,7 +1819,7 @@ impl CarrierKernel {
                 let driver_clone = driver.clone();
                 let brain_clone = brain.map(Arc::clone);
                 let mh_clone: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
-                    Some(Arc::new(crate::handle::MemorySubstrateHandle::new(Arc::clone(&memory))));
+                    Some(crate::handle::make_memory_handle(Arc::clone(&memory)));
                 let tools_owned = tools.to_vec();
                 let manifest_clone = manifest.clone();
                 let sid = sender_id.clone();

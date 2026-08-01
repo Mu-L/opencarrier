@@ -233,6 +233,144 @@ pub struct FetchLeavesQuery<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// Owned query request types (for HTTP transport to aginxMemory)
+// ---------------------------------------------------------------------------
+// The borrowed `*Query<'a>` types above are not serde-able (they hold `&str`).
+// These owned mirrors serialize over HTTP when opencarrier delegates memory to
+// the external aginxMemory service via `HttpMemoryHandle` (runtime crate).
+// `From<&XQuery>` lets the HTTP impl borrow->own at the call boundary.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceQueryOwned {
+    pub owner_id: String,
+    pub source_id: Option<String>,
+    pub source_kind: Option<String>,
+    pub time_window_days: Option<u32>,
+    pub query: Option<String>,
+    pub limit: usize,
+    pub user_id: Option<String>,
+}
+
+impl<'a> From<SourceQuery<'a>> for SourceQueryOwned {
+    fn from(q: SourceQuery<'a>) -> Self {
+        Self {
+            owner_id: q.owner_id.to_string(),
+            source_id: q.source_id.map(String::from),
+            source_kind: q.source_kind.map(String::from),
+            time_window_days: q.time_window_days,
+            query: q.query.map(String::from),
+            limit: q.limit,
+            user_id: q.user_id.map(String::from),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalQueryOwned {
+    pub owner_id: String,
+    pub time_window_days: Option<u32>,
+    pub query: Option<String>,
+    pub limit: usize,
+    pub user_id: Option<String>,
+}
+
+impl<'a> From<GlobalQuery<'a>> for GlobalQueryOwned {
+    fn from(q: GlobalQuery<'a>) -> Self {
+        Self {
+            owner_id: q.owner_id.to_string(),
+            time_window_days: q.time_window_days,
+            query: q.query.map(String::from),
+            limit: q.limit,
+            user_id: q.user_id.map(String::from),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopicQueryOwned {
+    pub owner_id: String,
+    pub entity_id: String,
+    pub query: Option<String>,
+    pub time_window_days: Option<u32>,
+    pub limit: usize,
+    pub user_id: Option<String>,
+}
+
+impl<'a> From<TopicQuery<'a>> for TopicQueryOwned {
+    fn from(q: TopicQuery<'a>) -> Self {
+        Self {
+            owner_id: q.owner_id.to_string(),
+            entity_id: q.entity_id.to_string(),
+            query: q.query.map(String::from),
+            time_window_days: q.time_window_days,
+            limit: q.limit,
+            user_id: q.user_id.map(String::from),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntitySearchOwned {
+    pub owner_id: String,
+    pub query: String,
+    pub kind: Option<String>,
+    pub limit: usize,
+    pub user_id: Option<String>,
+}
+
+impl<'a> From<EntitySearch<'a>> for EntitySearchOwned {
+    fn from(q: EntitySearch<'a>) -> Self {
+        Self {
+            owner_id: q.owner_id.to_string(),
+            query: q.query.to_string(),
+            kind: q.kind.map(String::from),
+            limit: q.limit,
+            user_id: q.user_id.map(String::from),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DrillDownQueryOwned {
+    pub owner_id: String,
+    pub node_id: String,
+    pub max_depth: u32,
+    pub limit: usize,
+    pub user_id: Option<String>,
+}
+
+impl<'a> From<DrillDownQuery<'a>> for DrillDownQueryOwned {
+    fn from(q: DrillDownQuery<'a>) -> Self {
+        Self {
+            owner_id: q.owner_id.to_string(),
+            node_id: q.node_id.to_string(),
+            max_depth: q.max_depth,
+            limit: q.limit,
+            user_id: q.user_id.map(String::from),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchLeavesQueryOwned {
+    pub owner_id: String,
+    pub chunk_ids: Vec<String>,
+    pub limit: usize,
+    pub user_id: Option<String>,
+}
+
+impl<'a> From<FetchLeavesQuery<'a>> for FetchLeavesQueryOwned {
+    fn from(q: FetchLeavesQuery<'a>) -> Self {
+        Self {
+            owner_id: q.owner_id.to_string(),
+            chunk_ids: q.chunk_ids,
+            limit: q.limit,
+            user_id: q.user_id.map(String::from),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tree summary (for memory_list tool)
 // ---------------------------------------------------------------------------
 

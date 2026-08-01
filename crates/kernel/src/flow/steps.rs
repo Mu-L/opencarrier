@@ -53,9 +53,7 @@ impl CarrierKernel {
     ) -> KernelResult<(Value, TokenUsage, u32)> {
         let driver = self.resolve_driver(manifest)?;
         let memory_handle: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
-            Some(Arc::new(crate::handle::MemorySubstrateHandle::new(Arc::clone(
-                &self.memory,
-            ))));
+            Some(crate::handle::make_memory_handle(Arc::clone(&self.memory)));
         // base_system_prompt already carries the flow body (injected by
         // prepare_agent_context); add only the step directive.
         let step_system = format!(
@@ -168,9 +166,7 @@ impl CarrierKernel {
 
         // Assemble the ToolContext (mirrors runtime/agent_loop/tool_use.rs).
         let memory_handle: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
-            Some(Arc::new(crate::handle::MemorySubstrateHandle::new(Arc::clone(
-                &self.memory,
-            ))));
+            Some(crate::handle::make_memory_handle(Arc::clone(&self.memory)));
         let caller_id = agent_id.to_string();
         let workspace_root: Option<&Path> = manifest.workspace.as_deref();
         let is_clone_admin =

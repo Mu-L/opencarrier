@@ -515,9 +515,8 @@ impl CarrierKernel {
             // 2. Flush structured facts via the same idempotent merge the
             //    per-turn path uses (state keys dedup, event.* now dedup too).
             if !result.key_facts.is_empty() {
-                let handle: Arc<dyn runtime::memory_handle::MemoryHandle> = Arc::new(
-                    crate::handle::MemorySubstrateHandle::new(Arc::clone(&self.memory)),
-                );
+                let handle: Arc<dyn runtime::memory_handle::MemoryHandle> =
+                    crate::handle::make_memory_handle(Arc::clone(&self.memory));
                 runtime::agent_loop::merge_key_facts(
                     &handle,
                     &entry.name,
