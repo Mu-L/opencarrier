@@ -18,10 +18,6 @@ use std::net::SocketAddr;
 use tokio_postgres::NoTls;
 use types::config::{home_dir, AginxMemoryConfig, KernelConfig};
 
-// refinery embeds the `migrations/` dir (V<n>__<name>.sql files) at compile time,
-// generating a `migrations` module with a `runner()` function.
-refinery::embed_migrations!("migrations");
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -54,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    migrations::runner()
+    aginx_memory::migrations::runner()
         .run_async(&mut client)
         .await
         .context("Failed to run PG migrations")?;

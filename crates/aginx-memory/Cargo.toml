@@ -3,7 +3,11 @@ name = "aginx-memory"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "aginxMemory — external kv+tree memory service (PostgreSQL + Obsidian md)"
+description = "aginxMemory - external kv+tree memory service (PostgreSQL + Obsidian md)"
+
+[lib]
+name = "aginx_memory"
+path = "src/lib.rs"
 
 [[bin]]
 name = "aginx-memory"
@@ -14,6 +18,7 @@ types = { path = "../types" }
 tokio = { workspace = true }
 axum = { workspace = true }
 tokio-postgres = { workspace = true }
+deadpool-postgres = { workspace = true }
 refinery = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
