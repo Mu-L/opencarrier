@@ -74,6 +74,32 @@ impl TreeWorkerPool {
             });
         }
 
+        // Always-on reaper: bounds `mem_tree_jobs` growth even at worker_count=0
+        // (the shipped default) and with the scheduler off. Without it, every
+        // ingest's ExtractChunk job plus all done/failed rows accumulate forever.
+        // Deletes done/failed rows older than 24h, hourly. Runs regardless of
+        // worker_count (the pool always calls `start`, even with 0 consumers).
+        {
+            let pool = self.pool.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(3600));
+                loop {
+                    ticker.tick().await;
+                    let store = JobStore::new(pool.clone());
+                    let cutoff = chrono::Utc::now().timestamp_millis() - 86_400_000; // 24h
+                    match store.delete_settled_before(cutoff).await {
+                        Ok(n) if n > 0 => {
+                            tracing::info!(
+                                "[tree_jobs] reaper deleted {n} settled jobs older than 24h"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!("[tree_jobs] reaper error: {e:#}"),
+                    }
+                }
+            });
+        }
+
         if self.worker_count == 0 {
             tracing::warn!(
                 "[tree_jobs] worker pool started with 0 consumers (queue-only mode): \
@@ -100,7 +126,7 @@ impl TreeWorkerPool {
         // handle_job is async (PG) - no spawn_blocking needed.
         match handle_job(&self.pool, &self.content_root, &job.owner_id, &job).await {
             Ok(JobOutcome::Done) => {
-                if let Err(e) = job_store.mark_done(&job_id).await {
+                if let Err(e) = job_store.mark_done(&job_id, job.locked_until_ms).await {
                     tracing::warn!("[tree_jobs] mark_done failed for {job_id}: {e:#}");
                 }
             }
@@ -111,7 +137,9 @@ impl TreeWorkerPool {
             }
             Err(e) => {
                 tracing::warn!("[tree_jobs] job failed id={job_id} err={e:#}");
-                if let Err(e2) = job_store.mark_failed(&job_id, &format!("{e:#}")).await {
+                if let Err(e2) =
+                    job_store.mark_failed(&job_id, &format!("{e:#}"), job.locked_until_ms).await
+                {
                     tracing::warn!("[tree_jobs] mark_failed error: {e2:#}");
                 }
             }

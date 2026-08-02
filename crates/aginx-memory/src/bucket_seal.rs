@@ -215,14 +215,24 @@ impl BucketSealEngine {
             .fold(f32::NEG_INFINITY, f32::max)
             .max(0.0);
 
-        // Run summariser (sync trait - file/LLM work; called within async fn)
-        let ctx = SummaryContext {
-            tree_id: &tree.id,
-            tree_kind: tree.kind,
-            target_level,
-            token_budget: OUTPUT_TOKEN_BUDGET,
-        };
-        let output = self.summariser.summarise(&inputs, &ctx);
+        // Run summariser (sync trait - file/LLM work) off the async runtime.
+        // Summariser: Send + Sync and SummaryInput: Clone, so move owned inputs
+        // + an owned tree_id into the blocking closure (SummaryContext borrows
+        // &str). `inputs` is not used after this point.
+        let summariser = self.summariser.clone();
+        let tree_id = tree.id.clone();
+        let tree_kind = tree.kind;
+        let output = tokio::task::spawn_blocking(move || {
+            let ctx = SummaryContext {
+                tree_id: &tree_id,
+                tree_kind,
+                target_level,
+                token_budget: OUTPUT_TOKEN_BUDGET,
+            };
+            summariser.summarise(&inputs, &ctx)
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(format!("summarise join: {e}")))?;
 
         // Build the new summary node
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -249,9 +259,17 @@ impl BucketSealEngine {
             embedding: None,
         };
 
-        // Write summary content to disk (file I/O - sync, reused from memory crate)
-        self.content_store.ensure_dirs(owner_id)?;
-        self.content_store.write_summary(owner_id, &node)?;
+        // Write summary content to disk (sync fs -> spawn_blocking). `node` is
+        // reused below for insert_summary, so clone into the closure.
+        let cs = self.content_store.clone();
+        let owner = owner_id.to_string();
+        let node_for_disk = node.clone();
+        tokio::task::spawn_blocking(move || {
+            cs.ensure_dirs(&owner)?;
+            cs.write_summary(&owner, &node_for_disk)
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(format!("summary content write join: {e}")))??;
 
         // Persist the summary + clear this buffer + append to parent buffer.
         self.tree_store.insert_summary(owner_id, &node).await?;
@@ -316,11 +334,22 @@ impl BucketSealEngine {
                 }
             };
 
-            // Try to read full body from disk, fall back to DB content
-            let body = self
-                .content_store
-                .read_chunk_body(owner_id, chunk.source_kind.as_str(), &chunk.source_id, &chunk.id)
-                .unwrap_or_else(|_| chunk.content.clone());
+            // Try to read full body from disk (sync fs -> spawn_blocking), fall
+            // back to DB content on any error (read error or join error).
+            let cs = self.content_store.clone();
+            let owner = owner_id.to_string();
+            let sk = chunk.source_kind.as_str().to_string();
+            let sid = chunk.source_id.clone();
+            let cid = chunk.id.clone();
+            let fallback = chunk.content.clone();
+            let body = match tokio::task::spawn_blocking(move || {
+                cs.read_chunk_body(&owner, &sk, &sid, &cid)
+            })
+            .await
+            {
+                Ok(Ok(body)) => body,
+                _ => fallback,
+            };
 
             out.push(SummaryInput {
                 id: chunk.id,

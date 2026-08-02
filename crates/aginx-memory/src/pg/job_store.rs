@@ -150,30 +150,59 @@ impl JobStore {
     }
 
     /// Mark a job as done.
-    pub async fn mark_done(&self, job_id: &str) -> CarrierResult<()> {
+    ///
+    /// `expected_locked_until_ms` is the deadline this worker's `claim_next`
+    /// set; the UPDATE only settles the row if `locked_until_ms` still matches
+    /// it (`IS NOT DISTINCT FROM` so NULL=NULL). If `recover_stale_locks`
+    /// re-queued the row (locked_until_ms=NULL) or another worker re-claimed it
+    /// (different deadline), 0 rows are affected and we log + no-op rather than
+    /// settling someone else's job.
+    pub async fn mark_done(
+        &self,
+        job_id: &str,
+        expected_locked_until_ms: Option<i64>,
+    ) -> CarrierResult<()> {
         let client = self.client().await?;
         let now_ms = chrono::Utc::now().timestamp_millis();
-        client
+        let affected = client
             .execute(
                 "UPDATE mem_tree_jobs SET status='done', completed_at_ms=$1, \
-                 locked_until_ms=NULL WHERE id=$2",
-                &[&now_ms, &job_id],
+                 locked_until_ms=NULL WHERE id=$2 \
+                 AND (locked_until_ms IS NOT DISTINCT FROM $3)",
+                &[&now_ms, &job_id, &expected_locked_until_ms],
             )
             .await
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        if affected == 0 {
+            tracing::warn!(
+                "[tree_jobs] mark_done: job {job_id} no longer owned by this worker \
+                 (locked_until mismatch), skipping"
+            );
+        }
         Ok(())
     }
 
     /// Mark a job as failed. Re-queues for retry if attempts < max_attempts,
     /// otherwise marks permanently failed.
-    pub async fn mark_failed(&self, job_id: &str, error: &str) -> CarrierResult<()> {
+    ///
+    /// `expected_locked_until_ms` guards ownership (see `mark_done`): the SELECT
+    /// and both UPDATE branches require `locked_until_ms` to still match this
+    /// worker's claim, so a stale worker revived after `recover_stale_locks`
+    /// cannot settle a job another worker now owns.
+    pub async fn mark_failed(
+        &self,
+        job_id: &str,
+        error: &str,
+        expected_locked_until_ms: Option<i64>,
+    ) -> CarrierResult<()> {
         let client = self.client().await?;
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         let row = client
             .query_opt(
-                "SELECT attempts, max_attempts FROM mem_tree_jobs WHERE id=$1",
-                &[&job_id],
+                "SELECT attempts, max_attempts FROM mem_tree_jobs WHERE id=$1 \
+                 AND (locked_until_ms IS NOT DISTINCT FROM $2)",
+                &[&job_id, &expected_locked_until_ms],
             )
             .await
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -182,29 +211,42 @@ impl JobStore {
                 r.try_get(0).map_err(|e| CarrierError::Serialization(e.to_string()))?,
                 r.try_get(1).map_err(|e| CarrierError::Serialization(e.to_string()))?,
             ),
-            // Job gone - nothing to mark (source used unwrap_or(0/5) which would
-            // spuriously re-queue a non-existent job; treat as no-op).
-            None => return Ok(()),
+            // Job gone OR no longer owned by this worker (locked_until mismatch
+            // after recover_stale_locks / re-claim) - treat as no-op.
+            None => {
+                tracing::warn!(
+                    "[tree_jobs] mark_failed: job {job_id} no longer owned by this \
+                     worker (locked_until mismatch) or gone, skipping"
+                );
+                return Ok(());
+            }
         };
 
-        if attempts >= max_attempts {
+        let affected = if attempts >= max_attempts {
             client
                 .execute(
                     "UPDATE mem_tree_jobs SET status='failed', last_error=$1, \
-                     completed_at_ms=$2, locked_until_ms=NULL WHERE id=$3",
-                    &[&error, &now_ms, &job_id],
+                     completed_at_ms=$2, locked_until_ms=NULL WHERE id=$3 \
+                     AND (locked_until_ms IS NOT DISTINCT FROM $4)",
+                    &[&error, &now_ms, &job_id, &expected_locked_until_ms],
                 )
                 .await
-                .map_err(|e| CarrierError::Memory(e.to_string()))?;
+                .map_err(|e| CarrierError::Memory(e.to_string()))?
         } else {
             client
                 .execute(
                     "UPDATE mem_tree_jobs SET status='ready', last_error=$1, \
-                     locked_until_ms=NULL, available_at_ms=$2 WHERE id=$3",
-                    &[&error, &now_ms, &job_id],
+                     locked_until_ms=NULL, available_at_ms=$2 WHERE id=$3 \
+                     AND (locked_until_ms IS NOT DISTINCT FROM $4)",
+                    &[&error, &now_ms, &job_id, &expected_locked_until_ms],
                 )
                 .await
-                .map_err(|e| CarrierError::Memory(e.to_string()))?;
+                .map_err(|e| CarrierError::Memory(e.to_string()))?
+        };
+        if affected == 0 {
+            tracing::warn!(
+                "[tree_jobs] mark_failed: job {job_id} ownership changed mid-settle, skipping"
+            );
         }
         Ok(())
     }
@@ -237,6 +279,25 @@ impl JobStore {
             .await
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(count as usize)
+    }
+
+    /// Delete settled (done/failed) jobs older than `threshold_ms` to bound
+    /// `mem_tree_jobs` growth. Critical when `worker_count=0` (the shipped
+    /// default): every ingest enqueues an ExtractChunk job, and without a reaper
+    /// done/failed rows accumulate forever. `completed_at_ms IS NOT NULL`
+    /// defends against deleting a row that never settled. `cancelled` rows are
+    /// kept (audit trail).
+    pub async fn delete_settled_before(&self, threshold_ms: i64) -> CarrierResult<usize> {
+        let client = self.client().await?;
+        let n = client
+            .execute(
+                "DELETE FROM mem_tree_jobs WHERE status IN ('done','failed') \
+                 AND completed_at_ms IS NOT NULL AND completed_at_ms < $1",
+                &[&threshold_ms],
+            )
+            .await
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        Ok(n as usize)
     }
 
     /// Count pending jobs by kind for an owner.
@@ -470,8 +531,8 @@ mod tests {
             }
         };
         let job_id = store.enqueue(&new_job("owner_1", Some("seal:tree_1:0"))).await.unwrap().unwrap();
-        let _ = store.claim_next(Some("owner_1")).await.unwrap();
-        store.mark_done(&job_id).await.unwrap();
+        let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
+        store.mark_done(&job_id, claimed.locked_until_ms).await.unwrap();
         // Done jobs don't count as active -> re-enqueue allowed.
         let again = store.enqueue(&new_job("owner_1", Some("seal:tree_1:0"))).await.unwrap();
         assert!(again.is_some());
@@ -501,8 +562,8 @@ mod tests {
             }
         };
         let job_id = store.enqueue(&new_job("owner_1", None)).await.unwrap().unwrap();
-        let _ = store.claim_next(Some("owner_1")).await.unwrap();
-        store.mark_done(&job_id).await.unwrap();
+        let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
+        store.mark_done(&job_id, claimed.locked_until_ms).await.unwrap();
         assert!(store.claim_next(Some("owner_1")).await.unwrap().is_none());
     }
 
@@ -518,8 +579,8 @@ mod tests {
         let mut job = new_job("owner_1", None);
         job.max_attempts = Some(3);
         let job_id = store.enqueue(&job).await.unwrap().unwrap();
-        let _ = store.claim_next(Some("owner_1")).await.unwrap();
-        store.mark_failed(&job_id, "timeout").await.unwrap();
+        let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
+        store.mark_failed(&job_id, "timeout", claimed.locked_until_ms).await.unwrap();
 
         // Re-queued for retry with attempts incremented.
         let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
@@ -538,9 +599,9 @@ mod tests {
         let mut job = new_job("owner_1", None);
         job.max_attempts = Some(1);
         let job_id = store.enqueue(&job).await.unwrap().unwrap();
-        let _ = store.claim_next(Some("owner_1")).await.unwrap();
+        let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
         // attempts (1) >= max_attempts (1) -> permanent fail, not retried.
-        store.mark_failed(&job_id, "boom").await.unwrap();
+        store.mark_failed(&job_id, "boom", claimed.locked_until_ms).await.unwrap();
         assert!(store.claim_next(Some("owner_1")).await.unwrap().is_none());
     }
 
@@ -597,6 +658,77 @@ mod tests {
         // Job is ready again -> claimable.
         let claimed = store.claim_next(Some("owner_1")).await.unwrap();
         assert!(claimed.is_some());
+    }
+
+    #[tokio::test]
+    async fn mark_done_rejects_stale_owner() {
+        // Worker A claims, stalls past lock duration. recover_stale_locks
+        // re-queues (locked_until_ms=NULL). Worker B re-claims (new deadline).
+        // A revives and tries mark_done with its STALE deadline -> 0 rows, the
+        // row is NOT settled by A (B still owns it). This is the TOCTOU the
+        // ownership guard closes (SQLite store held a Mutex making it impossible).
+        let store = match setup().await {
+            Some(s) => s,
+            None => {
+                eprintln!("skip (set AGINX_MEMORY_TEST_PG)");
+                return;
+            }
+        };
+        let job_id = store.enqueue(&new_job("owner_1", None)).await.unwrap().unwrap();
+        let a = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
+        let a_deadline = a.locked_until_ms;
+
+        // Age A's lock + recover -> row back to ready, locked_until_ms=NULL.
+        let conn = direct_connect().await;
+        conn.execute("UPDATE mem_tree_jobs SET locked_until_ms=1 WHERE id=$1", &[&job_id])
+            .await
+            .unwrap();
+        let recovered = store.recover_stale_locks().await.unwrap();
+        assert_eq!(recovered, 1);
+
+        // B re-claims (new deadline, attempts=2).
+        let b = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
+        assert_eq!(b.id, job_id);
+        assert_ne!(b.locked_until_ms, a_deadline);
+
+        // A's stale mark_done must NOT settle B's job (no-op, no error).
+        store.mark_done(&job_id, a_deadline).await.unwrap();
+        // Job is still running under B -> not claimable.
+        assert!(store.claim_next(Some("owner_1")).await.unwrap().is_none());
+
+        // B settles it correctly with its own deadline.
+        store.mark_done(&job_id, b.locked_until_ms).await.unwrap();
+        assert!(store.claim_next(Some("owner_1")).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_settled_before_reaps_settled_only() {
+        let store = match setup().await {
+            Some(s) => s,
+            None => {
+                eprintln!("skip (set AGINX_MEMORY_TEST_PG)");
+                return;
+            }
+        };
+        // A done job (aged) + a ready job. Reaper should delete only the done one.
+        let done_id = store.enqueue(&new_job("owner_1", None)).await.unwrap().unwrap();
+        let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
+        store.mark_done(&done_id, claimed.locked_until_ms).await.unwrap();
+        // Age the done row's completed_at_ms into the past.
+        let conn = direct_connect().await;
+        conn.execute("UPDATE mem_tree_jobs SET completed_at_ms=1 WHERE id=$1", &[&done_id])
+            .await
+            .unwrap();
+        // A ready job that must NOT be reaped.
+        let ready_id = store.enqueue(&new_job("owner_1", None)).await.unwrap().unwrap();
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let n = store.delete_settled_before(now_ms).await.unwrap();
+        assert_eq!(n, 1, "only the aged done row should be reaped");
+
+        // The ready job survives and is claimable.
+        let claimed_ready = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
+        assert_eq!(claimed_ready.id, ready_id);
     }
 
     #[tokio::test]

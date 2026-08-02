@@ -109,8 +109,13 @@ impl IngestPipeline {
             });
         }
 
-        // Ensure content directories exist
-        self.content_store.ensure_dirs(&req.owner_id)?;
+        // Ensure content directories exist (sync fs -> spawn_blocking off the
+        // async runtime; this runs on the live /tree/ingest HTTP path).
+        let cs = self.content_store.clone();
+        let owner = req.owner_id.clone();
+        tokio::task::spawn_blocking(move || cs.ensure_dirs(&owner))
+            .await
+            .map_err(|e| CarrierError::Internal(format!("ensure_dirs join: {e}")))??;
 
         // Score each chunk and classify
         let mut chunks_written = 0usize;
@@ -148,8 +153,13 @@ impl IngestPipeline {
                 continue;
             }
 
-            // Persist chunk content to disk
-            self.content_store.write_chunk(&req.owner_id, chunk)?;
+            // Persist chunk content to disk (sync fs -> spawn_blocking)
+            let cs = self.content_store.clone();
+            let owner = req.owner_id.clone();
+            let chunk_owned = chunk.clone();
+            tokio::task::spawn_blocking(move || cs.write_chunk(&owner, &chunk_owned))
+                .await
+                .map_err(|e| CarrierError::Internal(format!("write_chunk join: {e}")))??;
 
             // Persist chunk to PG
             self.chunk_store
