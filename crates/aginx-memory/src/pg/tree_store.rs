@@ -18,6 +18,7 @@ use types::error::{CarrierError, CarrierResult};
 use types::memory_tree::{TreeKind, TreeSummary};
 
 /// Tree + summary + buffer store backed by PG.
+#[derive(Clone)]
 pub struct TreeStore {
     pool: Pool,
 }

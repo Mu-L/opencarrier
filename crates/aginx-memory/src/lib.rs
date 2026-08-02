@@ -14,3 +14,6 @@ pub mod routing;
 pub mod digest;
 pub mod jobs;
 pub mod retrieval;
+pub mod ingest;
+pub mod routes;
+pub mod server;

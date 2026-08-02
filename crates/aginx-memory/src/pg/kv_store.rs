@@ -12,6 +12,7 @@ use serde_json::Value;
 use types::error::{CarrierError, CarrierResult};
 
 /// PG-backed key-value store scoped by `(agent_id, owner_id, user_id, key)`.
+#[derive(Clone)]
 pub struct KvStore {
     pool: Pool,
 }

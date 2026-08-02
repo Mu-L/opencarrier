@@ -1,22 +1,29 @@
-//! aginxMemory — external kv+tree memory service.
+//! aginxMemory - external kv+tree memory service.
 //!
 //! Standalone daemon backing opencarrier's memory subsystem with PostgreSQL +
 //! Obsidian-compatible .md files. opencarrier delegates kv/tree operations to
 //! this service over HTTP (see `HttpMemoryHandle` in the runtime crate);
 //! sessions and other runtime state stay in opencarrier's in-process SQLite.
 //!
-//! Stage 1 skeleton: load config -> connect PG -> run migrations -> /health.
-//! The PG pool and full HTTP API land in later stages.
+//! Startup order: load config -> PG pool -> run migrations -> ensure
+//! content_root -> start TreeWorkerPool (worker_count from config, default 0 =
+//! queue-only) -> optionally start the daily scheduler -> axum::serve the
+//! HTTP API (`server::build_router`).
 //!
 //! PG driver note: we use `tokio-postgres` + `refinery` (not `sqlx`) because
 //! sqlx's dependency tree pulls `sqlx-sqlite` whose `libsqlite3-sys` conflicts
 //! with `rusqlite`'s under cargo's single-`links` rule.
 
+use std::sync::Arc;
+
 use anyhow::Context;
-use axum::{routing::get, Router};
-use std::net::SocketAddr;
+use deadpool_postgres::Manager;
 use tokio_postgres::NoTls;
 use types::config::{home_dir, AginxMemoryConfig, KernelConfig};
+
+use aginx_memory::jobs::scheduler::start_scheduler;
+use aginx_memory::jobs::worker::TreeWorkerPool;
+use aginx_memory::server::{build_router, AppState};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -29,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = load_config();
     let database_url = cfg.database_url.clone().context(
-        "aginx_memory.database_url is not set — configure [aginx_memory] in config.toml \
+        "aginx_memory.database_url is not set - configure [aginx_memory] in config.toml \
          or set the DATABASE_URL env var",
     )?;
     let listen = cfg
@@ -39,38 +46,98 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!(listen = %listen, "aginxMemory starting (PG backend)");
 
-    // Stage 1: single connection to apply migrations, then drop before serving.
-    // Stage 4 replaces this with a deadpool-postgres Pool for the HTTP API.
-    let (mut client, connection) = tokio_postgres::connect(&database_url, NoTls)
+    // Apply migrations via a direct connection (refinery's run_async needs
+    // `&mut tokio_postgres::Client`; the pool's ClientWrapper doesn't impl it).
+    let (mut mig_client, mig_conn) = tokio_postgres::connect(&database_url, NoTls)
         .await
         .with_context(|| "Failed to connect to PostgreSQL at the configured URL")?;
     tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            tracing::error!(error = %e, "PG connection error");
+        if let Err(e) = mig_conn.await {
+            tracing::error!(error = %e, "PG migration connection error");
         }
     });
-
     aginx_memory::migrations::runner()
-        .run_async(&mut client)
+        .run_async(&mut mig_client)
         .await
         .context("Failed to run PG migrations")?;
     tracing::info!("PG migrations applied");
-    drop(client);
+    drop(mig_client);
 
-    let app = Router::new().route("/health", get(health));
-    let addr: SocketAddr = listen
+    // Build the serving pool.
+    let pg_cfg: tokio_postgres::Config = database_url
+        .parse()
+        .with_context(|| format!("invalid database_url: {database_url}"))?;
+    let mgr = Manager::new(pg_cfg, NoTls);
+    let pool = deadpool_postgres::Pool::builder(mgr)
+        .max_size(16)
+        .build()
+        .context("Failed to build PG connection pool")?;
+
+    // Ensure the content-root directory exists.
+    let content_root = cfg
+        .content_root
+        .clone()
+        .unwrap_or_else(|| home_dir().join("memory_tree").join("content"));
+    std::fs::create_dir_all(&content_root)
+        .with_context(|| format!("failed to create content_root: {}", content_root.display()))?;
+    tracing::info!(content_root = %content_root.display(), "content root ready");
+
+    // Start the tree-job worker pool (worker_count=0 = queue-only, no consumers).
+    let worker_pool = Arc::new(TreeWorkerPool::new(
+        pool.clone(),
+        content_root.clone(),
+        cfg.worker_count,
+    ));
+    worker_pool.clone().start().await;
+
+    // Optionally start the daily digest / stale-flush scheduler.
+    if cfg.scheduler_enabled {
+        tracing::info!("aginxMemory daily scheduler enabled");
+        start_scheduler(pool.clone(), content_root.clone());
+    } else {
+        tracing::info!("aginxMemory daily scheduler disabled (default)");
+    }
+
+    let state = AppState {
+        pool,
+        content_root,
+        worker_pool,
+    };
+    let app = build_router(state);
+
+    let addr: std::net::SocketAddr = listen
         .parse()
         .with_context(|| format!("invalid listen address: {listen}"))?;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("failed to bind {addr}"))?;
     tracing::info!(%addr, "aginxMemory listening");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
 }
 
-async fn health() -> &'static str {
-    "ok"
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("installed Ctrl-C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("aginxMemory shutdown signal received");
 }
 
 /// Load `[aginx_memory]` from `~/.opencarrier/config.toml`, with env overrides.

@@ -12,6 +12,7 @@ use memory::tree::types::ScoreSignals;
 use types::error::{CarrierError, CarrierResult};
 
 /// Score store backed by PG.
+#[derive(Clone)]
 pub struct ScoreStore {
     pool: Pool,
 }

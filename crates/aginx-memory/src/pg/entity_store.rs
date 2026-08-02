@@ -17,6 +17,7 @@ use types::error::{CarrierError, CarrierResult};
 use types::memory_tree::EntityMatch;
 
 /// Entity index + hotness store backed by PG.
+#[derive(Clone)]
 pub struct EntityStore {
     pool: Pool,
 }

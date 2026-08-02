@@ -10,6 +10,7 @@ use memory::tree::types::{Chunk, SourceKind, CHUNK_STATUS_ADMITTED};
 use tokio_postgres::types::ToSql;
 use types::error::{CarrierError, CarrierResult};
 
+#[derive(Clone)]
 pub struct ChunkStore {
     pool: Pool,
 }

@@ -23,6 +23,7 @@ use types::error::{CarrierError, CarrierResult};
 const LOCK_DURATION_MS: i64 = 300_000;
 
 /// Job store backed by PG.
+#[derive(Clone)]
 pub struct JobStore {
     pool: Pool,
 }
