@@ -68,37 +68,40 @@ ssh 86quan 'journalctl -u aginx-memory --no-pager | tail'  # PG migrations appli
 
 ## 5. 切换：迁移数据 + 设 env（有停机）
 
+> **实际 db 路径是 `~/.opencarrier/data/opencarrier.db`（164M），不是 `~/.opencarrier/opencarrier.db`（0 字节旧文件）。**
+> **不要 rename 整个 db** -- opencarrier.db 还含 sessions/agents/cron（运行时表，留进程内）。迁移只读记忆表，db 原地保留。
+> **DATABASE_URL 要带 `?host=/var/run/postgresql`**（tokio-postgres peer auth 走 unix socket，`postgres:///db` 缺 host 会报 "both host and hostaddr are missing"）。
+
 ```bash
 ssh 86quan '
 set -e
 # 5a. 停 opencarrier（停写，保证迁移快照一致）
 sudo systemctl stop opencarrier
 
-# 5b. 迁移线上数据（只读开 opencarrier.db -> PG）
+# 5b. 迁移线上数据（只读开 data/opencarrier.db -> PG）
 ~/.opencarrier/aginx-memory-migrate \
-  --sqlite ~/.opencarrier/opencarrier.db \
-  --pg "postgres:///aginx_memory" \
+  --sqlite ~/.opencarrier/data/opencarrier.db \
+  --pg "postgres:///aginx_memory?host=/var/run/postgresql" \
   --content-src ~/.opencarrier/memory_tree/content \
   --content-dst ~/.opencarrier/memory_tree/content
-# （content-dst 同路径：md 文件原地保留，daemon 直接读）
 
 # 5c. 对账：每表行数 PG vs SQLite
-for t in kv_store mem_tree_chunks mem_tree_summaries mem_tree_trees mem_tree_score; do
+for t in kv_store kv_history mem_tree_chunks mem_tree_trees mem_tree_score mem_tree_entity_index mem_tree_entity_hotness; do
   pg=$(psql -t -d aginx_memory -c "SELECT count(*) FROM $t")
-  sq=$(sqlite3 ~/.opencarrier/opencarrier.db "SELECT count(*) FROM $t")
+  sq=$(sqlite3 ~/.opencarrier/data/opencarrier.db "SELECT count(*) FROM $t")
   echo "$t: pg=$pg sqlite=$sq"
 done
+# mem_tree_jobs 应为 0（迁移后清空，历史 chunk 已在 chunks 表）
 
-# 5d. 备份原库
-mv ~/.opencarrier/opencarrier.db ~/.opencarrier/opencarrier.db.migrated-bak
-
-# 5e. 设 opencarrier env（指向 aginx-memory）
+# 5d. 设 opencarrier env（指向 aginx-memory）
 grep -q AGINXMEMORY_URL ~/.opencarrier/.env || echo "AGINXMEMORY_URL=http://127.0.0.1:4300" >> ~/.opencarrier/.env
 
-# 5f. 起 opencarrier
+# 5e. 起 opencarrier
 sudo systemctl start opencarrier
 '
 ```
+
+> **不 rename opencarrier.db**。记忆表在 SQLite 里变 stale（AGINXMEMORY_URL 开后 opencarrier 不读它们）但无害；运行时表（sessions/agents/cron）继续用。
 
 ## 6. 观察期（24h，WORKER_COUNT=0）
 
