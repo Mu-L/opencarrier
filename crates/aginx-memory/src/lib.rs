@@ -17,3 +17,4 @@ pub mod retrieval;
 pub mod ingest;
 pub mod routes;
 pub mod server;
+pub mod migrate;
