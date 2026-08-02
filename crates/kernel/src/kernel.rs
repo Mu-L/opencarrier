@@ -998,15 +998,26 @@ impl CarrierKernel {
     fn prefetch_tree_memories(&self, owner_id: &str) -> Vec<runtime::prompt_builder::TreeMemoryHit> {
         use types::memory_tree::GlobalQuery;
 
+        let owner = owner_id.to_string();
         let req = GlobalQuery {
-            owner_id,
+            owner_id: &owner,
             time_window_days: Some(7),
             query: None,
             limit: 3,
             user_id: None,
         };
 
-        match self.memory.tree_query_global(&req) {
+        // Route through the injected handle so AGINXMEMORY_URL (external
+        // aginxMemory) is honoured here too, not just at the tool/agent-loop
+        // injection points. tree_query_global is async on the trait; bridge from
+        // this sync method via block_in_place (safe: callers run us from an async
+        // context on the multi-thread runtime).
+        let handle = crate::handle::make_memory_handle(std::sync::Arc::clone(&self.memory));
+        let result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(handle.tree_query_global(req))
+        });
+
+        match result {
             Ok(resp) => resp
                 .hits
                 .iter()
@@ -1030,7 +1041,9 @@ impl CarrierKernel {
     /// Reads all kv keys, filters to drawer prefixes (profile/preference/entity/fact/event),
     /// and builds DrawerEntry structs for injection into the system prompt.
     pub(crate) fn prefetch_drawer_entries(&self, agent_name: &str, owner_id: &str) -> Vec<runtime::prompt_builder::DrawerEntry> {
-        let all_pairs = match self.memory.list_kv(agent_name, owner_id, owner_id) {
+        // Route through the injected handle so AGINXMEMORY_URL is honoured.
+        let handle = crate::handle::make_memory_handle(std::sync::Arc::clone(&self.memory));
+        let all_pairs = match handle.kv_list(agent_name, owner_id, owner_id) {
             Ok(pairs) => pairs,
             Err(e) => {
                 tracing::debug!("Drawer prefetch failed (non-fatal): {e}");
@@ -1082,9 +1095,10 @@ impl CarrierKernel {
     ) {
         let sid = sender_id.as_deref().unwrap_or("");
         let oid = owner_id.as_deref().unwrap_or(sid);
-        let user_name = self
-            .memory
-            .system_kv_get(&agent_id.to_string(), sid, sid, "user_name")
+        // Route through the injected handle so AGINXMEMORY_URL is honoured.
+        let mem_handle = crate::handle::make_memory_handle(std::sync::Arc::clone(&self.memory));
+        let user_name = mem_handle
+            .kv_get(&agent_id.to_string(), sid, sid, "user_name")
             .ok()
             .flatten()
             .and_then(|v| v.as_str().map(String::from))
