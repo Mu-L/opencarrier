@@ -650,6 +650,13 @@ pub struct KernelConfig {
     /// `timed_out`. Default: 86400 (24h).
     #[serde(default = "default_user_input_timeout_secs")]
     pub user_input_timeout_secs: u64,
+    /// Outer wall-clock timeout (seconds) for a single agent turn across all
+    /// trigger paths (HTTP /send, channel inbound, cron, inter-agent). Applied
+    /// at the `send_message_with_handle_and_blocks` chokepoint so every path is
+    /// bounded consistently; cron jobs may override per-job via `timeout_secs`
+    /// (tighter wins). Default: 600.
+    #[serde(default = "default_agent_turn_timeout_secs")]
+    pub agent_turn_timeout_secs: u64,
     /// Config include files — loaded and deep-merged before the root config.
     /// Paths are relative to the root config file's directory.
     /// Security: absolute paths and `..` components are rejected.
@@ -811,6 +818,10 @@ fn default_user_input_timeout_secs() -> u64 {
     86_400
 }
 
+fn default_agent_turn_timeout_secs() -> u64 {
+    600
+}
+
 fn default_llm_concurrency() -> usize {
     10
 }
@@ -915,6 +926,7 @@ impl Default for KernelConfig {
             budget: BudgetConfig::default(),
             max_cron_jobs: default_max_cron_jobs(),
             user_input_timeout_secs: default_user_input_timeout_secs(),
+            agent_turn_timeout_secs: default_agent_turn_timeout_secs(),
             include: Vec::new(),
             exec_policy: ExecPolicy::default(),
             cli_exec: CliExecConfig::default(),
@@ -1450,6 +1462,11 @@ impl KernelConfig {
         } else if self.user_input_timeout_secs > 2_592_000 {
             self.user_input_timeout_secs = 2_592_000;
         }
+
+        // agent turn timeout: 0 would time out instantly - fall back to default.
+        if self.agent_turn_timeout_secs == 0 {
+            self.agent_turn_timeout_secs = default_agent_turn_timeout_secs();
+        }
     }
 }
 
@@ -1462,6 +1479,17 @@ mod tests {
         let config = KernelConfig::default();
         assert_eq!(config.log_level, "info");
         assert_eq!(config.api_listen, "127.0.0.1:50051");
+    }
+
+    #[test]
+    fn test_agent_turn_timeout_default_and_clamp() {
+        let config = KernelConfig::default();
+        assert_eq!(config.agent_turn_timeout_secs, 600);
+        // 0 would time out instantly - clamp_bounds restores the default.
+        let mut config = config;
+        config.agent_turn_timeout_secs = 0;
+        config.clamp_bounds();
+        assert_eq!(config.agent_turn_timeout_secs, 600);
     }
 
     #[test]

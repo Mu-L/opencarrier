@@ -873,6 +873,22 @@ fn cmd_start(config: Option<PathBuf>) {
     rt.block_on(async {
         let kernel_config = kernel::config::load_config(config.as_deref());
 
+        // Boot health-check: if AGINXMEMORY_URL is set, the kernel routes kv+tree
+        // to the external aginx-memory daemon. Probe its /health before boot so a
+        // down or misconfigured aginx-memory fails fast (systemd Restart=always
+        // retries) instead of silently degrading to in-process SQLite (or every
+        // memory call failing per-request). URL unset = in-process only, skipped.
+        if let Some(url) = runtime::http_memory::aginx_memory_url_opt() {
+            match runtime::http_memory::probe_health(&url, std::time::Duration::from_secs(30)).await {
+                Ok(()) => ui::success(&format!("aginxMemory health-check OK ({url})")),
+                Err(e) => {
+                    ui::error(&format!("aginxMemory boot health-check failed ({url}): {e}"));
+                    ui::hint("Ensure the aginx-memory service is running and AGINXMEMORY_URL is correct.");
+                    std::process::exit(1);
+                }
+            }
+        }
+
         let kernel = match CarrierKernel::boot_with_config(kernel_config) {
             Ok(k) => k,
             Err(e) => {

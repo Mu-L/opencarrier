@@ -779,6 +779,27 @@ impl CarrierKernel {
     /// Per-agent locking ensures that concurrent messages for the same agent
     /// are serialized (preventing session corruption), while messages for
     /// different agents run in parallel.
+    /// Bound an agent-turn future with a wall-clock timeout. All trigger paths
+    /// (HTTP /send, channel inbound, cron, inter-agent) funnel through
+    /// `send_message_with_handle_and_blocks`, which wraps each executor branch
+    /// in this so every turn is bounded consistently. Cron may also wrap in its
+    /// own per-job timeout (tighter wins).
+    async fn bounded_turn<F>(
+        fut: F,
+        secs: u64,
+        agent_id: &str,
+    ) -> KernelResult<AgentLoopResult>
+    where
+        F: std::future::Future<Output = KernelResult<AgentLoopResult>>,
+    {
+        match tokio::time::timeout(std::time::Duration::from_secs(secs), fut).await {
+            Ok(r) => r,
+            Err(_) => Err(KernelError::Carrier(CarrierError::Internal(format!(
+                "agent {agent_id} turn exceeded {secs}s timeout"
+            )))),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn send_message_with_handle_and_blocks(
         &self,
@@ -813,12 +834,25 @@ impl CarrierKernel {
             KernelError::Carrier(CarrierError::AgentNotFound(agent_id.to_string()))
         })?;
 
-        // Dispatch based on module type
+        // Dispatch based on module type, bounded by the configurable turn
+        // timeout (all trigger paths funnel through here). Cron may also wrap
+        // per-job (tighter wins).
+        let turn_secs = self.config.agent_turn_timeout_secs;
+        let agent_id_str = agent_id.to_string();
         let result = if entry.manifest.module.starts_with("wasm:") {
-            self.execute_wasm_agent(&entry, message, kernel_handle)
-                .await
+            Self::bounded_turn(
+                self.execute_wasm_agent(&entry, message, kernel_handle),
+                turn_secs,
+                &agent_id_str,
+            )
+            .await
         } else if entry.manifest.module.starts_with("python:") {
-            self.execute_python_agent(&entry, agent_id, message).await
+            Self::bounded_turn(
+                self.execute_python_agent(&entry, agent_id, message),
+                turn_secs,
+                &agent_id_str,
+            )
+            .await
         } else {
             // Resume detection: if this sender has a suspended (waiting) flow
             // run for this agent, the message is the `user_input` reply --
@@ -864,19 +898,23 @@ impl CarrierKernel {
                 KernelError::Carrier(CarrierError::AgentNotFound(agent_id.to_string()))
             })?;
             // Default: LLM agent loop (builtin:chat or any unrecognized module)
-            self.execute_llm_agent(
-                &entry,
-                agent_id,
-                message,
-                kernel_handle,
-                content_blocks,
-                sender_id,
-                sender_name,
-                owner_id,
-                channel_type.clone(),
-                task_id,
-                resume_row.as_ref(),
-                active_flow,
+            Self::bounded_turn(
+                self.execute_llm_agent(
+                    &entry,
+                    agent_id,
+                    message,
+                    kernel_handle,
+                    content_blocks,
+                    sender_id,
+                    sender_name,
+                    owner_id,
+                    channel_type.clone(),
+                    task_id,
+                    resume_row.as_ref(),
+                    active_flow,
+                ),
+                turn_secs,
+                &agent_id_str,
             )
             .await
         };

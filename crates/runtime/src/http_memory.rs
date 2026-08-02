@@ -51,6 +51,35 @@ pub fn aginx_memory_url_opt() -> Option<String> {
     types::env::get_env("AGINXMEMORY_URL").filter(|s| !s.is_empty())
 }
 
+/// Probe `{base}/health` with a short request timeout, retrying every 1s until
+/// `deadline` elapses. Returns `Ok(())` on the first 2xx; `Err` on timeout.
+///
+/// Used at opencarrier boot: when `AGINXMEMORY_URL` is set the kernel routes
+/// kv+tree to the external daemon, so we probe its `/health` before boot and
+/// abort startup (systemd `Restart=always` retries) if it's unreachable, rather
+/// than silently starting with every memory call failing per-request.
+pub async fn probe_health(base_url: &str, deadline: std::time::Duration) -> CarrierResult<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .map_err(|e| CarrierError::Network(format!("health probe client: {e}")))?;
+    let url = format!("{}/health", base_url.trim_end_matches('/'));
+    let start = std::time::Instant::now();
+    loop {
+        match client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => return Ok(()),
+            Ok(resp) => tracing::warn!(status = %resp.status(), url = %url, "aginxMemory /health not ready"),
+            Err(e) => tracing::warn!(error = %e, url = %url, "aginxMemory /health probe failed"),
+        }
+        if start.elapsed() >= deadline {
+            return Err(CarrierError::Network(format!(
+                "aginxMemory {url} not healthy within {deadline:?}"
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
 /// HTTP-backed `MemoryHandle`. kv+tree go to aginxMemory; analytics stay local.
 pub struct HttpMemoryHandle {
     client: Client,
@@ -342,5 +371,16 @@ mod tests {
         let resp = handle.tree_query_global(req).await.unwrap();
         assert_eq!(resp.total, 0);
         assert!(resp.hits.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn probe_health_unreachable_returns_err() {
+        // 127.0.0.1:1 has no listener -> connection refused. probe_health must
+        // retry within the deadline then return Err (no panic, no hang). Bounded
+        // by the 1s deadline + 2s per-request timeout.
+        let err = probe_health("http://127.0.0.1:1", std::time::Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not healthy"), "got: {err}");
     }
 }

@@ -382,6 +382,34 @@ pub fn command_matches_shell_allow(command: &str, patterns: &[String]) -> bool {
     patterns.iter().any(|p| shell_allow_glob_match(p.trim(), cmd))
 }
 
+/// True if `command` contains a `..` path segment (`../`, `/../`, `/..`, or a
+/// lone `..` token) - a traversal component that could escape a pattern's
+/// directory prefix. Does NOT match `..` inside a filename like `foo..bar`.
+/// Strips leading `VAR=value` env assignments first (same rule as
+/// `normalize_command_for_match`) so `PYTHONPATH=../etc python3 ...` is caught.
+fn command_has_dotdot_segment(command: &str) -> bool {
+    let mut tokens: Vec<&str> = command.split_whitespace().collect();
+    while let Some(first) = tokens.first() {
+        if let Some(eq) = first.find('=') {
+            let name = &first[..eq];
+            let valid_name = !name.is_empty()
+                && name
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if valid_name {
+                tokens.remove(0);
+                continue;
+            }
+        }
+        break;
+    }
+    tokens.iter().any(|tok| {
+        *tok == ".." || tok.starts_with("../") || tok.contains("/../") || tok.ends_with("/..")
+    })
+}
+
 /// Match a shell command against flow `shell_allow` patterns, also trying a
 /// workspace-relative-ized form of the command.
 ///
@@ -397,7 +425,14 @@ pub fn command_matches_flow_shell_allow(
     patterns: &[String],
     workspace_root: Option<&std::path::Path>,
 ) -> bool {
-    if command_matches_shell_allow(command, patterns) {
+    // A `..` path segment can traverse out of a pattern's directory prefix.
+    // The raw + workspace-strip tiers below match on starts_with(prefix), which
+    // a `../../../` suffix defeats (escapes the allowed dir yet still
+    // "matches"). For `..`-bearing commands skip them and rely on the normalize
+    // tier, which lexically collapses `..`: escapes lose the prefix (denied);
+    // legit `../../flows/...` collapses back under it (allowed).
+    let has_dotdot = command_has_dotdot_segment(command);
+    if !has_dotdot && command_matches_shell_allow(command, patterns) {
         return true;
     }
     if let Some(ws) = workspace_root.and_then(|p| p.to_str()) {
@@ -409,7 +444,7 @@ pub fn command_matches_flow_shell_allow(
             // occurrence is replaced — the command text before and after the
             // path is preserved.
             let rel = command.replacen(&prefix, "", 1);
-            if rel != command && command_matches_shell_allow(&rel, patterns) {
+            if !has_dotdot && rel != command && command_matches_shell_allow(&rel, patterns) {
                 return true;
             }
             // Agent may be running from sender_data_dir cwd
@@ -421,7 +456,7 @@ pub fn command_matches_flow_shell_allow(
                 let after_sender = &rel[sender_idx + 9..]; // after /senders/
                 if let Some(rest) = after_sender.split_once('/').map(|x| x.1) {
                     let without_sender = format!("{before}{rest}");
-                    if command_matches_shell_allow(&without_sender, patterns) {
+                    if !has_dotdot && command_matches_shell_allow(&without_sender, patterns) {
                         return true;
                     }
                 }
@@ -1392,6 +1427,44 @@ b"#;
             "python3 --config=../../etc/evil flows/outline-writer/scripts/x.py",
             &patterns,
             None
+        ));
+    }
+
+    #[test]
+    fn flow_shell_allow_denies_traversal_after_matching_prefix() {
+        // The raw + workspace-strip tiers match on starts_with(prefix). A command
+        // whose path SHARES the pattern's directory prefix but then traverses
+        // out via `../../../` must be denied - previously the raw tier
+        // short-circuited to allow (the existing dotdot test only passed by
+        // using a different dir, so it never exercised the same-prefix escape).
+        let patterns = vec!["python3 flows/foo/scripts/*".to_string()];
+        // Same-prefix escape: raw starts_with would match, but `..` is detected
+        // and the normalize tier collapses to `python3 etc/passwd` (no prefix).
+        assert!(!command_matches_flow_shell_allow(
+            "python3 flows/foo/scripts/../../../etc/passwd",
+            &patterns,
+            None,
+        ));
+        // Same with workspace_root set (workspace-strip tier is also gated).
+        let ws = std::path::Path::new("/home/u/.opencarrier/workspaces/demo");
+        assert!(!command_matches_flow_shell_allow(
+            "python3 flows/foo/scripts/../../../etc/passwd",
+            &patterns,
+            Some(ws),
+        ));
+        // Legit relative `../../flows/foo/...` (.. BEFORE the allowed prefix)
+        // still matches after normalize collapses it back under the prefix.
+        assert!(command_matches_flow_shell_allow(
+            "python3 ../../flows/foo/scripts/x.py",
+            &patterns,
+            None,
+        ));
+        // A filename containing `..` (foo..bar.py) is NOT a traversal segment
+        // and must not trigger the skip - raw tier matches as before.
+        assert!(command_matches_flow_shell_allow(
+            "python3 flows/foo/scripts/foo..bar.py",
+            &patterns,
+            None,
         ));
     }
 

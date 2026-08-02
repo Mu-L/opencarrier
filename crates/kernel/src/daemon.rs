@@ -115,12 +115,14 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
             ..
         } => {
             tracing::debug!(job = %job_name, agent = %agent_id, "Cron: firing agent turn");
-            // Default 300s: cron AgentTurns are full LLM turns (multi-iteration
-            // reasoning + tool calls) that routinely take 2-5 min (e.g. the
-            // ai-writer pipeline's formatter/outline steps). 120s was too short
-            // and timed out legitimate writing turns. Tasks needing more should
-            // set `timeout_secs` explicitly via cron_create.
-            let timeout_s = timeout_secs.unwrap_or(300);
+            // Default to the shared agent-turn timeout (KernelConfig.
+            // agent_turn_timeout_secs, default 600s) so cron turns are bounded
+            // consistently with HTTP /send and channel inbound turns (which get
+            // the same outer timeout at the send_message_with_handle_and_blocks
+            // chokepoint). Cron AgentTurns are full LLM turns (multi-iteration
+            // reasoning + tool calls) that routinely take 2-5 min; tasks needing
+            // more (or less) should set `timeout_secs` explicitly via cron_create.
+            let timeout_s = timeout_secs.unwrap_or(kernel.config.agent_turn_timeout_secs);
             let timeout = std::time::Duration::from_secs(timeout_s);
             let delivery = job.delivery.clone();
             let owner_id = job.owner_id.clone();

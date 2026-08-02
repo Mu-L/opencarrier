@@ -25,6 +25,20 @@ scp deploy/aginx-memory.service 86quan:/tmp/aginx-memory.service
 ssh 86quan 'sudo mv /tmp/aginx-memory.service /etc/systemd/system/aginx-memory.service && sudo systemctl daemon-reload'
 ```
 
+### 2b. opencarrier.service 硬依赖 + 启动健康检查（重要）
+
+`opencarrier.service` 是服务器侧文件（不在仓内）。给它加硬依赖，让 systemd 在 aginx-memory 起来后再起 opencarrier：
+
+```bash
+ssh 86quan 'sudo systemctl edit opencarrier'
+# 在 override 里加：
+#   [Unit]
+#   Requires=aginx-memory.service
+#   After=aginx-memory.service
+```
+
+此外 opencarrier 启动代码现在做 boot 健康检查：若 `AGINXMEMORY_URL` 设了，启动时探测 `{url}/health` 重试 30s，仍不可达则 **abort 启动**（systemd `Restart=always` 重试到 aginx-memory 起来为止），而不是默默降级到进程内 SQLite 或每调用 per-call 失败。URL 未设（in-process-only 配置）则跳过探测。所以 aginx-memory 挂了 opencarrier 不会"假活"。
+
 ## 3. 改 post-receive hook（build aginx-memory 两个 bin）
 
 编辑 `/data/git/opencarrier-workspace.git/hooks/post-receive`，在 build opencarrier 之后加：
