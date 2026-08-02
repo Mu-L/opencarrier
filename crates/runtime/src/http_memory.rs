@@ -294,3 +294,49 @@ impl MemoryHandle for HttpMemoryHandle {
         self.fallback.analytics_recent_conversations(agent_id, limit)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use memory::MemorySubstrate;
+    use types::memory_tree::GlobalQuery;
+
+    /// Env-gated integration test: when `AGINXMEMORY_TEST_URL` is set (pointing
+    /// at a running aginx-memory daemon), exercise the full HTTP round-trip the
+    /// kernel now relies on at the 5 routed call sites - kv (sync trait ->
+    /// block_in_place bridge) and tree_query_global (async). Skips otherwise.
+    ///
+    /// Run: start the daemon, then
+    ///   AGINXMEMORY_TEST_URL=http://127.0.0.1:4399 \
+    ///   cargo test -p runtime --features ... http_memory::tests::switch_on_round_trip
+    #[tokio::test(flavor = "multi_thread")]
+    async fn switch_on_round_trip() {
+        let Some(url) = std::env::var("AGINXMEMORY_TEST_URL").ok() else {
+            eprintln!("skip (set AGINXMEMORY_TEST_URL=http://127.0.0.1:<port>)");
+            return;
+        };
+        let fallback = Arc::new(MemorySubstrate::open_in_memory().unwrap());
+        let handle = HttpMemoryHandle::new(url, fallback).unwrap();
+
+        // kv round-trip (sync trait method -> block_in_place -> HTTP).
+        handle
+            .kv_set("a1", "o1", "u1", "k", json!("v_round_trip"))
+            .unwrap();
+        let got = handle.kv_get("a1", "o1", "u1", "k").unwrap();
+        assert_eq!(got, Some(json!("v_round_trip")));
+
+        // tree_query_global (async -> HTTP). Empty owner -> empty hits, but must
+        // not panic/error through the block_on bridge the kernel uses.
+        let owner = "switch_on_owner".to_string();
+        let req = GlobalQuery {
+            owner_id: &owner,
+            time_window_days: Some(7),
+            query: None,
+            limit: 3,
+            user_id: None,
+        };
+        let resp = handle.tree_query_global(req).await.unwrap();
+        assert_eq!(resp.total, 0);
+        assert!(resp.hits.is_empty());
+    }
+}
