@@ -10,7 +10,7 @@
 //!   - L2 = one node per **month** (~4 weekly nodes)
 //!   - L3 = one node per **year** (~12 monthly nodes)
 
-pub mod digest;
+/// Pure hotness formula for topic-tree spawning (reused by aginxMemory).
 pub mod hotness;
 
 /// Number of L0 (daily) nodes that seal into one L1 (weekly) node.

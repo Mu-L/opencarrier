@@ -13,7 +13,6 @@ pub mod entity_store;
 pub mod extract;
 pub mod ingest;
 pub mod job_store;
-pub mod jobs;
 pub mod score_store;
 pub mod scoring;
 pub mod store;
