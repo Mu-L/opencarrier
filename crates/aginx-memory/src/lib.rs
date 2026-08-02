@@ -12,3 +12,4 @@ pub mod pg;
 pub mod bucket_seal;
 pub mod routing;
 pub mod digest;
+pub mod jobs;
