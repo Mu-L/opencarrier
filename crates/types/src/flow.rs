@@ -432,26 +432,48 @@ pub fn command_matches_flow_shell_allow(
     // sender_data_dir cwd (workspace_root/senders/{owner}/ -> `../../` reaches
     // workspace_root). Lexically collapse `..` components so
     // `python3 ../../flows/foo/scripts/x.py` matches a
-    // `python3 flows/foo/scripts/*` pattern. Security-neutral: the same glob
-    // match runs against the canonicalized form - `..` traversal that escapes
-    // the pattern's directory collapses to a path that no longer shares the
+    // `python3 flows/foo/scripts/*` pattern. Also strips leading `VAR=value`
+    // env assignments the agent may prepend (e.g. `PYTHONPATH=../../flows/...
+    // python3 ...`). Security-neutral: the same glob match runs against the
+    // canonicalized form - `..`/env-prefix manipulation that escapes the
+    // pattern's directory collapses to a path that no longer shares the
     // pattern's prefix, so it is still denied.
-    let collapsed = collapse_dotdot_components(command);
-    if collapsed != command && command_matches_shell_allow(&collapsed, patterns) {
+    let normalized = normalize_command_for_match(command);
+    if normalized != command && command_matches_shell_allow(&normalized, patterns) {
         return true;
     }
     false
 }
 
-/// Lexically collapse `..` path components in each whitespace-separated token
-/// of `command`. Leading `..` (stack empty) are dropped, so
-/// `../../flows/foo/x.py` -> `flows/foo/x.py`; mid-path `a/b/../c` -> `a/c`.
+/// Normalize a shell command for `shell_allow` matching. Strips leading
+/// `VAR=value` env assignments (`PYTHONPATH=... ` etc.), then lexically
+/// collapses `..` path components in each remaining token
+/// (`../../flows/foo/x.py` -> `flows/foo/x.py`; `a/b/../c` -> `a/c`).
 /// Tokens without `/` are left unchanged. Pure lexical normalization (no
 /// filesystem access) used only to match a relative command against a relative
 /// `shell_allow` pattern.
-fn collapse_dotdot_components(command: &str) -> String {
-    command
-        .split_whitespace()
+fn normalize_command_for_match(command: &str) -> String {
+    let mut tokens: Vec<&str> = command.split_whitespace().collect();
+    // Strip leading env-var assignments (VAR=value) - the agent may prepend
+    // PYTHONPATH=... before the actual command.
+    while let Some(first) = tokens.first() {
+        if let Some(eq) = first.find('=') {
+            let name = &first[..eq];
+            let valid_name = !name.is_empty()
+                && name
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if valid_name {
+                tokens.remove(0);
+                continue;
+            }
+        }
+        break;
+    }
+    tokens
+        .iter()
         .map(|tok| {
             if !tok.contains('/') {
                 return tok.to_string();
@@ -1340,6 +1362,34 @@ b"#;
         // A path outside the allowed scripts dir is denied.
         assert!(!command_matches_flow_shell_allow(
             "python3 ../../etc/passwd",
+            &patterns,
+            None
+        ));
+    }
+
+    #[test]
+    fn flow_shell_allow_strips_env_prefix_and_dotdot() {
+        // Agent prepends a PYTHONPATH= env assignment (itself using a relative
+        // ../../flows path) before `python3 ../../flows/...`. Both the env
+        // prefix and the `..` must be normalized for the relative pattern to
+        // match.
+        let patterns = vec!["python3 flows/outline-writer/scripts/*".to_string()];
+        let cmd = "PYTHONPATH=../../flows/outline-writer/scripts python3 ../../flows/outline-writer/scripts/validate_outline.py output/pipeline-x/大纲.md";
+        assert!(command_matches_flow_shell_allow(cmd, &patterns, None));
+
+        // Multiple env prefixes also stripped.
+        let cmd2 = "A=1 B=../../flows/x python3 ../../flows/outline-writer/scripts/validate_outline.py";
+        assert!(command_matches_flow_shell_allow(cmd2, &patterns, None));
+
+        // Security: env prefix + traversal that escapes is still denied.
+        assert!(!command_matches_flow_shell_allow(
+            "PYTHONPATH=../../etc python3 ../../etc/passwd",
+            &patterns,
+            None
+        ));
+        // A --flag=value is NOT stripped as an env assignment (starts with `-`).
+        assert!(!command_matches_flow_shell_allow(
+            "python3 --config=../../etc/evil flows/outline-writer/scripts/x.py",
             &patterns,
             None
         ));
