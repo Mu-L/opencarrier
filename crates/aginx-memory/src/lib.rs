@@ -9,3 +9,4 @@
 refinery::embed_migrations!("migrations");
 
 pub mod pg;
+pub mod bucket_seal;
