@@ -44,7 +44,11 @@ const AGINX_MEMORY_TIMEOUT_SECS: u64 = 30;
 /// The kernel's `make_memory_handle` factory branches on this at the 6
 /// injection points + 4 direct call sites.
 pub fn aginx_memory_url_opt() -> Option<String> {
-    std::env::var("AGINXMEMORY_URL").ok().filter(|s| !s.is_empty())
+    // types::env::get_env (not std::env::var): ~/.opencarrier/.env is loaded into
+    // the in-process ENV_OVERRIDES map by load_dotenv, which never calls
+    // std::env::set_var. std::env::var would silently miss .env values and
+    // make_memory_handle would fall back to in-process SQLite with no error.
+    types::env::get_env("AGINXMEMORY_URL").filter(|s| !s.is_empty())
 }
 
 /// HTTP-backed `MemoryHandle`. kv+tree go to aginxMemory; analytics stay local.

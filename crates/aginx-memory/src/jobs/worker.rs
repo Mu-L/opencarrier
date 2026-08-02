@@ -75,7 +75,11 @@ impl TreeWorkerPool {
         }
 
         if self.worker_count == 0 {
-            tracing::info!("[tree_jobs] worker pool started with 0 consumers (queue-only mode)");
+            tracing::warn!(
+                "[tree_jobs] worker pool started with 0 consumers (queue-only mode): \
+                 tree memory recall will return EMPTY until AGINX_MEMORY_WORKER_COUNT \
+                 is raised above 0 - ingest stores chunks but no worker seals summaries"
+            );
         }
     }
 

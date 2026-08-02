@@ -10,7 +10,7 @@ WorkingDirectory=/home/ubuntu/.opencarrier
 # DATABASE_URL: PG connection. AGINX_MEMORY_WORKER_COUNT: start at 0 (queue-only),
 # ramp to 1 then 4 after observing the seal/digest/topic_route pipeline.
 # AGINX_MEMORY_SCHEDULER: leave off until the digest path is validated manually.
-Environment=DATABASE_URL=postgres:///aginx_memory
+Environment=DATABASE_URL=postgres:///aginx_memory?host=/var/run/postgresql
 Environment=AGINX_MEMORY_LISTEN=127.0.0.1:4300
 Environment=CONTENT_ROOT=/home/ubuntu/.opencarrier/memory_tree/content
 Environment=AGINX_MEMORY_WORKER_COUNT=0

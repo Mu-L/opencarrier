@@ -42,6 +42,26 @@ jobs:
     name: Test / ubuntu-22.04
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    services:
+      # PostgreSQL for aginx-memory PG store tests (guarded on
+      # AGINX_MEMORY_TEST_PG). The ~89 tests call reset_and_migrate which DROPs
+      # and recreates tables in this shared DB, so the aginx-memory suite is run
+      # serialized in a separate step below (--test-threads=1).
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AGINX_MEMORY_TEST_PG: postgres://postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # stable
@@ -57,8 +77,11 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
-      - name: Run tests
-        run: cargo test --workspace
+      - name: Run workspace tests (excluding aginx-memory, which shares the PG DB and runs serialized below)
+        run: cargo test --workspace --exclude aginx-memory
+        timeout-minutes: 15
+      - name: Run aginx-memory tests serialized (shared PG test DB - reset_and_migrate would trample under parallelism)
+        run: cargo test -p aginx-memory -- --test-threads=1
         timeout-minutes: 15
 
   clippy:
@@ -79,7 +102,7 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf
-      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
   fmt:
     name: Format

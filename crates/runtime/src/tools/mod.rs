@@ -46,7 +46,10 @@ pub(crate) const AGINXBROWSER_TIMEOUT_SECS: u64 = 60;
 /// Read the AginBrowser URL from `AGINXBROWSER_URL` env var.
 /// Returns `None` if not set or empty (e.g. web_search disables itself).
 pub(crate) fn aginxbrowser_url_opt() -> Option<String> {
-    std::env::var("AGINXBROWSER_URL").ok().filter(|s| !s.is_empty())
+    // types::env::get_env so ~/.opencarrier/.env values take effect (load_dotenv
+    // populates ENV_OVERRIDES, not std::env). Falls back to std::env::var for
+    // systemd Environment= configs. Same root-cause fix as aginx_memory_url_opt.
+    types::env::get_env("AGINXBROWSER_URL").filter(|s| !s.is_empty())
 }
 
 /// Read the AginBrowser URL from `AGINXBROWSER_URL` env var.
