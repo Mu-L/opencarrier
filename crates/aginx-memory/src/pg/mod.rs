@@ -8,6 +8,8 @@
 pub mod kv_store;
 pub mod chunk_store;
 pub mod tree_store;
+pub mod score_store;
+pub mod entity_store;
 
 #[cfg(test)]
 /// Drop all aginxMemory tables and re-run migrations. Tests call this so each
