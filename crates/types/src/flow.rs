@@ -428,7 +428,48 @@ pub fn command_matches_flow_shell_allow(
             }
         }
     }
+    // Agent may run flow scripts via a relative `../../flows/...` path from the
+    // sender_data_dir cwd (workspace_root/senders/{owner}/ -> `../../` reaches
+    // workspace_root). Lexically collapse `..` components so
+    // `python3 ../../flows/foo/scripts/x.py` matches a
+    // `python3 flows/foo/scripts/*` pattern. Security-neutral: the same glob
+    // match runs against the canonicalized form - `..` traversal that escapes
+    // the pattern's directory collapses to a path that no longer shares the
+    // pattern's prefix, so it is still denied.
+    let collapsed = collapse_dotdot_components(command);
+    if collapsed != command && command_matches_shell_allow(&collapsed, patterns) {
+        return true;
+    }
     false
+}
+
+/// Lexically collapse `..` path components in each whitespace-separated token
+/// of `command`. Leading `..` (stack empty) are dropped, so
+/// `../../flows/foo/x.py` -> `flows/foo/x.py`; mid-path `a/b/../c` -> `a/c`.
+/// Tokens without `/` are left unchanged. Pure lexical normalization (no
+/// filesystem access) used only to match a relative command against a relative
+/// `shell_allow` pattern.
+fn collapse_dotdot_components(command: &str) -> String {
+    command
+        .split_whitespace()
+        .map(|tok| {
+            if !tok.contains('/') {
+                return tok.to_string();
+            }
+            let mut stack: Vec<&str> = Vec::new();
+            for part in tok.split('/') {
+                match part {
+                    ".." => {
+                        stack.pop();
+                    }
+                    "." | "" => {}
+                    other => stack.push(other),
+                }
+            }
+            stack.join("/")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn shell_allow_glob_match(pattern: &str, text: &str) -> bool {
@@ -1273,6 +1314,35 @@ b"#;
         ));
         // Empty workspace_root → falls back to literal match only.
         assert!(!command_matches_flow_shell_allow(abs, &patterns, None));
+    }
+
+    #[test]
+    fn flow_shell_allow_matches_relative_dotdot_path() {
+        // Flow instructs the agent to run `python3 ../../flows/...` from the
+        // sender_data_dir cwd (workspace_root/senders/{owner}/ -> `../../`
+        // reaches workspace_root). The relative pattern `python3 flows/...`
+        // must match after lexically collapsing the leading `..`.
+        let patterns = vec!["python3 flows/outline-writer/scripts/*".to_string()];
+        let cmd = "python3 ../../flows/outline-writer/scripts/validate_outline.py output/pipeline-x/大纲.md";
+        assert!(command_matches_flow_shell_allow(cmd, &patterns, None));
+        // Also works with workspace_root set (the collapse is independent).
+        let ws = std::path::Path::new("/home/u/.opencarrier/workspaces/ai-writer");
+        assert!(command_matches_flow_shell_allow(cmd, &patterns, Some(ws)));
+
+        // Security: `..` traversal that escapes the pattern's directory must
+        // still be denied. `flows/foo/scripts/../../../etc/passwd` collapses to
+        // `etc/passwd`, which does not share the `flows/...` prefix.
+        assert!(!command_matches_flow_shell_allow(
+            "python3 flows/foo/scripts/../../../etc/passwd",
+            &patterns,
+            None
+        ));
+        // A path outside the allowed scripts dir is denied.
+        assert!(!command_matches_flow_shell_allow(
+            "python3 ../../etc/passwd",
+            &patterns,
+            None
+        ));
     }
 
     #[test]
