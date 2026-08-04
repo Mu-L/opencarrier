@@ -41,6 +41,10 @@ pub enum TaskKind {
     PushText,
     /// `task_payload = {"miniprogram": {appid, pagepath, title, thumb_media_id}}`.
     PushMiniprogram,
+    /// Bypass push to admins (does NOT skip the agent -- agent still replies to
+    /// the user). `task_payload = {"notify_type": "..."}`; the push content is
+    /// the user's message + source, routed via `notify_routes[notify_type]`.
+    NotifyAdmin,
 }
 
 impl TaskKind {
@@ -48,6 +52,7 @@ impl TaskKind {
         match self {
             Self::PushText => "push_text",
             Self::PushMiniprogram => "push_miniprogram",
+            Self::NotifyAdmin => "notify_admin",
         }
     }
 }

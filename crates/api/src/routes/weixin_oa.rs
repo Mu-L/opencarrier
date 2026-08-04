@@ -258,22 +258,52 @@ pub async fn weixin_oa_callback(
         if !hit {
             continue;
         }
-        if rule.trigger_kind == types::automation::TriggerKind::Subscribe
-            && rule.task_kind == types::automation::TaskKind::PushText
-        {
-            if passive_text.is_none() {
-                passive_text = Some(rule);
+        match rule.task_kind {
+            types::automation::TaskKind::NotifyAdmin => {
+                // Bypass push to admins. Does NOT count as api_hits -> does not
+                // decide agent skip. Agent still runs to reply to the user.
+                let notify_type = rule
+                    .task_payload
+                    .get("notify_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("escalation");
+                if let Some(agent_id) = session.bind_agent.as_deref() {
+                    if let Err(e) = state
+                        .kernel
+                        .notify_admins(agent_id, notify_type, &msg.content, &from_user, &app_id)
+                        .await
+                    {
+                        tracing::warn!(
+                            %app_id, openid = %from_user, rule_id = %rule.id, error = %e,
+                            "weixin-oa: automation notify_admin push failed"
+                        );
+                    }
+                } else {
+                    tracing::warn!(
+                        %app_id, rule_id = %rule.id,
+                        "weixin-oa: notify_admin rule matched but no bind_agent"
+                    );
+                }
             }
-        } else {
-            api_hits += 1;
-            if let Err(e) =
-                channel_weixin_oa::execute_push(&app_id, &from_user, &rule.task_payload).await
+            types::automation::TaskKind::PushText
+                if rule.trigger_kind == types::automation::TriggerKind::Subscribe =>
             {
-                tracing::warn!(
-                    %app_id, openid = %from_user, rule_id = %rule.id, error = %e,
-                    "weixin-oa: automation push failed"
-                );
-                api_failures += 1;
+                if passive_text.is_none() {
+                    passive_text = Some(rule);
+                }
+            }
+            _ => {
+                // PushText (non-subscribe) / PushMiniprogram: reply to user, counts as api_hits.
+                api_hits += 1;
+                if let Err(e) =
+                    channel_weixin_oa::execute_push(&app_id, &from_user, &rule.task_payload).await
+                {
+                    tracing::warn!(
+                        %app_id, openid = %from_user, rule_id = %rule.id, error = %e,
+                        "weixin-oa: automation push failed"
+                    );
+                    api_failures += 1;
+                }
             }
         }
     }

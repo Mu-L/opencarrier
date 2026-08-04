@@ -51,7 +51,7 @@ impl ToolModule for AutomationRulesTools {
             },
             ToolDefinition {
                 name: "automation_rule_upsert".to_string(),
-                description: "Create or update an automation rule (admin only). On a matching inbound event, deliver a fixed reply without the agent LLM. trigger: subscribe|keyword; task: push_text|push_miniprogram.".to_string(),
+                description: "Create or update an automation rule (admin only). On a matching inbound event: push_text/push_miniprogram deliver a fixed reply and skip the agent; notify_admin pushes to admins (notify_type→notify_routes) as a bypass while the agent still replies to the user. trigger: subscribe|keyword.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -59,7 +59,7 @@ impl ToolModule for AutomationRulesTools {
                         "name": { "type": "string", "description": "Human-readable rule name" },
                         "trigger": { "type": "string", "enum": ["subscribe", "keyword"] },
                         "keyword": { "type": "string", "description": "Required when trigger=keyword (substring match on text)" },
-                        "task": { "type": "string", "enum": ["push_text", "push_miniprogram"] },
+                        "task": { "type": "string", "enum": ["push_text", "push_miniprogram", "notify_admin"] },
                         "text": { "type": "string", "description": "Required when task=push_text" },
                         "miniprogram": { "type": "object", "description": "Required when task=push_miniprogram: {appid, pagepath, title, thumb_media_id}" },
                         "priority": { "type": "integer", "description": "Higher = evaluated first (default 0)" },
@@ -158,9 +158,10 @@ async fn tool_rule_upsert(
     let task_kind = match task {
         "push_text" => TaskKind::PushText,
         "push_miniprogram" => TaskKind::PushMiniprogram,
+        "notify_admin" => TaskKind::NotifyAdmin,
         other => {
             return Err(CarrierError::InvalidInput(format!(
-                "unknown task '{other}' (push_text|push_miniprogram)"
+                "unknown task '{other}' (push_text|push_miniprogram|notify_admin)"
             )))
         }
     };
@@ -209,6 +210,15 @@ async fn tool_rule_upsert(
                     "thumb_media_id": thumb_media_id
                 }
             })
+        }
+        TaskKind::NotifyAdmin => {
+            let notify_type = input["notify_type"].as_str().ok_or_else(|| {
+                CarrierError::InvalidInput(
+                    "task=notify_admin requires 'notify_type' (matches a notify_routes entry)"
+                        .to_string(),
+                )
+            })?;
+            serde_json::json!({ "notify_type": notify_type })
         }
     };
 

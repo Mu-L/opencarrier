@@ -1242,6 +1242,132 @@ impl CarrierKernel {
         manifest.model.system_prompt =
             runtime::prompt_builder::build_system_prompt(&prompt_ctx);
     }
+
+    /// Push a notification to admins (automation `notify_admin` rule bypass).
+    /// Looks up `notify_type` in `notify_routes`, resolves recipients (admins
+    /// fan-out via the agent's `admins.json`, or the route's explicit user_id),
+    /// and pushes via `channel_send_fn`. Does NOT touch the agent turn -- the
+    /// caller still runs the agent to reply to the user.
+    pub async fn notify_admins(
+        &self,
+        agent_id: &str,
+        notify_type: &str,
+        content: &str,
+        source_sender: &str,
+        source_bot: &str,
+    ) -> types::error::CarrierResult<()> {
+        use types::error::CarrierError;
+
+        // 1. Find the route for this notify type.
+        let route = {
+            let routes = self.memory.notify_store().load_all()?;
+            routes
+                .iter()
+                .find(|r| r.name == notify_type)
+                .cloned()
+                .ok_or_else(|| {
+                    CarrierError::Config(format!("no notify route '{notify_type}'"))
+                })?
+        };
+
+        // 2. Build the push message (prefix + content + source).
+        let msg = match route.prefix.as_ref().filter(|p| !p.is_empty()) {
+            Some(p) => format!("{p}\n{content}\n来源用户: {source_sender}"),
+            None => format!("{content}\n来源用户: {source_sender}"),
+        };
+
+        // 3. Resolve recipient (channel, bot_id, user_id) tuples.
+        //    recipients="admins" -> fan out via admins.json (iLink ids keep the
+        //    route's channel/bot; bare openids route through weixin-oa + source_bot).
+        let recipient_ids: Vec<(String, String, String)> =
+            if route.recipients.as_deref() == Some("admins") {
+                // Inline resolve_agent_workspace (it's a KernelHandle trait
+                // method; inlining avoids importing the trait here).
+                let ws = self
+                    .registry
+                    .resolve(agent_id)
+                    .ok()
+                    .and_then(|(_, entry)| entry.manifest.workspace.clone())
+                    .map(|p| p.to_string_lossy().to_string());
+                match ws {
+                    Some(ws) => {
+                        let admins =
+                            runtime::plugin::admin_store::read_admins(std::path::Path::new(&ws));
+                        admins
+                            .admins
+                            .into_iter()
+                            .map(|a| {
+                                if a.sender_id.contains("@im.wechat") {
+                                    (route.channel.clone(), route.bot_id.clone(), a.sender_id)
+                                } else {
+                                    (
+                                        "weixin-oa".to_string(),
+                                        source_bot.to_string(),
+                                        a.sender_id,
+                                    )
+                                }
+                            })
+                            .collect()
+                    }
+                    None => {
+                        tracing::warn!(
+                            agent_id = %agent_id, notify_type = %notify_type,
+                            "notify_admins: recipients=admins but workspace unresolved"
+                        );
+                        Vec::new()
+                    }
+                }
+            } else if route.user_id.is_empty() {
+                tracing::warn!(
+                    notify_type = %notify_type,
+                    "notify_admins: route has empty user_id and recipients != admins"
+                );
+                Vec::new()
+            } else {
+                vec![(
+                    route.channel.clone(),
+                    route.bot_id.clone(),
+                    route.user_id.clone(),
+                )]
+            };
+
+        // 4. Push via channel_send_fn (sync fn -> spawn_blocking, fire-and-forget + log).
+        let send_fn = self
+            .channel_send_fn
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone());
+        let send_fn = match send_fn {
+            Some(f) => f,
+            None => {
+                return Err(CarrierError::Config(
+                    "channel_send_fn not configured".into(),
+                ))
+            }
+        };
+
+        for (channel, bot_id, user_id) in recipient_ids {
+            let send_fn = std::sync::Arc::clone(&send_fn);
+            let msg = msg.clone();
+            let (ch, bot, user) = (channel.clone(), bot_id.clone(), user_id.clone());
+            let nt = notify_type.to_string();
+            match tokio::task::spawn_blocking(move || send_fn(&ch, &bot, &user, &msg)).await {
+                Ok(Ok(())) => tracing::info!(
+                    notify_type = %nt, target_channel = %channel, target_user = %user_id,
+                    "automation notify_admin pushed"
+                ),
+                Ok(Err(e)) => tracing::warn!(
+                    notify_type = %notify_type, target_user = %user_id, error = %e,
+                    "automation notify_admin push failed"
+                ),
+                Err(e) => tracing::warn!(
+                    notify_type = %notify_type, target_user = %user_id, error = %e,
+                    "automation notify_admin join failed"
+                ),
+            }
+        }
+        Ok(())
+    }
 }
 
 

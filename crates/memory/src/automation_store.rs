@@ -145,6 +145,7 @@ fn row_to_rule(r: RowData) -> CarrierResult<AutomationRule> {
     let task_kind = match r.task_kind.as_str() {
         "push_text" => TaskKind::PushText,
         "push_miniprogram" => TaskKind::PushMiniprogram,
+        "notify_admin" => TaskKind::NotifyAdmin,
         other => {
             return Err(CarrierError::Serialization(format!(
                 "unknown task_kind {other}"
