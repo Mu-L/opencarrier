@@ -45,6 +45,10 @@ pub enum TaskKind {
     /// the user). `task_payload = {"notify_type": "..."}`; the push content is
     /// the user's message + source, routed via `notify_routes[notify_type]`.
     NotifyAdmin,
+    /// Unified push: format inferred from `task_payload` (ContentDescriptor
+    /// shape), target from `rule.target`. Subsumes PushText/PushMiniprogram/
+    /// NotifyAdmin — those legacy variants remain for backward compat.
+    Push,
 }
 
 impl TaskKind {
@@ -53,6 +57,7 @@ impl TaskKind {
             Self::PushText => "push_text",
             Self::PushMiniprogram => "push_miniprogram",
             Self::NotifyAdmin => "notify_admin",
+            Self::Push => "push",
         }
     }
 }
@@ -73,8 +78,18 @@ pub struct AutomationRule {
     /// Keyword text (empty for `Subscribe`).
     pub trigger_data: String,
     pub task_kind: TaskKind,
-    /// `ContentDescriptor`-shaped JSON consumed by `execute_push`.
+    /// `ContentDescriptor`-shaped JSON consumed by `execute_push` /
+    /// `push_message`.
     pub task_payload: serde_json::Value,
+    /// Push target: `"current"` (default, the triggering user), `"admins"`
+    /// (fan-out via admins.json), or a specific user_id. Only meaningful for
+    /// `TaskKind::Push` (legacy variants have implicit targets).
+    #[serde(default = "default_target")]
+    pub target: String,
     pub created_at: String,
     pub updated_at: String,
+}
+
+fn default_target() -> String {
+    "current".to_string()
 }

@@ -1368,6 +1368,92 @@ impl CarrierKernel {
         }
         Ok(())
     }
+
+    /// Unified push: deliver a `ContentDescriptor` (text/miniprogram/image/link)
+    /// to any target — a specific user_id or `"admins"` (fan-out). Uses
+    /// `channel_deliver_fn` (supports rich content on all channels). The agent
+    /// turn is NOT affected (caller decides whether to skip agent).
+    pub async fn do_push_message(
+        &self,
+        target: &str,
+        content: &types::content::ContentDescriptor,
+        source_agent_id: &str,
+        source_bot_id: &str,
+    ) -> types::error::CarrierResult<()> {
+        use types::error::CarrierError;
+
+        let deliver_fn = self
+            .channel_deliver_fn
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone());
+        let deliver_fn = match deliver_fn {
+            Some(f) => f,
+            None => {
+                return Err(CarrierError::Config(
+                    "channel_deliver_fn not configured".into(),
+                ))
+            }
+        };
+
+        // Resolve recipients: (channel, bot_id, user_id).
+        let recipients: Vec<(String, String, String)> = if target == "admins" {
+            let ws = self
+                .registry
+                .resolve(source_agent_id)
+                .ok()
+                .and_then(|(_, entry)| entry.manifest.workspace.clone())
+                .map(|p| p.to_string_lossy().to_string());
+            match ws {
+                Some(w) => {
+                    let admins =
+                        runtime::plugin::admin_store::read_admins(std::path::Path::new(&w));
+                    admins
+                        .admins
+                        .into_iter()
+                        .map(|a| infer_channel_bot(&a.sender_id, source_bot_id))
+                        .collect()
+                }
+                None => Vec::new(),
+            }
+        } else {
+            vec![infer_channel_bot(target, source_bot_id)]
+        };
+
+        for (channel, bot_id, user_id) in recipients {
+            let deliver_fn = std::sync::Arc::clone(&deliver_fn);
+            let content = content.clone();
+            let (ch, bot, user) = (channel.clone(), bot_id.clone(), user_id.clone());
+            match tokio::task::spawn_blocking(move || deliver_fn(&ch, &bot, &user, &content)).await {
+                Ok(Ok(())) => tracing::info!(
+                    target_channel = %channel, target_user = %user_id,
+                    "push_message delivered"
+                ),
+                Ok(Err(e)) => tracing::warn!(
+                    target_user = %user_id, error = %e,
+                    "push_message failed"
+                ),
+                Err(e) => tracing::warn!(
+                    target_user = %user_id, error = %e,
+                    "push_message join failed"
+                ),
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Infer (channel, bot_id) from a user_id format.
+/// `wm...` → wecom-kf (TODO: bot_id is 86bus-specific, make configurable).
+/// `@im.wechat` → weixin iLink. Bare openid → weixin-oa.
+fn infer_channel_bot(user_id: &str, source_bot: &str) -> (String, String, String) {
+    if user_id.starts_with("wm") {
+        ("wecom".to_string(), "86bus-kf".to_string(), user_id.to_string())
+    } else if user_id.contains("@im.wechat") {
+        ("weixin".to_string(), "default".to_string(), user_id.to_string())
+    } else {
+        ("weixin-oa".to_string(), source_bot.to_string(), user_id.to_string())
+    }
 }
 
 

@@ -352,6 +352,17 @@ impl KernelHandle for CarrierKernel {
         self.memory.automation_rule_delete(id).await
     }
 
+    async fn push_message(
+        &self,
+        target: String,
+        content: types::content::ContentDescriptor,
+        source_agent_id: String,
+        source_bot_id: String,
+    ) -> CarrierResult<()> {
+        self.do_push_message(&target, &content, &source_agent_id, &source_bot_id)
+            .await
+    }
+
     async fn publish_event(
         &self,
         event_type: &str,

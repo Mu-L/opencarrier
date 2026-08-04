@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 28;
+const SCHEMA_VERSION: u32 = 29;
 
 /// Run all migrations to bring the database up to date.
 ///
@@ -44,6 +44,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         (26, migrate_v26),
         (27, migrate_v27),
         (28, migrate_v28),
+        (29, migrate_v29),
     ];
 
     for (version, migrate_fn) in &migrations {
@@ -1224,13 +1225,34 @@ fn migrate_v28(conn: &Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Version 29: Unified push — add `target` column to automation_rules.
+/// Existing notify_admin rules get target='admins'; all others default
+/// to 'current' (the triggering user). Metadata-only ALTER (no rewrite).
+fn migrate_v29(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "automation_rules", "target") {
+        conn.execute_batch(
+            "ALTER TABLE automation_rules ADD COLUMN target TEXT NOT NULL DEFAULT 'current';",
+        )?;
+    }
+    // Backfill: legacy notify_admin rules -> target='admins'.
+    conn.execute(
+        "UPDATE automation_rules SET target='admins' WHERE task_kind='notify_admin' AND target='current';",
+        [],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![29, "Unified push: target column on automation_rules"],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::run_migrations;
 
     #[test]
     fn test_migration_creates_tables() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
 
         // Verify tables exist
@@ -1286,7 +1308,7 @@ mod tests {
 
     #[test]
     fn test_migration_idempotent() {
-        let conn = Connection::open_in_memory().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap(); // Should not error
     }

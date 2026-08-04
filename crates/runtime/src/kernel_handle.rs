@@ -157,6 +157,19 @@ pub trait KernelHandle: Send + Sync {
         Err(CarrierError::Internal("Automation rule store not available".into()))
     }
 
+    /// Unified push: deliver a `ContentDescriptor` to any target (user_id or
+    /// "admins"). Uses `channel_deliver_fn` (rich content on all channels).
+    async fn push_message(
+        &self,
+        target: String,
+        content: types::content::ContentDescriptor,
+        source_agent_id: String,
+        source_bot_id: String,
+    ) -> CarrierResult<()> {
+        let _ = (target, content, source_agent_id, source_bot_id);
+        Err(CarrierError::Internal("push_message not available".into()))
+    }
+
     /// List discovered external A2A agents as (name, url) pairs.
     fn list_a2a_agents(&self) -> Vec<(String, String)> {
         vec![]

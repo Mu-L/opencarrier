@@ -31,7 +31,7 @@ impl AutomationRuleStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id, app_id, channel, name, enabled, priority, trigger_kind, trigger_data, \
-                        task_kind, task_payload, created_at, updated_at \
+                        task_kind, task_payload, created_at, updated_at, target \
                  FROM automation_rules \
                  WHERE channel=?1 AND app_id=?2 \
                  ORDER BY priority DESC, created_at ASC",
@@ -52,6 +52,7 @@ impl AutomationRuleStore {
                     task_payload: row.get(9)?,
                     created_at: row.get(10)?,
                     updated_at: row.get(11)?,
+                    target: row.get(12)?,
                 })
             })
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -77,12 +78,12 @@ impl AutomationRuleStore {
         conn.execute(
             "INSERT INTO automation_rules (id, app_id, channel, name, enabled, priority, \
                                             trigger_kind, trigger_data, task_kind, task_payload, \
-                                            created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
+                                            created_at, updated_at, target) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
              ON CONFLICT(id) DO UPDATE SET \
                app_id=?2, channel=?3, name=?4, enabled=?5, priority=?6, \
                trigger_kind=?7, trigger_data=?8, task_kind=?9, task_payload=?10, \
-               updated_at=?12",
+               updated_at=?12, target=?13",
             rusqlite::params![
                 rule.id,
                 rule.app_id,
@@ -96,6 +97,7 @@ impl AutomationRuleStore {
                 task_payload,
                 rule.created_at,
                 rule.updated_at,
+                rule.target,
             ],
         )
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -130,6 +132,7 @@ struct RowData {
     task_payload: String,
     created_at: String,
     updated_at: String,
+    target: String,
 }
 
 fn row_to_rule(r: RowData) -> CarrierResult<AutomationRule> {
@@ -146,6 +149,7 @@ fn row_to_rule(r: RowData) -> CarrierResult<AutomationRule> {
         "push_text" => TaskKind::PushText,
         "push_miniprogram" => TaskKind::PushMiniprogram,
         "notify_admin" => TaskKind::NotifyAdmin,
+        "push" => TaskKind::Push,
         other => {
             return Err(CarrierError::Serialization(format!(
                 "unknown task_kind {other}"
@@ -165,6 +169,7 @@ fn row_to_rule(r: RowData) -> CarrierResult<AutomationRule> {
         trigger_data: r.trigger_data,
         task_kind,
         task_payload,
+        target: r.target,
         created_at: r.created_at,
         updated_at: r.updated_at,
     })
@@ -205,6 +210,7 @@ mod tests {
             task_payload: serde_json::json!({"text":"hi"}),
             created_at: "2026-08-04T00:00:00Z".to_string(),
             updated_at: "2026-08-04T00:00:00Z".to_string(),
+            target: "current".to_string(),
         }
     }
 

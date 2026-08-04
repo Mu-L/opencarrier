@@ -78,6 +78,25 @@ impl ToolModule for AutomationRulesTools {
                     "required": ["id"]
                 }),
             },
+            ToolDefinition {
+                name: "message_push".to_string(),
+                description: "Immediately push a message to a specific user or all admins (admin only). Supports text and miniprogram card formats. target = user_id (e.g. wmVXjfCw... for wecom-kf, oOPNNv... for weixin-oa, xxx@im.wechat for iLink) or 'admins'. msgtype inferred from which content field you provide.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "target": { "type": "string", "description": "Recipient: user_id or 'admins'" },
+                        "text": { "type": "string", "description": "Text content (msgtype=text)" },
+                        "miniprogram": { "type": "object", "description": "Miniprogram card (msgtype=miniprogram): {appid, pagepath, title, thumb_media_id}", "properties": {
+                            "appid": { "type": "string" },
+                            "pagepath": { "type": "string", "description": "Must end with .html for wecom-kf" },
+                            "title": { "type": "string" },
+                            "thumb_media_id": { "type": "string" }
+                        } },
+                        "bot_id": { "type": "string", "description": "Source bot_id for OA routing (optional, auto-inferred from user_id)" }
+                    },
+                    "required": ["target"]
+                }),
+            },
         ]
     }
 
@@ -93,13 +112,18 @@ impl ToolModule for AutomationRulesTools {
             "automation_rule_list" => Some(tool_rule_list(input, kernel, sender_id).await),
             "automation_rule_upsert" => Some(tool_rule_upsert(input, kernel, sender_id).await),
             "automation_rule_delete" => Some(tool_rule_delete(input, kernel, sender_id).await),
+            "message_push" => {
+                let agent_id = ctx.caller_agent_id;
+                Some(tool_message_push(input, kernel, sender_id, agent_id).await)
+            }
             _ => None,
         }
     }
 
     fn permission_level(&self, tool_name: &str) -> PermissionLevel {
         match tool_name {
-            "automation_rule_list" | "automation_rule_upsert" | "automation_rule_delete" => {
+            "automation_rule_list" | "automation_rule_upsert" | "automation_rule_delete"
+            | "message_push" => {
                 PermissionLevel::Write
             }
             _ => PermissionLevel::Dangerous,
@@ -159,9 +183,10 @@ async fn tool_rule_upsert(
         "push_text" => TaskKind::PushText,
         "push_miniprogram" => TaskKind::PushMiniprogram,
         "notify_admin" => TaskKind::NotifyAdmin,
+        "push" => TaskKind::Push,
         other => {
             return Err(CarrierError::InvalidInput(format!(
-                "unknown task '{other}' (push_text|push_miniprogram|notify_admin)"
+                "unknown task '{other}' (push_text|push_miniprogram|notify_admin|push)"
             )))
         }
     };
@@ -220,6 +245,30 @@ async fn tool_rule_upsert(
             })?;
             serde_json::json!({ "notify_type": notify_type })
         }
+        TaskKind::Push => {
+            // Unified: format inferred from which content field is present.
+            if let Some(text) = input["text"].as_str() {
+                serde_json::json!({ "text": text })
+            } else if let Some(mp) = input.get("miniprogram") {
+                let appid = mp["appid"].as_str().ok_or_else(|| {
+                    CarrierError::InvalidInput("miniprogram.appid required".to_string())
+                })?;
+                let pagepath = mp["pagepath"].as_str().ok_or_else(|| {
+                    CarrierError::InvalidInput("miniprogram.pagepath required".to_string())
+                })?;
+                let title = mp["title"].as_str().ok_or_else(|| {
+                    CarrierError::InvalidInput("miniprogram.title required".to_string())
+                })?;
+                let thumb_media_id = mp["thumb_media_id"].as_str().ok_or_else(|| {
+                    CarrierError::InvalidInput("miniprogram.thumb_media_id required".to_string())
+                })?;
+                serde_json::json!({ "miniprogram": { "appid": appid, "pagepath": pagepath, "title": title, "thumb_media_id": thumb_media_id } })
+            } else {
+                return Err(CarrierError::InvalidInput(
+                    "task=push requires 'text' or 'miniprogram' (image/link: future)".to_string(),
+                ));
+            }
+        }
     };
 
     let priority = input["priority"].as_i64().unwrap_or(0);
@@ -241,6 +290,7 @@ async fn tool_rule_upsert(
         trigger_data,
         task_kind,
         task_payload,
+        target: input["target"].as_str().unwrap_or("current").to_string(),
         created_at: now.clone(),
         updated_at: now,
     };
@@ -260,6 +310,72 @@ async fn tool_rule_delete(
         .ok_or_else(|| CarrierError::InvalidInput("Missing 'id'".to_string()))?;
     kh.automation_rule_delete(id).await?;
     Ok(format!("Automation rule deleted: {id}"))
+}
+
+/// Build a `ContentDescriptor` from tool input fields (text or miniprogram).
+fn build_content_descriptor(
+    input: &Value,
+) -> CarrierResult<types::content::ContentDescriptor> {
+    use types::content::{ContentDescriptor, MiniprogramContent};
+
+    if let Some(text) = input["text"].as_str() {
+        return Ok(ContentDescriptor {
+            text: Some(text.to_string()),
+            ..Default::default()
+        });
+    }
+    if let Some(mp) = input.get("miniprogram") {
+        let appid = mp["appid"].as_str().ok_or_else(|| {
+            CarrierError::InvalidInput("miniprogram.appid required".to_string())
+        })?;
+        let pagepath = mp["pagepath"].as_str().ok_or_else(|| {
+            CarrierError::InvalidInput("miniprogram.pagepath required".to_string())
+        })?;
+        let title = mp["title"].as_str().ok_or_else(|| {
+            CarrierError::InvalidInput("miniprogram.title required".to_string())
+        })?;
+        let thumb_media_id = mp["thumb_media_id"].as_str().map(String::from);
+        let thumb_url = mp["thumb_url"].as_str().map(String::from);
+        return Ok(ContentDescriptor {
+            miniprogram: Some(MiniprogramContent {
+                appid: appid.to_string(),
+                pagepath: pagepath.to_string(),
+                title: title.to_string(),
+                thumb_media_id,
+                thumb_url,
+                thumb_file: None,
+            }),
+            ..Default::default()
+        });
+    }
+    Err(CarrierError::InvalidInput(
+        "message_push requires 'text' or 'miniprogram' content".to_string(),
+    ))
+}
+
+/// Immediately push a message to a specific user or all admins (admin only).
+async fn tool_message_push(
+    input: &Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    sender_id: Option<&str>,
+    caller_agent_id: Option<&str>,
+) -> CarrierResult<String> {
+    require_admin(sender_id)?;
+    let kh = crate::tools::require_kernel(kernel)?;
+    let target = input["target"]
+        .as_str()
+        .ok_or_else(|| CarrierError::InvalidInput("Missing 'target'".to_string()))?;
+    let content = build_content_descriptor(input)?;
+    let agent_id = caller_agent_id.unwrap_or("");
+    let bot_id = input["bot_id"].as_str().unwrap_or("");
+    kh.push_message(
+        target.to_string(),
+        content,
+        agent_id.to_string(),
+        bot_id.to_string(),
+    )
+    .await?;
+    Ok(format!("Message pushed to {target}"))
 }
 
 #[cfg(test)]

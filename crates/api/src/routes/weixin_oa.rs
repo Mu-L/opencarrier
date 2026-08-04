@@ -285,6 +285,40 @@ pub async fn weixin_oa_callback(
                     );
                 }
             }
+            types::automation::TaskKind::Push
+                if rule.target != "current" && !rule.target.is_empty() =>
+            {
+                // Unified Push to a specific user or admins (bypass, like NotifyAdmin).
+                // Push with target="current" falls through to the _ arm (execute_push).
+                if let Some(agent_id) = session.bind_agent.as_deref() {
+                    match serde_json::from_value::<types::content::ContentDescriptor>(
+                        rule.task_payload.clone(),
+                    ) {
+                        Ok(content) => {
+                            if let Err(e) = state
+                                .kernel
+                                .push_message(
+                                    rule.target.clone(),
+                                    content,
+                                    agent_id.to_string(),
+                                    app_id.clone(),
+                                )
+                                .await
+                            {
+                                tracing::warn!(
+                                    %app_id, openid = %from_user, rule_id = %rule.id,
+                                    target = %rule.target, error = %e,
+                                    "weixin-oa: automation push_message failed"
+                                );
+                            }
+                        }
+                        Err(e) => tracing::warn!(
+                            rule_id = %rule.id, error = %e,
+                            "weixin-oa: Push rule has bad task_payload"
+                        ),
+                    }
+                }
+            }
             types::automation::TaskKind::PushText
                 if rule.trigger_kind == types::automation::TriggerKind::Subscribe =>
             {
