@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 27;
+const SCHEMA_VERSION: u32 = 28;
 
 /// Run all migrations to bring the database up to date.
 ///
@@ -43,6 +43,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         (25, migrate_v25),
         (26, migrate_v26),
         (27, migrate_v27),
+        (28, migrate_v28),
     ];
 
     for (version, migrate_fn) in &migrations {
@@ -1188,6 +1189,37 @@ fn migrate_v27(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![27, "per-user tree isolation: user_id on chunks/trees/summaries/entity_index"],
+    )?;
+    Ok(())
+}
+
+/// Version 28: Automation rules - per-app/channel "trigger -> fixed action"
+/// rules matched on inbound events (subscribe/keyword) and executed by the
+/// channel layer WITHOUT routing to the agent LLM. Configured by admins via
+/// agent tools. `task_payload` is a `ContentDescriptor`-shaped JSON object.
+fn migrate_v28(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS automation_rules (
+            id           TEXT PRIMARY KEY,
+            app_id       TEXT NOT NULL,
+            channel      TEXT NOT NULL DEFAULT 'weixin-oa',
+            name         TEXT NOT NULL,
+            enabled      INTEGER NOT NULL DEFAULT 1,
+            priority     INTEGER NOT NULL DEFAULT 0,
+            trigger_kind TEXT NOT NULL,
+            trigger_data TEXT NOT NULL DEFAULT '',
+            task_kind    TEXT NOT NULL,
+            task_payload TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_automation_rules_app
+            ON automation_rules(channel, app_id, enabled, priority);",
+    )?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![28, "Automation rules: per-app inbound fixed-reply rules (subscribe/keyword -> push)"],
     )?;
     Ok(())
 }

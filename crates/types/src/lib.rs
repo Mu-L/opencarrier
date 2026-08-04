@@ -4,6 +4,7 @@
 //! runtime, memory substrate, and wire protocol. It contains no business logic.
 
 pub mod agent;
+pub mod automation;
 pub mod api_tool;
 pub mod brain;
 pub mod channel;

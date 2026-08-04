@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use channel_weixin_oa::api::{check_sign, get_access_token, get_user_unionid};
 use channel_weixin_oa::{build_plugin_message, parse_xml_message, ProxyMessage};
+use runtime::kernel_handle::KernelHandle;
 use types::error::{CarrierError, CarrierResult};
 
 /// Shared HTTP client for WeChat API + 86bus `bind-openid` calls.
@@ -219,6 +220,55 @@ pub async fn weixin_oa_callback(
             msg_type = %msg.msg_type,
             event = %msg.event,
             "weixin-oa: dropped no-reply event"
+        );
+        return (StatusCode::OK, "success".to_string());
+    }
+
+    // --- Automation rules: deliver a fixed reply WITHOUT the agent LLM ---
+    // Match subscribe/keyword rules for this app; on hit, push the fixed
+    // content (text/miniprogram) directly via the customer-service API and
+    // skip the agent. All pushes must succeed to skip the agent; any failure
+    // falls through so the user isn't left without a reply.
+    let matched = match state.kernel.automation_rule_list("weixin-oa", &app_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(%app_id, error=%e, "weixin-oa: automation_rule_list failed");
+            Vec::new()
+        }
+    };
+    let mut hits = 0usize;
+    let mut failures = 0usize;
+    for rule in &matched {
+        if !rule.enabled {
+            continue;
+        }
+        let hit = match rule.trigger_kind {
+            types::automation::TriggerKind::Subscribe => {
+                msg.msg_type == "event" && msg.event == "subscribe"
+            }
+            types::automation::TriggerKind::Keyword => {
+                msg.msg_type == "text"
+                    && !rule.trigger_data.is_empty()
+                    && msg.content.trim().contains(rule.trigger_data.trim())
+            }
+        };
+        if hit {
+            hits += 1;
+            if let Err(e) =
+                channel_weixin_oa::execute_push(&app_id, &from_user, &rule.task_payload).await
+            {
+                tracing::warn!(
+                    %app_id, openid = %from_user, rule_id = %rule.id, error = %e,
+                    "weixin-oa: automation push failed"
+                );
+                failures += 1;
+            }
+        }
+    }
+    if hits > 0 && failures == 0 {
+        tracing::info!(
+            %app_id, openid = %from_user, hits,
+            "weixin-oa: automation rule matched, delivered fixed reply (agent skipped)"
         );
         return (StatusCode::OK, "success".to_string());
     }

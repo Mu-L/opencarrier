@@ -436,6 +436,40 @@ async fn deliver_oa(
     ))
 }
 
+/// Deliver a `ContentDescriptor` to an OA follower by `app_id`. Public entry
+/// point for the webhook callback (inbound automation rules) and the future
+/// cron `Push` path - reuses the private `deliver_oa` (token + 40001 retry).
+pub async fn deliver_content(
+    app_id: &str,
+    openid: &str,
+    content: &types::content::ContentDescriptor,
+) -> CarrierResult<()> {
+    let account = WEIXIN_OA_STATE
+        .accounts
+        .get(app_id)
+        .map(|a| a.clone())
+        .ok_or_else(|| {
+            CarrierError::InvalidInput(format!("no OA account loaded for app_id {app_id}"))
+        })?;
+    deliver_oa(&account, openid, content).await
+}
+
+/// Execute a stored automation rule's push against the triggering user.
+/// `task_payload` is a `ContentDescriptor`-shaped JSON object
+/// (`{"text":"..."}` or `{"miniprogram":{appid,pagepath,title,thumb_media_id}}`).
+/// Shared by the inbound callback (Phase 1) and the future cron `Push` path
+/// (Phase 2) so both triggers converge on one executor.
+pub async fn execute_push(
+    app_id: &str,
+    openid: &str,
+    task_payload: &serde_json::Value,
+) -> CarrierResult<()> {
+    let content: types::content::ContentDescriptor =
+        serde_json::from_value(task_payload.clone())
+            .map_err(|e| CarrierError::Serialization(format!("bad task_payload: {e}")))?;
+    deliver_content(app_id, openid, &content).await
+}
+
 // --- Channel trait impl ---
 
 impl Channel for SessionWatcher {

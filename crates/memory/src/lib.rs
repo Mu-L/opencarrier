@@ -4,6 +4,7 @@
 //! plus system infrastructure (agent registry, sessions, invites, cron delivery).
 
 pub mod acp_session;
+pub mod automation_store;
 pub mod cron_delivery;
 pub mod cron_store;
 pub mod flow_run;

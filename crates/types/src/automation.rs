@@ -1,0 +1,75 @@
+//! Automation rules: per-app/channel "trigger -> fixed action" rules that the
+//! channel layer matches on inbound events and executes WITHOUT routing to the
+//! agent LLM (e.g. weixin-oa subscribe -> push welcome text; keyword "月卡" ->
+//! push miniprogram card).
+//!
+//! Lived in `types` (not `memory`) so `runtime`/`api`/`kernel` can name the
+//! structs without a circular dep, mirroring `types::scheduler` / `types::content`.
+//!
+//! `task_payload` is a `ContentDescriptor`-shaped JSON object so the same
+//! `execute_push` path serves both inbound-trigger (Phase 1) and the future
+//! cron `Push` action (Phase 2).
+
+use serde::{Deserialize, Serialize};
+
+/// What inbound event fires this rule.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerKind {
+    /// `msg_type=event & event=subscribe` (follow). `trigger_data` unused.
+    Subscribe,
+    /// `msg_type=text` whose content contains `trigger_data` (substring).
+    Keyword,
+}
+
+impl TriggerKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Subscribe => "subscribe",
+            Self::Keyword => "keyword",
+        }
+    }
+}
+
+/// What to do when the rule fires. Both are expressible as a
+/// `ContentDescriptor`, so `execute_push` deserializes `task_payload` into one
+/// and delivers it (no LLM). Phase 2 may add `PushImage` / `AgentTurn`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskKind {
+    /// `task_payload = {"text": "..."}`.
+    PushText,
+    /// `task_payload = {"miniprogram": {appid, pagepath, title, thumb_media_id}}`.
+    PushMiniprogram,
+}
+
+impl TaskKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::PushText => "push_text",
+            Self::PushMiniprogram => "push_miniprogram",
+        }
+    }
+}
+
+/// A single automation rule, scoped to a `(channel, app_id)` pair.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutomationRule {
+    pub id: String,
+    /// Bot id for the channel (weixin-oa: the service-account app_id).
+    pub app_id: String,
+    /// Channel name (`"weixin-oa"`; future: `wecom` / `feishu` / ...).
+    pub channel: String,
+    pub name: String,
+    pub enabled: bool,
+    /// Higher = evaluated first. Ties broken by `created_at` ASC.
+    pub priority: i64,
+    pub trigger_kind: TriggerKind,
+    /// Keyword text (empty for `Subscribe`).
+    pub trigger_data: String,
+    pub task_kind: TaskKind,
+    /// `ContentDescriptor`-shaped JSON consumed by `execute_push`.
+    pub task_payload: serde_json::Value,
+    pub created_at: String,
+    pub updated_at: String,
+}

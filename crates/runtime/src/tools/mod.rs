@@ -6,6 +6,7 @@
 pub mod a2a;
 pub mod agent;
 pub mod agent_mgmt;
+pub mod automation;
 pub mod browser;
 pub mod collaboration;
 pub mod data_analyze;
@@ -114,6 +115,7 @@ pub fn builtin_modules(cli_exec_config: types::config::CliExecConfig) -> Vec<Box
         Box::new(training::TrainingTools),
         Box::new(scheduling::SchedulingTools),
         Box::new(collaboration::CollaborationTools),
+        Box::new(automation::AutomationRulesTools),
         Box::new(a2a::A2aTools),
         Box::new(data_analyze::DataAnalyzeTools),
         Box::new(crate::api_tools::ApiToolRegisterModule),

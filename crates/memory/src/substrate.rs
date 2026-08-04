@@ -5,6 +5,7 @@
 
 use crate::cron_delivery::CronDeliveryStore;
 use crate::cron_store::CronJobStore;
+use crate::automation_store::AutomationRuleStore;
 use crate::flow_run::FlowRunStore;
 use crate::invites::InviteStore;
 use crate::weixin_store::WeixinSessionStore;
@@ -18,6 +19,7 @@ use crate::tree::types::SourceKind;
 use crate::usage::UsageStore;
 
 use types::agent::{AgentEntry, AgentId, SessionId};
+use types::automation::AutomationRule;
 use types::error::{CarrierError, CarrierResult};
 use types::message::Message;
 use types::memory_tree::{
@@ -41,6 +43,7 @@ pub struct MemorySubstrate {
     weixin_store: WeixinSessionStore,
     notify_store: NotifyRouteStore,
     flow_runs: FlowRunStore,
+    automation_rules: AutomationRuleStore,
     content_root: PathBuf,
 }
 
@@ -71,6 +74,7 @@ impl MemorySubstrate {
             weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
             notify_store: NotifyRouteStore::new(Arc::clone(&shared)),
             flow_runs: FlowRunStore::new(Arc::clone(&shared)),
+            automation_rules: AutomationRuleStore::new(Arc::clone(&shared)),
             content_root,
         })
     }
@@ -91,6 +95,7 @@ impl MemorySubstrate {
             weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
             notify_store: NotifyRouteStore::new(Arc::clone(&shared)),
             flow_runs: FlowRunStore::new(Arc::clone(&shared)),
+            automation_rules: AutomationRuleStore::new(Arc::clone(&shared)),
             content_root: PathBuf::from("/tmp/opencarrier_tree_content"),
         })
     }
@@ -118,6 +123,46 @@ impl MemorySubstrate {
     /// Get a reference to the flow run store (multi-step flow execution state).
     pub fn flow_runs(&self) -> &FlowRunStore {
         &self.flow_runs
+    }
+
+    /// Get a reference to the automation rule store.
+    pub fn automation_rules(&self) -> &AutomationRuleStore {
+        &self.automation_rules
+    }
+
+    // -----------------------------------------------------------------
+    // Automation rules (subscribe/keyword -> fixed push, no LLM)
+    // -----------------------------------------------------------------
+
+    /// List automation rules for (channel, app_id), highest priority first.
+    pub async fn automation_rule_list(
+        &self,
+        channel: &str,
+        app_id: &str,
+    ) -> CarrierResult<Vec<AutomationRule>> {
+        let store = self.automation_rules.clone();
+        let channel = channel.to_string();
+        let app_id = app_id.to_string();
+        tokio::task::spawn_blocking(move || store.list_by_app(&channel, &app_id))
+            .await
+            .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Insert or update an automation rule.
+    pub async fn automation_rule_upsert(&self, rule: AutomationRule) -> CarrierResult<()> {
+        let store = self.automation_rules.clone();
+        tokio::task::spawn_blocking(move || store.upsert(&rule))
+            .await
+            .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Delete an automation rule by id.
+    pub async fn automation_rule_delete(&self, id: &str) -> CarrierResult<()> {
+        let store = self.automation_rules.clone();
+        let id = id.to_string();
+        tokio::task::spawn_blocking(move || store.delete(&id))
+            .await
+            .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
 
     // -----------------------------------------------------------------
