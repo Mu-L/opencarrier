@@ -141,12 +141,12 @@ async fn deliver_kf_rich(
         };
         let thumb = resolve_kf_media_id(http, token, "image", &thumb_media, "thumb.jpg").await?;
         let body = serde_json::json!({
-            "msgtype": "miniprogrampage",
-            "miniprogrampage": {
-                "title": mp.title,
-                "pagepath": mp.pagepath,
-                "thumb_media_id": thumb,
+            "msgtype": "miniprogram",
+            "miniprogram": {
                 "appid": mp.appid,
+                "title": mp.title,
+                "thumb_media_id": thumb,
+                "pagepath": mp.pagepath,
             }
         });
         return token::send_kf_msg(http, token, open_kfid, external_userid, body).await;
