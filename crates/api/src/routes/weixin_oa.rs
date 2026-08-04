@@ -225,10 +225,12 @@ pub async fn weixin_oa_callback(
     }
 
     // --- Automation rules: deliver a fixed reply WITHOUT the agent LLM ---
-    // Match subscribe/keyword rules for this app; on hit, push the fixed
-    // content (text/miniprogram) directly via the customer-service API and
-    // skip the agent. All pushes must succeed to skip the agent; any failure
-    // falls through so the user isn't left without a reply.
+    // subscribe + push_text rules reply via passive XML (the HTTP response body)
+    // - guaranteed delivery, because the customer-service API only allows 1
+    // welcome after subscribe then 45015. Passive XML carries one text reply, so
+    // the highest-priority subscribe push_text rule wins.
+    // Other hits (keyword any, subscribe+miniprogram) use the customer-service
+    // API (keyword opens the 48h window; miniprogram can't be a passive XML).
     let matched = match state.kernel.automation_rule_list("weixin-oa", &app_id).await {
         Ok(r) => r,
         Err(e) => {
@@ -236,8 +238,9 @@ pub async fn weixin_oa_callback(
             Vec::new()
         }
     };
-    let mut hits = 0usize;
-    let mut failures = 0usize;
+    let mut passive_text: Option<&types::automation::AutomationRule> = None;
+    let mut api_hits = 0usize;
+    let mut api_failures = 0usize;
     for rule in &matched {
         if !rule.enabled {
             continue;
@@ -252,8 +255,17 @@ pub async fn weixin_oa_callback(
                     && msg.content.trim().contains(rule.trigger_data.trim())
             }
         };
-        if hit {
-            hits += 1;
+        if !hit {
+            continue;
+        }
+        if rule.trigger_kind == types::automation::TriggerKind::Subscribe
+            && rule.task_kind == types::automation::TaskKind::PushText
+        {
+            if passive_text.is_none() {
+                passive_text = Some(rule);
+            }
+        } else {
+            api_hits += 1;
             if let Err(e) =
                 channel_weixin_oa::execute_push(&app_id, &from_user, &rule.task_payload).await
             {
@@ -261,13 +273,38 @@ pub async fn weixin_oa_callback(
                     %app_id, openid = %from_user, rule_id = %rule.id, error = %e,
                     "weixin-oa: automation push failed"
                 );
-                failures += 1;
+                api_failures += 1;
             }
         }
     }
-    if hits > 0 && failures == 0 {
+    // Passive XML reply for a subscribe push_text rule (skips agent, no 45015).
+    if let Some(rule) = passive_text {
+        if let Some(text) = rule.task_payload.get("text").and_then(|v| v.as_str()) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let xml = format!(
+                "<xml><ToUserName><![CDATA[{openid}]]></ToUserName>\
+                 <FromUserName><![CDATA[{gh}]]></FromUserName>\
+                 <CreateTime>{ts}</CreateTime>\
+                 <MsgType><![CDATA[text]]></MsgType>\
+                 <Content><![CDATA[{text}]]></Content></xml>",
+                openid = from_user,
+                gh = msg.to_user,
+                ts = now,
+                text = text,
+            );
+            tracing::info!(
+                %app_id, openid = %from_user, rule_id = %rule.id,
+                "weixin-oa: automation subscribe rule matched, passive XML reply (agent skipped)"
+            );
+            return (StatusCode::OK, xml);
+        }
+    }
+    if api_hits > 0 && api_failures == 0 {
         tracing::info!(
-            %app_id, openid = %from_user, hits,
+            %app_id, openid = %from_user, hits = api_hits,
             "weixin-oa: automation rule matched, delivered fixed reply (agent skipped)"
         );
         return (StatusCode::OK, "success".to_string());
