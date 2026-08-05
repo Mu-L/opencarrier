@@ -232,13 +232,16 @@ async fn poll_loop_inner(
                             std::sync::atomic::Ordering::Relaxed,
                         );
                         state.active.store(true, std::sync::atomic::Ordering::Relaxed);
-                        WEIXIN_STATE.save_session(&state);
+                        WEIXIN_STATE.persist_if_due(&state);
                     }
                     for msg in msgs {
                         process_inbound_message(&bot_id, session_key, &msg, &sender, &http).await;
                     }
                 } else {
-                    // No messages but successful poll — still renew to keep session alive
+                    // No messages but successful poll — still renew to keep session alive.
+                    // persist_if_due (not save_session) so we don't write every 2s tick,
+                    // but often enough that a restart sees a fresh expires_at instead of
+                    // dropping the bot as expired.
                     if let Some(state) = WEIXIN_STATE.bots.get(session_key) {
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -248,6 +251,7 @@ async fn poll_loop_inner(
                             now + SESSION_DURATION_SECS,
                             std::sync::atomic::Ordering::Relaxed,
                         );
+                        WEIXIN_STATE.persist_if_due(&state);
                     }
                 }
             }

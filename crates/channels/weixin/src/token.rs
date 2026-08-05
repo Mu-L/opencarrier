@@ -14,6 +14,13 @@ use tracing::{info, warn};
 
 use crate::models::*;
 
+/// Throttle for persisting renewed sessions. The poll loop renews `expires_at`
+/// in memory on every successful (often empty) getUpdates — we must not hit the
+/// DB/JSON on each ~2s tick. Persist at most this often, so on restart load sees
+/// an `expires_at` at most this stale (well inside the 24h window) instead of a
+/// value from the last inbound message hours/days ago.
+const SESSION_SAVE_INTERVAL_SECS: i64 = 1800; // 30 min
+
 // ---------------------------------------------------------------------------
 // DB persistence callbacks (set from server.rs when memory is available)
 // ---------------------------------------------------------------------------
@@ -51,6 +58,9 @@ pub struct BotSession {
     pub cursor: Mutex<String>,
     /// Whether the polling loop is active.
     pub active: AtomicBool,
+    /// Wall-clock (secs) of the last `save_session`. Used to throttle
+    /// persistence during empty-poll renewal so we don't write every tick.
+    pub last_saved: AtomicI64,
     /// Optional agent name to bind this channel to.
     pub bind_agent: Option<String>,
 }
@@ -218,6 +228,7 @@ impl WeixinState {
                 typing_tickets: Mutex::new(HashMap::new()),
                 cursor: Mutex::new(String::new()),
                 active: AtomicBool::new(false),
+                last_saved: AtomicI64::new(tf.expires_at - SESSION_DURATION_SECS),
                 bind_agent: tf.bind_agent,
             };
             self.bots.insert(user_id, state);
@@ -254,6 +265,7 @@ impl WeixinState {
             typing_tickets: Mutex::new(HashMap::new()),
             cursor: Mutex::new(String::new()),
             active: AtomicBool::new(true),
+            last_saved: AtomicI64::new(now),
             bind_agent: bind_agent.map(|s| s.to_string()),
         };
 
@@ -324,6 +336,25 @@ impl WeixinState {
         }
     }
 
+    /// Persist `state` only if it was last saved more than
+    /// `SESSION_SAVE_INTERVAL_SECS` ago. Called from the poll loop's renewal
+    /// branches (both message and empty-poll) so a long-idle bot's on-disk
+    /// `expires_at` stays current without writing on every ~2s tick.
+    ///
+    /// Without this, idle bots' disk `expires_at` stays frozen at the time of
+    /// their last *inbound message*; after 24h without a message a restart
+    /// loads them as expired and drops them — the "iLink 老是断开 on restart" bug.
+    pub fn persist_if_due(&self, state: &BotSession) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        if now - state.last_saved.load(Ordering::Relaxed) >= SESSION_SAVE_INTERVAL_SECS {
+            self.save_session(state);
+            state.last_saved.store(now, Ordering::Relaxed);
+        }
+    }
+
     /// Get a bot session by user_id.
     pub fn get_session(
         &self,
@@ -391,6 +422,7 @@ impl WeixinState {
                     typing_tickets: Mutex::new(HashMap::new()),
                     cursor: Mutex::new(String::new()),
                     active: AtomicBool::new(false),
+                    last_saved: AtomicI64::new(tf.expires_at - SESSION_DURATION_SECS),
                     bind_agent: tf.bind_agent,
                 };
                 self.bots.insert(sender_id.to_string(), state);
@@ -450,6 +482,7 @@ impl WeixinState {
                 typing_tickets: Mutex::new(HashMap::new()),
                 cursor: Mutex::new(String::new()),
                 active: AtomicBool::new(false),
+                last_saved: AtomicI64::new(tf.expires_at - SESSION_DURATION_SECS),
                 bind_agent: tf.bind_agent,
             };
             self.bots.insert(sender_id, state);
