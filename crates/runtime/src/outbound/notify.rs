@@ -14,8 +14,8 @@ use super::types::{ChannelSendFn, NotifyTarget};
 /// not leak to the user.
 ///
 /// `admin_sender_ids` is used when a route has `recipients = "admins"`. Each id
-/// is routed by format: `*@im.wechat` → route's channel/bot_id; bare openid →
-/// `weixin-oa` with `source_bot_id`.
+/// is routed by format: `wm…` → wecom (prefix inference); `*@im.wechat` →
+/// route's channel/bot_id; bare openid → `weixin-oa` with `source_bot_id`.
 pub fn process_notify_markers(
     response: &str,
     send_fn: Option<&ChannelSendFn>,
@@ -71,7 +71,18 @@ pub fn process_notify_markers(
                 admin_sender_ids
                     .iter()
                     .map(|sender_id| {
-                        if sender_id.contains("@im.wechat") {
+                        // Route by format. `*@im.wechat` keeps the route's
+                        // configured channel/bot (cross-channel admin notify);
+                        // `wm…` (wecom external_userid) goes to wecom via prefix
+                        // inference — previously it fell through to weixin-oa and
+                        // misrouted. Bare openids go through weixin-oa + source_bot.
+                        if sender_id.starts_with("wm") {
+                            let (ch, bot) = memory::cron_delivery::infer_channel_by_prefix(
+                                sender_id,
+                                source_bot_id,
+                            );
+                            (ch.to_string(), bot, sender_id.clone())
+                        } else if sender_id.contains("@im.wechat") {
                             (
                                 target.channel.clone(),
                                 target.bot_id.clone(),

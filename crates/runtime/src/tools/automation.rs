@@ -246,28 +246,15 @@ async fn tool_rule_upsert(
             serde_json::json!({ "notify_type": notify_type })
         }
         TaskKind::Push => {
-            // Unified: format inferred from which content field is present.
-            if let Some(text) = input["text"].as_str() {
-                serde_json::json!({ "text": text })
-            } else if let Some(mp) = input.get("miniprogram") {
-                let appid = mp["appid"].as_str().ok_or_else(|| {
-                    CarrierError::InvalidInput("miniprogram.appid required".to_string())
-                })?;
-                let pagepath = mp["pagepath"].as_str().ok_or_else(|| {
-                    CarrierError::InvalidInput("miniprogram.pagepath required".to_string())
-                })?;
-                let title = mp["title"].as_str().ok_or_else(|| {
-                    CarrierError::InvalidInput("miniprogram.title required".to_string())
-                })?;
-                let thumb_media_id = mp["thumb_media_id"].as_str().ok_or_else(|| {
-                    CarrierError::InvalidInput("miniprogram.thumb_media_id required".to_string())
-                })?;
-                serde_json::json!({ "miniprogram": { "appid": appid, "pagepath": pagepath, "title": title, "thumb_media_id": thumb_media_id } })
-            } else {
-                return Err(CarrierError::InvalidInput(
-                    "task=push requires 'text' or 'miniprogram' (image/link: future)".to_string(),
-                ));
-            }
+            // Unified: build a ContentDescriptor (the same path as message_push)
+            // and serialize it. Sharing build_content_descriptor keeps the stored
+            // payload contract identical to the direct-push path — e.g. it
+            // preserves `thumb_url`, which wecom-kf delivery requires (an OA
+            // thumb_media_id alone is invalid in wecom's media library), and
+            // avoids the divergent validation the hand-written parser had.
+            let content = build_content_descriptor(input)?;
+            serde_json::to_value(content)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
         }
     };
 
@@ -349,7 +336,7 @@ fn build_content_descriptor(
         });
     }
     Err(CarrierError::InvalidInput(
-        "message_push requires 'text' or 'miniprogram' content".to_string(),
+        "requires 'text' or 'miniprogram' content".to_string(),
     ))
 }
 

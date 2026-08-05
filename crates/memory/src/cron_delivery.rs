@@ -179,6 +179,43 @@ impl CronDeliveryStore {
     }
 }
 
+/// Best-effort `(channel, bot_id)` for a sender based on id format.
+///
+/// This is the **fallback** when no `sender_channels` entry exists — a cold
+/// push to someone who never sent an inbound message on this deployment.
+/// `source_bot` is reused as the bot_id guess: for a sender with no recorded
+/// inbound there is no authoritative bot, and hard-coding a deployment-specific
+/// name (the old `"86bus-kf"` / `"default"`) silently broke every other tenant.
+/// `wm…` → wecom-kf, `*@im.wechat` → weixin (iLink), bare id → weixin-oa.
+pub fn infer_channel_by_prefix(sender_id: &str, source_bot: &str) -> (&'static str, String) {
+    if sender_id.starts_with("wm") {
+        ("wecom", source_bot.to_string())
+    } else if sender_id.contains("@im.wechat") {
+        ("weixin", source_bot.to_string())
+    } else {
+        ("weixin-oa", source_bot.to_string())
+    }
+}
+
+/// Resolve a recipient's `(channel_type, bot_id, user_id)` for outbound push.
+///
+/// Authoritative source is the `sender_channels` table (recorded on every
+/// inbound via [`CronDeliveryStore::touch_sender_channel`]) — it records the
+/// exact bot the sender last used, so it is correct for multi-tenant and
+/// cross-channel setups. Only when no entry exists do we fall back to
+/// format-based inference ([`infer_channel_by_prefix`]).
+pub fn route_recipient(
+    sender_id: &str,
+    store: &CronDeliveryStore,
+    source_bot: &str,
+) -> (String, String, String) {
+    if let Some(lc) = store.get_last_channel(sender_id).ok().flatten() {
+        return (lc.channel_type, lc.bot_id, sender_id.to_string());
+    }
+    let (channel, bot_id) = infer_channel_by_prefix(sender_id, source_bot);
+    (channel.to_string(), bot_id, sender_id.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

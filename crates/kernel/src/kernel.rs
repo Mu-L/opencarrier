@@ -1277,8 +1277,10 @@ impl CarrierKernel {
         };
 
         // 3. Resolve recipient (channel, bot_id, user_id) tuples.
-        //    recipients="admins" -> fan out via admins.json (iLink ids keep the
-        //    route's channel/bot; bare openids route through weixin-oa + source_bot).
+        //    recipients="admins" -> fan out via admins.json, routing each admin
+        //    through sender_channels (authoritative) with prefix fallback — this
+        //    also handles wecom (`wm…`) admins, which the old inline logic missed.
+        let cron_store = self.memory.cron_delivery();
         let recipient_ids: Vec<(String, String, String)> =
             if route.recipients.as_deref() == Some("admins") {
                 // Inline resolve_agent_workspace (it's a KernelHandle trait
@@ -1297,15 +1299,11 @@ impl CarrierKernel {
                             .admins
                             .into_iter()
                             .map(|a| {
-                                if a.sender_id.contains("@im.wechat") {
-                                    (route.channel.clone(), route.bot_id.clone(), a.sender_id)
-                                } else {
-                                    (
-                                        "weixin-oa".to_string(),
-                                        source_bot.to_string(),
-                                        a.sender_id,
-                                    )
-                                }
+                                memory::cron_delivery::route_recipient(
+                                    &a.sender_id,
+                                    cron_store,
+                                    source_bot,
+                                )
                             })
                             .collect()
                     }
@@ -1396,7 +1394,10 @@ impl CarrierKernel {
             }
         };
 
-        // Resolve recipients: (channel, bot_id, user_id).
+        // Resolve recipients: (channel, bot_id, user_id) via sender_channels
+        // (authoritative, multi-tenant safe) with prefix fallback. `"admins"`
+        // fans out via admins.json.
+        let cron_store = self.memory.cron_delivery();
         let recipients: Vec<(String, String, String)> = if target == "admins" {
             let ws = self
                 .registry
@@ -1411,15 +1412,41 @@ impl CarrierKernel {
                     admins
                         .admins
                         .into_iter()
-                        .map(|a| infer_channel_bot(&a.sender_id, source_bot_id))
+                        .map(|a| {
+                            memory::cron_delivery::route_recipient(
+                                &a.sender_id,
+                                cron_store,
+                                source_bot_id,
+                            )
+                        })
                         .collect()
                 }
-                None => Vec::new(),
+                None => {
+                    tracing::warn!(
+                        agent_id = %source_agent_id, target = %target,
+                        "push_message: target=admins but workspace unresolved"
+                    );
+                    Vec::new()
+                }
             }
         } else {
-            vec![infer_channel_bot(target, source_bot_id)]
+            vec![memory::cron_delivery::route_recipient(
+                target,
+                cron_store,
+                source_bot_id,
+            )]
         };
 
+        // Fail loudly on zero recipients or total delivery failure so the caller
+        // (tool_message_push) surfaces an error instead of a false success.
+        let total = recipients.len();
+        if total == 0 {
+            return Err(CarrierError::Config(format!(
+                "push to '{target}': no recipients resolved"
+            )));
+        }
+
+        let mut failed = 0usize;
         for (channel, bot_id, user_id) in recipients {
             let deliver_fn = std::sync::Arc::clone(&deliver_fn);
             let content = content.clone();
@@ -1429,30 +1456,35 @@ impl CarrierKernel {
                     target_channel = %channel, target_user = %user_id,
                     "push_message delivered"
                 ),
-                Ok(Err(e)) => tracing::warn!(
-                    target_user = %user_id, error = %e,
-                    "push_message failed"
-                ),
-                Err(e) => tracing::warn!(
-                    target_user = %user_id, error = %e,
-                    "push_message join failed"
-                ),
+                Ok(Err(e)) => {
+                    failed += 1;
+                    tracing::warn!(
+                        target_user = %user_id, error = %e,
+                        "push_message failed"
+                    );
+                }
+                Err(e) => {
+                    failed += 1;
+                    tracing::warn!(
+                        target_user = %user_id, error = %e,
+                        "push_message join failed"
+                    );
+                }
             }
         }
-        Ok(())
-    }
-}
 
-/// Infer (channel, bot_id) from a user_id format.
-/// `wm...` → wecom-kf (TODO: bot_id is 86bus-specific, make configurable).
-/// `@im.wechat` → weixin iLink. Bare openid → weixin-oa.
-fn infer_channel_bot(user_id: &str, source_bot: &str) -> (String, String, String) {
-    if user_id.starts_with("wm") {
-        ("wecom".to_string(), "86bus-kf".to_string(), user_id.to_string())
-    } else if user_id.contains("@im.wechat") {
-        ("weixin".to_string(), "default".to_string(), user_id.to_string())
-    } else {
-        ("weixin-oa".to_string(), source_bot.to_string(), user_id.to_string())
+        if failed == total {
+            return Err(CarrierError::Internal(format!(
+                "push to '{target}': all {total} deliveries failed"
+            )));
+        }
+        if failed > 0 {
+            tracing::warn!(
+                target = %target, failed, total,
+                "push_message partial failure"
+            );
+        }
+        Ok(())
     }
 }
 
