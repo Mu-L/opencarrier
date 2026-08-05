@@ -1846,10 +1846,68 @@ impl CarrierKernel {
                 }
 
                 // Each step gets its own session
-                let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
-                let step_session = self.memory.create_session_async(agent_name)
+                let entry_opt = self.registry.get(agent_id);
+                let agent_name = entry_opt
+                    .as_ref()
+                    .map(|e| e.name.clone())
+                    .unwrap_or_else(|| agent_id.to_string());
+                let step_session = self.memory
+                    .create_session_async(agent_name.clone())
                     .await
                     .map_err(KernelError::Carrier)?;
+
+                // Per-step flow injection. Without this, plan steps run bare —
+                // no flow body, full agent toolset — and ignore the flow's hard
+                // rules. That was the root cause of ai-writer looping on
+                // file_read and reaching for document_generate instead of using
+                // file_write: the step agent never saw article-writer's rules.
+                // When a step names a flow, load it exactly like an explicit
+                // active_flow turn: inject the flow body ahead of the task,
+                // scope tools to the flow's declared set, apply max_iterations
+                // and (for shell_allow flows) elevation.
+                let mut tools_owned = tools.to_vec();
+                let mut manifest_clone = manifest.clone();
+                if let Some(flow_name) = step.flow.as_deref() {
+                    if let Some(entry_ref) = entry_opt.as_ref() {
+                        match self.load_named_flow_for_turn(entry_ref, &mut tools_owned, flow_name) {
+                            Some((flow_prompt, flow_max_iter, flow)) => {
+                                info!(
+                                    agent = %agent_name,
+                                    step = %step.id,
+                                    flow = %flow_name,
+                                    "Plan step loaded flow — body + declared tools injected"
+                                );
+                                // Flow body first, then the task — same shape as
+                                // a normal active_flow turn (build_and_apply_prompt).
+                                message = format!("{}\n\n{}", flow_prompt, message);
+                                Self::apply_flow_elevation(
+                                    &mut tools_owned,
+                                    &mut manifest_clone,
+                                    &flow,
+                                    &agent_name,
+                                );
+                                Self::apply_manifest_overrides(
+                                    &mut manifest_clone,
+                                    flow_max_iter,
+                                    None,
+                                    &agent_name,
+                                );
+                            }
+                            None => {
+                                warn!(
+                                    agent = %agent_name,
+                                    step = %step.id,
+                                    flow = %flow_name,
+                                    "Plan step referenced flow not found — running bare"
+                                );
+                                message = format!(
+                                    "⚠️ 本步声明的 flow `{flow_name}` 未找到，按裸任务执行（无 flow 指引）。\n\n{}",
+                                    message
+                                );
+                            }
+                        }
+                    }
+                }
 
                 // Clone Arc references for the spawned task
                 let memory = Arc::clone(&self.memory);
@@ -1858,8 +1916,6 @@ impl CarrierKernel {
                 let brain_clone = brain.map(Arc::clone);
                 let mh_clone: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
                     Some(crate::handle::make_memory_handle(Arc::clone(&memory)));
-                let tools_owned = tools.to_vec();
-                let manifest_clone = manifest.clone();
                 let sid = sender_id.clone();
                 let oid = owner_id.clone();
                 let ct = channel_type.clone();

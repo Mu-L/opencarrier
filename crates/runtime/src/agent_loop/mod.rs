@@ -97,6 +97,14 @@ pub struct TaskStep {
     pub id: String,
     pub prompt: String,
     pub depends_on: Vec<String>,
+    /// Optional named flow to load for this step (e.g. "article-writer").
+    /// When set, `execute_plan` injects the flow body + declared tools +
+    /// max_iterations/elevation for this step — exactly like an explicit
+    /// `active_flow` turn. Without it the step runs bare (no flow guidance,
+    /// full agent toolset), which is why plan steps used to ignore the flow's
+    /// hard rules and flounder (loop on file_read, reach for document_generate).
+    #[serde(default)]
+    pub flow: Option<String>,
 }
 
 /// A task plan produced by the `task_plan` tool.

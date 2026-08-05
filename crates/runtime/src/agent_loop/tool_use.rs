@@ -105,8 +105,11 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     }
 
     // Detect loop: same (name, input_hash) repeated LOOP_DETECTION_WINDOW times.
-    // Instead of terminating the agent loop, remove the looping tool and
-    // inject a system message so the LLM can continue with other tools.
+    // We educate, not punish (see d7037bd — "Tools are never removed"): yanking
+    // the looping tool just leaves the agent floundering without the tool it
+    // actually needs. Instead we inject an actionable system message so the LLM
+    // changes approach (e.g. stop re-reading the same path and call file_write
+    // to write/overwrite the target). The tool stays available.
     if let Some((looping_name, _)) = super::helpers::detect_tool_loop(
         recent_tool_calls,
         super::helpers::LOOP_DETECTION_WINDOW,
@@ -116,15 +119,16 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             tool = %looping_name,
             consecutive = super::helpers::LOOP_DETECTION_WINDOW,
             iteration,
-            "Tool loop detected — removing tool and continuing"
+            "Tool loop detected — injecting corrective guidance (tool NOT removed)"
         );
-        // Remove the looping tool from available tools
-        tools_owned.retain(|t| t.name != looping_name);
         recent_tool_calls.clear();
         error_tracker.remove(&looping_name);
-        // Inject a system message telling the LLM to stop using this tool
+        // Inject a system message telling the LLM to change approach.
         let warning = format!(
-            "工具 `{looping_name}` 连续多次返回相同结果，已被临时移除。请换方式完成任务（例如该写文件时调用 file_write，不要反复 file_read 同一路径）。若 flow 的 tools 声明缺失或不对，成功后用 flow_update(name, tools=[...], body=...) 固化正确工具列表。"
+            "工具 `{looping_name}` 连续多次返回相同结果——你在原地打转，请立刻换方式完成任务。\
+             常见情况：该写文件时直接调用 `file_write(path=..., content=...)` 写入或覆盖目标文件，\
+             不要反复 `file_read` 同一路径。本任务若加载了 flow，只用 flow `tools:` 声明的工具；\
+             若 flow 未加载导致工具集不对，成功后用 flow_update 固化正确工具列表。"
         );
         messages.push(Message::system(&warning));
     }
@@ -566,6 +570,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                                         .collect()
                                 })
                                 .unwrap_or_default(),
+                            flow: s["flow"].as_str().map(String::from),
                         })
                     })
                     .collect()

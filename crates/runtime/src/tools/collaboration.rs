@@ -274,7 +274,7 @@ impl ToolModule for CollaborationTools {
             },
             ToolDefinition {
                 name: "task_plan".to_string(),
-                description: "Split a complex task into ordered steps with dependencies. Each step runs as an independent agent turn (up to 15 iterations). Use this when the task is too complex for a single turn — e.g. multi-stage workflows like research -> write -> format -> publish. Steps without dependencies run in parallel; steps with depends_on wait for those steps to complete first. Previous step outputs are injected into the step's prompt automatically.".to_string(),
+                description: "Split a complex task into ordered steps with dependencies. Each step runs as an independent agent turn (up to 15 iterations). Use this when the task is too complex for a single turn — e.g. multi-stage workflows like research -> write -> format -> publish. Steps without dependencies run in parallel; steps with depends_on wait for those steps to complete first. Previous step outputs are injected into the step's prompt automatically. IMPORTANT: when a step should follow a specific flow's rules (e.g. 'article-writer'), set that step's `flow` to the flow name — the flow body + declared tools + max_iterations are then injected for that step just like an active_flow turn. Without `flow`, the step runs with NO flow guidance and the full agent toolset, so it may ignore the flow's tool/usage rules.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -293,6 +293,10 @@ impl ToolModule for CollaborationTools {
                                         "type": "array",
                                         "items": { "type": "string" },
                                         "description": "IDs of steps that must complete before this step starts. Empty = run immediately."
+                                    },
+                                    "flow": {
+                                        "type": "string",
+                                        "description": "Optional named flow to load for this step (e.g. 'article-writer'). When set, the flow body + declared tools + max_iterations are injected for this step, exactly like an active_flow turn — set this whenever the step should obey a flow's tool/usage rules. Omit only for steps with no flow."
                                     }
                                 },
                                 "required": ["id", "prompt"]
