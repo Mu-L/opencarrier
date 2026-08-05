@@ -180,21 +180,36 @@ impl CarrierKernel {
     /// suspended flow) and the explicit `active_flow` path — both bypass the
     /// non-deterministic LLM classifier and load by name. Returns `None` when
     /// no flow definition matches `flow_name`.
-    fn load_named_flow_for_turn(
+    /// Load (and parse) a named flow from disk — the cacheable half of flow
+    /// loading. This is the expensive part: `load_flow_by_name` does a
+    /// `read_dir` + parse of every flow file in the workspace. Callers that
+    /// load the same flow repeatedly (e.g. `execute_plan`, one flow per step)
+    /// should memoize this so each file is parsed at most once per plan.
+    fn load_flow_match(
         &self,
         entry: &AgentEntry,
-        tools: &mut Vec<types::tool::ToolDefinition>,
         flow_name: &str,
-    ) -> Option<(String, Option<u32>, crate::prompt_sources::FlowMatch)> {
+    ) -> Option<crate::prompt_sources::FlowMatch> {
         let ws = entry.manifest.workspace.as_ref()?;
-        let flow = crate::prompt_sources::load_flow_by_name(ws, flow_name)?;
+        crate::prompt_sources::load_flow_by_name(ws, flow_name)
+    }
+
+    /// Apply a parsed flow to a turn: scope `tools` to the flow's declared set
+    /// and build the flow prompt. Cheap (no disk I/O) — safe to call once per
+    /// turn even when the flow was loaded from a cache.
+    fn apply_flow_to_turn(
+        &self,
+        flow: &crate::prompt_sources::FlowMatch,
+        tools: &mut Vec<types::tool::ToolDefinition>,
+        entry: &AgentEntry,
+    ) -> (String, Option<u32>) {
         let flow_name_owned = flow.name.clone();
         let flow_body = flow.body.clone();
         let flow_max_iter = flow.max_iterations;
         let elevate = flow.elevates();
         let flow_warnings = self.inject_flow_tools(
             tools,
-            &flow,
+            flow,
             entry.manifest.max_tool_level,
             elevate,
             entry.manifest.cli_exec.clone().unwrap_or_default(),
@@ -210,6 +225,17 @@ impl CarrierKernel {
                     .join("\n")
             ));
         }
+        (flow_prompt, flow_max_iter)
+    }
+
+    fn load_named_flow_for_turn(
+        &self,
+        entry: &AgentEntry,
+        tools: &mut Vec<types::tool::ToolDefinition>,
+        flow_name: &str,
+    ) -> Option<(String, Option<u32>, crate::prompt_sources::FlowMatch)> {
+        let flow = self.load_flow_match(entry, flow_name)?;
+        let (flow_prompt, flow_max_iter) = self.apply_flow_to_turn(&flow, tools, entry);
         Some((flow_prompt, flow_max_iter, flow))
     }
 
@@ -1833,6 +1859,12 @@ impl CarrierKernel {
             "Plan execution starting"
         );
 
+        // Cache parsed flows across the whole plan: load_flow_by_name re-reads
+        // and re-parses the entire flows/ dir on each call, so a K-step plan
+        // that names a flow per step would otherwise do K full dir scans.
+        let mut flow_cache: HashMap<String, Option<crate::prompt_sources::FlowMatch>> =
+            HashMap::new();
+
         for (layer_idx, layer) in layers.iter().enumerate() {
             let mut layer_handles = Vec::new();
 
@@ -1869,8 +1901,17 @@ impl CarrierKernel {
                 let mut manifest_clone = manifest.clone();
                 if let Some(flow_name) = step.flow.as_deref() {
                     if let Some(entry_ref) = entry_opt.as_ref() {
-                        match self.load_named_flow_for_turn(entry_ref, &mut tools_owned, flow_name) {
-                            Some((flow_prompt, flow_max_iter, flow)) => {
+                        // Cached parse: each flow file is read at most once per
+                        // plan. The cheap tool-scoping + prompt build still runs
+                        // per step (tools_owned is fresh each step).
+                        let flow_opt = flow_cache
+                            .entry(flow_name.to_string())
+                            .or_insert_with(|| self.load_flow_match(entry_ref, flow_name))
+                            .as_ref();
+                        match flow_opt {
+                            Some(flow) => {
+                                let (flow_prompt, flow_max_iter) =
+                                    self.apply_flow_to_turn(flow, &mut tools_owned, entry_ref);
                                 info!(
                                     agent = %agent_name,
                                     step = %step.id,
@@ -1883,7 +1924,7 @@ impl CarrierKernel {
                                 Self::apply_flow_elevation(
                                     &mut tools_owned,
                                     &mut manifest_clone,
-                                    &flow,
+                                    flow,
                                     &agent_name,
                                 );
                                 Self::apply_manifest_overrides(

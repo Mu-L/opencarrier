@@ -31,12 +31,23 @@ use tracing::{debug, info, warn};
 /// we educate, not punish.)
 pub(in crate::agent_loop) const ERROR_ESCALATION_THRESHOLD: u32 = 3;
 
+/// How many times the SAME tool may trip loop detection before we stop the
+/// turn. Each detection already costs `LOOP_DETECTION_WINDOW` identical calls,
+/// so at threshold 3 the agent has burned ~12 iterations and ignored two
+/// escalating nudges — continuing just wastes the rest of `max_iterations`.
+/// The tool is still never removed; we only fail the turn fast with a clear
+/// reason (better than a silent `MaxIterationsExceeded`).
+pub(in crate::agent_loop) const LOOP_BREAK_THRESHOLD: u32 = 3;
+
 /// Action the main loop should take after handling a ToolUse.
 pub(in crate::agent_loop) enum ToolUseAction {
     /// The loop should continue (normal tool execution completed).
     Continue,
     /// The loop should break — a task_plan was detected.
     BreakWithPlan(TaskPlan),
+    /// The loop should fail fast — the agent is stuck in a tool loop after
+    /// repeated corrective guidance (see [`LOOP_BREAK_THRESHOLD`]).
+    BreakToolLoop(String),
 }
 
 /// Handle a `StopReason::ToolUse` response.
@@ -76,6 +87,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     discovered_tool_names: &mut std::collections::HashSet<String>,
     loaded_flows: &mut std::collections::HashSet<String>,
     error_tracker: &mut crate::agent_loop::state::ToolErrorTracker,
+    tool_loop_rearm: &mut std::collections::HashMap<String, u32>,
     // For task_plan save
     session_base_len: usize,
     iteration: u32,
@@ -107,29 +119,54 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     // Detect loop: same (name, input_hash) repeated LOOP_DETECTION_WINDOW times.
     // We educate, not punish (see d7037bd — "Tools are never removed"): yanking
     // the looping tool just leaves the agent floundering without the tool it
-    // actually needs. Instead we inject an actionable system message so the LLM
+    // actually needs. Instead we inject an escalating system message so the LLM
     // changes approach (e.g. stop re-reading the same path and call file_write
-    // to write/overwrite the target). The tool stays available.
+    // to write/overwrite the target). The tool stays available. After
+    // LOOP_BREAK_THRESHOLD ignored nudges we fail the turn fast rather than
+    // burning the whole max_iterations budget.
     if let Some((looping_name, _)) = super::helpers::detect_tool_loop(
         recent_tool_calls,
         super::helpers::LOOP_DETECTION_WINDOW,
     ) {
+        let rearm = tool_loop_rearm.entry(looping_name.clone()).or_insert(0);
+        *rearm += 1;
+        let rearm = *rearm;
         warn!(
             agent = %manifest.name,
             tool = %looping_name,
             consecutive = super::helpers::LOOP_DETECTION_WINDOW,
+            rearm,
             iteration,
             "Tool loop detected — injecting corrective guidance (tool NOT removed)"
         );
         recent_tool_calls.clear();
         error_tracker.remove(&looping_name);
-        // Inject a system message telling the LLM to change approach.
-        let warning = format!(
-            "工具 `{looping_name}` 连续多次返回相同结果——你在原地打转，请立刻换方式完成任务。\
-             常见情况：该写文件时直接调用 `file_write(path=..., content=...)` 写入或覆盖目标文件，\
-             不要反复 `file_read` 同一路径。本任务若加载了 flow，只用 flow `tools:` 声明的工具；\
-             若 flow 未加载导致工具集不对，成功后用 flow_update 固化正确工具列表。"
-        );
+        if rearm >= LOOP_BREAK_THRESHOLD {
+            // Stuck after repeated nudges — fail fast with a clear reason
+            // instead of silently burning the rest of max_iterations.
+            return ToolUseAction::BreakToolLoop(format!(
+                "agent stuck in a tool loop on `{looping_name}` after {rearm} corrective \
+                 nudges (identical call repeated {}× each time). The tool was not removed, \
+                 but the turn is aborted to avoid wasting the iteration budget — fix the \
+                 flow/tool guidance and retry.",
+                super::helpers::LOOP_DETECTION_WINDOW
+            ));
+        }
+        // Inject a system message; escalate wording on the 2nd+ nudge.
+        let warning = if rearm >= 2 {
+            format!(
+                "⚠️⚠️ 工具 `{looping_name}` 已第 {rearm} 次陷入完全相同的循环——上一条纠正没有生效。\
+                 ��必须在下一步换做法：停止调用 `{looping_name}`，直接产出最终答案或改用其他工具/路径。\
+                 再循环一次，本任务将被终止。"
+            )
+        } else {
+            format!(
+                "工具 `{looping_name}` 连续多次返回相同结果——你在原地打转，请立刻换方式完成任务。\
+                 常见情况：该写文件时直接调用 `file_write(path=..., content=...)` 写入或覆盖目标文件，\
+                 不要反复 `file_read` 同一路径。本任务若加载了 flow，只用 flow `tools:` 声明的工具；\
+                 若 flow 未加载导致工具集不对，成功后用 flow_update 固化正确工具列表。"
+            )
+        };
         messages.push(Message::system(&warning));
     }
 

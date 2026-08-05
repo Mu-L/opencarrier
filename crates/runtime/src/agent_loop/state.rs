@@ -160,6 +160,13 @@ pub struct LoopState {
     pub any_tools_executed: bool,
     pub recent_tool_calls: Vec<(String, u64)>,
     pub error_tracker: ToolErrorTracker,
+    /// Per-tool count of how many times loop detection has fired for the exact
+    /// same `(name, input_hash)` within this turn. Used to ESCALATE corrective
+    /// guidance (2nd nudge is stronger) and, after [`super::tool_use::LOOP_BREAK_THRESHOLD`],
+    /// fail the turn fast instead of silently burning the whole `max_iterations`
+    /// budget on a stuck loop. (The tool itself is never removed — we educate,
+    /// not punish; this is only the escalation counter.)
+    pub tool_loop_rearm: HashMap<String, u32>,
     pub consecutive_max_tokens: u32,
     pub text_recovery_retries: u32,
     pub last_run: Option<LastRunSummary>,
@@ -185,6 +192,7 @@ impl LoopState {
             any_tools_executed: false,
             recent_tool_calls: Vec::new(),
             error_tracker: ToolErrorTracker::new(5),
+            tool_loop_rearm: HashMap::new(),
             consecutive_max_tokens: 0,
             text_recovery_retries: 0,
             last_run: None,

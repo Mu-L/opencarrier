@@ -1430,6 +1430,19 @@ impl CarrierKernel {
                 }
             }
         } else {
+            // Security gate: only push to recipients the bot has actually
+            // interacted with (recorded in sender_channels). This blocks an
+            // automation rule from pushing to an arbitrary陌生 openid via a
+            // public keyword trigger, and also fails fast for doomed deliveries
+            // — OA/wecom can only reach users who have followed / entered the
+            // kf session, which is exactly when sender_channels gets a row.
+            if cron_store.get_last_channel(target).ok().flatten().is_none() {
+                return Err(CarrierError::InvalidInput(format!(
+                    "cannot push to '{target}': no recorded interaction with this \
+                     recipient (not in sender_channels). Have them send the bot a \
+                     message first, or target 'admins'."
+                )));
+            }
             vec![memory::cron_delivery::route_recipient(
                 target,
                 cron_store,

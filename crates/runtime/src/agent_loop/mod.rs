@@ -873,6 +873,7 @@ async fn dispatch(
                 &mut ctx.discovered_tool_names,
                 &mut ctx.loaded_flows,
                 &mut ctx.state.error_tracker,
+                &mut ctx.state.tool_loop_rearm,
                 ctx.session_base_len,
                 ctx.state.iteration,
             )
@@ -882,6 +883,9 @@ async fn dispatch(
                 tool_use::ToolUseAction::BreakWithPlan(plan) => {
                     ctx.detected_plan = Some(plan);
                     return Ok(LoopAction::BreakForPlan);
+                }
+                tool_use::ToolUseAction::BreakToolLoop(msg) => {
+                    return Err(CarrierError::Internal(msg));
                 }
             }
         }
