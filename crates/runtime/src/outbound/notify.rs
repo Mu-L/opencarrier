@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use tracing::{error, info, warn};
 
+use crate::kernel_handle::KernelHandle;
 use super::parse::parse_notify_markers;
 use super::types::{ChannelSendFn, NotifyTarget};
 
@@ -14,8 +15,10 @@ use super::types::{ChannelSendFn, NotifyTarget};
 /// not leak to the user.
 ///
 /// `admin_sender_ids` is used when a route has `recipients = "admins"`. Each id
-/// is routed by format: `wm…` → wecom (prefix inference); `*@im.wechat` →
-/// route's channel/bot_id; bare openid → `weixin-oa` with `source_bot_id`.
+/// is routed via `sender_channels` when `kernel` is available (authoritative —
+/// the exact bot the admin last used); otherwise by format: `wm…` → wecom
+/// (prefix inference); `*@im.wechat` → route's channel/bot_id; bare openid →
+/// `weixin-oa` with `source_bot_id`.
 pub fn process_notify_markers(
     response: &str,
     send_fn: Option<&ChannelSendFn>,
@@ -23,6 +26,7 @@ pub fn process_notify_markers(
     source_sender_id: &str,
     source_bot_id: &str,
     admin_sender_ids: &[String],
+    kernel: Option<&dyn KernelHandle>,
 ) -> String {
     let (notifications, cleaned) = parse_notify_markers(response);
     if notifications.is_empty() {
@@ -71,6 +75,15 @@ pub fn process_notify_markers(
                 admin_sender_ids
                     .iter()
                     .map(|sender_id| {
+                        // Authoritative: sender_channels (recorded on every
+                        // inbound) — resolves the exact bot the admin last used,
+                        // correct for multi-tenant / cross-channel. Falls through
+                        // to format-based inference for a cold admin (no record).
+                        if let Some((ch, bot)) =
+                            kernel.and_then(|k| k.resolve_sender_channel(sender_id))
+                        {
+                            return (ch, bot, sender_id.clone());
+                        }
                         // Route by format. `*@im.wechat` keeps the route's
                         // configured channel/bot (cross-channel admin notify);
                         // `wm…` (wecom external_userid) goes to wecom via prefix

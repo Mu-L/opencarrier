@@ -170,6 +170,15 @@ pub trait KernelHandle: Send + Sync {
         Err(CarrierError::Internal("push_message not available".into()))
     }
 
+    /// Look up the `(channel_type, bot_id)` a sender most recently used, from
+    /// the `sender_channels` table (written on every inbound). Sync — used by
+    /// outbound routing (e.g. `process_notify_markers`) to route admin
+    /// fan-out authoritatively instead of by id-prefix guesswork. Returns None
+    /// when the sender has no recorded inbound (caller falls back to inference).
+    fn resolve_sender_channel(&self, _sender_id: &str) -> Option<(String, String)> {
+        None
+    }
+
     /// List discovered external A2A agents as (name, url) pairs.
     fn list_a2a_agents(&self) -> Vec<(String, String)> {
         vec![]

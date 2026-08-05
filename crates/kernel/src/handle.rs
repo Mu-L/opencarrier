@@ -363,6 +363,15 @@ impl KernelHandle for CarrierKernel {
             .await
     }
 
+    fn resolve_sender_channel(&self, sender_id: &str) -> Option<(String, String)> {
+        self.memory
+            .cron_delivery()
+            .get_last_channel(sender_id)
+            .ok()
+            .flatten()
+            .map(|lc| (lc.channel_type, lc.bot_id))
+    }
+
     async fn publish_event(
         &self,
         event_type: &str,

@@ -69,6 +69,8 @@ pub async fn prepare_outbound(response: &str, ctx: OutboundCtx<'_>) -> OutboundR
             ctx.sender_id,
             ctx.bot_id,
             ctx.admin_sender_ids,
+            // Resolve admin recipients via sender_channels when available.
+            ctx.kernel.as_deref(),
         );
     }
 
