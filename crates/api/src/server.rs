@@ -358,6 +358,62 @@ pub async fn run_daemon(
             dispatcher.register(std::sync::Arc::new(builtin));
         }
 
+        // Inject DB-backed persistence callbacks into WeixinState BEFORE cm.start():
+        // weixin channel's start() calls load_from_dir() which needs `sessions_load`
+        // already set, otherwise it falls back to scanning JSON files and ignores the
+        // weixin_sessions table entirely. This used to run *after* cm.start(), so load
+        // always took the JSON path — the DB table existed but was never read on boot.
+        {
+            let store = kernel.memory.weixin_store().clone();
+            let persist_fn: channel_weixin::token::SessionPersistFn = std::sync::Arc::new(move |tf| {
+                let row = memory::weixin_store::WeixinSessionRow {
+                    channel: tf.channel.clone(),
+                    sender_key: tf.sender_key.clone(),
+                    bot_id: tf.bot_id.clone(),
+                    bot_token: tf.bot_token.clone(),
+                    baseurl: tf.baseurl.clone(),
+                    ilink_bot_id: tf.ilink_bot_id.clone(),
+                    user_id: tf.user_id.clone(),
+                    expires_at: tf.expires_at,
+                    bind_agent: tf.bind_agent.clone(),
+                    context_tokens: serde_json::to_string(&tf.context_tokens).unwrap_or_default(),
+                };
+                if let Err(e) = store.upsert(&row) {
+                    tracing::warn!("Failed to persist weixin session to DB: {e}");
+                }
+            });
+            let store2 = kernel.memory.weixin_store().clone();
+            let load_fn: channel_weixin::token::SessionsLoadFn = std::sync::Arc::new(move || {
+                match store2.load_all() {
+                    Ok(rows) => rows
+                        .into_iter()
+                        .map(|r| {
+                            let ctx: std::collections::HashMap<String, String> =
+                                serde_json::from_str(&r.context_tokens).unwrap_or_default();
+                            channel_weixin::models::BotTokenFile {
+                                channel: r.channel,
+                                sender_key: r.sender_key,
+                                bot_id: r.bot_id,
+                                bot_token: r.bot_token,
+                                baseurl: r.baseurl,
+                                ilink_bot_id: r.ilink_bot_id,
+                                user_id: r.user_id,
+                                expires_at: r.expires_at,
+                                bind_agent: r.bind_agent,
+                                context_tokens: ctx,
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                    Err(e) => {
+                        tracing::warn!("Failed to load weixin sessions from DB: {e}");
+                        Vec::new()
+                    }
+                }
+            });
+            channel_weixin::token::WEIXIN_STATE.set_persist_fns(persist_fn, load_fn);
+            info!("WeixinState DB persistence callbacks installed");
+        }
+
         cm.start().await;
 
         // Start API tool cron scheduler (for tools with [tool.cron] section)
@@ -467,58 +523,6 @@ pub async fn run_daemon(
                 }
             }
         });
-    }
-
-    // Inject DB-backed persistence callbacks into WeixinState
-    {
-        let store = kernel.memory.weixin_store().clone();
-        let persist_fn: channel_weixin::token::SessionPersistFn = std::sync::Arc::new(move |tf| {
-            let row = memory::weixin_store::WeixinSessionRow {
-                channel: tf.channel.clone(),
-                sender_key: tf.sender_key.clone(),
-                bot_id: tf.bot_id.clone(),
-                bot_token: tf.bot_token.clone(),
-                baseurl: tf.baseurl.clone(),
-                ilink_bot_id: tf.ilink_bot_id.clone(),
-                user_id: tf.user_id.clone(),
-                expires_at: tf.expires_at,
-                bind_agent: tf.bind_agent.clone(),
-                context_tokens: serde_json::to_string(&tf.context_tokens).unwrap_or_default(),
-            };
-            if let Err(e) = store.upsert(&row) {
-                tracing::warn!("Failed to persist weixin session to DB: {e}");
-            }
-        });
-        let store2 = kernel.memory.weixin_store().clone();
-        let load_fn: channel_weixin::token::SessionsLoadFn = std::sync::Arc::new(move || {
-            match store2.load_all() {
-                Ok(rows) => rows
-                    .into_iter()
-                    .map(|r| {
-                        let ctx: std::collections::HashMap<String, String> =
-                            serde_json::from_str(&r.context_tokens).unwrap_or_default();
-                        channel_weixin::models::BotTokenFile {
-                            channel: r.channel,
-                            sender_key: r.sender_key,
-                            bot_id: r.bot_id,
-                            bot_token: r.bot_token,
-                            baseurl: r.baseurl,
-                            ilink_bot_id: r.ilink_bot_id,
-                            user_id: r.user_id,
-                            expires_at: r.expires_at,
-                            bind_agent: r.bind_agent,
-                            context_tokens: ctx,
-                        }
-                    })
-                    .collect::<Vec<_>>(),
-                Err(e) => {
-                    tracing::warn!("Failed to load weixin sessions from DB: {e}");
-                    Vec::new()
-                }
-            }
-        });
-        channel_weixin::token::WEIXIN_STATE.set_persist_fns(persist_fn, load_fn);
-        info!("WeixinState DB persistence callbacks installed");
     }
 
     let (app, state) = build_router(kernel.clone(), addr, channel_manager).await;
