@@ -105,7 +105,6 @@ pub fn build_manifest_from_workspace(
             .map(|t| t.version.clone())
             .unwrap_or_else(|| "1".to_string()),
         hub_template_id,
-        auto_upgrade: false,
     };
 
     // 7. Assemble manifest

@@ -625,7 +625,7 @@ impl CarrierKernel {
                     // if unset, fall back to the DEFINITION layer — workspace
                     // template.json's default_flow. dup push writes template.json
                     // straight into the workspace, so the definition-layer value takes
-                    // effect without needing install/upgrade to stamp agent.toml.
+                    // effect immediately (no reinstall needed to stamp agent.toml).
                     let default_flow = entry
                         .manifest
                         .default_flow

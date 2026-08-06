@@ -2,7 +2,7 @@
 //!
 //! `TemplateManifest` parses a clone's `template.json` (name, author, plugins,
 //! mcp_servers, ...); the `parse_*` helpers handle YAML frontmatter and simple
-//! TOML/JSON-array extraction. Used by the hub install/upgrade flow and the
+//! TOML/JSON-array extraction. Used by the hub install flow and the
 //! manifest builder.
 
 use std::collections::HashMap;

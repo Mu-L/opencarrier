@@ -284,21 +284,6 @@ impl AgentRegistry {
         Ok(())
     }
 
-    /// Update an agent's clone_source (e.g. agx_version after upgrade).
-    pub fn update_clone_source(
-        &self,
-        id: AgentId,
-        clone_source: types::agent::CloneSource,
-    ) -> CarrierResult<()> {
-        let mut entry = self
-            .agents
-            .get_mut(&id)
-            .ok_or_else(|| CarrierError::AgentNotFound(id.to_string()))?;
-        entry.manifest.clone_source = Some(clone_source);
-        entry.last_active = chrono::Utc::now();
-        Ok(())
-    }
-
     /// Update an agent's entire manifest (hot-reload from agent.toml).
     /// Re-indexes capabilities and preserves the workspace path.
     pub fn update_manifest(&self, id: AgentId, new_manifest: AgentManifest) -> CarrierResult<()> {

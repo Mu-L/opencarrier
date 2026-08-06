@@ -259,9 +259,9 @@ pub async fn get_template(
     resp.json().await.context("解析 Hub 响应失败")
 }
 
-/// Hub template key used for download/upgrade (name or hub_template_id).
+/// Hub template key used for download/push (name or hub_template_id).
 /// DupHub version endpoints accept the template **name**; we also store that
-/// as `hub_template_id` so upgrade does not require a separate UUID.
+/// as `hub_template_id` so push/update-checks do not require a separate UUID.
 pub fn hub_template_key(name: &str, hub_template_id: Option<&str>) -> String {
     hub_template_id
         .map(str::trim)
@@ -274,7 +274,7 @@ pub fn hub_template_key(name: &str, hub_template_id: Option<&str>) -> String {
 /// Returns the clone name on success.
 ///
 /// Writes `clone_source.hub_template_id` = Hub template name so later
-/// `upgrade` can re-fetch without re-install.
+/// update-checks / push resolve the same Hub key without re-install.
 pub async fn install_template(
     hub_url: &str,
     api_key: &str,
@@ -295,7 +295,7 @@ pub async fn install_template(
     let toml_str = toml::to_string_pretty(&manifest).context("Failed to serialize agent.toml")?;
     std::fs::write(workspace_dir.join("agent.toml"), toml_str)?;
 
-    tracing::info!("分身 '{}' 安装完成 (hub_template_id set for upgrade)", name);
+    tracing::info!("分身 '{}' 安装完成 (hub_template_id set)", name);
     Ok(name.to_string())
 }
 

@@ -459,9 +459,6 @@ pub struct CloneSource {
     /// Hub template ID (if installed from Hub).
     #[serde(default)]
     pub hub_template_id: Option<String>,
-    /// Whether to auto-upgrade when hub has a newer version. Default: false.
-    #[serde(default)]
-    pub auto_upgrade: bool,
 }
 
 /// Declarative subagent definition — configured as `[[subagents]]` in agent.toml.

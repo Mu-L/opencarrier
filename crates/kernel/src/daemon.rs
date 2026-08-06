@@ -1,4 +1,4 @@
-//! Daemon background services — watchers, heartbeat, cron tick loop, hub upgrades.
+//! Daemon background services — watchers, heartbeat, cron tick loop, hub update checks.
 //!
 //! All methods live on `CarrierKernel` but are organized here for clarity.
 
@@ -555,7 +555,8 @@ impl CarrierKernel {
         }
     }
 
-    /// Check hub for clone template upgrades.
+    /// Check hub for newer clone template versions (log-only hint; upgrade was
+    /// removed — definition-layer sync goes through local dup pull/edit/push).
     fn check_hub_upgrades(self: &Arc<Self>) {
         let hub_url = match self.config.hub.url.as_str() {
             "" | "none" => return,

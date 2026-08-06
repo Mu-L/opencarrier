@@ -232,7 +232,7 @@ enum HubCommands {
         #[arg(long)]
         update: bool,
     },
-    /// Write hub_template_id on an existing workspace so upgrade works (no download).
+    /// Write hub_template_id on an existing workspace (no download) so hub push / update-checks resolve it.
     Link {
         /// Agent name (workspace under workspaces/).
         name: String,
