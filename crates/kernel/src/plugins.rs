@@ -149,6 +149,22 @@ impl CarrierKernel {
                 if let Some(ref mut new_cs) = m.clone_source {
                     new_cs.auto_upgrade = auto_upgrade;
                 }
+                // Sync default_flow from the freshly-upgraded template.json into
+                // the runtime agent.toml. clone_upgrade does NOT call
+                // build_manifest_from_workspace (it preserves the existing
+                // agent.toml), so definition-layer default_flow additions would
+                // otherwise never reach the running agent. Only fill when the
+                // runtime agent.toml doesn't already declare one (don't clobber a
+                // hand-set value). See AgentManifest::default_flow / resolve_matched_flow.
+                if m.default_flow.is_none() {
+                    if let Ok(tpl) = std::fs::read_to_string(workspace.join("template.json")) {
+                        if let Ok(tpl_m) = serde_json::from_str::<clone::TemplateManifest>(&tpl) {
+                            if let Some(df) = tpl_m.default_flow {
+                                m.default_flow = Some(df);
+                            }
+                        }
+                    }
+                }
                 if let Ok(s) = toml::to_string_pretty(&m) {
                     let _ = std::fs::write(workspace.join("agent.toml"), s);
                 }
