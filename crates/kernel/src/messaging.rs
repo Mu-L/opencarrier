@@ -665,11 +665,30 @@ impl CarrierKernel {
     /// `template.json`. Returns None when the workspace/template is missing or
     /// the field is absent/empty. This is the dup-synced definition-layer source
     /// of truth for the classifier-miss fallback — see resolve_matched_flow.
+    ///
+    /// Parses ONLY the one field via serde_json::Value instead of the full
+    /// TemplateManifest: real-world template.json files drift from that struct
+    /// (e.g. mcp_servers as objects `[{name, required}]` where the struct wants
+    /// `Vec<String>`), and a whole-file parse failure would silently disable
+    /// the fallback — exactly the bug this must not have.
     fn read_template_default_flow(entry: &AgentEntry) -> Option<String> {
         let ws = entry.manifest.workspace.as_ref()?;
         let content = std::fs::read_to_string(ws.join("template.json")).ok()?;
-        let tpl: clone::TemplateManifest = serde_json::from_str(&content).ok()?;
-        tpl.default_flow.filter(|s| !s.is_empty())
+        match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(v) => v
+                .get("default_flow")?
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            Err(e) => {
+                warn!(
+                    agent = %entry.name,
+                    error = %e,
+                    "template.json parse failed — default_flow fallback disabled"
+                );
+                None
+            }
+        }
     }
 
     /// Auto-match a subagent trigger (only when no flow matched) and resolve the
@@ -2156,4 +2175,121 @@ fn partition_steps_by_layers(steps: &[runtime::agent_loop::TaskStep]) -> Vec<Vec
     }
 
     layers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use std::collections::HashMap;
+    use types::agent::{AgentEntry, AgentId, AgentManifest, AgentMode, AgentState, ManifestCapabilities, ModelConfig, ResourceQuota, ScheduleMode, SessionId};
+
+    fn entry_with_workspace(ws: &std::path::Path) -> AgentEntry {
+        AgentEntry {
+            id: AgentId::new(),
+            name: "test-agent".to_string(),
+            manifest: AgentManifest {
+                name: "test-agent".to_string(),
+                display_name: String::new(),
+                version: "0.1.0".to_string(),
+                description: "test".to_string(),
+                author: "test".to_string(),
+                module: "test".to_string(),
+                schedule: ScheduleMode::default(),
+                model: ModelConfig::default(),
+                resources: ResourceQuota::default(),
+                priority: Priority::default(),
+                capabilities: ManifestCapabilities::default(),
+                profile: None,
+                tools: HashMap::new(),
+                flows: vec![],
+                mcp_servers: vec![],
+                max_tool_level: types::tool::PermissionLevel::Write,
+                intent_classifier_enabled: None,
+                default_flow: None,
+                metadata: HashMap::new(),
+                tags: vec![],
+                autonomous: None,
+                workspace: Some(ws.to_path_buf()),
+                generate_identity_files: true,
+                exec_policy: None,
+                cli_exec: None,
+                tool_allowlist: vec![],
+                tool_blocklist: vec![],
+                clone_source: None,
+                knowledge_files: vec![],
+                plugins: vec![],
+                subagents: vec![],
+            },
+            state: AgentState::Created,
+            mode: AgentMode::default(),
+            created_at: Utc::now(),
+            last_active: Utc::now(),
+            parent: None,
+            children: vec![],
+            session_id: SessionId::new(),
+            tags: vec![],
+            identity: Default::default(),
+            onboarding_completed: false,
+            onboarding_completed_at: None,
+        }
+    }
+
+    fn temp_ws() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "messaging-default-flow-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Real-world template.json shape: mcp_servers as OBJECTS ([{name,
+    /// required}]), exported_at as a string number — this drifts from
+    /// clone::TemplateManifest (Vec<String> mcp_servers) and must NOT defeat
+    /// the default_flow fallback (regression: ai-writer fallback silently
+    /// disabled because whole-struct parse failed).
+    #[test]
+    fn default_flow_reads_real_world_template_shape() {
+        let ws = temp_ws();
+        std::fs::write(
+            ws.join("template.json"),
+            r#"{
+                "version": "2",
+                "name": "ai-writer",
+                "exported_at": "1745395200",
+                "knowledge_version": 3,
+                "mcp_servers": [{"name": "searxng", "required": true}],
+                "default_flow": "topic-researcher"
+            }"#,
+        )
+        .unwrap();
+        let entry = entry_with_workspace(&ws);
+        assert_eq!(
+            CarrierKernel::read_template_default_flow(&entry).as_deref(),
+            Some("topic-researcher")
+        );
+        std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn default_flow_absent_or_empty_is_none() {
+        let ws = temp_ws();
+        std::fs::write(ws.join("template.json"), r#"{"name": "x"}"#).unwrap();
+        let entry = entry_with_workspace(&ws);
+        assert_eq!(CarrierKernel::read_template_default_flow(&entry), None);
+
+        std::fs::write(ws.join("template.json"), r#"{"default_flow": ""}"#).unwrap();
+        assert_eq!(CarrierKernel::read_template_default_flow(&entry), None);
+        std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn default_flow_broken_json_is_none_not_panic() {
+        let ws = temp_ws();
+        std::fs::write(ws.join("template.json"), "{not json").unwrap();
+        let entry = entry_with_workspace(&ws);
+        assert_eq!(CarrierKernel::read_template_default_flow(&entry), None);
+        std::fs::remove_dir_all(&ws).ok();
+    }
 }
