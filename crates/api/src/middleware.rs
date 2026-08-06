@@ -183,6 +183,9 @@ pub async fn auth(
         || path == "/api/senders/dingtalk/device-auth/poll"
         // Clone access control (share page needs these without auth)
         || path.starts_with("/api/clones/") && (path.ends_with("/access") || path.ends_with("/verify-access"))
+        // Share-page hub template install — first step of beginAuth, public so
+        // any visitor can install a clone from /share without an API key.
+        || (path.starts_with("/api/hub/templates/") && path.ends_with("/install"))
         // Agent output files — must be public for WeChat direct download links
         || (path.starts_with("/api/agents/") && path.contains("/output/") && is_get)
         // File explorer view — public for direct file links (browser viewing via file.yinnho.cn)
