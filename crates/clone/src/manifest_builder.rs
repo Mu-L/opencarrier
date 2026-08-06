@@ -161,6 +161,12 @@ pub fn build_manifest_from_workspace(
             .map(|t| t.plugins.clone())
             .unwrap_or_default(),
         mcp_servers,
+        // default_flow: classifier-miss fallback flow (see AgentManifest::default_flow).
+        // Read from template.json so clones can declare it in their definition layer
+        // (dup-synced) rather than having to hand-edit the runtime agent.toml.
+        default_flow: template
+            .as_ref()
+            .and_then(|t| t.default_flow.clone()),
         generate_identity_files: false, // .agx already has identity files
         ..Default::default()
     };

@@ -35,6 +35,11 @@ pub struct TemplateManifest {
     /// Required MCP servers for this clone.
     #[serde(default)]
     pub mcp_servers: Vec<String>,
+    /// Optional fallback flow loaded when the intent classifier returns NO
+    /// match (bare-turn gap). Flows through manifest_builder into the
+    /// generated agent.toml's `default_flow` field. See AgentManifest::default_flow.
+    #[serde(default)]
+    pub default_flow: Option<String>,
 }
 
 /// Format a string slice as `["a", "b"]` — safe for YAML frontmatter.
