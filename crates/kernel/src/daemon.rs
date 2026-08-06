@@ -114,6 +114,23 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
             active_flow,
             ..
         } => {
+            // Orphan-cron cleanup: if the agent vanished via a non-kill path
+            // (workspace removed, spawn failed before registering, stale on
+            // reload), silently remove the job instead of firing a doomed turn
+            // that spams the user with "Agent not found" failures. kill_agent
+            // already removes cron jobs (#504); this covers the remaining
+            // disappearance paths. SystemEvent jobs don't need an agent, so
+            // the check lives here inside the AgentTurn arm only.
+            if kernel.registry.get(agent_id).is_none() {
+                let _ = kernel.cron_scheduler.remove_job(job_id);
+                let _ = kernel.cron_scheduler.persist();
+                tracing::info!(
+                    job = %job_name,
+                    agent = %agent_id,
+                    "Removed orphan cron job — agent no longer in registry"
+                );
+                return;
+            }
             tracing::debug!(job = %job_name, agent = %agent_id, "Cron: firing agent turn");
             // Default to the shared agent-turn timeout (KernelConfig.
             // agent_turn_timeout_secs, default 600s) so cron turns are bounded
