@@ -558,7 +558,10 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 // This caused the LLM to re-search when it needed tools from two
                 // different contexts in the same conversation. Now we accumulate,
                 // capped by MAX_TOTAL_TOOLS to prevent unbounded inflation.
-                const MAX_TOTAL_TOOLS: usize = 32;
+                // 64 (was 32 — one tool_search returning 10 results could fill the
+                // cap alongside a ~23-tool base set, silently dropping all later
+                // discoveries and forcing the LLM to re-search in a loop).
+                const MAX_TOTAL_TOOLS: usize = 64;
                 let current_count = tools_owned.len();
                 let remaining_capacity = MAX_TOTAL_TOOLS.saturating_sub(current_count);
                 let to_add: Vec<_> = found_tools

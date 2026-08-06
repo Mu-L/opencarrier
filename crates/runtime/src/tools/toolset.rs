@@ -65,9 +65,14 @@ impl ToolModule for ToolSearchTools {
                 out.push_str(&format!("Parameters: {}\n\n", serde_json::to_string(&def.input_schema).unwrap_or_default()));
             }
         }
-        out.push_str("⚠️ STOP — These are SEARCH RESULTS, not tool execution output.\n\
-You MUST now directly call the tool you need (e.g. `mcp_wechat_oa_create_draft`) with the required parameters.\n\
-Do NOT call `tool_search` again for the same query — it will return the same list, not execute anything.");
+        out.push_str(&format!(
+            "\n✅ 以上 {} 个工具已加入你的工具列表，你现在可以直接调用它们（无需再 tool_search）。\n\
+             下一步：直接调用最匹配的 `{}` 来执行任务（必需参数见上方它的 Parameters）。\n\
+             不要再用 tool_search 搜同样的需求——它只会返回这个相同的列表，不执行任何操作。\n\
+             如果这些工具都不合适，换一个不同的 query 关键词再搜。",
+            results.len(),
+            results.first().map(|(_, d)| d.name.as_str()).unwrap_or("上面的工具")
+        ));
 
         Some(Ok(out))
     }
