@@ -228,17 +228,9 @@ enum HubCommands {
         /// Specific version (default: latest).
         #[arg(short, long)]
         version: Option<String>,
-        /// Prefer definition-layer upgrade when workspace already exists (same as `hub upgrade`).
+        /// Deprecated (upgrade removed) — errors out pointing at the dup flow.
         #[arg(long)]
         update: bool,
-    },
-    /// Upgrade an installed clone's definition from DupHub (preserve sessions/senders).
-    Upgrade {
-        /// Agent / template name.
-        name: String,
-        /// Specific version (default: latest).
-        #[arg(short, long)]
-        version: Option<String>,
     },
     /// Write hub_template_id on an existing workspace so upgrade works (no download).
     Link {
@@ -3442,30 +3434,14 @@ async fn cmd_hub(cmd: HubCommands) {
         HubCommands::Install { name, version, update } => {
             let workspace_dir = config.effective_workspaces_dir().join(&name);
             if workspace_dir.exists() && update {
-                // Definition-layer upgrade path (not full re-extract)
-                match cmd_hub_upgrade_impl(
-                    &hub_url,
-                    &api_key,
-                    &name,
-                    version.as_deref(),
-                    &workspace_dir,
-                )
-                .await
-                {
-                    Ok(ver) => {
-                        println!("分身 '{name}' 已升级 (version={ver})");
-                        check_mcp_deps(&workspace_dir);
-                    }
-                    Err(e) => {
-                        eprintln!("升级失败: {e}");
-                        std::process::exit(1);
-                    }
-                }
-                return;
+                // Definition-layer upgrade was removed. Sync via the dup flow instead:
+                // dup pull -> edit -> dup push (remote = source of truth).
+                eprintln!("upgrade 已移除：分身定义层更新请走 dup 工作流（dup pull → 修改 → dup push）");
+                std::process::exit(1);
             }
             if workspace_dir.exists() && !update {
                 eprintln!("分身 '{name}' 已存在: {}", workspace_dir.display());
-                eprintln!("升级定义请用: opencarrier hub upgrade {name}");
+                eprintln!("更新定义请走 dup 工作流: dup pull → 修改 → dup push");
                 std::process::exit(1);
             }
             match clone::hub::install_template(
@@ -3485,106 +3461,9 @@ async fn cmd_hub(cmd: HubCommands) {
                     );
                     check_mcp_deps(&workspace_dir);
                     println!("运行 'opencarrier agent spawn {clone_name}' 启动分身");
-                    println!("之后迭代: 本地 publish 到 DupHub → opencarrier hub upgrade {clone_name}");
+                    println!("之后迭代: dup pull → 修改 → dup push（远程 = 事实源）");
                 }
                 Err(e) => eprintln!("安装失败: {e}"),
-            }
-        }
-        HubCommands::Upgrade { name, version } => {
-            let workspace_dir = config.effective_workspaces_dir().join(&name);
-            // Prefer daemon API so registry restarts the agent
-            if let Some(base) = find_daemon_async().await {
-                let mut url = format!("{base}/api/clones/{name}/upgrade");
-                if let Some(ref v) = version {
-                    // version is typically semver / digits — minimal query escape
-                    let escaped = v.replace('&', "%26").replace('=', "%3D").replace(' ', "%20");
-                    url.push_str(&format!("?version={escaped}"));
-                }
-                let mut client_builder = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(300));
-                if let Some(key) = read_api_key() {
-                    let mut headers = reqwest::header::HeaderMap::new();
-                    if let Ok(val) =
-                        reqwest::header::HeaderValue::from_str(&format!("Bearer {key}"))
-                    {
-                        headers.insert(reqwest::header::AUTHORIZATION, val);
-                    }
-                    client_builder = client_builder.default_headers(headers);
-                }
-                let client = client_builder.build().expect("http client");
-                match client.post(&url).send().await {
-                    Ok(resp) if resp.status().is_success() => {
-                        let body: serde_json::Value = resp.json().await.unwrap_or_default();
-                        println!(
-                            "分身 '{name}' 已升级 (daemon): {}",
-                            body.get("version")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("ok")
-                        );
-                    }
-                    Ok(resp) => {
-                        let status = resp.status();
-                        let text = resp.text().await.unwrap_or_default();
-                        eprintln!("daemon upgrade 失败 ({status}): {text}");
-                        eprintln!("尝试本地文件升级…");
-                        match cmd_hub_upgrade_impl(
-                            &hub_url,
-                            &api_key,
-                            &name,
-                            version.as_deref(),
-                            &workspace_dir,
-                        )
-                        .await
-                        {
-                            Ok(ver) => println!("分身 '{name}' 已升级 (local): version={ver}"),
-                            Err(e) => {
-                                eprintln!("升级失败: {e}");
-                                std::process::exit(1);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("无法连接 daemon: {e}，尝试本地文件升级…");
-                        match cmd_hub_upgrade_impl(
-                            &hub_url,
-                            &api_key,
-                            &name,
-                            version.as_deref(),
-                            &workspace_dir,
-                        )
-                        .await
-                        {
-                            Ok(ver) => println!("分身 '{name}' 已升级 (local): version={ver}"),
-                            Err(e) => {
-                                eprintln!("升级失败: {e}");
-                                std::process::exit(1);
-                            }
-                        }
-                    }
-                }
-            } else {
-                if !workspace_dir.is_dir() {
-                    eprintln!("工作区不存在: {}", workspace_dir.display());
-                    std::process::exit(1);
-                }
-                match cmd_hub_upgrade_impl(
-                    &hub_url,
-                    &api_key,
-                    &name,
-                    version.as_deref(),
-                    &workspace_dir,
-                )
-                .await
-                {
-                    Ok(ver) => {
-                        println!("分身 '{name}' 已升级 (local): version={ver}");
-                        println!("若 daemon 在跑，请 restart 该 agent 以加载新定义");
-                    }
-                    Err(e) => {
-                        eprintln!("升级失败: {e}");
-                        std::process::exit(1);
-                    }
-                }
             }
         }
         HubCommands::Link { name, template } => {
@@ -3596,7 +3475,7 @@ async fn cmd_hub(cmd: HubCommands) {
                         "已写入 hub_template_id='{hub_id}' → {}",
                         workspace_dir.join("agent.toml").display()
                     );
-                    println!("现在可以: opencarrier hub upgrade {name}");
+                    println!("现在可以: dup pull {name} 拉取远程定义层");
                 }
                 Err(e) => {
                     eprintln!("link 失败: {e}");
@@ -3635,29 +3514,6 @@ async fn cmd_hub(cmd: HubCommands) {
             }
         }
     }
-}
-
-async fn cmd_hub_upgrade_impl(
-    hub_url: &str,
-    api_key: &str,
-    name: &str,
-    version: Option<&str>,
-    workspace: &std::path::Path,
-) -> Result<String, String> {
-    if !workspace.is_dir() {
-        return Err(format!("workspace 不存在: {}", workspace.display()));
-    }
-    let hub_id = read_hub_template_id(workspace);
-    clone::hub::upgrade_workspace_from_hub(
-        hub_url,
-        api_key,
-        name,
-        version,
-        workspace,
-        hub_id.as_deref(),
-    )
-    .await
-    .map_err(|e| e.to_string())
 }
 
 fn read_hub_template_id(workspace: &std::path::Path) -> Option<String> {

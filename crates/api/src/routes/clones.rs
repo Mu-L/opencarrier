@@ -516,41 +516,6 @@ pub async fn clone_verify(
     }
 }
 
-/// POST /api/clones/{name}/upgrade — Upgrade definition layer from DupHub.
-///
-/// Query: `?version=x` optional (default latest).
-/// Uses `clone_source.hub_template_id` or `template_name` or agent name as Hub key.
-/// Preserves sessions/senders/output; replaces SOUL/prompt/flows/knowledge/…
-pub async fn upgrade_clone(
-    State(state): State<Arc<AppState>>,
-    Path(name): Path<String>,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> impl IntoResponse {
-    if state.kernel.registry.find_by_name(&name).is_none() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Clone not found"})),
-        );
-    }
-
-    let version = params.get("version").map(|s| s.as_str());
-
-    match state.kernel.clone_upgrade(&name, version).await {
-        Ok(version) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "name": name,
-                "version": version,
-                "status": "upgraded"
-            })),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        ),
-    }
-}
-
 /// DELETE /api/clones/{name} — Uninstall a clone.
 pub async fn uninstall_clone(
     State(state): State<Arc<AppState>>,
@@ -616,6 +581,5 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/clones/{name}/rollback", routing::post(clone_rollback))
         .route("/api/clones/{name}/start", routing::post(start_clone))
         .route("/api/clones/{name}/stop", routing::post(stop_clone))
-        .route("/api/clones/{name}/upgrade", routing::post(upgrade_clone))
         .route("/api/clones/{name}/verify", routing::post(clone_verify))
 }

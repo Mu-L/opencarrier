@@ -620,7 +620,18 @@ impl CarrierKernel {
                     // (via apply_flow_to_turn), so the flow's tools/elevation apply
                     // and apply_flow_elevation (below) runs. Priority BELOW classify
                     // — only fires on a classifier miss, never bypasses it.
-                    if let Some(name) = entry.manifest.default_flow.as_deref() {
+                    //
+                    // Source: manifest.default_flow (runtime agent.toml override) wins;
+                    // if unset, fall back to the DEFINITION layer — workspace
+                    // template.json's default_flow. dup push writes template.json
+                    // straight into the workspace, so the definition-layer value takes
+                    // effect without needing install/upgrade to stamp agent.toml.
+                    let default_flow = entry
+                        .manifest
+                        .default_flow
+                        .clone()
+                        .or_else(|| Self::read_template_default_flow(entry));
+                    if let Some(name) = default_flow.as_deref() {
                         match self.load_named_flow_for_turn(entry, tools, name) {
                             Some((prompt, max_iter, flow)) => {
                                 info!(
@@ -648,6 +659,17 @@ impl CarrierKernel {
         } else {
             (None, None, None)
         }
+    }
+
+    /// Read the definition-layer `default_flow` from the clone's workspace
+    /// `template.json`. Returns None when the workspace/template is missing or
+    /// the field is absent/empty. This is the dup-synced definition-layer source
+    /// of truth for the classifier-miss fallback — see resolve_matched_flow.
+    fn read_template_default_flow(entry: &AgentEntry) -> Option<String> {
+        let ws = entry.manifest.workspace.as_ref()?;
+        let content = std::fs::read_to_string(ws.join("template.json")).ok()?;
+        let tpl: clone::TemplateManifest = serde_json::from_str(&content).ok()?;
+        tpl.default_flow.filter(|s| !s.is_empty())
     }
 
     /// Auto-match a subagent trigger (only when no flow matched) and resolve the

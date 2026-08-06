@@ -563,7 +563,6 @@ impl CarrierKernel {
         };
 
         let agents = self.registry.list();
-        let kernel = Arc::clone(self);
         tokio::spawn(async move {
             for entry in &agents {
                 let Some(ref cs) = entry.manifest.clone_source else {
@@ -605,27 +604,8 @@ impl CarrierKernel {
                     hub_template = %tid,
                     local = local_ver,
                     remote = remote_ver,
-                    auto_upgrade = cs.auto_upgrade,
-                    "Hub template update available"
+                    "Hub template update available — sync via local dup pull/edit/push (upgrade removed)"
                 );
-
-                if !cs.auto_upgrade {
-                    continue;
-                }
-
-                let agent_name = entry.name.clone();
-                match kernel.clone_upgrade(&agent_name, None).await {
-                    Ok(ver) => info!(
-                        agent = %agent_name,
-                        new_version = %ver,
-                        "Auto-upgrade completed"
-                    ),
-                    Err(e) => warn!(
-                        agent = %agent_name,
-                        error = %e,
-                        "Auto-upgrade failed"
-                    ),
-                }
             }
         });
     }
