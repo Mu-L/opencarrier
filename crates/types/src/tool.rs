@@ -492,7 +492,7 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "tool_search", "flow_load", "flow_create", "flow_update",
     "session_summarize",
     "knowledge_add", "knowledge_read", "knowledge_list",
-    "file_read", "file_list", "web_search",
+    "file_read", "file_list", "web_search", "web_fetch",
     "kv_get", "kv_set", "kv_list",
     "cron_create", "cron_list", "cron_cancel",
     "task_plan",

@@ -11,7 +11,7 @@ use types::config::WebFetchConfig;
 use types::ssrf;
 use types::error::{CarrierError, CarrierResult};
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// 外挂 AginxBrowser 需要兜底抓取的站点（JS 渲染或风控）。命中且 AginxBrowser 已启用时
 /// 走浏览器，其余走 reqwest 直连。这是 web_fetch 的私有路由策略，不暴露为配置。
@@ -89,28 +89,45 @@ impl WebFetchEngine {
             }
         }
 
-        // Step 2b: 外挂 AginxBrowser —— 命中风控站 + 已启用时走浏览器抓取，失败回退 reqwest。
-        // 仅对 GET 生效；POST/PUT 等 API 调用永远走 reqwest。对 agent 完全透明。
+        // Step 2b: 外挂 AginxBrowser —— 命中风控站 + 已启用时走浏览器抓取。
+        // 仅对 GET 生效；POST/PUT 等 API 调用永远走 reqwest。
+        // 注意：风控站（微信/知乎/JD/github）aginxbrowser 失败时【不降级 reqwest】——
+        // reqwest 对这些站必失败（JS 渲染/风控），降级只给 agent 外壳假数据，导致它
+        // 误以为"没读全"反复重试（实测 ai-writer web_fetch 循环）。失败直接报错。
         if method_upper == "GET" && should_use_aginxbrowser(url) && aginxbrowser_url().is_some() {
-            if let Ok(content) = self.fetch_via_aginxbrowser(url).await {
-                let truncated = if content.len() > self.config.max_chars {
-                    format!(
-                        "{}... [truncated, {} total chars]",
-                        safe_truncate_str(&content, self.config.max_chars),
-                        content.len()
-                    )
-                } else {
-                    content
-                };
-                let result = format!(
-                    "HTTP 200 (via AginxBrowser)\n\n{}",
-                    wrap_external_content(url, &truncated)
-                );
-                self.cache.put(cache_key.clone(), result.clone());
-                return Ok(result);
+            match self.fetch_via_aginxbrowser(url).await {
+                Ok(content) => {
+                    let truncated = if content.len() > self.config.max_chars {
+                        format!(
+                            "{}... [truncated, {} total chars]",
+                            safe_truncate_str(&content, self.config.max_chars),
+                            content.len()
+                        )
+                    } else {
+                        content
+                    };
+                    let result = format!(
+                        "HTTP 200 (via AginxBrowser)\n\n{}",
+                        wrap_external_content(url, &truncated)
+                    );
+                    self.cache.put(cache_key.clone(), result.clone());
+                    return Ok(result);
+                }
+                Err(e) => {
+                    warn!(
+                        url,
+                        error = %e,
+                        "AginxBrowser fetch failed for risk-controlled site; NOT falling back to reqwest (would return shell/garbage and cause retry loops)"
+                    );
+                    return Err(CarrierError::Network(format!(
+                        "此 URL 属于需要浏览器渲染的风控站点（{}），AginxBrowser 抓取失败：{e}。\
+                         reqwest 直连拿不到正文（只会返回外壳/乱码），故不降级。\
+                         可能原因：临时链接(tempkey)已失效、被反爬、或 AginxBrowser 未就绪。\
+                         请改用公开文章 URL，或稍后重试。",
+                        ssrf::extract_host(url)
+                    )));
+                }
             }
-            // AginxBrowser 失败/空内容 → 不 return，继续走下方 reqwest（降级）
-            debug!(url, "AginxBrowser fetch failed or empty, falling back to reqwest");
         }
 
         // Step 3: Build request with configured method
