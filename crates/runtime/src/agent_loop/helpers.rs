@@ -108,6 +108,17 @@ pub const LOOP_DETECTION_WINDOW: usize = 4;
 /// without removing the tool.
 pub const SOFT_LOOP_WINDOW: usize = 2;
 
+/// Cumulative (whole-turn) repetition threshold: if the SAME `(tool_name,
+/// input_hash)` pair is called this many times total within a turn — even when
+/// interleaved with other calls so the consecutive `LOOP_DETECTION_WINDOW`
+/// never fills — we `BreakToolLoop` immediately. Catches ROTATING repetition
+/// (e.g. file_read on 4 paths cycled, each read 3× total but never 4-in-a-row)
+/// that the consecutive-only detector misses. N=3 is already lenient — 3
+/// identical reads of one file is clearly stuck, and guidance does not fix
+/// input-cycling (the 16:29 ai-writer turn had soft-loop reminders and still
+/// burned 600s). Distinct from `LOOP_BREAK_THRESHOLD` (consecutive escalation).
+pub const CUMULATIVE_LOOP_THRESHOLD: u32 = 3;
+
 /// Default context window size (tokens) for token-based trimming.
 pub(in crate::agent_loop) const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
 

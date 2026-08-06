@@ -167,6 +167,14 @@ pub struct LoopState {
     /// budget on a stuck loop. (The tool itself is never removed — we educate,
     /// not punish; this is only the escalation counter.)
     pub tool_loop_rearm: HashMap<String, u32>,
+    /// Per-`(tool_name, input_hash)` call count across the WHOLE turn (not the
+    /// sliding `recent_tool_calls` window). Survives `recent_tool_calls.clear()`.
+    /// Distinct from `tool_loop_rearm` (per-NAME escalation, only bumps on
+    /// consecutive-window hits). When any single pair reaches
+    /// [`super::helpers::CUMULATIVE_LOOP_THRESHOLD`], the turn is aborted — this
+    /// catches ROTATING repetition (e.g. file_read on 4 paths cycled, each read
+    /// 3× total but never 4-in-a-row) that the consecutive-only window misses.
+    pub tool_call_counts: HashMap<(String, u64), u32>,
     pub consecutive_max_tokens: u32,
     pub text_recovery_retries: u32,
     pub last_run: Option<LastRunSummary>,
@@ -193,6 +201,7 @@ impl LoopState {
             recent_tool_calls: Vec::new(),
             error_tracker: ToolErrorTracker::new(5),
             tool_loop_rearm: HashMap::new(),
+            tool_call_counts: HashMap::new(),
             consecutive_max_tokens: 0,
             text_recovery_retries: 0,
             last_run: None,

@@ -57,7 +57,7 @@ pub use helpers::TOOL_TIMEOUT_LONG_SECS;
 pub use helpers::TOOL_LONG_TIMEOUT_NAMES;
 pub use max_tokens::MAX_CONTINUATIONS;
 // Re-export constants and functions used by tests via `use super::*`.
-pub use helpers::{MAX_RETRIES, BASE_RETRY_DELAY_MS, MAX_HISTORY_MESSAGES, LOOP_DETECTION_WINDOW, SOFT_LOOP_WINDOW};
+pub use helpers::{MAX_RETRIES, BASE_RETRY_DELAY_MS, MAX_HISTORY_MESSAGES, LOOP_DETECTION_WINDOW, SOFT_LOOP_WINDOW, CUMULATIVE_LOOP_THRESHOLD};
 pub use helpers::{tool_input_hash, detect_tool_loop, detect_soft_loop};
 // Re-export the kv-drawer knowledge merge so the kernel's compaction path can
 // flush facts with the same idempotent semantics as the per-turn path.
@@ -874,6 +874,7 @@ async fn dispatch(
                 &mut ctx.loaded_flows,
                 &mut ctx.state.error_tracker,
                 &mut ctx.state.tool_loop_rearm,
+                &mut ctx.state.tool_call_counts,
                 ctx.session_base_len,
                 ctx.state.iteration,
             )

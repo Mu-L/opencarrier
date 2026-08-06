@@ -611,8 +611,38 @@ impl CarrierKernel {
                     )
                 }
                 None => {
-                    warn!(agent = %entry.name, "Flow classifier returned no match — proceeding without flow prompt");
-                    (None, None, None)
+                    // Classifier-miss fallback: closes the bare-turn gap. Without
+                    // this, a no-match left the agent in a bare turn where
+                    // apply_flow_elevation/deny_tools never ran (task_plan usable,
+                    // no elevation, no flow prompt — ai-writer 16:29 deadlock).
+                    // default_flow loads exactly like an explicit active_flow:
+                    // load_named_flow_for_turn calls inject_flow_tools internally
+                    // (via apply_flow_to_turn), so the flow's tools/elevation apply
+                    // and apply_flow_elevation (below) runs. Priority BELOW classify
+                    // — only fires on a classifier miss, never bypasses it.
+                    if let Some(name) = entry.manifest.default_flow.as_deref() {
+                        match self.load_named_flow_for_turn(entry, tools, name) {
+                            Some((prompt, max_iter, flow)) => {
+                                info!(
+                                    agent = %entry.name,
+                                    flow = %name,
+                                    "Flow loaded by default_flow (classifier miss fallback)"
+                                );
+                                (Some(prompt), max_iter, Some(flow))
+                            }
+                            None => {
+                                warn!(
+                                    agent = %entry.name,
+                                    flow = %name,
+                                    "default_flow set but flow def not found — proceeding without flow prompt"
+                                );
+                                (None, None, None)
+                            }
+                        }
+                    } else {
+                        warn!(agent = %entry.name, "Flow classifier returned no match — proceeding without flow prompt");
+                        (None, None, None)
+                    }
                 }
             }
         } else {

@@ -88,6 +88,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     loaded_flows: &mut std::collections::HashSet<String>,
     error_tracker: &mut crate::agent_loop::state::ToolErrorTracker,
     tool_loop_rearm: &mut std::collections::HashMap<String, u32>,
+    tool_call_counts: &mut std::collections::HashMap<(String, u64), u32>,
     // For task_plan save
     session_base_len: usize,
     iteration: u32,
@@ -108,7 +109,36 @@ pub(in crate::agent_loop) async fn handle_tool_use(
 
     // Track tool calls for loop detection BEFORE execution
     for tc in &response.tool_calls {
-        recent_tool_calls.push((tc.name.clone(), super::helpers::tool_input_hash(&tc.input)));
+        let key = (tc.name.clone(), super::helpers::tool_input_hash(&tc.input));
+        recent_tool_calls.push(key.clone());
+        // Cumulative (whole-turn) repetition counter — distinct from the
+        // sliding window above. Survives recent_tool_calls.clear(). Catches
+        // ROTATING repetition (same call interleaved with others so the
+        // consecutive window never fills) that detect_tool_loop misses.
+        let count = {
+            let e = tool_call_counts.entry(key.clone()).or_insert(0);
+            *e += 1;
+            *e
+        };
+        if count >= super::helpers::CUMULATIVE_LOOP_THRESHOLD {
+            warn!(
+                agent = %manifest.name,
+                tool = %tc.name,
+                count,
+                threshold = super::helpers::CUMULATIVE_LOOP_THRESHOLD,
+                iteration,
+                "Cumulative tool-call repetition (rotating) — aborting turn \
+                 (consecutive-window loop detection misses interleaved repetition)"
+            );
+            return ToolUseAction::BreakToolLoop(format!(
+                "agent re-called `{name}` with identical args {count}× total this turn \
+                 (interleaved with other calls so the consecutive loop detector never fired). \
+                 This is rotating repetition — the agent is re-reading inputs without \
+                 progressing, which guidance does not fix. Turn aborted to save the iteration \
+                 budget. Fix the flow/tool guidance and retry.",
+                name = tc.name
+            ));
+        }
     }
     if recent_tool_calls.len() > super::helpers::LOOP_DETECTION_WINDOW * 3 {
         let drain_count =

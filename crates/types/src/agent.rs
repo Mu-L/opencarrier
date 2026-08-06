@@ -388,6 +388,15 @@ pub struct AgentManifest {
     /// call per message; sessions never auto-rotate).
     #[serde(default)]
     pub intent_classifier_enabled: Option<bool>,
+    /// Optional fallback flow loaded when the intent classifier returns NO
+    /// match — closes the bare-turn gap that previously skipped
+    /// deny_tools/elevation. When set, the named flow is loaded exactly like
+    /// an explicit active_flow match, so apply_flow_elevation runs and the
+    /// flow's tools:/deny_tools apply. Priority: resume > active_flow >
+    /// classify > default_flow — never bypasses classify, only catches its
+    /// no-match outcome.
+    #[serde(default)]
+    pub default_flow: Option<String>,
     /// Custom metadata.
     #[serde(default, deserialize_with = "crate::serde_compat::map_lenient")]
     pub metadata: HashMap<String, serde_json::Value>,
@@ -527,6 +536,7 @@ impl Default for AgentManifest {
             mcp_servers: Vec::new(),
             max_tool_level: crate::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
+            default_flow: None,
             metadata: HashMap::new(),
             tags: Vec::new(),
             autonomous: None,
@@ -741,6 +751,7 @@ mod tests {
             mcp_servers: vec![],
             max_tool_level: crate::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
+            default_flow: None,
             metadata: HashMap::new(),
             tags: vec!["test".to_string()],
             autonomous: None,

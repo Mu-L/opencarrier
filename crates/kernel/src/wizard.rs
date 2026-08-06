@@ -163,6 +163,7 @@ impl SetupWizard {
             mcp_servers: vec![],
             max_tool_level: types::tool::PermissionLevel::Write,
             intent_classifier_enabled: None,
+            default_flow: None,
             metadata: HashMap::new(),
             tags: vec![],
             autonomous: None,

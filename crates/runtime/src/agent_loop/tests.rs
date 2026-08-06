@@ -122,6 +122,77 @@ use std::sync::atomic::{AtomicU32, Ordering};
         assert_eq!(LOOP_DETECTION_WINDOW, 4);
     }
 
+    // --- Cumulative (rotating) repetition ---
+
+    #[test]
+    fn test_cumulative_threshold_constant() {
+        assert_eq!(CUMULATIVE_LOOP_THRESHOLD, 3);
+    }
+
+    /// Mirrors the in-loop counter in handle_tool_use: a per-(name, input_hash)
+    /// count accumulated across the WHOLE turn (interleaved calls included).
+    /// Rotating repetition (same call recurring but never 4-in-a-row) must still
+    /// trip the cumulative threshold — this is the exact gap the 16:29 ai-writer
+    /// turn fell through (file_read on 4 paths cycled, each read 3×, consecutive
+    /// window never filled, 600s burned).
+    fn cumulative_count(recent: &[(String, u64)]) -> std::collections::HashMap<(String, u64), u32> {
+        let mut counts: std::collections::HashMap<(String, u64), u32> = std::collections::HashMap::new();
+        for entry in recent {
+            *counts.entry(entry.clone()).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    #[test]
+    fn test_cumulative_repetition_triggers_on_rotating_pattern() {
+        // file_read("大纲") interleaved with reads of other files — never 4
+        // consecutive, but 3 total. Consecutive detector misses this.
+        let mut recent: Vec<(String, u64)> = Vec::new();
+        recent.push(make_call("file_read", serde_json::json!({"path": "大纲.md"})));
+        recent.push(make_call("file_read", serde_json::json!({"path": "素材.md"})));
+        recent.push(make_call("file_read", serde_json::json!({"path": "大纲.md"})));
+        recent.push(make_call("file_read", serde_json::json!({"path": "风格.md"})));
+        recent.push(make_call("file_read", serde_json::json!({"path": "大纲.md"})));
+
+        // Consecutive window (4) does NOT fire — tail is mixed.
+        assert!(detect_tool_loop(&recent, LOOP_DETECTION_WINDOW).is_none());
+
+        // Cumulative count of 大纲.md hits the threshold (3).
+        let counts = cumulative_count(&recent);
+        let dagan = make_call("file_read", serde_json::json!({"path": "大纲.md"}));
+        let dagan_count = *counts.get(&dagan).unwrap();
+        assert_eq!(dagan_count, 3);
+        assert!(dagan_count >= CUMULATIVE_LOOP_THRESHOLD);
+    }
+
+    #[test]
+    fn test_cumulative_repetition_below_threshold_no_trigger() {
+        // Only 2 identical calls — under the cumulative threshold.
+        let recent: Vec<(String, u64)> = vec![
+            make_call("file_read", serde_json::json!({"path": "大纲.md"})),
+            make_call("file_read", serde_json::json!({"path": "素材.md"})),
+            make_call("file_read", serde_json::json!({"path": "大纲.md"})),
+        ];
+        let counts = cumulative_count(&recent);
+        let dagan = make_call("file_read", serde_json::json!({"path": "大纲.md"}));
+        let dagan_count = *counts.get(&dagan).unwrap();
+        assert_eq!(dagan_count, 2);
+        assert!(dagan_count < CUMULATIVE_LOOP_THRESHOLD);
+    }
+
+    #[test]
+    fn test_cumulative_repetition_distinguishes_args() {
+        // Same tool name, different args — pagination. Must NOT trip cumulative.
+        let recent: Vec<(String, u64)> = vec![
+            make_call("web_search", serde_json::json!({"q": "rust page 1"})),
+            make_call("web_search", serde_json::json!({"q": "rust page 2"})),
+            make_call("web_search", serde_json::json!({"q": "rust page 3"})),
+        ];
+        let counts = cumulative_count(&recent);
+        // No single (name, hash) pair reaches 3.
+        assert!(counts.values().all(|c| *c < CUMULATIVE_LOOP_THRESHOLD));
+    }
+
     // --- Integration tests for empty response guards ---
 
     fn test_manifest() -> AgentManifest {
