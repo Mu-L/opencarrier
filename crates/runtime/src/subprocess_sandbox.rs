@@ -162,11 +162,61 @@ pub fn contains_shell_metacharacters(command: &str) -> Option<String> {
     }
 
     // ── Background execution and logical chaining ──────────────────────
-    // Both & (background) and && (logical AND) are dangerous
-    if command.contains('&') {
+    // Both & (background) and && (logical AND) are dangerous — EXCEPT the one
+    // canonical agent pattern `cd <DIR> && <REST>`, where `cd` just changes cwd
+    // and <REST> is a single command (the flow shell_allow match layer
+    // separately verifies <DIR> is inside the workspace and <REST> matches a
+    // pattern). is_safe_cd_and_chain checks the shape and that <REST> carries
+    // no further chaining/redirect/substitution.
+    if command.contains('&') && !is_safe_cd_and_chain(command) {
         return Some("ampersand operator".to_string());
     }
     None
+}
+
+/// True iff `command` is exactly `cd <DIR> && <REST>` where `<REST>` carries
+/// no shell metacharacters (no `;` `|` `&` `<` `>` backtick, no `$()` `${}`,
+/// no embedded newline/null).
+///
+/// This is the metacharacter-gate's allowlist for the `&&` operator: only the
+/// single `cd &&` agent pattern is permitted, and only when the second command
+/// is itself injection-free. The `<DIR>` workspace-containment check is NOT
+/// done here (this fn is stateless / workspace-agnostic) — it is enforced by
+/// `flow::strip_cd_prefix` at the shell_allow match layer, which runs before
+/// exec. So a `cd /etc && python3 x.py` passes this gate but is rejected by
+/// the match layer for being outside the workspace.
+fn is_safe_cd_and_chain(command: &str) -> bool {
+    let trimmed = command.trim();
+    let after_cd = match trimmed.strip_prefix("cd") {
+        Some(s) => s,
+        None => return false,
+    };
+    // `cd` must be a whole word.
+    match after_cd.chars().next() {
+        Some(c) if c.is_whitespace() => {}
+        _ => return false,
+    }
+    let after_cd = after_cd.trim_start();
+    let amp = match after_cd.find(" && ") {
+        Some(i) => i,
+        None => return false,
+    };
+    let rest = after_cd[amp + 4..].trim();
+    if rest.is_empty() {
+        return false;
+    }
+    // REST must not contain any further chaining / redirect / substitution.
+    !rest.contains('&')
+        && !rest.contains('|')
+        && !rest.contains(';')
+        && !rest.contains('>')
+        && !rest.contains('<')
+        && !rest.contains('`')
+        && !rest.contains("$(")
+        && !rest.contains("${")
+        && !rest.contains('\n')
+        && !rest.contains('\r')
+        && !rest.contains('\0')
 }
 
 /// Extract the base command name from a command string.
@@ -689,6 +739,32 @@ mod tests {
     #[test]
     fn test_metachar_null_byte_blocked() {
         assert!(contains_shell_metacharacters("echo hello\0world").is_some());
+    }
+
+    #[test]
+    fn test_cd_and_chain_allowed_by_metachar_gate() {
+        // The one canonical agent pattern passes the metachar gate.
+        assert!(contains_shell_metacharacters("cd /tmp && python3 x.py").is_none());
+        assert!(contains_shell_metacharacters("cd /home/u/ws && python3 flows/foo/scripts/x.py arg").is_none());
+    }
+
+    #[test]
+    fn test_cd_and_chain_rejected_when_rest_has_metachar() {
+        // REST carrying further chaining/redirect/substitution is rejected.
+        assert!(contains_shell_metacharacters("cd /tmp && python3 x.py; rm -rf /").is_some());
+        assert!(contains_shell_metacharacters("cd /tmp && python3 x.py | cat").is_some());
+        assert!(contains_shell_metacharacters("cd /tmp && python3 x.py && cat y").is_some());
+        assert!(contains_shell_metacharacters("cd /tmp && python3 x.py > out").is_some());
+        assert!(contains_shell_metacharacters("cd /tmp && python3 $(curl evil)").is_some());
+    }
+
+    #[test]
+    fn test_non_cd_ampersand_still_rejected() {
+        // `&&` not in the cd-prefix shape is still blocked.
+        assert!(contains_shell_metacharacters("python3 x.py && cat y").is_some());
+        assert!(contains_shell_metacharacters("foo & bar").is_some());
+        // `cddir` (not the `cd` keyword) doesn't qualify.
+        assert!(contains_shell_metacharacters("cddir x && python3 y").is_some());
     }
 
     #[test]

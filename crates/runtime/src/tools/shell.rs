@@ -69,7 +69,23 @@ impl ToolModule for ShellTools {
         let command = input["command"].as_str().unwrap_or("");
         let exec_policy = ctx.exec_policy;
         let allowed_env = ctx.allowed_env_vars.unwrap_or(&[]);
-        let workspace_root = resolve_shell_cwd(ctx);
+        let shell_cwd = resolve_shell_cwd(ctx);
+        // `cd <DIR> && <REST>`: agents reach flow scripts from the
+        // sender_data_dir cwd via this pattern. strip_cd_prefix (verified
+        // against the real workspace_root) yields (REST, cd_dir); we execute
+        // only REST with cd_dir as cwd. The metachar gate already allowed this
+        // single `cd &&` shape; the shell_allow match layer (tool_runner + the
+        // re-check below) verified <DIR> is inside the workspace and <REST>
+        // matches a pattern.
+        let (effective_command, effective_cwd): (String, Option<std::path::PathBuf>) =
+            if let Some((rest, cd_dir)) =
+                types::flow::strip_cd_prefix(command, ctx.workspace_root)
+            {
+                (rest, Some(cd_dir))
+            } else {
+                (command.to_string(), shell_cwd)
+            };
+        let workspace_root = effective_cwd.as_deref();
 
         // SECURITY: Always check for shell metacharacters, even in Full mode.
         if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(command) {
@@ -135,7 +151,7 @@ impl ToolModule for ShellTools {
     } else {
         exec_policy.map(|p| p.timeout_secs).unwrap_or(30)
     };
-    Some(exec_shell(input, allowed_env, workspace_root.as_deref(), exec_policy, default_timeout_secs).await)
+    Some(exec_shell(input, &effective_command, allowed_env, workspace_root, exec_policy, default_timeout_secs).await)
     }
 
     fn permission_level(&self, _tool_name: &str) -> types::tool::PermissionLevel {
@@ -152,14 +168,18 @@ const FLOW_SHELL_DEFAULT_TIMEOUT_SECS: u64 = 300;
 
 async fn exec_shell(
     input: &Value,
+    effective_command: &str,
     allowed_env: &[String],
     workspace_root: Option<&Path>,
     exec_policy: Option<&types::config::ExecPolicy>,
     default_timeout_secs: u64,
 ) -> CarrierResult<String> {
-    let command = input["command"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'command' parameter".to_string()))?;
+    // `effective_command` is the command to actually execute. For a
+    // `cd <DIR> && <REST>` input the caller already stripped the cd prefix and
+    // set workspace_root (= cd_dir) as cwd, so effective_command is just <REST>.
+    // For ordinary commands it equals input["command"]. timeout still comes
+    // from the original input.
+    let command = effective_command;
     let timeout_secs = input["timeout_seconds"].as_u64().unwrap_or(default_timeout_secs);
 
     let use_direct_exec = exec_policy

@@ -420,11 +420,130 @@ fn command_has_dotdot_segment(command: &str) -> bool {
 /// command pointing at the identical script. Security-neutral: the same glob
 /// match runs — the actual executed command is unchanged, and relative-pattern
 /// traversal risk (already present) is not widened.
+/// Strip a leading `cd <DIR> && <REST>` prefix, returning `(REST, cd_dir)`.
+///
+/// Agents often run flow scripts via `cd <workspace_root> && python3 flows/...`
+/// because `shell_exec`'s default cwd is the sender_data_dir, not the
+/// workspace root — so a relative `python3 flows/...` can't find the script.
+/// This canonical agent pattern is safe ONLY when `<DIR>` is inside the
+/// workspace and `<REST>` carries no further chaining metacharacters. The
+/// workspace check is done here; the "REST has no extra metacharacters" check
+/// is enforced by `subprocess_sandbox::is_safe_cd_and_chain` (the metacharacter
+/// gate), and `<REST>` must still match a `shell_allow` pattern (the caller
+/// runs the existing match tiers against the returned `REST`).
+///
+/// Returns `Some((rest, cd_dir))` when:
+/// - the command is exactly `cd <DIR> && <REST>` (single `&&`, `cd` is the
+///   first token),
+/// - `<DIR>` resolves (relative to `workspace_root` if given) to a path that
+///   canonicalizes inside `workspace_root`,
+/// - `<REST>` is non-empty.
+///
+/// Otherwise `None` — the caller falls through to the normal match tiers
+/// (which will reject an out-of-workspace `cd` or a non-matching REST).
+///
+/// `cd_dir` is the resolved absolute directory the execution layer should use
+/// as `current_dir`; the match layer only consumes `rest`.
+pub fn strip_cd_prefix(
+    command: &str,
+    workspace_root: Option<&std::path::Path>,
+) -> Option<(String, std::path::PathBuf)> {
+    let trimmed = command.trim();
+    // First token must be `cd`. Split off "cd <rest>".
+    let after_cd = trimmed.strip_prefix("cd")?;
+    // `cd` must be a whole word, not e.g. "cddir".
+    let next_char = after_cd.chars().next()?;
+    if !next_char.is_whitespace() {
+        return None;
+    }
+    let after_cd = after_cd.trim_start();
+
+    // Split on the first " && " (single occurrence expected). Find the literal
+    // "&&" surrounded by whitespace so "cd a&&b" (no spaces) is NOT accepted —
+    // that form is unusual for agents and risks mis-parsing.
+    let amp = after_cd.find(" && ")?;
+    let dir_str = after_cd[..amp].trim();
+    let rest = after_cd[amp + 4..].trim();
+    if dir_str.is_empty() || rest.is_empty() {
+        return None;
+    }
+    // Reject any further "&&" in REST — only a single cd&& chain is allowed.
+    if rest.contains("&&") || rest.contains("||") {
+        return None;
+    }
+
+    // Strip surrounding quotes from the dir (single or double).
+    let dir_str = strip_one_quote_pair(dir_str);
+
+    // Resolve the cd target. Relative dirs resolve against workspace_root;
+    // without workspace_root we can only accept absolute paths that the caller
+    // will have to trust (the metachar gate still guards REST).
+    let resolved = if let Some(ws) = workspace_root {
+        let p = if std::path::Path::new(&dir_str).is_absolute() {
+            std::path::PathBuf::from(&dir_str)
+        } else {
+            ws.join(dir_str)
+        };
+        // Canonicalize both to compare real paths (symlinks, .., etc.). If the
+        // dir doesn't exist yet, fall back to lexical normalize + starts_with.
+        match p.canonicalize() {
+            Ok(canon) => {
+                let ws_canon = ws.canonicalize().ok()?;
+                if !canon.starts_with(&ws_canon) {
+                    return None;
+                }
+                canon
+            }
+            Err(_) => {
+                // Path doesn't exist (e.g. typo) — don't allow. cd to a
+                // nonexistent dir would fail at exec anyway; safer to reject
+                // here so the agent gets a clear "not in shell_allow".
+                return None;
+            }
+        }
+    } else {
+        // No workspace_root: can't verify containment. Return the raw path so
+        // the exec layer can try it, but the match layer (no workspace strip)
+        // will still require REST to match a pattern literally. This path is
+        // only reached for non-flow / non-workspace contexts.
+        std::path::PathBuf::from(&dir_str)
+    };
+
+    Some((rest.to_string(), resolved))
+}
+
+/// Strip one layer of matching surrounding quotes from a token.
+fn strip_one_quote_pair(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let (q, rest) = (bytes[0], &s[1..s.len() - 1]);
+        if (q == b'"' || q == b'\'') && s.ends_with(q as char) {
+            return rest;
+        }
+    }
+    s
+}
+
 pub fn command_matches_flow_shell_allow(
     command: &str,
     patterns: &[String],
     workspace_root: Option<&std::path::Path>,
 ) -> bool {
+    // `cd <DIR> && <REST>`: agents use this to reach flow scripts from the
+    // sender_data_dir cwd. Strip the cd prefix (verifying <DIR> is inside the
+    // workspace) and match the REST against the patterns via the normal tiers
+    // below. See `strip_cd_prefix` for the safety rationale.
+    if let Some((rest, _)) = strip_cd_prefix(command, workspace_root) {
+        if command_matches_flow_shell_allow(&rest, patterns, workspace_root) {
+            return true;
+        }
+        // Fall through: a cd&& command whose REST doesn't match must NOT be
+        // allowed by the raw/workspace tiers against the full `cd ... && ...`
+        // string either — those would also fail. Return false directly to
+        // avoid the dotdot/normalize tiers re-parsing the `&&` as a path.
+        return false;
+    }
+
     // A `..` path segment can traverse out of a pattern's directory prefix.
     // The raw + workspace-strip tiers below match on starts_with(prefix), which
     // a `../../../` suffix defeats (escapes the allowed dir yet still
@@ -1371,6 +1490,83 @@ b"#;
         ));
         // Empty workspace_root → falls back to literal match only.
         assert!(!command_matches_flow_shell_allow(abs, &patterns, None));
+    }
+
+    #[test]
+    fn flow_shell_allow_matches_cd_and_chain() {
+        // Agents run `cd <workspace_root> && python3 flows/...` because
+        // shell_exec's default cwd is the sender_data_dir. strip_cd_prefix
+        // verifies <DIR> is inside the workspace, then matches <REST>.
+        let patterns = vec!["python3 flows/topic-researcher/scripts/*".to_string()];
+
+        // Real temp workspace so canonicalize succeeds.
+        let ws = std::env::temp_dir().join(format!(
+            "flow-cd-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&ws).unwrap();
+        // Relative cd target resolves against workspace_root.
+        let cmd_rel = format!(
+            "cd {} && python3 flows/topic-researcher/scripts/validate.py arg",
+            ws.display()
+        );
+        assert!(command_matches_flow_shell_allow(&cmd_rel, &patterns, Some(&ws)));
+
+        // cd into a subdir of the workspace is allowed, but REST must still
+        // match the pattern (which is workspace-relative). cd-ing into the
+        // scripts dir and running `python3 validate.py` does NOT match
+        // `python3 flows/.../scripts/*` — the relative path changed. That is
+        // correct: the agent should cd to workspace_root and run the full
+        // `python3 flows/.../scripts/x.py`.
+        std::fs::create_dir_all(ws.join("flows/topic-researcher/scripts")).unwrap();
+        let cmd_sub = format!(
+            "cd {} && python3 flows/topic-researcher/scripts/validate.py",
+            ws.display()
+        );
+        assert!(command_matches_flow_shell_allow(&cmd_sub, &patterns, Some(&ws)));
+
+        std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn flow_shell_allow_rejects_cd_outside_workspace() {
+        let patterns = vec!["python3 flows/foo/scripts/*".to_string()];
+        let ws = std::env::temp_dir().join(format!(
+            "flow-cd-out-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&ws).unwrap();
+        // cd to /tmp (outside workspace) → strip_cd_prefix returns None →
+        // the raw tiers against the full `cd /tmp && ...` string also fail.
+        assert!(!command_matches_flow_shell_allow(
+            "cd /tmp && python3 flows/foo/scripts/x.py",
+            &patterns,
+            Some(&ws)
+        ));
+        // cd to a nonexistent dir → canonicalize fails → None → denied.
+        assert!(!command_matches_flow_shell_allow(
+            "cd /nonexistent/pathxyz && python3 flows/foo/scripts/x.py",
+            &patterns,
+            Some(&ws)
+        ));
+        std::fs::remove_dir_all(&ws).ok();
+    }
+
+    #[test]
+    fn flow_shell_allow_rejects_cd_chain_when_rest_unmatched() {
+        let patterns = vec!["python3 flows/foo/scripts/*".to_string()];
+        let ws = std::env::temp_dir().join(format!(
+            "flow-cd-rest-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&ws).unwrap();
+        // REST doesn't match the pattern (cat, not python3 flows/...).
+        assert!(!command_matches_flow_shell_allow(
+            &format!("cd {} && cat flows/foo/scripts/x.py", ws.display()),
+            &patterns,
+            Some(&ws)
+        ));
+        std::fs::remove_dir_all(&ws).ok();
     }
 
     #[test]
