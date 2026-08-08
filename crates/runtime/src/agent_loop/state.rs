@@ -7,31 +7,13 @@ use std::collections::HashMap;
 use types::message::TokenUsage;
 
 // ---------------------------------------------------------------------------
-// Budget / pressure enums
+// Context pressure
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum BudgetState {
-    Comfortable,
-    Moderate,
-    Tight,
-    Critical,
-}
-
-impl BudgetState {
-    pub fn from_remaining_secs(secs: u64) -> Self {
-        if secs > 300 {
-            BudgetState::Comfortable
-        } else if secs > 120 {
-            BudgetState::Moderate
-        } else if secs > 60 {
-            BudgetState::Tight
-        } else {
-            BudgetState::Critical
-        }
-    }
-}
-
+/// Turn-end is governed by progress/stuck detection (tool-call repetition via
+/// `BreakToolLoop` + no-progress idle), NOT a wall-clock budget. The outer turn
+/// timeout (`agent_turn_timeout_secs`, default 4h) is a generous daemon-hang
+/// backstop only - it must never kill legitimate long work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ContextPressure {
     Normal,
@@ -149,10 +131,14 @@ pub struct LastRunSummary {
 #[derive(Debug, Clone)]
 pub struct LoopState {
     pub iteration: u32,
-    pub max_iterations: u32,
-    pub deadline: std::time::Instant,
-    pub budget_state: BudgetState,
-    pub budget_warning_sent: bool,
+    /// Consecutive iterations that made no progress (no tool call, no final
+    /// answer, not actively generating via MaxTokens). Reaches
+    /// [`super::NO_PROGRESS_THRESHOLD`] -> turn aborted as stuck.
+    pub idle_streak: u32,
+    /// Tools executed in the CURRENT iteration. Reset at the top of each
+    /// `loop_iteration`; bumped per tool call in `tool_use`. Drives the
+    /// no-progress detector.
+    pub tools_this_iter: u32,
     pub context_tokens_used_estimate: usize,
     pub context_tokens_max: usize,
     pub context_pressure: ContextPressure,
@@ -182,17 +168,11 @@ pub struct LoopState {
 }
 
 impl LoopState {
-    pub fn new(
-        max_iterations: u32,
-        deadline: std::time::Instant,
-        context_window_tokens: usize,
-    ) -> Self {
+    pub fn new(context_window_tokens: usize) -> Self {
         Self {
             iteration: 0,
-            max_iterations,
-            deadline,
-            budget_state: BudgetState::Comfortable,
-            budget_warning_sent: false,
+            idle_streak: 0,
+            tools_this_iter: 0,
             context_tokens_used_estimate: 0,
             context_tokens_max: context_window_tokens,
             context_pressure: ContextPressure::Normal,
@@ -209,12 +189,6 @@ impl LoopState {
         }
     }
 
-    pub fn remaining_secs(&self) -> u64 {
-        self.deadline
-            .saturating_duration_since(std::time::Instant::now())
-            .as_secs()
-    }
-
     pub fn context_usage_pct(&self) -> f64 {
         if self.context_tokens_max == 0 {
             return 0.0;
@@ -222,8 +196,24 @@ impl LoopState {
         (self.context_tokens_used_estimate as f64) / (self.context_tokens_max as f64)
     }
 
-    pub fn refresh_budget(&mut self) {
-        self.budget_state = BudgetState::from_remaining_secs(self.remaining_secs());
+    /// Record whether the just-completed iteration made progress, and return
+    /// `Some(idle_streak)` when the no-progress threshold is reached (caller
+    /// should abort the turn as stuck), else `None`.
+    ///
+    /// "Progress" = the iteration called a tool, produced a final answer, or
+    /// was actively generating (MaxTokens). Only a Continue with no tool call
+    /// and no final answer (EndTurn/StopSequence spin) counts as idle.
+    pub fn record_iteration_progress(&mut self, made_progress: bool) -> Option<u32> {
+        if made_progress {
+            self.idle_streak = 0;
+            return None;
+        }
+        self.idle_streak += 1;
+        if self.idle_streak >= super::NO_PROGRESS_THRESHOLD {
+            Some(self.idle_streak)
+        } else {
+            None
+        }
     }
 
     pub fn log_turn(
@@ -249,10 +239,8 @@ impl LoopState {
 
     pub fn build_status_message(&self) -> String {
         let mut msg = format!(
-            "📊 Turn {}/{} | ⏱️ ~{}s remaining | 📐 context: {} ({}%)",
+            "📊 Turn {} | 📐 context: {} ({}%)",
             self.iteration + 1,
-            self.max_iterations,
-            self.remaining_secs(),
             self.context_pressure.as_label(),
             (self.context_usage_pct() * 100.0) as u32,
         );
@@ -278,16 +266,6 @@ impl LoopState {
         match self.context_pressure {
             ContextPressure::High | ContextPressure::Critical => {
                 msg.push_str("\n⚠️ 上下文即将耗尽，优先输出最终答案，减少工具调用。");
-            }
-            _ => {}
-        }
-
-        match self.budget_state {
-            BudgetState::Tight | BudgetState::Critical => {
-                msg.push_str(&format!(
-                    "\n⏱️ 剩余 {}s，如果工具调用可能超时，直接给出当前最佳答案。",
-                    self.remaining_secs()
-                ));
             }
             _ => {}
         }

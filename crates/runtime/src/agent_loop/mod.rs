@@ -63,11 +63,10 @@ pub use helpers::{tool_input_hash, detect_tool_loop, detect_soft_loop};
 // flush facts with the same idempotent semantics as the per-turn path.
 pub use knowledge::merge_key_facts;
 
-/// Maximum iterations in the agent loop before giving up.
-const MAX_ITERATIONS: u32 = 25;
-
-/// Overall timeout for the entire agent loop (seconds).
-const AGENT_LOOP_TIMEOUT_SECS: u64 = 600;
+/// Consecutive no-progress iterations (no tool call, no final answer, not
+/// actively generating via MaxTokens) after which the turn is aborted as stuck.
+/// Aligns with `CUMULATIVE_LOOP_THRESHOLD` - 3 idle turns is clearly spinning.
+const NO_PROGRESS_THRESHOLD: u32 = 3;
 
 const MAX_TEXT_RECOVERY_RETRIES: u32 = 2;
 
@@ -174,32 +173,19 @@ pub async fn run_agent_loop(
     channel_type: Option<&str>,
     llm_concurrency_limit: Option<Arc<tokio::sync::Semaphore>>,
 ) -> CarrierResult<AgentLoopResult> {
-    let timeout = std::time::Duration::from_secs(AGENT_LOOP_TIMEOUT_SECS);
-    match tokio::time::timeout(
-        timeout,
-        run_agent_loop_impl(
-            manifest, user_message, session, memory, driver, tools,
-            kernel, stream_tx, mcp_connections, fetch_engine, workspace_root,
-            on_phase, hooks, context_window_tokens, process_manager,
-            user_content_blocks, brain, memory_handle, sender_id, owner_id, channel_type,
-            llm_concurrency_limit,
-        ),
+    // No inner wall-clock deadline: the loop runs until natural completion or
+    // stuck detection (tool-call repetition via `BreakToolLoop`, or no-progress
+    // idle via `NO_PROGRESS_THRESHOLD`). The outer `bounded_turn` / cron timeout
+    // (config `agent_turn_timeout_secs`, default 4h) is a daemon-hang backstop
+    // only - it must never be the thing that kills legitimate long work.
+    run_agent_loop_impl(
+        manifest, user_message, session, memory, driver, tools,
+        kernel, stream_tx, mcp_connections, fetch_engine, workspace_root,
+        on_phase, hooks, context_window_tokens, process_manager,
+        user_content_blocks, brain, memory_handle, sender_id, owner_id, channel_type,
+        llm_concurrency_limit,
     )
     .await
-    {
-        Ok(result) => result,
-        Err(_) => {
-            warn!(
-                agent = %manifest.name,
-                timeout_secs = AGENT_LOOP_TIMEOUT_SECS,
-                "Agent loop timed out"
-            );
-            Err(CarrierError::LlmDriver(format!(
-                "Agent loop timed out after {}s — the LLM API did not respond in time. Please try again later.",
-                AGENT_LOOP_TIMEOUT_SECS
-            )))
-        }
-    }
 }
 
 /// Streaming variant of [`run_agent_loop`].
@@ -271,9 +257,6 @@ async fn run_agent_loop_impl(
 ) -> CarrierResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
 
-    let loop_deadline = std::time::Instant::now()
-        + std::time::Duration::from_secs(AGENT_LOOP_TIMEOUT_SECS);
-
     let hand_allowed_env: Vec<String> = manifest
         .metadata
         .get("hand_allowed_env")
@@ -337,16 +320,10 @@ async fn run_agent_loop_impl(
         crate::context_overflow::pair_aware_drain(&mut messages, trim_count);
     }
 
-    let max_iterations = manifest
-        .autonomous
-        .as_ref()
-        .map(|a| a.max_iterations)
-        .unwrap_or(MAX_ITERATIONS);
-
     let ctx_window = context_window_tokens.unwrap_or(helpers::DEFAULT_CONTEXT_WINDOW);
     let context_budget = ContextBudget::new(ctx_window);
 
-    let mut state = LoopState::new(max_iterations, loop_deadline, ctx_window);
+    let mut state = LoopState::new(ctx_window);
 
     // O8: Restore last run summary from cross-session state
     if let Some(mh) = &memory_handle {
@@ -414,7 +391,10 @@ async fn run_agent_loop_impl(
     };
 
     // ---- Main loop ----
-    while ctx.state.iteration < ctx.state.max_iterations {
+    // No iteration cap: runs until natural completion (Complete), a detected
+    // task plan (BreakForPlan), or stuck detection (returns Err). max_iterations
+    // is advisory only.
+    loop {
         let action = loop_iteration(&mut ctx).await?;
         match action {
             LoopAction::Continue => {}
@@ -423,7 +403,7 @@ async fn run_agent_loop_impl(
         }
     }
 
-    // ---- TEARDOWN ----
+    // ---- TEARDOWN ---- (reached only via BreakForPlan)
     teardown(&mut ctx).await
 }
 
@@ -449,23 +429,28 @@ async fn loop_iteration(ctx: &mut LoopContext<'_>) -> CarrierResult<LoopAction> 
     let iteration = ctx.state.iteration;
     debug!(iteration, "Streaming agent loop iteration");
 
+    // Reset per-iteration tool counter for the no-progress detector.
+    ctx.state.tools_this_iter = 0;
+
     // ---- PREPARE_TURN ----
     prepare_turn(ctx);
 
     // ---- LLM_CALL ----
     let modality = select_modality(ctx);
-    let response = match call_llm(ctx, &modality).await? {
-        LlmCallOutcome::Response(resp) => resp,
-        LlmCallOutcome::BudgetWrapUp(resp) => resp,
-        LlmCallOutcome::FatalError(e) => return Err(e),
-    };
+    let response = call_llm(ctx, &modality).await?;
 
     ctx.state.total_usage.input_tokens += response.usage.input_tokens;
     ctx.state.total_usage.output_tokens += response.usage.output_tokens;
 
     // ---- Text tool call recovery ----
+    // Capture stop_reason before `response` is moved/consumed; it drives the
+    // no-progress check below. (StopReason is Copy.)
+    let stop_reason = response.stop_reason;
     let response = match handle_text_recovery(ctx, response, &modality).await {
         TextRecoveryOutcome::Continue => {
+            // Active recovery attempt (model narrated tools as text) - counts as
+            // progress, so reset the idle streak.
+            ctx.state.idle_streak = 0;
             ctx.state.iteration += 1;
             return Ok(LoopAction::Continue);
         }
@@ -475,6 +460,26 @@ async fn loop_iteration(ctx: &mut LoopContext<'_>) -> CarrierResult<LoopAction> 
     // ---- DISPATCH ----
     let action = dispatch(ctx, response, &modality).await?;
     ctx.state.iteration += 1;
+
+    // ---- No-progress detection ----
+    // An iteration that neither called a tool nor produced a final answer nor
+    // was actively generating (MaxTokens) is "idle". A few idle turns in a row
+    // means the agent is spinning without converging -> abort as stuck. Tool
+    // execution, completion, or active generation (MaxTokens) resets the streak.
+    let made_progress = !matches!(action, LoopAction::Continue)
+        || ctx.state.tools_this_iter > 0
+        || matches!(stop_reason, StopReason::ToolUse | StopReason::MaxTokens);
+    if let Some(streak) = ctx.state.record_iteration_progress(made_progress) {
+        warn!(
+            iteration = ctx.state.iteration,
+            idle_streak = streak,
+            "No progress for {streak} consecutive iterations - aborting turn as stuck"
+        );
+        return Err(CarrierError::Internal(format!(
+            "agent 连续 {streak} 轮无进展（无工具调用、无最终答案），判定卡死，终止本轮"
+        )));
+    }
+
     Ok(action)
 }
 
@@ -543,8 +548,7 @@ fn prepare_turn(ctx: &mut LoopContext<'_>) {
         if should_inject {
             tracing::info!(
                 iteration = ctx.state.iteration,
-                remaining_secs = ctx.state.remaining_secs(),
-                pressure = ?ctx.state.budget_state,
+                idle_streak = ctx.state.idle_streak,
                 context_pressure = ?ctx.state.context_pressure,
                 error_tools = ?ctx.state.error_tracker.failed_tools().collect::<Vec<_>>(),
                 "Injecting loop status"
@@ -564,39 +568,17 @@ fn select_modality(ctx: &mut LoopContext<'_>) -> String {
     } else {
         &ctx.manifest.model.modality
     };
-
-    let is_reasoning = ctx.brain
-        .as_ref()
-        .is_some_and(|b| b.has_modality(helpers::REASONING_MODALITY));
-
-    ctx.state.refresh_budget();
-
-    if ctx.state.remaining_secs() < 120 && is_reasoning {
-        if !ctx.state.budget_warning_sent {
-            ctx.state.budget_warning_sent = true;
-            info!(
-                iteration = ctx.state.iteration,
-                remaining_secs = ctx.state.remaining_secs(),
-                "Budget tight: forcing reasoning for wrap-up decision"
-            );
-        }
-        helpers::REASONING_MODALITY.to_string()
-    } else {
-        helpers::pick_modality(ctx.brain.as_ref(), ctx.state.iteration, default_modality)
-    }
+    // No time-budget pressure: just pick the configured modality. The previous
+    // "remaining < 120s -> force reasoning for wrap-up" was a countdown-to-wall
+    // hack that no longer applies (no wall-clock governor).
+    helpers::pick_modality(ctx.brain.as_ref(), ctx.state.iteration, default_modality)
 }
 
 // ---------------------------------------------------------------------------
-// Phase: LLM_CALL — with budget exhaustion wrap-up
+// Phase: LLM_CALL
 // ---------------------------------------------------------------------------
 
-enum LlmCallOutcome {
-    Response(CompletionResponse),
-    BudgetWrapUp(CompletionResponse),
-    FatalError(CarrierError),
-}
-
-async fn call_llm(ctx: &mut LoopContext<'_>, modality: &str) -> CarrierResult<LlmCallOutcome> {
+async fn call_llm(ctx: &mut LoopContext<'_>, modality: &str) -> CarrierResult<CompletionResponse> {
     // Dedup tools by name before every LLM call. Duplicates can arise when
     // text-tool recovery / tool_search re-adds tools already injected by a
     // flow; OpenAI-compatible APIs then reject with
@@ -620,64 +602,15 @@ async fn call_llm(ctx: &mut LoopContext<'_>, modality: &str) -> CarrierResult<Ll
         extra: Default::default(),
     };
 
-    match helpers::call_with_fallback(
+    helpers::call_with_fallback(
         ctx.brain.as_ref(),
         &*ctx.driver,
         modality,
         request,
         ctx.stream_tx.clone(),
-        Some(ctx.state.deadline),
         ctx.llm_concurrency_limit.as_ref(),
     )
     .await
-    {
-        Ok(resp) => Ok(LlmCallOutcome::Response(resp)),
-        Err(e) => {
-            let err_str = format!("{e}");
-            if err_str.contains("time budget exhausted")
-                && ctx.brain.as_ref().is_some_and(|b| b.has_modality(helpers::REASONING_MODALITY))
-            {
-                warn!(
-                    ctx.state.iteration,
-                    "Time budget exhausted — attempting final reasoning wrap-up"
-                );
-                ctx.messages.push(Message::system(
-                    "⏱️ Time budget is now exhausted. Based on everything you have \
-                     so far, produce the best possible final answer. Do not call any \
-                     more tools — just summarize and conclude.",
-                ));
-
-                let final_deadline = ctx.state.deadline
-                    - std::time::Duration::from_secs(5);
-                let final_request = CompletionRequest {
-                    model: String::new(),
-                    messages: ctx.messages.clone(),
-                    tools: vec![],
-                    max_tokens: ctx.manifest.model.max_tokens,
-                    temperature: ctx.manifest.model.temperature,
-                    system: Some(ctx.system_prompt.clone()),
-                    thinking: None,
-                    extra: Default::default(),
-                };
-                match helpers::call_with_fallback(
-                    ctx.brain.as_ref(),
-                    &*ctx.driver,
-                    helpers::REASONING_MODALITY,
-                    final_request,
-                    ctx.stream_tx.clone(),
-                    Some(final_deadline),
-                    ctx.llm_concurrency_limit.as_ref(),
-                )
-                .await
-                {
-                    Ok(final_resp) => Ok(LlmCallOutcome::BudgetWrapUp(final_resp)),
-                    Err(_) => Ok(LlmCallOutcome::FatalError(e)),
-                }
-            } else {
-                Ok(LlmCallOutcome::FatalError(e))
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -868,6 +801,7 @@ async fn dispatch(
                 ctx.channel_type,
                 &mut ctx.state.consecutive_max_tokens,
                 &mut ctx.state.any_tools_executed,
+                &mut ctx.state.tools_this_iter,
                 &mut ctx.state.recent_tool_calls,
                 &mut ctx.tools_owned,
                 &mut ctx.discovered_tool_names,
@@ -933,47 +867,27 @@ async fn dispatch(
 
 
 // ---------------------------------------------------------------------------
-// Phase: TEARDOWN — save failure state, persist loop state, return error
+// Phase: TEARDOWN - persist loop state, return plan (or abnormal-exit error)
 // ---------------------------------------------------------------------------
 
 async fn teardown(ctx: &mut LoopContext<'_>) -> CarrierResult<AgentLoopResult> {
-    // O8: Persist last run summary before teardown
-    ctx.persist_last_run(state::RunOutcome::MaxIterations);
+    // Reached only via BreakForPlan (a task_plan was detected mid-loop). There
+    // is no max-iterations kill anymore - the loop runs until completion or
+    // stuck detection - so this path exclusively returns the detected plan.
+    ctx.persist_last_run(state::RunOutcome::Complete);
 
-    // O6: Single-track — sync before teardown save
+    // O6: Single-track - sync before teardown save
     helpers::sync_loop_messages(&ctx.messages, ctx.session, ctx.session_base_len);
 
-    // Plan B: on failure, save only user message + error summary (discard tool noise)
-    {
-        let discarded = ctx.session.messages.len() - ctx.session_base_len;
-        let summary = format!(
-            "[Agent loop failed: max iterations ({}) exceeded. {} messages discarded.]",
-            ctx.state.max_iterations, discarded,
-        );
-        let user_msg = ctx.session.messages[ctx.session_base_len..]
-            .iter()
-            .find(|m| m.role == Role::User)
-            .cloned()
-            .unwrap_or_else(|| Message::user(ctx.user_message));
-        let fail_msgs = vec![user_msg, Message::assistant(&summary)];
-        if let Err(e) = ctx.memory.save_session_append_async(
-            ctx.session.id, &ctx.session.agent_name, &fail_msgs,
-            ctx.session.context_window_tokens, ctx.session.label.as_deref(),
-            Some(&ctx.session.turn_summaries),
-        ).await {
-            warn!("Failed to save failure summary: {e}");
-        }
-    }
-
-    // Fire AgentLoopEnd hook on max iterations exceeded
+    // Fire AgentLoopEnd hook
     if let Some(hook_reg) = ctx.hooks {
         let ctx_hook = crate::hooks::HookContext {
             agent_name: &ctx.manifest.name,
             agent_id: ctx.agent_id_str.as_str(),
             event: types::agent::HookEvent::AgentLoopEnd,
             data: serde_json::json!({
-                "reason": "max_iterations_exceeded",
-                "iterations": ctx.state.max_iterations,
+                "reason": "plan_detected",
+                "iterations": ctx.state.iteration,
             }),
         };
         let _ = hook_reg.fire(&ctx_hook);
@@ -991,7 +905,12 @@ async fn teardown(ctx: &mut LoopContext<'_>) -> CarrierResult<AgentLoopResult> {
         });
     }
 
-    Err(CarrierError::MaxIterationsExceeded(ctx.state.max_iterations))
+    // Defensive: teardown reached without a plan (should not happen - the loop
+    // only `break`s on BreakForPlan). Treat as an abnormal exit.
+    Err(CarrierError::Internal(format!(
+        "agent loop exited abnormally at iteration {} without completion or plan",
+        ctx.state.iteration
+    )))
 }
 
 #[cfg(test)]

@@ -82,6 +82,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     // Mutable loop state
     consecutive_max_tokens: &mut u32,
     any_tools_executed: &mut bool,
+    tools_this_iter: &mut u32,
     recent_tool_calls: &mut Vec<(String, u64)>,
     tools_owned: &mut Vec<ToolDefinition>,
     discovered_tool_names: &mut std::collections::HashSet<String>,
@@ -96,6 +97,10 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     // Reset MaxTokens continuation counter on tool use
     *consecutive_max_tokens = 0;
     *any_tools_executed = true;
+    // Mark this iteration as having made tool progress (drives the no-progress
+    // detector in loop_iteration). Bumped once on ToolUse entry; the idle check
+    // only cares whether any tool ran this iteration (== 0 vs > 0).
+    *tools_this_iter = tools_this_iter.saturating_add(1);
 
     let assistant_blocks = response.content.clone();
 

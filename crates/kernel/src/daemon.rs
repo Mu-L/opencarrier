@@ -132,15 +132,15 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
                 return;
             }
             tracing::debug!(job = %job_name, agent = %agent_id, "Cron: firing agent turn");
-            // Default to the shared agent-turn timeout (KernelConfig.
-            // agent_turn_timeout_secs, default 600s) so cron turns are bounded
-            // consistently with HTTP /send and channel inbound turns (which get
-            // the same outer timeout at the send_message_with_handle_and_blocks
-            // chokepoint). Cron AgentTurns are full LLM turns (multi-iteration
-            // reasoning + tool calls) that routinely take 2-5 min; tasks needing
-            // more (or less) should set `timeout_secs` explicitly via cron_create.
+            // Default to the shared agent-turn backstop (KernelConfig.
+            // agent_turn_timeout_secs, default 4h) so cron turns share the same
+            // daemon-hang backstop as HTTP /send and channel inbound turns (which
+            // get it at the send_message_with_handle_and_blocks chokepoint). This
+            // is a BACKSTOP only - the turn itself is governed by progress/stuck
+            // detection, not a time budget, so long research crons are not killed
+            // at 600s. 0 (or config 0) disables the backstop. Tasks needing a
+            // tighter/looser bound set `timeout_secs` explicitly via cron_create.
             let timeout_s = timeout_secs.unwrap_or(kernel.config.agent_turn_timeout_secs);
-            let timeout = std::time::Duration::from_secs(timeout_s);
             let delivery = job.delivery.clone();
             let owner_id = job.owner_id.clone();
             // Generate task_id: {job_name slug}-{YYYYMMDD}. The name is slugified
@@ -155,23 +155,32 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
             tracing::info!(job = %job_name, task_id = %task_id, "Cron: generated task_id");
             let kh: std::sync::Arc<dyn runtime::kernel_handle::KernelHandle> =
                 kernel.clone();
-            match tokio::time::timeout(
-                timeout,
-                kernel.send_message_with_handle(
-                    agent_id,
-                    message,
-                    Some(kh),
-                    job.sender_id.clone(),
-                    None,
-                    job.owner_id.clone(),
-                    None,
-                    Some(task_id),
-                    active_flow.as_deref(),
-                ),
-            )
-            .await
-            {
-                Ok(Ok(result)) => {
+            // timeout_s == 0 means "no backstop" - run unbounded (rely on stuck
+            // detection + per-LLM-call stall timeout). Otherwise wrap in the
+            // wall-clock backstop.
+            let turn_fut = kernel.send_message_with_handle(
+                agent_id,
+                message,
+                Some(kh),
+                job.sender_id.clone(),
+                None,
+                job.owner_id.clone(),
+                None,
+                Some(task_id),
+                active_flow.as_deref(),
+            );
+            let outcome = if timeout_s == 0 {
+                Some(turn_fut.await)
+            } else {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(timeout_s),
+                    turn_fut,
+                )
+                .await
+                .ok()
+            };
+            match outcome {
+                Some(Ok(result)) => {
                     match cron_deliver_response(
                         kernel,
                         agent_id,
@@ -191,7 +200,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
                         }
                     }
                 }
-                Ok(Err(e)) => {
+                Some(Err(e)) => {
                     let err_msg = format!("{e}");
                     tracing::warn!(job = %job_name, error = %err_msg, "Cron job failed");
                     kernel.cron_scheduler.record_failure(job_id, &err_msg);
@@ -211,7 +220,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
                         tracing::warn!(job = %job_name, error = %de, "Failure-notice delivery failed");
                     }
                 }
-                Err(_) => {
+                None => {
                     tracing::warn!(job = %job_name, timeout_s, "Cron job timed out");
                     kernel.cron_scheduler.record_failure(
                         job_id,

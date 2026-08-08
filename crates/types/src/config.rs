@@ -650,11 +650,14 @@ pub struct KernelConfig {
     /// `timed_out`. Default: 86400 (24h).
     #[serde(default = "default_user_input_timeout_secs")]
     pub user_input_timeout_secs: u64,
-    /// Outer wall-clock timeout (seconds) for a single agent turn across all
+    /// Outer wall-clock backstop (seconds) for a single agent turn across all
     /// trigger paths (HTTP /send, channel inbound, cron, inter-agent). Applied
-    /// at the `send_message_with_handle_and_blocks` chokepoint so every path is
-    /// bounded consistently; cron jobs may override per-job via `timeout_secs`
-    /// (tighter wins). Default: 600.
+    /// at the `send_message_with_handle_and_blocks` chokepoint; cron jobs may
+    /// override per-job via `timeout_secs` (tighter wins). This is a daemon-hang
+    /// BACKSTOP only - the turn itself is governed by progress/stuck detection
+    /// (tool-call repetition + no-progress idle), not a time budget. Default:
+    /// 14400 (4h); set to 0 to disable the backstop entirely (rely solely on
+    /// stuck/progress detection + per-LLM-call stall timeout).
     #[serde(default = "default_agent_turn_timeout_secs")]
     pub agent_turn_timeout_secs: u64,
     /// Config include files — loaded and deep-merged before the root config.
@@ -819,7 +822,7 @@ fn default_user_input_timeout_secs() -> u64 {
 }
 
 fn default_agent_turn_timeout_secs() -> u64 {
-    600
+    14_400
 }
 
 fn default_llm_concurrency() -> usize {
@@ -1463,10 +1466,9 @@ impl KernelConfig {
             self.user_input_timeout_secs = 2_592_000;
         }
 
-        // agent turn timeout: 0 would time out instantly - fall back to default.
-        if self.agent_turn_timeout_secs == 0 {
-            self.agent_turn_timeout_secs = default_agent_turn_timeout_secs();
-        }
+        // agent turn timeout: 0 means "no backstop" (rely solely on stuck/
+        // progress detection + per-LLM-call stall timeout) - leave it as 0.
+        // Any positive value is the daemon-hang backstop in seconds.
     }
 }
 
@@ -1482,14 +1484,15 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_turn_timeout_default_and_clamp() {
+    fn test_agent_turn_timeout_default_and_zero() {
         let config = KernelConfig::default();
-        assert_eq!(config.agent_turn_timeout_secs, 600);
-        // 0 would time out instantly - clamp_bounds restores the default.
+        assert_eq!(config.agent_turn_timeout_secs, 14_400);
+        // 0 means "no backstop" - clamp_bounds preserves it (does NOT restore
+        // the default), so operators can opt out of the wall-clock backstop.
         let mut config = config;
         config.agent_turn_timeout_secs = 0;
         config.clamp_bounds();
-        assert_eq!(config.agent_turn_timeout_secs, 600);
+        assert_eq!(config.agent_turn_timeout_secs, 0);
     }
 
     #[test]

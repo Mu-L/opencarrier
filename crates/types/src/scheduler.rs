@@ -33,8 +33,10 @@ const MAX_TURN_MESSAGE_LEN: usize = 16_384;
 /// Minimum timeout for AgentTurn (seconds).
 const MIN_TIMEOUT_SECS: u64 = 10;
 
-/// Maximum timeout for AgentTurn (seconds).
-const MAX_TIMEOUT_SECS: u64 = 600;
+/// Maximum timeout for AgentTurn (seconds). Raised from 600 to 86400 (24h) so
+/// long research crons are not capped at the old 600s. The turn itself is
+/// governed by progress/stuck detection, not this backstop.
+const MAX_TIMEOUT_SECS: u64 = 86_400;
 
 /// Maximum webhook URL length.
 const MAX_WEBHOOK_URL_LEN: usize = 2048;
@@ -671,7 +673,7 @@ mod tests {
         job.action = CronAction::AgentTurn {
             message: "hello".into(),
             model_override: None,
-            timeout_secs: Some(601),
+            timeout_secs: Some(86_401),
             active_flow: None,
         };
         let err = job.validate(0).unwrap_err().to_string();
@@ -692,7 +694,7 @@ mod tests {
         job.action = CronAction::AgentTurn {
             message: "hello".into(),
             model_override: None,
-            timeout_secs: Some(600),
+            timeout_secs: Some(86_400),
             active_flow: None,
         };
         assert!(job.validate(0).is_ok());

@@ -6,8 +6,39 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 
     #[test]
-    fn test_max_iterations_constant() {
-        assert_eq!(MAX_ITERATIONS, 25);
+    fn test_no_progress_threshold_constant() {
+        assert_eq!(NO_PROGRESS_THRESHOLD, 3);
+    }
+
+    #[test]
+    fn test_record_progress_aborts_after_threshold_idle_iters() {
+        // No progress for 3 consecutive iterations -> Some(streak) on the 3rd.
+        let mut state = LoopState::new(128_000);
+        assert_eq!(state.record_iteration_progress(false), None, "1st idle: under threshold");
+        assert_eq!(state.record_iteration_progress(false), None, "2nd idle: under threshold");
+        let stuck = state.record_iteration_progress(false);
+        assert_eq!(stuck, Some(3), "3rd idle: threshold reached");
+    }
+
+    #[test]
+    fn test_record_progress_resets_on_tool_or_completion() {
+        let mut state = LoopState::new(128_000);
+        // Two idle, then progress (tool call) resets the streak.
+        assert_eq!(state.record_iteration_progress(false), None);
+        assert_eq!(state.record_iteration_progress(false), None);
+        assert_eq!(state.record_iteration_progress(true), None, "progress resets streak");
+        // Streak restarted - needs 3 more idle to trip.
+        assert_eq!(state.record_iteration_progress(false), None);
+        assert_eq!(state.record_iteration_progress(false), None);
+        assert_eq!(state.record_iteration_progress(false), Some(3));
+    }
+
+    #[test]
+    fn test_record_progress_progress_never_aborts() {
+        let mut state = LoopState::new(128_000);
+        for _ in 0..100 {
+            assert_eq!(state.record_iteration_progress(true), None);
+        }
     }
 
     #[test]

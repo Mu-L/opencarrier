@@ -876,11 +876,16 @@ impl CarrierKernel {
     /// Per-agent locking ensures that concurrent messages for the same agent
     /// are serialized (preventing session corruption), while messages for
     /// different agents run in parallel.
-    /// Bound an agent-turn future with a wall-clock timeout. All trigger paths
+    /// Bound an agent-turn future with a wall-clock backstop. All trigger paths
     /// (HTTP /send, channel inbound, cron, inter-agent) funnel through
     /// `send_message_with_handle_and_blocks`, which wraps each executor branch
-    /// in this so every turn is bounded consistently. Cron may also wrap in its
+    /// in this so every path is bounded consistently. Cron may also wrap in its
     /// own per-job timeout (tighter wins).
+    ///
+    /// This is a daemon-hang BACKSTOP only - the turn itself is governed by
+    /// progress/stuck detection, not a time budget. `secs == 0` disables the
+    /// backstop entirely (run unbounded, rely solely on stuck detection + the
+    /// per-LLM-call stall timeout).
     async fn bounded_turn<F>(
         fut: F,
         secs: u64,
@@ -889,10 +894,13 @@ impl CarrierKernel {
     where
         F: std::future::Future<Output = KernelResult<AgentLoopResult>>,
     {
+        if secs == 0 {
+            return fut.await;
+        }
         match tokio::time::timeout(std::time::Duration::from_secs(secs), fut).await {
             Ok(r) => r,
             Err(_) => Err(KernelError::Carrier(CarrierError::Internal(format!(
-                "agent {agent_id} turn exceeded {secs}s timeout"
+                "agent {agent_id} turn exceeded {secs}s backstop"
             )))),
         }
     }

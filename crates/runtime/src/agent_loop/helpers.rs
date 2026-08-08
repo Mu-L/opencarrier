@@ -213,7 +213,6 @@ pub(in crate::agent_loop) async fn call_with_retry(
     stream_tx: Option<mpsc::Sender<StreamEvent>>,
     provider: Option<&str>,
     cooldown: Option<&ProviderCooldown>,
-    deadline: Option<std::time::Instant>,
     llm_concurrency_limit: Option<&Arc<tokio::sync::Semaphore>>,
 ) -> CarrierResult<CompletionResponse> {
     let is_stream = stream_tx.is_some();
@@ -242,20 +241,12 @@ pub(in crate::agent_loop) async fn call_with_retry(
     let mut last_error = None;
 
     for attempt in 0..=MAX_RETRIES {
-        // Compute per-call timeout: min(remaining budget, 180s)
-        let per_call_timeout = match deadline {
-            Some(dl) => {
-                let remaining = dl.saturating_duration_since(std::time::Instant::now());
-                if remaining.is_zero() {
-                    warn!(attempt, "Time budget exhausted before LLM attempt");
-                    return Err(CarrierError::LlmDriver(
-                        "Agent loop time budget exhausted".to_string(),
-                    ));
-                }
-                std::cmp::min(remaining, std::time::Duration::from_secs(PER_LLM_CALL_TIMEOUT_SECS))
-            }
-            None => std::time::Duration::from_secs(PER_LLM_CALL_TIMEOUT_SECS),
-        };
+        // Per-call stall timeout: catches a single hung HTTP/LLM call (network
+        // stall, model stuck). This is NOT a turn-level budget - the turn itself
+        // has no wall-clock governor (only stuck/progress detection + an outer
+        // daemon backstop). Fixed at PER_LLM_CALL_TIMEOUT_SECS, further capped by
+        // STREAM_WALL_CLOCK_TIMEOUT_SECS below.
+        let per_call_timeout = std::time::Duration::from_secs(PER_LLM_CALL_TIMEOUT_SECS);
 
         // The agent loop always streams internally. `stream_tx` only controls
         // whether incremental events are ALSO forwarded to a consumer (e.g. the
@@ -439,11 +430,10 @@ pub(in crate::agent_loop) async fn call_with_fallback(
     modality: &str,
     request: CompletionRequest,
     stream_tx: Option<mpsc::Sender<StreamEvent>>,
-    deadline: Option<std::time::Instant>,
     llm_concurrency_limit: Option<&Arc<tokio::sync::Semaphore>>,
 ) -> CarrierResult<CompletionResponse> {
     let Some(brain) = brain else {
-        return call_with_retry(fallback_driver, request, stream_tx, None, None, deadline, llm_concurrency_limit).await;
+        return call_with_retry(fallback_driver, request, stream_tx, None, None, llm_concurrency_limit).await;
     };
 
     let endpoints = brain.endpoints_for(modality);
@@ -455,27 +445,12 @@ pub(in crate::agent_loop) async fn call_with_fallback(
 
     let mut last_error: Option<CarrierError> = None;
     for ep in &endpoints {
-        // Skip endpoint if insufficient time budget remains (need at least 30s)
-        if let Some(dl) = deadline {
-            let remaining = dl.saturating_duration_since(std::time::Instant::now());
-            if remaining.as_secs() < 30 {
-                tracing::warn!(
-                    endpoint = %ep.id,
-                    remaining_secs = remaining.as_secs(),
-                    "Skipping endpoint: insufficient time budget"
-                );
-                last_error = Some(CarrierError::LlmDriver(
-                    "Agent loop time budget exhausted".to_string(),
-                ));
-                continue;
-            }
-        }
         if let Some(driver) = brain.driver_for_endpoint(&ep.id) {
             let mut req = request.clone();
             req.model = ep.model.clone();
             let start = std::time::Instant::now();
             let tx_arg = stream_tx.clone();
-            match call_with_retry(&*driver, req, tx_arg, Some(&ep.provider), None, deadline, llm_concurrency_limit).await {
+            match call_with_retry(&*driver, req, tx_arg, Some(&ep.provider), None, llm_concurrency_limit).await {
                 Ok(response) => {
                     let latency = start.elapsed().as_millis() as u64;
                     brain.report(types::brain::EndpointReport {
