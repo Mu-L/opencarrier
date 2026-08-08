@@ -279,7 +279,7 @@ impl ToolModule for TrainingTools {
             },
             ToolDefinition {
                 name: "clone_install".to_string(),
-                description: "Install a brand-new clone from its definition-layer files. Writes all files to workspaces/<name>/, builds agent.toml, and spawns the agent. Used by clone-creator after generating SOUL.md / system_prompt.md / template.json / knowledge / flows.".to_string(),
+                description: "Install a clone from its definition-layer files. Writes all files to workspaces/<name>/, builds agent.toml, and spawns the agent. Supports REINSTALL: if a clone with this name already exists (registered agent and/or workspace), it kills the old agent, clears the workspace (preserving .dup/ history), and reinstalls fresh - so regenerating a clone over an existing one works. Used by clone-creator after generating SOUL.md / system_prompt.md / template.json / knowledge / flows.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {

@@ -986,14 +986,38 @@ impl CarrierKernel {
 
         let clone_name = name.to_string();
 
-        if self.registry.find_by_name(&clone_name).is_some() {
-            return Err(CarrierError::Internal(format!("Agent '{}' already exists", clone_name)));
+        // Re-install (overwrite) support: if an agent is already registered or a
+        // workspace already exists for this name, tear down the old one first so
+        // regeneration doesn't hit a wall. The `.dup/` version-history dir is
+        // preserved (keeps the clone's dup-push history); everything else is
+        // cleared for a clean reinstall.
+        if let Some(entry) = self.registry.find_by_name(&clone_name) {
+            tracing::info!(
+                name = %clone_name,
+                old_id = %entry.id,
+                "Clone already registered - killing existing agent for reinstall"
+            );
+            self.kill_agent(entry.id)
+                .map_err(CarrierError::from)?;
         }
         if workspace_dir.exists() {
-            return Err(CarrierError::Internal(format!(
-                "Workspace for '{}' already exists",
-                clone_name
-            )));
+            for dir_entry in std::fs::read_dir(&workspace_dir)
+                .map_err(|e| CarrierError::Internal(format!("Failed to read workspace for reinstall: {e}")))?
+            {
+                let dir_entry = dir_entry
+                    .map_err(|e| CarrierError::Internal(format!("Dir entry error: {e}")))?;
+                let path = dir_entry.path();
+                // Preserve .dup/ (clone version history for the dup sync workflow).
+                if dir_entry.file_name().to_string_lossy() == ".dup" {
+                    continue;
+                }
+                let _ = if path.is_dir() {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                };
+            }
+            tracing::info!(name = %clone_name, "Existing workspace cleared for reinstall (.dup/ preserved)");
         }
 
         // File-level write of the fetched definition files.
