@@ -156,23 +156,34 @@ async fn tool_clone_publish(
     })?;
     let ws = std::path::PathBuf::from(&ws_str);
 
-    let files = clone::manifest::collect_definition_files(&ws)
+    let mut files = clone::manifest::collect_definition_files(&ws)
         .map_err(|e| CarrierError::Internal(format!("Failed to collect definition files: {e}")))?;
-    let manifest = clone::manifest::build_manifest(&ws)
-        .map_err(|e| CarrierError::Internal(format!("Failed to build manifest: {e}")))?;
+    // Ensure template.json has a `version` field - DupHub requires it to extract
+    // listing metadata (description/display_name/category). Safe for clones
+    // installed before the clone_install safeguard added it.
+    let added_version = clone::manifest::ensure_template_version(&mut files);
+    // Compute the manifest hash from the (possibly modified) files so it matches
+    // exactly what we push - build_manifest reads the workspace, which may not
+    // yet reflect the version we just injected, so derive the hash here.
+    let file_hashes: std::collections::BTreeMap<String, String> = files
+        .iter()
+        .map(|(p, b)| (p.clone(), clone::manifest::sha256_hex(b)))
+        .collect();
+    let hash = clone::manifest::manifest_hash(&file_hashes);
 
     let (hub_url, api_key) = kh
         .clone_hub_config()
         .ok_or_else(|| CarrierError::Internal("Hub not configured (hub.url / api_key missing)".into()))?;
 
-    let template_name = clone::hub::push_dup_files(&hub_url, &api_key, name, &files, &manifest.hash, None, None)
+    let template_name = clone::hub::push_dup_files(&hub_url, &api_key, name, &files, &hash, None, None)
         .await
         .map_err(|e| CarrierError::Network(format!("Failed to push to Hub: {e}")))?;
 
-    let short_hash = &manifest.hash[..manifest.hash.len().min(12)];
+    let short_hash = &hash[..hash.len().min(12)];
     Ok(format!(
-        "已推送到 DupHub: {template_name}（{} 文件，hash={short_hash}）",
-        files.len()
+        "已推送到 DupHub: {template_name}（{} 文件，hash={short_hash}{}）",
+        files.len(),
+        if added_version { "，已补 version 字段" } else { "" }
     ))
 }
 

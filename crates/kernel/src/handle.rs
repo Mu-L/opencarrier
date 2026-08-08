@@ -1020,6 +1020,15 @@ impl CarrierKernel {
             tracing::info!(name = %clone_name, "Existing workspace cleared for reinstall (.dup/ preserved)");
         }
 
+        // Ensure template.json has a `version` field - DupHub requires it to
+        // extract listing metadata (description/display_name/category). Agents
+        // sometimes omit it; add "1" if missing (never overwrite - defeats dup
+        // debounce). Mutates the in-memory files map before writing to disk.
+        let mut files = files;
+        if clone::manifest::ensure_template_version(&mut files) {
+            tracing::info!(name = %clone_name, "Added missing `version` field to template.json (DupHub listing metadata requires it)");
+        }
+
         // File-level write of the fetched definition files.
         let security_warnings =
             write_files_to_workspace(&files, &workspace_dir).map_err(|e| {

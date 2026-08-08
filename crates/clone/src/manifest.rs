@@ -166,6 +166,41 @@ pub fn sha256_hex(data: &[u8]) -> String {
     format!("{:x}", h.finalize())
 }
 
+/// Ensure `template.json` in `files` has a `version` field.
+///
+/// DupHub requires the `version` field in `template.json` to extract listing
+/// metadata (description/display_name/category) - a clone whose template.json
+/// lacks `version` publishes with an EMPTY DupHub listing (the files are there,
+/// but the listing shows no description/name/category). clone-creator's flow
+/// example includes `"version":"1"`, but agents sometimes omit it.
+///
+/// Adds `"version": "1"` if (and only if) the field is missing. Never overwrites
+/// an existing `version` - re-install/publish must not rewrite it (that would
+/// change the file hash and defeat dup debounce). Returns `true` if a version
+/// was added. Invalid/non-object template.json is left untouched (returns false).
+pub fn ensure_template_version(files: &mut BTreeMap<String, Vec<u8>>) -> bool {
+    let Some(bytes) = files.get_mut("template.json") else {
+        return false;
+    };
+    let Ok(mut tj) = serde_json::from_slice::<serde_json::Value>(bytes.as_slice()) else {
+        return false;
+    };
+    let Some(obj) = tj.as_object_mut() else {
+        return false;
+    };
+    if obj.contains_key("version") {
+        return false;
+    }
+    obj.insert("version".to_string(), serde_json::Value::String("1".to_string()));
+    match serde_json::to_vec_pretty(&tj) {
+        Ok(new_bytes) => {
+            *bytes = new_bytes;
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Write a set of files (`path -> bytes`) into `workspace`, enforcing the same
 /// definition-layer + traversal safety as the `dup` push endpoint. Creates
 /// parent dirs and writes atomically (`.duptmp` + rename). Files outside the
@@ -236,6 +271,46 @@ pub fn write_files_to_workspace(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn ensure_template_version_adds_missing_version() {
+        let mut files = BTreeMap::new();
+        files.insert(
+            "template.json".to_string(),
+            br#"{"name":"x","description":"d","display_name":"X","category":"c"}"#.to_vec(),
+        );
+        assert!(ensure_template_version(&mut files));
+        let tj: serde_json::Value = serde_json::from_slice(&files["template.json"]).unwrap();
+        assert_eq!(tj["version"], "1");
+        assert_eq!(tj["description"], "d");
+        assert_eq!(tj["display_name"], "X");
+    }
+
+    #[test]
+    fn ensure_template_version_preserves_existing_version() {
+        let mut files = BTreeMap::new();
+        let orig = br#"{"name":"x","version":"3","description":"d"}"#.to_vec();
+        files.insert("template.json".to_string(), orig.clone());
+        assert!(!ensure_template_version(&mut files));
+        // Unchanged (never rewrites an existing version - would defeat debounce).
+        assert_eq!(files["template.json"], orig);
+        let tj: serde_json::Value = serde_json::from_slice(&files["template.json"]).unwrap();
+        assert_eq!(tj["version"], "3");
+    }
+
+    #[test]
+    fn ensure_template_version_handles_missing_and_invalid() {
+        // No template.json at all.
+        let mut files = BTreeMap::new();
+        files.insert("SOUL.md".to_string(), b"soul".to_vec());
+        assert!(!ensure_template_version(&mut files));
+        // Invalid JSON -> untouched.
+        let mut files2 = BTreeMap::new();
+        let bad = b"{not json".to_vec();
+        files2.insert("template.json".to_string(), bad.clone());
+        assert!(!ensure_template_version(&mut files2));
+        assert_eq!(files2["template.json"], bad);
+    }
 
     fn tmp_dir(name: &str) -> std::path::PathBuf {
         let p = std::env::temp_dir().join(format!("oc-manifest-{name}"));
