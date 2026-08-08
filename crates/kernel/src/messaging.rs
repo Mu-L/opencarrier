@@ -761,6 +761,26 @@ impl CarrierKernel {
                 "Flow deny_tools applied for this turn"
             );
         }
+        // Flow `tools:` hard sandbox: when the matched flow declares a non-empty
+        // tool set, freeze the assembled toolset (base + flow tools, post-deny)
+        // as the turn's allow-list. tool_search is filtered to this set and
+        // tool_runner denies calls outside it — so the agent can't wander to
+        // out-of-flow catalog tools (e.g. clone-creator reaching train_write
+        // instead of the flow's declared clone_install). Only stamped when the
+        // flow declares tools; a flow with no declared tools imposes no sandbox.
+        if !flow.tools.is_empty() {
+            let allowed: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+            manifest.metadata.insert(
+                types::flow::META_FLOW_ALLOWED_TOOLS.to_string(),
+                serde_json::json!(allowed),
+            );
+            info!(
+                agent = %agent_name,
+                flow = %flow.name,
+                allowed_count = allowed.len(),
+                "Flow tools hard sandbox stamped for this turn"
+            );
+        }
         if flow.elevates() {
             let required = flow.flow_def.required_max_tool_level();
             if required > manifest.max_tool_level {

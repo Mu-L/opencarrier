@@ -18,6 +18,12 @@ tokio::task_local! {
 /// Maximum inter-agent call depth (used by agent tools).
 pub(crate) const MAX_AGENT_CALL_DEPTH: u32 = 5;
 
+/// Strip a toolset prefix ("filesystem__shell_exec" → "shell_exec") for
+/// base-name comparison in the flow `tools:` hard sandbox.
+pub(crate) fn base_tool_name(n: &str) -> &str {
+    n.rsplit_once("__").map(|(_, b)| b).unwrap_or(n)
+}
+
 /// Execute a tool by name with the given input, returning a ToolResult.
 ///
 /// The optional `kernel` handle enables inter-agent tools. If `None`,
@@ -56,6 +62,7 @@ pub async fn execute_tool(
         flow_elevated_tools,
         flow_shell_allow,
         flow_deny_tools,
+        flow_allowed_tools,
     } = *ctx;
 
     // Normalize the tool name through compat mappings so LLM-hallucinated aliases
@@ -79,6 +86,38 @@ pub async fn execute_tool(
                 ),
                 is_error: true,
             };
+        }
+    }
+
+    // Flow `tools:` hard sandbox (flow_allowed_tools): when the matched flow
+    // declares a non-empty tool set, only tools in that frozen allow-list may
+    // run. This stops the agent wandering to out-of-flow catalog tools (e.g.
+    // clone-creator reaching train_write instead of the declared clone_install).
+    // Both sides are normalized to base names ("filesystem__x" → "x") so
+    // toolset-prefixed names compare equal.
+    if let Some(allowed) = flow_allowed_tools {
+        // MCP tools (mcp_* namespaced) are exempt from the hard sandbox: they are
+        // externally-provided capabilities that flows legitimately call without
+        // declaring each one (e.g. ai-writer flows call mcp_wechat_oa_create_draft
+        // / mcp_wecom_send_kf_message in their body, yet no flow declares them in
+        // `tools:`). The sandbox targets the builtin catalog (train_write etc.)
+        // where wandering is the observed failure mode.
+        if !tool_name.starts_with("mcp_") {
+            let called = base_tool_name(tool_name);
+            if !allowed.iter().any(|a| base_tool_name(a) == called) {
+                warn!(
+                    tool_name,
+                    allowed_count = allowed.len(),
+                    "Permission denied: tool not in flow's declared tool set"
+                );
+                return ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!(
+                        "Permission denied: '{tool_name}' 不在当前 flow 声明的工具集中（flow tools 硬沙箱）。请只使用 flow `tools:` 声明的工具来完成本任务——不要 tool_search 或调用 flow 未声明的工具。"
+                    ),
+                    is_error: true,
+                };
+            }
         }
     }
 
@@ -431,6 +470,7 @@ mod tests {
             flow_elevated_tools: None,
             flow_shell_allow: None,
             flow_deny_tools: None,
+            flow_allowed_tools: None,
         }
     }
 
@@ -468,6 +508,105 @@ mod tests {
                 && !result.content.contains("not allowed by system flow shell_allow")
                 && !result.content.contains("requires Dangerous level"),
             "unexpected permission deny: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_flow_allowed_tools_blocks_out_of_set_tool() {
+        // Flow declares clone_install + file_read; calling train_write (not in
+        // the frozen allow-list) is denied by the hard sandbox.
+        let allowed = ["clone_install".to_string(), "file_read".to_string()];
+        let mut ctx = noop_ctx();
+        ctx.flow_allowed_tools = Some(&allowed);
+        let result = execute_tool(
+            "t4",
+            "train_write",
+            &serde_json::json!({"target": "x", "path": "p", "content": "c"}),
+            &ctx,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(
+            result.content.contains("不在当前 flow 声明的工具集"),
+            "expected flow sandbox deny, got: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_flow_allowed_tools_permits_declared_tool() {
+        // clone_install IS in the allow-list -> sandbox check passes. It fails
+        // downstream (no kernel handle) but NOT with the sandbox deny message.
+        let allowed = ["clone_install".to_string(), "file_read".to_string()];
+        let mut ctx = noop_ctx();
+        ctx.flow_allowed_tools = Some(&allowed);
+        let result = execute_tool(
+            "t5",
+            "clone_install",
+            &serde_json::json!({"name": "x", "files": {"SOUL.md": "s"}}),
+            &ctx,
+        )
+        .await;
+        assert!(
+            !result.content.contains("不在当前 flow 声明的工具集"),
+            "declared tool should not be sandbox-denied, got: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_flow_allowed_tools_base_name_normalization() {
+        // Toolset-prefixed out-of-set tool normalizes to base "train_write" and
+        // is still denied; a prefixed in-set tool normalizes to "clone_install"
+        // and passes the sandbox (fails downstream, not on the sandbox).
+        let allowed = ["clone_install".to_string()];
+        let mut ctx = noop_ctx();
+        ctx.flow_allowed_tools = Some(&allowed);
+        let denied = execute_tool(
+            "t6",
+            "training__train_write",
+            &serde_json::json!({"target": "x"}),
+            &ctx,
+        )
+        .await;
+        assert!(denied.is_error);
+        assert!(
+            denied.content.contains("不在当前 flow 声明的工具集"),
+            "prefixed out-of-set tool should be denied, got: {}",
+            denied.content
+        );
+        let permitted = execute_tool(
+            "t7",
+            "training__clone_install",
+            &serde_json::json!({"name": "x", "files": {"SOUL.md": "s"}}),
+            &ctx,
+        )
+        .await;
+        assert!(
+            !permitted.content.contains("不在当前 flow 声明的工具集"),
+            "prefixed in-set tool should pass sandbox, got: {}",
+            permitted.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_flow_allowed_tools_exempts_mcp_tools() {
+        // MCP tools (mcp_*) are exempt from the sandbox even when not declared:
+        // flows call them in their body without listing each in `tools:`.
+        let allowed = ["clone_install".to_string()];
+        let mut ctx = noop_ctx();
+        ctx.flow_allowed_tools = Some(&allowed);
+        let result = execute_tool(
+            "t8",
+            "mcp_wechat_oa_create_draft",
+            &serde_json::json!({"title": "t", "content": "c"}),
+            &ctx,
+        )
+        .await;
+        assert!(
+            !result.content.contains("不在当前 flow 声明的工具集"),
+            "mcp tool should be exempt from sandbox, got: {}",
             result.content
         );
     }

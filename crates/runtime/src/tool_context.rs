@@ -51,4 +51,8 @@ pub struct ToolContext<'a> {
     pub flow_shell_allow: Option<&'a [String]>,
     /// Tools blocked for this turn by the matched flow's `deny_tools`.
     pub flow_deny_tools: Option<&'a [String]>,
+    /// Hard allow-list for this turn when the matched flow declares `tools:`.
+    /// `tool_runner` denies calls outside this set; `tool_search` filters to it.
+    /// Frozen at flow-load (see `META_FLOW_ALLOWED_TOOLS`).
+    pub flow_allowed_tools: Option<&'a [String]>,
 }

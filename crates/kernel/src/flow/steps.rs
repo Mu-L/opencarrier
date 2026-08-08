@@ -204,6 +204,17 @@ impl CarrierKernel {
                 })
             })
             .unwrap_or_default();
+        let flow_allowed_owned: Vec<String> = manifest
+            .metadata
+            .get(types::flow::META_FLOW_ALLOWED_TOOLS)
+            .and_then(|v| {
+                v.as_array().map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
         let tool_ctx = ToolContext {
             kernel: kernel_handle.as_ref(),
             memory: memory_handle.as_ref(),
@@ -243,6 +254,11 @@ impl CarrierKernel {
                 None
             } else {
                 Some(flow_deny_owned.as_slice())
+            },
+            flow_allowed_tools: if flow_allowed_owned.is_empty() {
+                None
+            } else {
+                Some(flow_allowed_owned.as_slice())
             },
         };
 

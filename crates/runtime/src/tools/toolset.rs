@@ -42,11 +42,26 @@ impl ToolModule for ToolSearchTools {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let results = if let Some(kernel) = ctx.kernel {
+        let mut results = if let Some(kernel) = ctx.kernel {
             kernel.search_tools(query, 10, ctx.max_tool_level)
         } else {
             Vec::new()
         };
+
+        // Flow `tools:` hard sandbox: only surface tools within the flow's frozen
+        // allow-list, so the agent can't widen its toolset beyond what the flow
+        // declares (e.g. clone-creator discovering train_write instead of using
+        // the flow's declared clone_install). Mirrors the tool_runner check.
+        // MCP tools (mcp_*) are exempt — flows call them without declaring each.
+        if let Some(allowed) = ctx.flow_allowed_tools {
+            results.retain(|(_, def)| {
+                def.name.starts_with("mcp_")
+                    || allowed.iter().any(|a| {
+                        crate::tool_runner::base_tool_name(a)
+                            == crate::tool_runner::base_tool_name(&def.name)
+                    })
+            });
+        }
 
         if results.is_empty() {
             return Some(Ok("No additional tools found matching your query — all available tools are already loaded. Do NOT call tool_search again. Use the tools you already have to accomplish the task.".to_string()));
