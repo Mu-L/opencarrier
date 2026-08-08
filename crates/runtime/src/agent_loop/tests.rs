@@ -300,6 +300,46 @@ use std::sync::atomic::{AtomicU32, Ordering};
     /// repeated MAX_CONTINUATIONS times to trigger the max continuations path.
     struct EmptyMaxTokensDriver;
 
+    /// Returns a ToolUse for a DIFFERENT non-existent tool each call
+    /// (fake_tool_0, fake_tool_1, ...). Different names/args keep the cumulative
+    /// loop detector from firing, but every call errors at execution (tool not
+    /// registered). Tests that the no-progress detector kills the turn after 3
+    /// consecutive all-failed iterations (Problem 3: failed tools = no progress).
+    struct AllFailingToolsDriver {
+        call_count: AtomicU32,
+    }
+
+    impl AllFailingToolsDriver {
+        fn new() -> Self {
+            Self { call_count: AtomicU32::new(0) }
+        }
+    }
+
+    #[async_trait]
+    impl LlmDriver for AllFailingToolsDriver {
+        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+            let n = self.call_count.fetch_add(1, Ordering::Relaxed);
+            let name = format!("fake_tool_{n}");
+            let input = serde_json::json!({"q": format!("arg-{n}")});
+            Ok(CompletionResponse {
+                content: vec![ContentBlock::ToolUse {
+                    id: format!("t{n}"),
+                    name: name.clone(),
+                    input: input.clone(),
+                    provider_metadata: None,
+                }],
+                stop_reason: StopReason::ToolUse,
+                tool_calls: vec![ToolCall {
+                    id: format!("t{n}"),
+                    name,
+                    input,
+                }],
+                usage: TokenUsage { input_tokens: 10, output_tokens: 5 },
+                media: None,
+            })
+        }
+    }
+
     #[async_trait]
     impl LlmDriver for EmptyMaxTokensDriver {
         async fn complete(
@@ -555,6 +595,39 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
         // Normal response should pass through unchanged
         assert_eq!(result.response, "Hello from the agent!");
+    }
+
+    #[tokio::test]
+    async fn test_no_progress_kills_after_all_failing_tools() {
+        // Every iteration calls a different non-existent tool (so cumulative
+        // loop detection doesn't fire) that errors at execution. After 3
+        // consecutive all-failed iterations the no-progress detector must kill
+        // the turn (Problem 3: failed tools = no progress).
+        let memory = memory::MemorySubstrate::open_in_memory().unwrap();
+        let mut session = memory::session::Session {
+            id: types::agent::SessionId::new(),
+            agent_name: "test-agent".to_string(),
+            messages: Vec::new(),
+            context_window_tokens: 0,
+            turn_summaries: Vec::new(),
+            label: None,
+        };
+        let manifest = test_manifest();
+        let driver: Arc<dyn LlmDriver> = Arc::new(AllFailingToolsDriver::new());
+
+        let result = run_agent_loop(
+            &manifest, "do stuff", &mut session, &memory, driver, &[],
+            None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None,
+        )
+        .await;
+
+        let err = result.expect_err("should be killed by no-progress detector");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("无进展") || msg.contains("卡死"),
+            "expected no-progress kill, got: {msg}"
+        );
     }
 
     #[tokio::test]

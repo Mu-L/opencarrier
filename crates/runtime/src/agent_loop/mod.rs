@@ -462,13 +462,16 @@ async fn loop_iteration(ctx: &mut LoopContext<'_>) -> CarrierResult<LoopAction> 
     ctx.state.iteration += 1;
 
     // ---- No-progress detection ----
-    // An iteration that neither called a tool nor produced a final answer nor
-    // was actively generating (MaxTokens) is "idle". A few idle turns in a row
-    // means the agent is spinning without converging -> abort as stuck. Tool
-    // execution, completion, or active generation (MaxTokens) resets the streak.
+    // An iteration that neither called a SUCCESSFUL tool nor produced a final
+    // answer nor was actively generating (MaxTokens) is "idle". A few idle turns
+    // in a row means the agent is spinning (or calling only failing tools)
+    // without converging -> abort as stuck. A successful tool call, completion,
+    // or active generation (MaxTokens) resets the streak. Note: a ToolUse
+    // iteration where every tool errored is idle (tools_this_iter stays 0) -
+    // stop_reason==ToolUse alone no longer counts as progress.
     let made_progress = !matches!(action, LoopAction::Continue)
         || ctx.state.tools_this_iter > 0
-        || matches!(stop_reason, StopReason::ToolUse | StopReason::MaxTokens);
+        || matches!(stop_reason, StopReason::MaxTokens);
     if let Some(streak) = ctx.state.record_iteration_progress(made_progress) {
         warn!(
             iteration = ctx.state.iteration,

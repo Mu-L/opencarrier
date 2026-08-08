@@ -97,10 +97,9 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     // Reset MaxTokens continuation counter on tool use
     *consecutive_max_tokens = 0;
     *any_tools_executed = true;
-    // Mark this iteration as having made tool progress (drives the no-progress
-    // detector in loop_iteration). Bumped once on ToolUse entry; the idle check
-    // only cares whether any tool ran this iteration (== 0 vs > 0).
-    *tools_this_iter = tools_this_iter.saturating_add(1);
+    // Note: tools_this_iter is bumped per SUCCESSFUL tool execution below (after
+    // the execute_tool call), not here on entry. A ToolUse iteration where every
+    // tool call errored counts as no-progress for the idle detector (Problem 3).
 
     let assistant_blocks = response.content.clone();
 
@@ -381,6 +380,15 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 }
             }
         };
+
+        // Count only SUCCESSFUL tool executions as progress for the no-progress
+        // detector (Problem 3): an iteration where every tool call errored
+        // (permission denied, path traversal, not found, timeout) leaves
+        // tools_this_iter == 0 and is treated as idle. A single success anywhere
+        // in the iteration marks it as progress.
+        if !result.is_error {
+            *tools_this_iter = tools_this_iter.saturating_add(1);
+        }
 
         // Fire AfterToolCall hook
         if let Some(hook_reg) = hooks {

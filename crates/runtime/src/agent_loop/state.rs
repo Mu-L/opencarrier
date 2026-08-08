@@ -136,8 +136,9 @@ pub struct LoopState {
     /// [`super::NO_PROGRESS_THRESHOLD`] -> turn aborted as stuck.
     pub idle_streak: u32,
     /// Tools executed in the CURRENT iteration. Reset at the top of each
-    /// `loop_iteration`; bumped per tool call in `tool_use`. Drives the
-    /// no-progress detector.
+    /// `loop_iteration`; bumped per SUCCESSFUL tool call in `tool_use` (failed
+    /// calls don't count - an all-failed iteration is treated as no-progress).
+    /// Drives the no-progress detector.
     pub tools_this_iter: u32,
     pub context_tokens_used_estimate: usize,
     pub context_tokens_max: usize,
@@ -200,9 +201,10 @@ impl LoopState {
     /// `Some(idle_streak)` when the no-progress threshold is reached (caller
     /// should abort the turn as stuck), else `None`.
     ///
-    /// "Progress" = the iteration called a tool, produced a final answer, or
-    /// was actively generating (MaxTokens). Only a Continue with no tool call
-    /// and no final answer (EndTurn/StopSequence spin) counts as idle.
+    /// "Progress" = the iteration called at least one SUCCESSFUL tool, produced a
+    /// final answer, or was actively generating (MaxTokens). A ToolUse iteration
+    /// where every tool errored (or an EndTurn/StopSequence spin with no tools)
+    /// counts as idle. Only consecutive idle turns trip the threshold.
     pub fn record_iteration_progress(&mut self, made_progress: bool) -> Option<u32> {
         if made_progress {
             self.idle_streak = 0;
