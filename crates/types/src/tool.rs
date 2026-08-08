@@ -67,7 +67,7 @@ impl PermissionLevel {
             | "task_list" | "schedule_list" | "cron_list"
             | "a2a_discover" | "clone_evaluate"
             | "knowledge_lint" | "knowledge_index" | "knowledge_extract"
-            | "train_knowledge_lint"
+            | "train_knowledge_lint" | "clone_export"
             | "memory_tree" | "data_analyze" => Self::None,
 
             // ReadOnly — reads from external sources
@@ -90,6 +90,9 @@ impl PermissionLevel {
             | "task_post" | "task_claim" | "task_complete"
             | "event_publish" | "schedule_create" | "schedule_delete"
             | "cron_create" | "cron_cancel"
+            // clone_install — writes into workspaces/<name>/ with name + traversal validation
+            // clone_publish — external push, gated by admin-configured hub api_key + URL validation
+            | "clone_install" | "clone_publish"
             // charter_create_order — creates a real order + notifies admins (external side effect)
             | "charter_create_order" => Self::Write,
 
@@ -528,6 +531,25 @@ mod tests {
         assert!(!is_admin_gated("file_write"));
         assert!(!is_admin_gated("knowledge_heal"));
         assert!(!is_admin_gated("apply_patch"));
+    }
+
+    #[test]
+    fn test_for_tool_clone_lifecycle() {
+        // clone_install / clone_publish are Write — callable at clone-creator's
+        // max_tool_level=write without flow elevation (no shell_allow on clone-generate).
+        assert_eq!(PermissionLevel::for_tool("clone_install"), PermissionLevel::Write);
+        assert_eq!(PermissionLevel::for_tool("clone_publish"), PermissionLevel::Write);
+        // clone_export is read-only manifest listing.
+        assert_eq!(PermissionLevel::for_tool("clone_export"), PermissionLevel::None);
+        // toolset-prefixed variants resolve the same way.
+        assert_eq!(
+            PermissionLevel::for_tool("training__clone_install"),
+            PermissionLevel::Write
+        );
+        assert_eq!(
+            PermissionLevel::for_tool("training__clone_export"),
+            PermissionLevel::None
+        );
     }
 
     #[test]

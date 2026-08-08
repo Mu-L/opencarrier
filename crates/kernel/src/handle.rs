@@ -870,6 +870,28 @@ impl KernelHandle for CarrierKernel {
         Ok(path_str)
     }
 
+    /// Trait-level delegate for the `clone_install` tool. Forwards to the inherent
+    /// `clone_install_files` method below (inherent resolution takes precedence,
+    /// so this calls the workspace-writing implementation, not recursion).
+    async fn clone_install_files(
+        &self,
+        name: &str,
+        files: std::collections::BTreeMap<String, Vec<u8>>,
+    ) -> CarrierResult<(String, String, String)> {
+        CarrierKernel::clone_install_files(self, name, files).await
+    }
+
+    /// Read the configured Hub `(url, api_key)` for `clone_publish`.
+    /// Mirrors the config access used by kernel.rs / api::routes::hub.rs.
+    fn clone_hub_config(&self) -> Option<(String, String)> {
+        let url = self.config.hub.url.clone();
+        let key = clone::hub::read_api_key(&self.config.hub.api_key_env).ok()?;
+        if url.is_empty() || key.is_empty() {
+            return None;
+        }
+        Some((url, key))
+    }
+
 }
 
 type ToolsetAlias = (fn(&str) -> bool, &'static str);

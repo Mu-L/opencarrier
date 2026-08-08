@@ -292,4 +292,31 @@ pub trait KernelHandle: Send + Sync {
         self.spawn_agent(manifest_toml, parent_id).await
     }
 
+    /// Install a clone from definition-layer files (`path -> bytes`).
+    ///
+    /// Writes every file under `workspaces/<name>/`, builds `agent.toml` from the
+    /// resulting workspace, and spawns the agent. Returns
+    /// `(agent_id, agent_name, display_name)`. Used by the `clone_install` tool
+    /// (clone-creator flow) so generation can land a new clone in one call.
+    ///
+    /// Default: unavailable — real kernels override this to delegate to their
+    /// existing `clone_install_files` inherent method.
+    async fn clone_install_files(
+        &self,
+        _name: &str,
+        _files: std::collections::BTreeMap<String, Vec<u8>>,
+    ) -> CarrierResult<(String, String, String)> {
+        Err(CarrierError::Internal(
+            "clone_install_files not available on this kernel".into(),
+        ))
+    }
+
+    /// Read the configured Hub `(url, api_key)` for `clone_publish`.
+    ///
+    /// Returns `None` when the hub url or api key is unconfigured (so the tool
+    /// can surface a clear error instead of a generic network failure).
+    fn clone_hub_config(&self) -> Option<(String, String)> {
+        None
+    }
+
 }

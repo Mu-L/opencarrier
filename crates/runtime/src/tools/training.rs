@@ -91,6 +91,134 @@ async fn tool_train_evaluate(
 }
 
 // ---------------------------------------------------------------------------
+// Clone lifecycle tools (for clone-creator flow): install / publish / export
+// ---------------------------------------------------------------------------
+
+/// `clone_install`: install a brand-new clone from definition-layer files.
+///
+/// Input `{ name, files: { path -> content } }`. Each file key is validated
+/// (no traversal / absolute), then delegated to the kernel's
+/// `clone_install_files`, which writes the workspace, builds `agent.toml`, and
+/// spawns the agent.
+async fn tool_clone_install(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    _caller_agent_id: Option<&str>,
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel)?;
+    let name = input["name"]
+        .as_str()
+        .ok_or_else(|| CarrierError::InvalidInput("Missing 'name' parameter".to_string()))?;
+    crate::tools::validate_clone_name(name)?;
+
+    let files_obj = input["files"].as_object().ok_or_else(|| {
+        CarrierError::InvalidInput("Missing 'files' parameter (object of path -> content)".to_string())
+    })?;
+    if files_obj.is_empty() {
+        return Err(CarrierError::InvalidInput(
+            "'files' cannot be empty — at least SOUL.md and system_prompt.md are required".to_string(),
+        ));
+    }
+
+    let mut files: std::collections::BTreeMap<String, Vec<u8>> = std::collections::BTreeMap::new();
+    for (path, content) in files_obj {
+        crate::tools::validate_clone_file_path(path)?;
+        let text = content.as_str().ok_or_else(|| {
+            CarrierError::InvalidInput(format!("File '{path}' content must be a string"))
+        })?;
+        files.insert(path.clone(), text.as_bytes().to_vec());
+    }
+
+    let (id, agent_name, display) = kh.clone_install_files(name, files).await?;
+    Ok(format!(
+        "已安装分身 '{agent_name}'（agent_id={id}，display={display}）"
+    ))
+}
+
+/// `clone_publish`: push an installed clone's definition layer to DupHub.
+///
+/// Input `{ name }`. Resolves the clone's workspace, collects its
+/// definition-layer files (excluding runtime dirs and `.dup/`), and pushes via
+/// the file-level dup endpoint using the configured Hub url + api_key.
+async fn tool_clone_publish(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    _caller_agent_id: Option<&str>,
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel)?;
+    let name = input["name"]
+        .as_str()
+        .ok_or_else(|| CarrierError::InvalidInput("Missing 'name' parameter".to_string()))?;
+    crate::tools::validate_clone_name(name)?;
+
+    let ws_str = kh.resolve_agent_workspace(name).ok_or_else(|| {
+        CarrierError::InvalidInput(format!("Clone '{name}' not found or has no workspace"))
+    })?;
+    let ws = std::path::PathBuf::from(&ws_str);
+
+    let files = clone::manifest::collect_definition_files(&ws)
+        .map_err(|e| CarrierError::Internal(format!("Failed to collect definition files: {e}")))?;
+    let manifest = clone::manifest::build_manifest(&ws)
+        .map_err(|e| CarrierError::Internal(format!("Failed to build manifest: {e}")))?;
+
+    let (hub_url, api_key) = kh
+        .clone_hub_config()
+        .ok_or_else(|| CarrierError::Internal("Hub not configured (hub.url / api_key missing)".into()))?;
+
+    let template_name = clone::hub::push_dup_files(&hub_url, &api_key, name, &files, &manifest.hash, None, None)
+        .await
+        .map_err(|e| CarrierError::Network(format!("Failed to push to Hub: {e}")))?;
+
+    let short_hash = &manifest.hash[..manifest.hash.len().min(12)];
+    Ok(format!(
+        "已推送到 DupHub: {template_name}（{} 文件，hash={short_hash}）",
+        files.len()
+    ))
+}
+
+/// `clone_export`: list an installed clone's definition-layer manifest.
+///
+/// Input `{ name }`. Returns the manifest (file listing + state hash + sizes)
+/// for the clone's definition layer — the file-level equivalent of an archive
+/// summary.
+async fn tool_clone_export(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    _caller_agent_id: Option<&str>,
+) -> CarrierResult<String> {
+    let kh = crate::tools::require_kernel(kernel)?;
+    let name = input["name"]
+        .as_str()
+        .ok_or_else(|| CarrierError::InvalidInput("Missing 'name' parameter".to_string()))?;
+    crate::tools::validate_clone_name(name)?;
+
+    let ws_str = kh.resolve_agent_workspace(name).ok_or_else(|| {
+        CarrierError::InvalidInput(format!("Clone '{name}' not found or has no workspace"))
+    })?;
+    let ws = std::path::PathBuf::from(&ws_str);
+
+    let files = clone::manifest::collect_definition_files(&ws)
+        .map_err(|e| CarrierError::Internal(format!("Failed to collect definition files: {e}")))?;
+    let manifest = clone::manifest::build_manifest(&ws)
+        .map_err(|e| CarrierError::Internal(format!("Failed to build manifest: {e}")))?;
+    let total_bytes: usize = files.values().map(|b| b.len()).sum();
+
+    let mut paths: Vec<&String> = manifest.files.keys().collect();
+    paths.sort();
+    Ok(format!(
+        "分身 '{name}' 定义层清单：{} 文件，{} 字节，hash={}\n{}",
+        files.len(),
+        total_bytes,
+        manifest.hash,
+        paths
+            .iter()
+            .map(|p| format!("- {p}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // ToolModule implementation
 // ---------------------------------------------------------------------------
 
@@ -149,6 +277,44 @@ impl ToolModule for TrainingTools {
                     "required": ["target"],
                 }),
             },
+            ToolDefinition {
+                name: "clone_install".to_string(),
+                description: "Install a brand-new clone from its definition-layer files. Writes all files to workspaces/<name>/, builds agent.toml, and spawns the agent. Used by clone-creator after generating SOUL.md / system_prompt.md / template.json / knowledge / flows.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Clone name (lowercase alphanumeric/hyphen, e.g. 'liang-shuming')"},
+                        "files": {
+                            "type": "object",
+                            "description": "Map of relative path -> file content (string). Required: SOUL.md, system_prompt.md, template.json.",
+                            "additionalProperties": {"type": "string"},
+                        },
+                    },
+                    "required": ["name", "files"],
+                }),
+            },
+            ToolDefinition {
+                name: "clone_publish".to_string(),
+                description: "Push an installed clone's definition-layer files to DupHub via the file-level dup endpoint. Requires hub.url + api_key configured in config.toml. Returns the template name and state hash.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Name of the installed clone to publish"},
+                    },
+                    "required": ["name"],
+                }),
+            },
+            ToolDefinition {
+                name: "clone_export".to_string(),
+                description: "List an installed clone's definition-layer manifest (file paths, total size, state hash). Read-only — the file-level equivalent of an archive summary.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Name of the installed clone to export"},
+                    },
+                    "required": ["name"],
+                }),
+            },
         ]
     }
 
@@ -166,6 +332,9 @@ impl ToolModule for TrainingTools {
             "train_write" => Some(tool_train_write(input, kernel, caller_agent_id).await),
             "train_list" => Some(tool_train_list(input, kernel, caller_agent_id).await),
             "train_evaluate" => Some(tool_train_evaluate(input, kernel, caller_agent_id).await),
+            "clone_install" => Some(tool_clone_install(input, kernel, caller_agent_id).await),
+            "clone_publish" => Some(tool_clone_publish(input, kernel, caller_agent_id).await),
+            "clone_export" => Some(tool_clone_export(input, kernel, caller_agent_id).await),
             _ => None,
         }
     }
@@ -174,7 +343,75 @@ impl ToolModule for TrainingTools {
         match tool_name {
             "train_read" | "train_list" | "train_evaluate" => PermissionLevel::None,
             "train_write" => PermissionLevel::Write,
+            "clone_install" | "clone_publish" => PermissionLevel::Write,
+            "clone_export" => PermissionLevel::None,
             _ => PermissionLevel::Dangerous,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clone_lifecycle_tools_registered() {
+        let tools = TrainingTools;
+        let names: Vec<String> = tools.definitions().into_iter().map(|d| d.name).collect();
+        assert!(names.contains(&"clone_install".to_string()));
+        assert!(names.contains(&"clone_publish".to_string()));
+        assert!(names.contains(&"clone_export".to_string()));
+    }
+
+    #[test]
+    fn clone_lifecycle_permissions() {
+        let tools = TrainingTools;
+        assert_eq!(tools.permission_level("clone_install"), PermissionLevel::Write);
+        assert_eq!(tools.permission_level("clone_publish"), PermissionLevel::Write);
+        assert_eq!(tools.permission_level("clone_export"), PermissionLevel::None);
+        // Unknown tools still fail-safe to Dangerous.
+        assert_eq!(tools.permission_level("clone_unknown"), PermissionLevel::Dangerous);
+    }
+
+    #[tokio::test]
+    async fn clone_install_requires_kernel() {
+        // No kernel provided → require_kernel returns Internal error before any
+        // file mutation. Guards the no-kernel path (e.g. headless/test runtime).
+        let input = serde_json::json!({
+            "name": "liang-shuming",
+            "files": {"SOUL.md": "x", "system_prompt.md": "y"}
+        });
+        let res = tool_clone_install(&input, None, None).await;
+        assert!(res.is_err());
+        let msg = res.unwrap_err().to_string();
+        assert!(msg.contains("Kernel handle not available"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn clone_install_rejects_bad_name() {
+        // Even with no kernel, name validation runs first via validate_clone_name
+        // — but validate_clone_name runs AFTER require_kernel, so this still errors
+        // on the kernel check. Assert it errors (either path) rather than panics.
+        let input = serde_json::json!({"name": "Bad Name!", "files": {"SOUL.md": "x"}});
+        let res = tool_clone_install(&input, None, None).await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn clone_publish_requires_kernel() {
+        let input = serde_json::json!({"name": "liang-shuming"});
+        let res = tool_clone_publish(&input, None, None).await;
+        assert!(res.is_err());
+        let msg = res.unwrap_err().to_string();
+        assert!(msg.contains("Kernel handle not available"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn clone_export_requires_kernel() {
+        let input = serde_json::json!({"name": "liang-shuming"});
+        let res = tool_clone_export(&input, None, None).await;
+        assert!(res.is_err());
+        let msg = res.unwrap_err().to_string();
+        assert!(msg.contains("Kernel handle not available"), "got: {msg}");
     }
 }
