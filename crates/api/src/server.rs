@@ -343,9 +343,12 @@ pub async fn run_daemon(
             dispatcher.register(std::sync::Arc::new(builtin));
         }
 
-        // Register weixin-oa publish article and charter order tools.
-        // Rich content delivery (mini-program cards, images, files) now goes
-        // through the unified `Channel::deliver` path and `[DELIVER:key]` markers.
+        // Register weixin-oa publish article tool.
+        // (charter_create_order is now a config-driven api_tool in the 86助手
+        // workspace's api_tools.toml - no longer a hardcoded client-specific
+        // ToolProvider. Rich content delivery (mini-program cards, images,
+        // files) goes through the unified `Channel::deliver` path and
+        // `[DELIVER:key]` markers.)
         {
             let dispatcher = cm.tool_dispatcher();
             let mut builtin = runtime::plugin::BuiltinPlugin::new(
@@ -354,7 +357,6 @@ pub async fn run_daemon(
                 std::path::PathBuf::new(),
             );
             builtin.register_tool(Box::new(channel_weixin_oa::WeixinOaPublishArticleTool));
-            builtin.register_tool(Box::new(channel_weixin_oa::CharterCreateOrderTool));
             dispatcher.register(std::sync::Arc::new(builtin));
         }
 

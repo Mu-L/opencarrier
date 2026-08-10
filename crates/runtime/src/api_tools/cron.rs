@@ -108,7 +108,9 @@ fn build_cron_url(tool: &ApiToolDef) -> String {
         }
     }
     if let (Some(ref auth_env), Some(ref auth_param)) = (&tool.auth_env, &tool.auth_param) {
-        if let Ok(key) = std::env::var(auth_env) {
+        // types::env::get_env reads ~/.opencarrier/.env (ENV_OVERRIDES) first;
+        // std::env::var alone misses .env-sourced keys.
+        if let Some(key) = types::env::get_env(auth_env) {
             if !key.is_empty() {
                 query_parts.push(format!("{}={}", urlencoding::encode(auth_param), urlencoding::encode(&key)));
             }

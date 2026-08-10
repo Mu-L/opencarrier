@@ -21,10 +21,13 @@ use std::path::Path as StdPath;
 use std::sync::Arc;
 
 /// Runtime top-level entries push/file must never touch (mirror manifest::SKIP).
+/// `api_tools.toml` is deployment-specific API tool config (not shareable via
+/// dup/DupHub) - managed via `api_tool_register`, like `bind_agent`.
 const SKIP: &[&str] = &[
     "agent.toml",
     "AGENT.json",
     "admins.json",
+    "api_tools.toml",
     "output",
     "sessions",
     "history",

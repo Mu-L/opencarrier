@@ -12,6 +12,7 @@ use types::error::{CarrierError, CarrierResult};
 use types::api_tool::ApiToolDef;
 use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
+use std::collections::HashSet;
 
 pub struct DeclarativeApiModule {
     tools: Vec<ApiToolDef>,
@@ -33,14 +34,94 @@ impl DeclarativeApiModule {
 
     fn resolve_auth(config: &ApiToolDef) -> Option<String> {
         if let Some(ref env_name) = config.auth_env {
-            std::env::var(env_name).ok().filter(|s| !s.is_empty())
+            // Use types::env::get_env (reads ENV_OVERRIDES from ~/.opencarrier/.env
+            // first, then std::env) - std::env::var alone misses .env values.
+            types::env::get_env(env_name).filter(|s| !s.is_empty())
         } else {
             None
         }
     }
 
+    /// Param names that go into the JSON body (not the query string).
+    fn body_field_set(config: &ApiToolDef) -> HashSet<String> {
+        config
+            .body
+            .as_ref()
+            .map(|b| b.fields.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Derive the URL path component (no scheme/host/query) for HMAC signing.
+    /// e.g. "https://chuxing.86bus.com/api/ai/orders?x=1" -> "/api/ai/orders".
+    fn url_path(url: &str) -> String {
+        let after_scheme = match url.find("://") {
+            Some(i) => &url[i + 3..],
+            None => url,
+        };
+        let path_start = after_scheme.find('/').map(|i| &after_scheme[i..]).unwrap_or("");
+        match path_start.find('?') {
+            Some(i) => path_start[..i].to_string(),
+            None => path_start.to_string(),
+        }
+    }
+
+    /// HMAC-SHA256(secret, msg) -> hex. Mirrors charter_sign in weixin-oa/tools.rs.
+    fn hmac_sha256_hex(secret: &str, msg: &str) -> String {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
+            .expect("HMAC accepts any key length");
+        mac.update(msg.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    /// Render the HMAC sign-string template. `{body}` is replaced LAST so body
+    /// content can't be re-interpreted as another placeholder.
+    fn render_sign_template(
+        template: &str,
+        method: &str,
+        path: &str,
+        timestamp: &str,
+        key_id: &str,
+        body: &str,
+    ) -> String {
+        template
+            .replace("{method}", method)
+            .replace("{path}", path)
+            .replace("{timestamp}", timestamp)
+            .replace("{key_id}", key_id)
+            .replace("{body}", body)
+    }
+
+    /// Build the JSON request body from configured body.fields. Absent, null,
+    /// or empty-string params are omitted (matches charter's skip_serializing_if
+    /// for optional fields). Returns None when no body is configured.
+    fn build_body_str(config: &ApiToolDef, args: &Value) -> Option<String> {
+        let body_def = config.body.as_ref()?;
+        let mut obj = serde_json::Map::new();
+        for field in &body_def.fields {
+            if let Some(val) = args.get(field) {
+                if val.is_null() {
+                    continue;
+                }
+                if let Value::String(s) = val {
+                    if s.is_empty() {
+                        continue;
+                    }
+                }
+                obj.insert(field.clone(), val.clone());
+            }
+        }
+        Some(
+            serde_json::to_string(&Value::Object(obj))
+                .unwrap_or_else(|_| "null".to_string()),
+        )
+    }
+
     fn build_url(config: &ApiToolDef, args: &Value) -> String {
         let mut url = config.url.clone();
+        let body_fields = Self::body_field_set(config);
 
         // Replace {param_name} placeholders in URL template
         for name in config.params.keys() {
@@ -50,11 +131,15 @@ impl DeclarativeApiModule {
             }
         }
 
-        // Build query string for params not already embedded as {param} in URL
+        // Build query string for params not already embedded as {param} in URL,
+        // and not destined for the JSON body.
         let mut query_parts: Vec<String> = Vec::new();
 
         for (name, param_def) in &config.params {
             if config.url.contains(&format!("{{{}}}", name)) {
+                continue;
+            }
+            if body_fields.contains(name) {
                 continue;
             }
             if let Some(val) = args.get(name) {
@@ -227,6 +312,10 @@ impl DeclarativeApiModule {
         // Resolve params: if config.resolve has entries, pre-process args
         let resolved_args = self.resolve_params(config, args).await?;
 
+        // Build JSON body (if configured). The exact serialized string is both
+        // signed (when hmac is set) and sent - never re-serialized.
+        let body_str: Option<String> = Self::build_body_str(config, &resolved_args);
+
         let url = Self::build_url(config, &resolved_args);
         let method = config.method.to_uppercase();
 
@@ -242,6 +331,52 @@ impl DeclarativeApiModule {
             req = req.header(k.as_str(), v.as_str());
         }
 
+        // HMAC-SHA256 signing (e.g. 86bus /api/ai/ gateway).
+        if let Some(ref hmac_def) = config.hmac {
+            let key_id = types::env::get_env(&hmac_def.key_id_env).ok_or_else(|| {
+                CarrierError::Internal(format!(
+                    "{}: hmac.key_id_env '{}' not configured",
+                    config.name, hmac_def.key_id_env
+                ))
+            })?;
+            let secret = types::env::get_env(&hmac_def.secret_env).ok_or_else(|| {
+                CarrierError::Internal(format!(
+                    "{}: hmac.secret_env '{}' not configured",
+                    config.name, hmac_def.secret_env
+                ))
+            })?;
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .to_string();
+            let path = Self::url_path(&config.url);
+            let body_for_sign = body_str.as_deref().unwrap_or("");
+            let sign_string = Self::render_sign_template(
+                &hmac_def.sign_template,
+                &method,
+                &path,
+                &timestamp,
+                &key_id,
+                body_for_sign,
+            );
+            let signature = Self::hmac_sha256_hex(&secret, &sign_string);
+            for (k, v_template) in &hmac_def.headers {
+                let v = v_template
+                    .replace("{key_id}", &key_id)
+                    .replace("{timestamp}", &timestamp)
+                    .replace("{signature}", &signature);
+                req = req.header(k.as_str(), v.as_str());
+            }
+        }
+
+        // Attach body (sign-once/send-once: send the exact string we signed).
+        if let Some(ref body_str) = body_str {
+            req = req
+                .header("Content-Type", "application/json")
+                .body(body_str.clone());
+        }
+
         let resp = req.send().await.map_err(|e| CarrierError::Network(format!("{} request failed: {}", config.name, e)))?;
 
         let status = resp.status();
@@ -251,11 +386,17 @@ impl DeclarativeApiModule {
 
         let body: Value = resp.json().await.map_err(|e| CarrierError::Serialization(format!("{} parse error: {}", config.name, e)))?;
 
-        // Error check
+        // Error check. Render the field as a string whether it's a JSON string,
+        // number, or bool (e.g. 86bus errcode is a number: 0 == "0").
         if let Some(ref check) = config.error_check {
             let actual = Self::navigate_path(&body, &check.field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+                .map(|v| match v {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    _ => v.to_string(),
+                })
+                .unwrap_or_default();
             if actual != check.expect {
                 return Err(CarrierError::Network(format!("{} API error: {}='{}', expected='{}'", config.name, check.field, actual, check.expect)));
             }
@@ -361,4 +502,166 @@ impl ToolModule for DeclarativeApiModule {
 /// Check if a string looks like coordinates (contains comma, no CJK chars).
 fn is_coordinates(s: &str) -> bool {
     s.contains(',') && !s.chars().any(|c| c > '\u{4e00}' && c < '\u{9fff}')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Standard HMAC-SHA256 test vector (key="key", msg="The quick brown...").
+    #[test]
+    fn hmac_sha256_known_vector() {
+        let sig = DeclarativeApiModule::hmac_sha256_hex(
+            "key",
+            "The quick brown fox jumps over the lazy dog",
+        );
+        assert_eq!(
+            sig,
+            "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+        );
+    }
+
+    #[test]
+    fn url_path_strips_scheme_host_query() {
+        assert_eq!(
+            DeclarativeApiModule::url_path("https://chuxing.86bus.com/api/ai/orders"),
+            "/api/ai/orders"
+        );
+        assert_eq!(
+            DeclarativeApiModule::url_path("https://host.com/a/b?x=1&y=2"),
+            "/a/b"
+        );
+        assert_eq!(DeclarativeApiModule::url_path("https://host.com/"), "/");
+        assert_eq!(DeclarativeApiModule::url_path("https://host.com"), "");
+    }
+
+    #[test]
+    fn render_sign_template_charter_shape() {
+        let rendered = DeclarativeApiModule::render_sign_template(
+            "{method}\n{path}\n{timestamp}\n{body}",
+            "POST",
+            "/api/ai/orders",
+            "1700000000",
+            "AK123",
+            "{\"a\":1}",
+        );
+        assert_eq!(rendered, "POST\n/api/ai/orders\n1700000000\n{\"a\":1}");
+    }
+
+    /// Body containing a literal "{key_id}" must survive verbatim ({body} is
+    /// substituted last, so body content is never re-interpreted).
+    #[test]
+    fn render_sign_template_body_literal_not_reinterpreted() {
+        let rendered = DeclarativeApiModule::render_sign_template(
+            "{method}\n{body}",
+            "POST",
+            "",
+            "",
+            "REAL_AK",
+            "x{key_id}y",
+        );
+        assert_eq!(rendered, "POST\nx{key_id}y");
+    }
+
+    fn parse_tool(toml_str: &str) -> ApiToolDef {
+        toml::from_str::<types::api_tool::ApiToolsConfig>(toml_str)
+            .unwrap()
+            .tool
+            .into_iter()
+            .next()
+            .unwrap()
+    }
+
+    fn charter_test_config() -> ApiToolDef {
+        parse_tool(
+            r#"
+[[tool]]
+name = "charter_create_order"
+description = "test"
+url = "https://chuxing.86bus.com/api/ai/orders"
+method = "POST"
+[tool.body]
+fields = ["username", "phone", "person_num", "start_point", "end_point", "go_time", "back_time", "remark"]
+[tool.params]
+username = { type = "string", description = "x" }
+phone = { type = "string", description = "x" }
+person_num = { type = "integer", description = "x" }
+start_point = { type = "string", description = "x" }
+end_point = { type = "string", description = "x" }
+go_time = { type = "string", description = "x" }
+back_time = { type = "string", description = "x" }
+remark = { type = "string", description = "x" }
+"#,
+        )
+    }
+
+    #[test]
+    fn build_body_str_omits_absent_and_empty() {
+        let cfg = charter_test_config();
+        let args = serde_json::json!({
+            "username": "张三",
+            "phone": "13800000000",
+            "person_num": 5,
+            "start_point": "南京南站",
+            "end_point": "禄口机场",
+            "go_time": "2026-08-11 08:00",
+            "remark": ""
+        });
+        let body = DeclarativeApiModule::build_body_str(&cfg, &args).unwrap();
+        assert!(!body.contains("back_time"));
+        assert!(!body.contains("remark"));
+        assert!(body.contains("username"));
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["username"], "张三");
+        assert_eq!(v["person_num"], 5);
+        assert!(v.get("back_time").is_none());
+    }
+
+    #[test]
+    fn build_body_str_none_when_no_body_config() {
+        let cfg = parse_tool(
+            r#"
+[[tool]]
+name = "t"
+description = "x"
+url = "https://example.com/api"
+method = "GET"
+"#,
+        );
+        let args = serde_json::json!({"q": "hi"});
+        assert!(DeclarativeApiModule::build_body_str(&cfg, &args).is_none());
+    }
+
+    /// Regression: the api_tool HMAC path must produce the SAME signature bytes
+    /// as charter_sign (weixin-oa/tools.rs) for identical inputs, so migrating
+    /// charter to a config-driven api_tool keeps the 86bus backend accepting it.
+    #[test]
+    fn charter_signature_matches_charter_sign_pattern() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        let secret = "test-secret";
+        let (method, path, timestamp) = ("POST", "/api/ai/orders", "1700000000");
+        let body = r#"{"username":"张三","phone":"138","person_num":5,"start_point":"A","end_point":"B","go_time":"2026-08-11 08:00"}"#;
+
+        // charter_sign equivalent (weixin-oa/tools.rs:250-260):
+        let sign_str = format!("{method}\n{path}\n{timestamp}\n{body}");
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(sign_str.as_bytes());
+        let expected_hex = hex::encode(mac.finalize().into_bytes());
+
+        // api_tool path:
+        let rendered = DeclarativeApiModule::render_sign_template(
+            "{method}\n{path}\n{timestamp}\n{body}",
+            method,
+            path,
+            timestamp,
+            "",
+            body,
+        );
+        let actual_hex = DeclarativeApiModule::hmac_sha256_hex(secret, &rendered);
+
+        assert_eq!(sign_str, rendered);
+        assert_eq!(actual_hex, expected_hex);
+    }
 }

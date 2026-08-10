@@ -14,11 +14,15 @@ use sha2::{Digest, Sha256};
 
 /// Runtime dirs/files excluded from the definition-layer manifest: agent
 /// runtime state (output/sessions/history/logs/...), the `.dup/` VCS state dir,
-/// and `admins.json` (deployment-specific admin list).
+/// `admins.json` (deployment-specific admin list), and `api_tools.toml`
+/// (deployment-specific API tool config - endpoints/HMAC keys, not shareable
+/// via dup/DupHub; managed via the `api_tool_register` admin tool, like
+/// `bind_agent` in session.json).
 const SKIP: &[&str] = &[
     "agent.toml",
     "AGENT.json",
     "admins.json",
+    "api_tools.toml",
     "output",
     "sessions",
     "history",

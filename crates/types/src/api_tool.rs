@@ -31,6 +31,59 @@ pub struct ApiToolDef {
     pub cron: Option<ApiCronDef>,
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    /// JSON request body: named params go into the body (signed+sent as-is
+    /// when `hmac` is set), the rest go to the query string. Omit if all
+    /// params are query params.
+    #[serde(default)]
+    pub body: Option<ApiBodyDef>,
+    /// HMAC-SHA256 request signing (e.g. 86bus `/api/ai/` gateway). When set,
+    /// the signature is computed over the sign_template and the resulting
+    /// values are sent as headers. The exact serialized body string is both
+    /// signed and sent (never re-serialized), matching a signed-request gateway.
+    #[serde(default)]
+    pub hmac: Option<ApiHmacDef>,
+}
+
+/// JSON request body configuration. Listed `fields` are serialized into a JSON
+/// object (absent or empty-string params omitted) and sent as the request body.
+/// Fields not listed here continue to go to the query string.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ApiBodyDef {
+    /// Param names to include in the JSON body, in this order.
+    #[serde(default)]
+    pub fields: Vec<String>,
+}
+
+/// HMAC-SHA256 request signing configuration.
+///
+/// Example (86bus charter gateway):
+/// ```toml
+/// [tool.hmac]
+/// key_id_env = "CHARTER_AK"
+/// secret_env = "CHARTER_SK"
+/// sign_template = "{method}\n{path}\n{timestamp}\n{body}"
+/// headers = { "X-Api-Key" = "{key_id}", "X-Timestamp" = "{timestamp}", "X-Signature" = "{signature}" }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiHmacDef {
+    /// Env var holding the key id (e.g. CHARTER_AK).
+    pub key_id_env: String,
+    /// Env var holding the HMAC secret (e.g. CHARTER_SK).
+    pub secret_env: String,
+    /// Sign string template. Placeholders: `{method}`, `{path}`, `{timestamp}`,
+    /// `{body}` (exact serialized body, empty if no body), `{key_id}`.
+    pub sign_template: String,
+    /// Algorithm. Only `"sha256"` is supported.
+    #[serde(default = "default_hmac_algorithm")]
+    pub algorithm: String,
+    /// Header name -> value template. Placeholders: `{key_id}`, `{timestamp}`,
+    /// `{signature}` (hex HMAC-SHA256).
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+}
+
+fn default_hmac_algorithm() -> String {
+    "sha256".to_string()
 }
 
 fn default_method() -> String {

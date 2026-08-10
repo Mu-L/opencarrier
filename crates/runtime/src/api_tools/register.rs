@@ -252,5 +252,48 @@ fn serialize_tool(tool: &ApiToolDef) -> String {
         out.push_str(&format!("expect = \"{}\"\n", check.expect));
     }
 
+    // Static headers
+    if !tool.headers.is_empty() {
+        out.push_str("\n[tool.headers]\n");
+        for (k, v) in &tool.headers {
+            out.push_str(&format!("{} = \"{}\"\n", k, escape_toml_string(v)));
+        }
+    }
+
+    // JSON body
+    if let Some(ref body) = tool.body {
+        out.push_str("\n[tool.body]\n");
+        let fields: Vec<String> = body
+            .fields
+            .iter()
+            .map(|f| format!("\"{}\"", escape_toml_string(f)))
+            .collect();
+        out.push_str(&format!("fields = [{}]\n", fields.join(", ")));
+    }
+
+    // HMAC signing
+    if let Some(ref hmac) = tool.hmac {
+        out.push_str("\n[tool.hmac]\n");
+        out.push_str(&format!("key_id_env = \"{}\"\n", hmac.key_id_env));
+        out.push_str(&format!("secret_env = \"{}\"\n", hmac.secret_env));
+        out.push_str(&format!("sign_template = \"{}\"\n", escape_toml_string(&hmac.sign_template)));
+        out.push_str(&format!("algorithm = \"{}\"\n", hmac.algorithm));
+        if !hmac.headers.is_empty() {
+            out.push_str("\n[tool.hmac.headers]\n");
+            for (k, v) in &hmac.headers {
+                out.push_str(&format!("\"{}\" = \"{}\"\n", escape_toml_string(k), escape_toml_string(v)));
+            }
+        }
+    }
+
     out
+}
+
+/// Escape a string for a TOML basic string (backslash, quote, newline, etc.).
+fn escape_toml_string(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
