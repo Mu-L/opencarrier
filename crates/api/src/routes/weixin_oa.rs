@@ -363,6 +363,16 @@ pub async fn weixin_oa_callback(
                 %app_id, openid = %from_user, rule_id = %rule.id,
                 "weixin-oa: automation subscribe rule matched, passive XML reply (agent skipped)"
             );
+            // Subscribe events return above before the main-path bind-openid
+            // block, so fire it here in the background — the 86bus backend gets
+            // the openid+unionid mapping on follow (not only on a later text msg).
+            spawn_bind_openid(
+                session.bind_openid_url.clone(),
+                app_id.clone(),
+                session.app_secret.clone(),
+                from_user.clone(),
+                msg.unionid.clone(),
+            );
             return (StatusCode::OK, xml);
         }
     }
@@ -499,6 +509,72 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         "/api/weixin-oa/{app_id}/callback",
         routing::get(weixin_oa_verify).post(weixin_oa_callback),
     )
+}
+
+/// Fire-and-forget bind-openid for inbound messages that `return` before the
+/// main path's inline bind-openid block — notably subscribe events handled by
+/// an automation rule (which returns the passive welcome early, skipping the
+/// main-path block). The background task respects the TTL cache (only fires on
+/// the refresh boundary) and never blocks the webhook reply. Idempotent: the
+/// backend re-receives the same openid+unionid and re-caching is harmless, so a
+/// race with a fast follow-up text message is safe.
+fn spawn_bind_openid(
+    bind_url: Option<String>,
+    app_id: String,
+    app_secret: String,
+    from_user: String,
+    event_unionid: String,
+) {
+    let bind_url = match bind_url {
+        Some(u) => u,
+        None => return,
+    };
+    if from_user.is_empty() {
+        return;
+    }
+    if !runtime::wechat_identity::needs_refresh(
+        &from_user,
+        runtime::wechat_identity::DEFAULT_TTL_SECS,
+    ) {
+        return;
+    }
+    let eu = if event_unionid.is_empty() {
+        None
+    } else {
+        Some(event_unionid)
+    };
+    tokio::spawn(async move {
+        match tokio::time::timeout(
+            Duration::from_millis(2000),
+            resolve_and_bind(&bind_url, &app_id, &app_secret, &from_user, eu.as_deref()),
+        )
+        .await
+        {
+            Ok(Ok(role)) => {
+                tracing::info!(
+                    app_id = %app_id,
+                    openid = %from_user,
+                    matched = %role,
+                    "weixin-oa: bind-openid identity resolved (subscribe background)"
+                );
+                runtime::wechat_identity::set(&from_user, &role);
+                if let Some(ref u) = eu {
+                    runtime::wechat_identity::set_unionid(&from_user, u);
+                }
+            }
+            Ok(Err(e)) => tracing::warn!(
+                app_id = %app_id,
+                openid = %from_user,
+                error = %e,
+                "weixin-oa: bind-openid resolve failed (skipping identity cache)"
+            ),
+            Err(_) => tracing::warn!(
+                app_id = %app_id,
+                openid = %from_user,
+                "weixin-oa: bind-openid resolve timed out (2s)"
+            ),
+        }
+    });
 }
 
 /// Resolve the user's unionid (from event XML when available, otherwise
