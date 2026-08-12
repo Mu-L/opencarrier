@@ -365,9 +365,9 @@ async fn webhook_post(
             let tx = state.tx.clone();
             let bot_id = state.bot_id.clone();
             // Extract owned data before spawning — DashMap Ref isn't Send.
-            let (http, access_token) = match token::WECOM_STATE.get_session_for_send(&bot_id) {
+            let (http, access_token, bind_wecom_url) = match token::WECOM_STATE.get_session_for_send(&bot_id) {
                 Some(bot) => match bot.entry.get_access_token_async().await {
-                    Ok(tok) => (bot.entry.http.clone(), tok),
+                    Ok(tok) => (bot.entry.http.clone(), tok, bot.entry.bind_wecom_url.clone()),
                     Err(e) => {
                         warn!(bot = %bot_id, error = %e, "kf: get_access_token failed");
                         return "success";
@@ -420,6 +420,27 @@ async fn webhook_post(
                             _ => continue,
                         };
                         let ext = m["external_userid"].as_str().unwrap_or("").to_string();
+                        // Auto-bind: resolve this customer's unionid via batchget
+                        // and POST {wecom_external_id, unionid} to the backend so
+                        // it can map the wecom customer to a member. Fire-and-
+                        // forget; cached per customer so a chatty session triggers
+                        // at most one batchget+bind per 30min. Only when this kf
+                        // bot has bind_wecom_url configured (86助手 today).
+                        if let Some(ref url) = bind_wecom_url {
+                            if !ext.is_empty() {
+                                let (http_b, tok_b, url_b, ext_b) =
+                                    (http.clone(), access_token.clone(), url.clone(), ext.clone());
+                                tokio::spawn(async move {
+                                    if let Err(e) = token::bind_kf_customer_unionid(
+                                        &http_b, &tok_b, &ext_b, &url_b,
+                                    )
+                                    .await
+                                    {
+                                        warn!(external_userid = %ext_b, error = %e, "kf bind-wecom failed");
+                                    }
+                                });
+                            }
+                        }
                         let _ = tx
                             .send(PluginMessage {
                                 channel_type: "wecom".to_string(),

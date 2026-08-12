@@ -67,6 +67,14 @@ pub struct BotEntry {
     /// MCP bot credentials (for App/Kf modes; SmartBot reuses mode's bot_id/secret).
     pub mcp_bot_id: Option<String>,
     pub mcp_bot_secret: Option<String>,
+    /// Backend endpoint to POST `{wecom_external_id, unionid}` on kf inbound,
+    /// so the backend can map the wecom external_userid to a member. e.g.
+    /// `https://chuxing.86bus.com/api/wechat/bind-wecom`. Plain POST, no HMAC
+    /// (like weixin-oa bind-openid). The unionid is resolved via
+    /// `kf/customer/batchget` using this bot's own `secret`/access_token — the
+    /// kf secret already covers that scope, so no separate secret is needed.
+    /// When `None` (default), kf inbound does no bind (other kf bots unaffected).
+    pub bind_wecom_url: Option<String>,
 }
 
 impl BotEntry {
@@ -99,6 +107,7 @@ impl BotEntry {
             cached_token: Mutex::new(None),
             mcp_bot_id,
             mcp_bot_secret,
+            bind_wecom_url: None,
         }
     }
 
@@ -114,6 +123,7 @@ impl BotEntry {
         callback_token: Option<String>,
         mcp_bot_id: Option<String>,
         mcp_bot_secret: Option<String>,
+        bind_wecom_url: Option<String>,
     ) -> Self {
         Self {
             name,
@@ -127,6 +137,7 @@ impl BotEntry {
             cached_token: Mutex::new(None),
             mcp_bot_id,
             mcp_bot_secret,
+            bind_wecom_url,
         }
     }
 
@@ -144,6 +155,7 @@ impl BotEntry {
             cached_token: Mutex::new(None),
             mcp_bot_id: None, // SmartBot uses mode's bot_id directly
             mcp_bot_secret: None,
+            bind_wecom_url: None,
         }
     }
 
@@ -456,6 +468,89 @@ pub fn save_kf_cursor(bot_id: &str, cursor: &str) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// kf customer → unionid bind (auto-bind external_userid to backend member)
+// ---------------------------------------------------------------------------
+
+/// In-process cache of external_userid → (resolved unionid, cached_at). Avoids
+/// repeat `kf/customer/batchget` + bind POSTs for the same customer within the
+/// TTL window. `None` unionid = negative cache (customer not linked to wechat).
+static UNIONID_CACHE: std::sync::LazyLock<DashMap<String, (Option<String>, Instant)>> =
+    std::sync::LazyLock::new(DashMap::new);
+
+/// TTL for the unionid cache (30 min). Matches wechat_identity DEFAULT_TTL_SECS;
+/// bounds how long a "not linked" customer stays negative-cached before re-check.
+const UNIONID_CACHE_TTL_SECS: u64 = 1800;
+
+/// On kf inbound, resolve the customer's unionid via `kf/customer/batchget`
+/// (using the bot's own access_token — the kf `secret` covers that scope, so no
+/// separate secret is needed) and POST `{wecom_external_id, unionid}` to the
+/// backend bind endpoint. Cached per external_userid (positive AND negative)
+/// for `UNIONID_CACHE_TTL_SECS` so a chatty customer triggers at most one
+/// batchget+bind per TTL window. Fire-and-forget: callers spawn this and log
+/// errors rather than propagating them (bind is best-effort, must not block
+/// message dispatch).
+pub async fn bind_kf_customer_unionid(
+    http: &Client,
+    access_token: &str,
+    external_userid: &str,
+    bind_wecom_url: &str,
+) -> CarrierResult<()> {
+    if external_userid.is_empty() {
+        return Ok(());
+    }
+
+    // Skip if we resolved this customer (or negative-cached it) recently.
+    if let Some(entry) = UNIONID_CACHE.get(external_userid) {
+        let (_, cached_at) = entry.value();
+        if Instant::now().duration_since(*cached_at).as_secs() < UNIONID_CACHE_TTL_SECS {
+            return Ok(());
+        }
+    }
+
+    // Pull the customer's unionid via kf/customer/batchget.
+    let body = serde_json::json!({ "external_userid_list": [external_userid] });
+    let resp = wedoc_post(http, "cgi-bin/kf/customer/batchget", access_token, &body).await?;
+    let unionid = resp["customer_list"]
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|c| c.get("unionid"))
+        .and_then(|u| u.as_str())
+        .map(|s| s.to_string());
+
+    // Cache result (positive or negative) before the POST so a transient bind
+    // failure doesn't cause a batchget storm on the next inbound.
+    UNIONID_CACHE.insert(external_userid.to_string(), (unionid.clone(), Instant::now()));
+
+    let Some(uid) = unionid else {
+        warn!(
+            external_userid = %external_userid,
+            "kf batchget returned no unionid (customer not linked to wechat?) — negative-cached"
+        );
+        return Ok(());
+    };
+
+    // POST {wecom_external_id, unionid} to the backend bind endpoint.
+    let bind_body = serde_json::json!({
+        "wecom_external_id": external_userid,
+        "unionid": uid,
+    });
+    let resp = http
+        .post(bind_wecom_url)
+        .json(&bind_body)
+        .send()
+        .await
+        .map_err(|e| CarrierError::Network(format!("bind-wecom request failed: {e}")))?;
+    let status = resp.status();
+    if status.is_success() {
+        info!(external_userid = %external_userid, %status, "kf bind-wecom posted");
+    } else {
+        let txt = resp.text().await.unwrap_or_default();
+        warn!(external_userid = %external_userid, %status, body = %txt, "bind-wecom non-2xx response");
+    }
+    Ok(())
+}
+
 /// Upload a temporary media file via `cgi-bin/media/upload` → `media_id`
 /// (valid 3 days). Used by kf image/voice/video/file/miniprogram-thumb sends.
 /// `media_type` = image|voice|video|file.
@@ -570,6 +665,12 @@ pub struct WecomSessionFile {
     pub callback_token: Option<String>,
     pub mcp_bot_id: Option<String>,
     pub mcp_bot_secret: Option<String>,
+    /// When set (kf mode), inbound kf customer messages auto-resolve the
+    /// customer's unionid via `kf/customer/batchget` and POST
+    /// `{wecom_external_id, unionid}` to this URL. Not exposed in the
+    /// simplified dashboard form — set via direct session.json edit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_wecom_url: Option<String>,
     pub bind_agent: Option<String>,
 }
 
@@ -652,6 +753,7 @@ impl WecomState {
                     sf.callback_token.clone(),
                     mcp_bot_id,
                     mcp_bot_secret,
+                    sf.bind_wecom_url.clone(),
                 ))
             }
             _ => {

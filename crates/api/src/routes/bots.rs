@@ -1461,6 +1461,7 @@ async fn register_bot_from_scan(
                 callback_token: None,
                 mcp_bot_id: None,
                 mcp_bot_secret: None,
+                bind_wecom_url: None,
                 bind_agent: Some(agent_ref.clone()),
             };
             channel_wecom::token::WECOM_STATE.save_session(&sf);

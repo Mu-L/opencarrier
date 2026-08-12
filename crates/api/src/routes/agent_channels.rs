@@ -574,6 +574,7 @@ pub async fn bind_wecom_kf(
         callback_token,
         mcp_bot_id: None,
         mcp_bot_secret: None,
+        bind_wecom_url: None,
         bind_agent: Some(agent_name.clone()),
     };
 
