@@ -29,6 +29,11 @@ pub struct ApiToolDef {
     pub resolve: HashMap<String, ApiResolveDef>,
     #[serde(default)]
     pub cron: Option<ApiCronDef>,
+    /// Context-field injection: auto-fill a param from the ToolContext (e.g.
+    /// inject the sender's openid so the agent doesn't have to pass it). Only
+    /// injects when the agent didn't already provide the field.
+    #[serde(default)]
+    pub inject: HashMap<String, ApiInjectDef>,
     #[serde(default)]
     pub headers: HashMap<String, String>,
     /// JSON request body: named params go into the body (signed+sent as-is
@@ -166,6 +171,27 @@ pub struct ApiCronDef {
     pub save_to: Option<String>,
     /// Table name for auto-creation.
     pub table: Option<String>,
+}
+
+/// Context-field injection — auto-fill a param from the ToolContext so the
+/// agent doesn't have to pass it. Example: inject the 公众号 sender's openid
+/// into a `query` call (`openid = { from = "sender_id", channel = "weixin-oa" }`).
+/// Only injects when (a) the agent didn't already provide the field, and
+/// (b) the optional `channel` matches the turn's channel_type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiInjectDef {
+    /// Context source. Currently only `"sender_id"` (the turn's sender id —
+    /// for weixin-oa this is the 服务号 openid).
+    pub from: String,
+    /// Only inject when the turn's `channel_type` equals this (e.g.
+    /// "weixin-oa"). None = inject on any channel.
+    #[serde(default)]
+    pub channel: Option<String>,
+    /// Only inject when ALL of these fields are absent from the agent's args
+    /// (e.g. `["order_no", "phone"]` — don't inject openid if the agent already
+    /// gave an alternative identifier). Empty = no such guard.
+    #[serde(default)]
+    pub only_if_absent: Vec<String>,
 }
 
 /// Parsed api_tools.toml — array of tool definitions.

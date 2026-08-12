@@ -286,10 +286,23 @@ fn serialize_tool(tool: &ApiToolDef) -> String {
         }
     }
 
+    // Context-field injection
+    if !tool.inject.is_empty() {
+        for (field, rule) in &tool.inject {
+            out.push_str(&format!("\n[tool.inject.{}]\n", field));
+            out.push_str(&format!("from = \"{}\"\n", rule.from));
+            if let Some(ref ch) = rule.channel {
+                out.push_str(&format!("channel = \"{}\"\n", ch));
+            }
+            if !rule.only_if_absent.is_empty() {
+                let fs: Vec<String> = rule.only_if_absent.iter().map(|f| format!("\"{}\"", f)).collect();
+                out.push_str(&format!("only_if_absent = [{}]\n", fs.join(", ")));
+            }
+        }
+    }
+
     out
 }
-
-/// Escape a string for a TOML basic string (backslash, quote, newline, etc.).
 fn escape_toml_string(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")

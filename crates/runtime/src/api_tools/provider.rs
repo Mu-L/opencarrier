@@ -218,7 +218,7 @@ impl DeclarativeApiModule {
     /// Resolve parameters that have a [tool.resolve] config.
     /// For each param with a resolve rule, if the condition is met, call the
     /// specified tool to transform the value (e.g. geocode place name → coordinates).
-    async fn resolve_params(&self, config: &ApiToolDef, args: &Value) -> CarrierResult<Value> {
+    async fn resolve_params(&self, config: &ApiToolDef, args: &Value, ctx: &ToolContext<'_>) -> CarrierResult<Value> {
         if config.resolve.is_empty() {
             return Ok(args.clone());
         }
@@ -268,7 +268,7 @@ impl DeclarativeApiModule {
                 "resolve: pre-resolving parameter"
             );
 
-            match Box::pin(self.execute_api_call(target_config, &Value::Object(resolve_args))).await {
+            match Box::pin(self.execute_api_call(target_config, &Value::Object(resolve_args), ctx)).await {
                 Ok(result_str) => {
                     // Extract the specified field from the result
                     let result: Value = serde_json::from_str(&result_str)
@@ -301,7 +301,7 @@ impl DeclarativeApiModule {
         Ok(resolved)
     }
 
-    async fn execute_api_call(&self, config: &ApiToolDef, args: &Value) -> CarrierResult<String> {
+    async fn execute_api_call(&self, config: &ApiToolDef, args: &Value, ctx: &ToolContext<'_>) -> CarrierResult<String> {
         // Validate required params
         for (name, param_def) in &config.params {
             if param_def.required && args.get(name).is_none() && param_def.default.is_none() {
@@ -310,7 +310,38 @@ impl DeclarativeApiModule {
         }
 
         // Resolve params: if config.resolve has entries, pre-process args
-        let resolved_args = self.resolve_params(config, args).await?;
+        let mut resolved_args = self.resolve_params(config, args, ctx).await?;
+
+        // Inject context fields (e.g. sender_id -> openid, channel-gated). Only
+        // fills fields the agent didn't already provide.
+        if !config.inject.is_empty() {
+            for (field, rule) in &config.inject {
+                if resolved_args.get(field).is_some() {
+                    continue;
+                }
+                // Skip if any guarded alternative is already provided (e.g.
+                // don't inject openid when the agent gave phone/order_no).
+                if rule
+                    .only_if_absent
+                    .iter()
+                    .any(|f| resolved_args.get(f).is_some())
+                {
+                    continue;
+                }
+                if let Some(ref ch) = rule.channel {
+                    if ctx.channel_type != Some(ch.as_str()) {
+                        continue;
+                    }
+                }
+                if rule.from == "sender_id" {
+                    if let Some(sid) = ctx.sender_id {
+                        if !sid.is_empty() {
+                            resolved_args[field.clone()] = Value::String(sid.to_string());
+                        }
+                    }
+                }
+            }
+        }
 
         // Build JSON body (if configured). The exact serialized string is both
         // signed (when hmac is set) and sent - never re-serialized.
@@ -486,10 +517,10 @@ impl ToolModule for DeclarativeApiModule {
         &self,
         name: &str,
         input: &Value,
-        _ctx: &ToolContext<'_>,
+        ctx: &ToolContext<'_>,
     ) -> Option<CarrierResult<String>> {
         let config = self.find_config(name)?;
-        let result = self.execute_api_call(config, input).await;
+        let result = self.execute_api_call(config, input, ctx).await;
         Some(result)
     }
 
