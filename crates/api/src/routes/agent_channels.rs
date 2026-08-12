@@ -557,6 +557,17 @@ pub async fn bind_wecom_kf(
         .map(|n| n as u16)
         .or_else(|| existing.as_ref().and_then(|e| e.webhook_port))
         .unwrap_or(9100);
+    // bind_wecom_url: optional backend endpoint for auto-binding kf customers to
+    // a member (kf/customer/batchget unionid -> POST). Not in the simplified
+    // dashboard form; set via direct session.json edit. Preserve the existing
+    // value if the request omits it (mirrors weixin-oa bind_openid_url) so
+    // re-saving the kf config through the form doesn't clobber it.
+    let bind_wecom_url = body
+        .get("bind_wecom_url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| existing.as_ref().and_then(|e| e.bind_wecom_url.clone()));
 
     let sf = channel_wecom::token::WecomSessionFile {
         channel: "wecom".to_string(),
@@ -574,7 +585,7 @@ pub async fn bind_wecom_kf(
         callback_token,
         mcp_bot_id: None,
         mcp_bot_secret: None,
-        bind_wecom_url: None,
+        bind_wecom_url,
         bind_agent: Some(agent_name.clone()),
     };
 
