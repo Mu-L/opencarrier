@@ -143,6 +143,11 @@ pub enum CronDelivery {
     None,
     /// Deliver via the user's last communication channel (degrades to None if no channel).
     LastChannel,
+    /// Deliver to all admins of the agent's workspace (fans out via admins.json
+    /// → `do_push_message("admins", …)`). Unlike an agent calling `message_push`,
+    /// this is a privileged delivery path with no ephemeral admin-identity gate,
+    /// so it reliably reaches admins from a scheduled (async) cron turn.
+    Admins,
     /// Deliver via HTTP webhook.
     Webhook {
         /// Webhook URL (must start with `http://` or `https://`).
@@ -322,6 +327,7 @@ impl CronJob {
             }
             CronDelivery::None => {}
             CronDelivery::LastChannel => {}
+            CronDelivery::Admins => {}
         }
         Ok(())
     }
@@ -812,6 +818,13 @@ mod tests {
         };
         let json2 = serde_json::to_string(&d2).unwrap();
         assert!(json2.contains("\"kind\":\"webhook\""));
+
+        // Admins delivery: round-trip through {"kind":"admins"}.
+        let d3 = CronDelivery::Admins;
+        let json3 = serde_json::to_string(&d3).unwrap();
+        assert_eq!(json3, "{\"kind\":\"admins\"}");
+        let back: CronDelivery = serde_json::from_str(&json3).unwrap();
+        assert!(matches!(back, CronDelivery::Admins));
     }
 
     // -- Cron expression edge cases --

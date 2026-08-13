@@ -319,6 +319,23 @@ pub(super) async fn cron_deliver_response(
             })?;
             deliver_via_last_channel(kernel, agent_id, sender_id, response).await
         }
+        CronDelivery::Admins => {
+            // Fan the cron result out to every admin in the agent's workspace
+            // (admins.json) via the same privileged path the automation webhook
+            // uses. This is delivery, not an agent tool call, so it bypasses the
+            // `message_push` tool's Dangerous classification and its ephemeral
+            // wechat_identity admin gate — both of which would block a scheduled
+            // (async) turn. `do_push_message("admins")` resolves the workspace
+            // via registry (id-or-name), routes each admin through sender_channels
+            // (prefix fallback), and delivers; ≥1 success returns Ok.
+            let content = types::content::ContentDescriptor {
+                text: Some(response.to_string()),
+                ..Default::default()
+            };
+            kernel
+                .do_push_message("admins", &content, &agent_id.to_string(), &pbot)
+                .await
+        }
         CronDelivery::Webhook { url } => {
             tracing::debug!(url = %url, "Cron: delivering via webhook");
             types::ssrf::check_ssrf(url)?;
