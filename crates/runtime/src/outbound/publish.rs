@@ -65,27 +65,57 @@ pub fn process_publish_markers(
     cleaned
 }
 
-/// Read the app_secret for `app_id` from the sender's own profile.json
-/// (preferences.wechat_accounts array). Multi-user: each user's OA credentials
-/// live in their own directory; find the matching entry by app_id. Returns
-/// None if the profile or that account isn't configured.
+/// Resolve the app_secret for `app_id` for a publish action.
+///
+/// Two sources, tried in order, supporting the two ways a clone ends up able to
+/// publish to a WeChat OA:
+/// 1. **User-provided (per-user profile)** — the user explicitly supplied
+///    app_id+app_secret for publishing, stored in their profile's
+///    `preferences.wechat_accounts`. Tried first so an explicit override wins.
+/// 2. **Backend-bound OA (registered sender)** — the OA is bound in the backend
+///    as a weixin-oa sender for auto-reply. That sender session already carries
+///    `app_secret`, so the user shouldn't have to re-supply it just to publish.
+///    Falls back to `~/.opencarrier/senders/<app_id>/session.json`.
+///
+/// Returns None only if neither source has a non-empty app_secret for app_id.
 fn read_wechat_app_secret(
     home: &std::path::Path,
     sender_id: &str,
     agent_id: &str,
     app_id: &str,
 ) -> Option<String> {
+    // (1) User profile preferences.wechat_accounts (explicit user-provided).
     let profile_path =
         types::config::sender_data_dir(home, sender_id, agent_id, Some(sender_id))
             .join("profile.json");
-    let content = std::fs::read_to_string(&profile_path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let accounts = v["preferences"]["wechat_accounts"].as_array()?;
-    for acct in accounts {
-        if acct["app_id"].as_str() == Some(app_id) {
-            return acct["app_secret"].as_str().map(|s| s.to_string());
+    if let Ok(content) = std::fs::read_to_string(&profile_path) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(accounts) = v["preferences"]["wechat_accounts"].as_array() {
+                for acct in accounts {
+                    if acct["app_id"].as_str() == Some(app_id) {
+                        if let Some(s) = acct["app_secret"].as_str().filter(|s| !s.is_empty()) {
+                            return Some(s.to_string());
+                        }
+                    }
+                }
+            }
         }
     }
+
+    // (2) Registered weixin-oa sender session (backend-bound OA for auto-reply).
+    let oa_session = home.join("senders").join(app_id).join("session.json");
+    if let Ok(content) = std::fs::read_to_string(&oa_session) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+            let is_oa = v.get("channel").and_then(|c| c.as_str()) == Some("weixin-oa");
+            let matches_app = v.get("app_id").and_then(|a| a.as_str()) == Some(app_id);
+            if is_oa && matches_app {
+                if let Some(s) = v.get("app_secret").and_then(|s| s.as_str()).filter(|s| !s.is_empty()) {
+                    return Some(s.to_string());
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -417,7 +447,9 @@ async fn handle_publish_marker(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_meta_field, extract_meta_title, resolve_article_title};
+    use super::{
+        extract_meta_field, extract_meta_title, read_wechat_app_secret, resolve_article_title,
+    };
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -484,5 +516,85 @@ mod tests {
         let md = tmp_md("# 标题直接开头\n\n正文");
         let html = md.with_extension("html");
         assert_eq!(resolve_article_title(html.to_str().unwrap()), "标题直接开头");
+    }
+
+    // --- read_wechat_app_secret: profile vs OA sender session fallback ---
+
+    #[test]
+    fn app_secret_from_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let profile = home.join("workspaces/agent1/senders/owner1/profile.json");
+        std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+        std::fs::write(
+            &profile,
+            r#"{"preferences":{"wechat_accounts":[{"app_id":"wxAAA","app_secret":"secret_profile"}]}}"#,
+        )
+        .unwrap();
+        let got = read_wechat_app_secret(home, "owner1", "agent1", "wxAAA");
+        assert_eq!(got.as_deref(), Some("secret_profile"));
+    }
+
+    #[test]
+    fn app_secret_fallback_to_registered_oa_sender() {
+        // Scenario B: OA bound in backend (sender session has app_secret); no
+        // profile entry → must fall back to the sender session.
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let session = home.join("senders/wxBBB/session.json");
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        std::fs::write(
+            &session,
+            r#"{"channel":"weixin-oa","app_id":"wxBBB","app_secret":"secret_oa","bind_agent":"agent1"}"#,
+        )
+        .unwrap();
+        let got = read_wechat_app_secret(home, "owner1", "agent1", "wxBBB");
+        assert_eq!(got.as_deref(), Some("secret_oa"));
+    }
+
+    #[test]
+    fn app_secret_profile_wins_over_sender_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let profile = home.join("workspaces/agent1/senders/owner1/profile.json");
+        std::fs::create_dir_all(profile.parent().unwrap()).unwrap();
+        std::fs::write(
+            &profile,
+            r#"{"preferences":{"wechat_accounts":[{"app_id":"wxCCC","app_secret":"from_profile"}]}}"#,
+        )
+        .unwrap();
+        let session = home.join("senders/wxCCC/session.json");
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        std::fs::write(
+            &session,
+            r#"{"channel":"weixin-oa","app_id":"wxCCC","app_secret":"from_session"}"#,
+        )
+        .unwrap();
+        let got = read_wechat_app_secret(home, "owner1", "agent1", "wxCCC");
+        assert_eq!(got.as_deref(), Some("from_profile"));
+    }
+
+    #[test]
+    fn app_secret_sender_session_must_be_weixin_oa() {
+        // A non-weixin-oa sender session (e.g. wecom) must NOT leak app_secret.
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let session = home.join("senders/wxDDD/session.json");
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        std::fs::write(
+            &session,
+            r#"{"channel":"wecom","app_id":"wxDDD","app_secret":"leak"}"#,
+        )
+        .unwrap();
+        let got = read_wechat_app_secret(home, "owner1", "agent1", "wxDDD");
+        assert!(got.is_none(), "non-OA sender session must not be used");
+    }
+
+    #[test]
+    fn app_secret_neither_source_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let got = read_wechat_app_secret(home, "owner1", "agent1", "wxNONE");
+        assert!(got.is_none());
     }
 }
