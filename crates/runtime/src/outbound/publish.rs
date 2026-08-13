@@ -103,12 +103,16 @@ fn read_wechat_app_secret(
     }
 
     // (2) Registered weixin-oa sender session (backend-bound OA for auto-reply).
+    // Only use it when the OA is bound to THIS agent (bind_agent == agent_id),
+    // so a multi-user clone publishing to some app_id never accidentally pulls
+    // another clone's OA app_secret from the global sender registry.
     let oa_session = home.join("senders").join(app_id).join("session.json");
     if let Ok(content) = std::fs::read_to_string(&oa_session) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
             let is_oa = v.get("channel").and_then(|c| c.as_str()) == Some("weixin-oa");
             let matches_app = v.get("app_id").and_then(|a| a.as_str()) == Some(app_id);
-            if is_oa && matches_app {
+            let bound_to_us = v.get("bind_agent").and_then(|a| a.as_str()) == Some(agent_id);
+            if is_oa && matches_app && bound_to_us {
                 if let Some(s) = v.get("app_secret").and_then(|s| s.as_str()).filter(|s| !s.is_empty()) {
                     return Some(s.to_string());
                 }
@@ -588,6 +592,23 @@ mod tests {
         .unwrap();
         let got = read_wechat_app_secret(home, "owner1", "agent1", "wxDDD");
         assert!(got.is_none(), "non-OA sender session must not be used");
+    }
+
+    #[test]
+    fn app_secret_sender_session_only_for_bound_agent() {
+        // An OA bound to a DIFFERENT agent must NOT be used by this agent
+        // (multi-user clone must not pull another clone's OA app_secret).
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let session = home.join("senders/wxEEE/session.json");
+        std::fs::create_dir_all(session.parent().unwrap()).unwrap();
+        std::fs::write(
+            &session,
+            r#"{"channel":"weixin-oa","app_id":"wxEEE","app_secret":"other_clone_secret","bind_agent":"some-other-agent"}"#,
+        )
+        .unwrap();
+        let got = read_wechat_app_secret(home, "owner1", "agent1", "wxEEE");
+        assert!(got.is_none(), "must not use an OA bound to a different agent");
     }
 
     #[test]
