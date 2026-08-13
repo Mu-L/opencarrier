@@ -502,6 +502,14 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "image_generate",
     "document_generate",
     "api_tool_register",
+    // `user_profile` must be core (not just catalog): it's the ONLY writer of
+    // per-user preferences (e.g. wechat_accounts OA credentials for multi-user
+    // clones). The flow `tools:` hard sandbox (e255801) freezes the allow-list
+    // to `base ∪ flow.tools`; if user_profile weren't in the assembled core
+    // set, publish flows (draft-publisher declares only `file_read`) couldn't
+    // save credentials the user provides mid-flow — regressing "一直给 app_secret
+    // 一直要". Core = always assembled = always inside every flow's allow-list.
+    "user_profile",
 
 ];
 
