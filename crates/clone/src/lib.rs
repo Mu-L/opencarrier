@@ -6,7 +6,10 @@
 pub mod hub;
 pub mod manifest;
 pub mod manifest_builder;
+pub mod defaults;
 mod loader;
+
+pub use defaults::DEFAULT_SELF_GROWTH_FLOW;
 
 pub use manifest::{build_manifest, is_bak, is_test_dir, sha256_hex, write_files_to_workspace, Manifest};
 pub use loader::{

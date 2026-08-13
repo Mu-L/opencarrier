@@ -750,12 +750,18 @@ pub struct CloneLifecycleConfig {
     /// When true, conversations with clone agents are automatically analyzed
     /// to extract new knowledge files.
     pub evolution_enabled: bool,
+    /// Global master switch for autonomous self-growth (idle-time learn/create
+    /// cron). When false, no clone runs self-growth regardless of its EVOLUTION.md.
+    /// When true, a clone runs self-growth only if its EVOLUTION.md also sets
+    /// `self_growth_enabled: true`. Default off.
+    pub self_growth_enabled: bool,
 }
 
 impl Default for CloneLifecycleConfig {
     fn default() -> Self {
         Self {
             evolution_enabled: true,
+            self_growth_enabled: false,
         }
     }
 }

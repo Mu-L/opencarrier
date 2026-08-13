@@ -247,6 +247,36 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
     }
 }
 
+/// Should an OA-bound clone run the *create* branch this cycle?
+///
+/// Returns true when the most recent `写:` entry in the clone's self-growth log
+/// is older than the cooldown (or there is none). Date strings compare
+/// lexically (YYYY-MM-DD sorts chronologically), avoiding date arithmetic.
+fn self_growth_should_create(workspace: &std::path::Path) -> bool {
+    const COOLDOWN_DAYS: i64 = 3;
+    let cutoff = (chrono::Utc::now() - chrono::Duration::days(COOLDOWN_DAYS))
+        .format("%Y-%m-%d")
+        .to_string();
+    let log = workspace.join("flows/self-growth/log.md");
+    let Ok(content) = std::fs::read_to_string(&log) else {
+        return true; // no log yet → free to create
+    };
+    let mut latest_create: Option<&str> = None;
+    for line in content.lines() {
+        if line.contains("写:") || line.contains("写：") {
+            let t = line.trim_start_matches(|c: char| c == '-' || c.is_whitespace());
+            if t.len() >= 10 {
+                latest_create = Some(&t[..10]); // keep scanning; last one wins (latest)
+            }
+        }
+    }
+    match latest_create {
+        // create if the latest draft predates the cutoff
+        Some(d) => d < cutoff.as_str(),
+        None => true,
+    }
+}
+
 /// Deliver a cron job's agent response to the configured delivery target.
 ///
 /// - `None`: silent — no notification sent
@@ -490,6 +520,164 @@ async fn deliver_via_last_channel(
 // ── Background daemon methods ──────────────────────────────
 
 impl CarrierKernel {
+    /// Reconcile per-clone self-growth cron jobs against config.
+    ///
+    /// For each clone: if (global `clone_lifecycle.self_growth_enabled` AND the
+    /// clone's EVOLUTION.md `self_growth_enabled`), ensure exactly one
+    /// `self-growth` cron exists whose message reflects the clone's current OA
+    /// binding + create-cadence; otherwise remove any `self-growth` cron. The
+    /// message carries `mode=learn` (always) or `mode=create app_id=<wx…>`
+    /// (OA-bound clones whose last article draft is older than the cooldown).
+    /// Idempotent: when the existing job already matches desired schedule +
+    /// message, it's left untouched (no churn, no persist write).
+    ///
+    /// Called at startup (start_background_agents) and periodically from the
+    /// cron tick loop (~every 60s), so config flips and new installs converge
+    /// without a restart.
+    fn reconcile_self_growth(&self) {
+        let global_on = self.config.clone_lifecycle.self_growth_enabled;
+
+        // Master switch off → strip self-growth jobs from every clone.
+        if !global_on {
+            let mut changed = false;
+            for entry in self.registry.list() {
+                if entry.manifest.clone_source.is_none() {
+                    continue;
+                }
+                for j in self.cron_scheduler.list_jobs(entry.id) {
+                    if j.name == "self-growth" {
+                        let _ = self.cron_scheduler.remove_job(j.id);
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                let _ = self.cron_scheduler.persist();
+            }
+            return;
+        }
+
+        // Map clone-name → OA app_id for clones with a weixin-oa sender bound.
+        // (bind_agent in the sender session holds the agent name; the sender
+        // dir name is the app_id.)
+        let mut oa_bound: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for (app_id, json) in types::config::scan_sender_sessions(&self.config.home_dir) {
+            if json.get("channel").and_then(|v| v.as_str()) == Some("weixin-oa") {
+                if let Some(bind) = json.get("bind_agent").and_then(|v| v.as_str()) {
+                    oa_bound
+                        .entry(bind.to_string())
+                        .or_insert_with(|| app_id.clone());
+                }
+            }
+        }
+
+        let mut changed = false;
+        for entry in self.registry.list() {
+            if entry.manifest.clone_source.is_none() {
+                continue;
+            }
+            let Some(ref workspace) = entry.manifest.workspace else {
+                continue;
+            };
+            let cfg = lifecycle::evolution_config::read_evolution_config(workspace.as_path());
+            let agent_id = entry.id;
+            let clone_name = entry.name.clone();
+
+            let existing: Vec<_> = self
+                .cron_scheduler
+                .list_jobs(agent_id)
+                .into_iter()
+                .filter(|j| j.name == "self-growth")
+                .collect();
+
+            if !cfg.self_growth_enabled {
+                if !existing.is_empty() {
+                    for j in &existing {
+                        let _ = self.cron_scheduler.remove_job(j.id);
+                    }
+                    changed = true;
+                }
+                continue;
+            }
+
+            // Enabled — compute desired mode + schedule + message.
+            let (can_publish, app_id) = match oa_bound.get(&clone_name) {
+                Some(aid) => (true, aid.clone()),
+                None => (false, String::new()),
+            };
+            let mode = if can_publish && self_growth_should_create(workspace) {
+                "create"
+            } else {
+                "learn"
+            };
+            let interval_secs = cfg.self_growth_interval_hours.saturating_mul(3600).max(60);
+            let message = if can_publish {
+                format!("自主成长。mode={mode} app_id={app_id}")
+            } else {
+                "自主成长。mode=learn".to_string()
+            };
+            let desired_schedule =
+                types::scheduler::CronSchedule::Every { every_secs: interval_secs };
+            let desired_action = types::scheduler::CronAction::AgentTurn {
+                message: message.clone(),
+                model_override: None,
+                timeout_secs: None,
+                active_flow: Some("self-growth".to_string()),
+            };
+
+            // Idempotency: if exactly one existing job matches desired, skip.
+            if existing.len() == 1 {
+                let j = &existing[0];
+                let schedule_matches = matches!(
+                    (&j.schedule, &desired_schedule),
+                    (
+                        types::scheduler::CronSchedule::Every { every_secs: a },
+                        types::scheduler::CronSchedule::Every { every_secs: b }
+                    ) if a == b
+                );
+                let action_matches = matches!(
+                    (&j.action, &desired_action),
+                    (
+                        types::scheduler::CronAction::AgentTurn { message: m1, .. },
+                        types::scheduler::CronAction::AgentTurn { message: m2, .. }
+                    ) if m1 == m2
+                );
+                if schedule_matches && action_matches {
+                    continue;
+                }
+            }
+
+            // Remove stale, add fresh.
+            for j in &existing {
+                let _ = self.cron_scheduler.remove_job(j.id);
+            }
+            let job = types::scheduler::CronJob {
+                id: types::scheduler::CronJobId::new(),
+                agent_id,
+                owner_id: None,
+                sender_id: None,
+                name: "self-growth".to_string(),
+                enabled: true,
+                schedule: desired_schedule,
+                action: desired_action,
+                delivery: types::scheduler::CronDelivery::None,
+                created_at: chrono::Utc::now(),
+                next_run: None,
+                last_run: None,
+            };
+            match self.cron_scheduler.add_job(job, false) {
+                Ok(_) => changed = true,
+                Err(e) => warn!(agent = %clone_name, error = %e, "self-growth cron add failed"),
+            }
+        }
+        if changed {
+            if let Err(e) = self.cron_scheduler.persist() {
+                warn!("self-growth reconcile persist failed: {e}");
+            }
+        }
+    }
+
     /// Start file watchers for clone agents to auto-compile on knowledge changes.
     fn start_clone_watchers(self: &Arc<Self>) {
         if !self.config.clone_lifecycle.evolution_enabled {
@@ -711,6 +899,7 @@ impl CarrierKernel {
 
         self.check_hub_upgrades();
         self.start_clone_watchers();
+        self.reconcile_self_growth();
 
         // Cron scheduler tick loop — fires due jobs every 15 seconds
         {
@@ -719,6 +908,7 @@ impl CarrierKernel {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 let mut persist_counter = 0u32;
+                let mut reconcile_counter = 0u32;
                 interval.tick().await;
                 loop {
                     interval.tick().await;
@@ -764,6 +954,16 @@ impl CarrierKernel {
                             Ok(n) => tracing::debug!(deleted = n, "Purged expired pending notifications"),
                             Err(e) => tracing::warn!("Purge expired notifications failed: {e}"),
                         }
+                    }
+
+                    // Reconcile self-growth crons every ~60s so config flips
+                    // (EVOLUTION.md self_growth_enabled) and new installs converge
+                    // without a restart. Cheap: iterates clones, reads small
+                    // frontmatter files, idempotent add/remove by name.
+                    reconcile_counter += 1;
+                    if reconcile_counter >= 4 {
+                        reconcile_counter = 0;
+                        kernel.reconcile_self_growth();
                     }
                 }
             });

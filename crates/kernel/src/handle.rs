@@ -1036,6 +1036,21 @@ impl CarrierKernel {
                 CarrierError::Internal(format!("Failed to write files: {e}"))
             })?;
 
+        // Seed the default `self-growth` flow (factory-baked autonomous
+        // learn/create capability) unless the clone ships its own. Done before
+        // building the manifest so the flow is auto-registered in the flows
+        // list. Whether it actually runs is controlled per-clone by
+        // EVOLUTION.md `self_growth_enabled` (reconciled by the daemon).
+        let self_growth_flow = workspace_dir.join("flows/self-growth/flow.md");
+        if !self_growth_flow.exists() {
+            if let Some(parent) = self_growth_flow.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&self_growth_flow, clone::DEFAULT_SELF_GROWTH_FLOW) {
+                tracing::warn!(name = %clone_name, error = %e, "failed to seed default self-growth flow");
+            }
+        }
+
         let mut manifest = build_manifest_from_workspace(&workspace_dir, &clone_name, Some(clone_name.clone()))
             .map_err(|e| {
                 let _ = std::fs::remove_dir_all(&workspace_dir);

@@ -42,6 +42,13 @@ pub struct EvolutionConfig {
     pub bloat_delete_days: u32,
     /// Whether to send anonymized feedback to Hub.
     pub feedback_to_hub: bool,
+    /// Whether autonomous self-growth (idle-time learn/create cron) is enabled
+    /// for this clone. Requires the global master switch (`clone_lifecycle
+    /// .self_growth_enabled`) to be on too. Default off.
+    pub self_growth_enabled: bool,
+    /// Self-growth cron interval in hours — how often the clone wakes to
+    /// autonomously learn (and, if OA-bound, create article drafts). Default 6.
+    pub self_growth_interval_hours: u64,
     /// V3: identity layer files that are frozen — evolution system may not modify.
     pub identity_frozen_files: Vec<String>,
 }
@@ -57,6 +64,8 @@ impl Default for EvolutionConfig {
             bloat_stale_days: 30,
             bloat_delete_days: 60,
             feedback_to_hub: false,
+            self_growth_enabled: false,
+            self_growth_interval_hours: 6,
             identity_frozen_files: Vec::new(),
         }
     }
@@ -123,6 +132,12 @@ fn parse_evolution_config(content: &str) -> EvolutionConfig {
             }
         } else if let Some(val) = line.strip_prefix("feedback_to_hub:") {
             config.feedback_to_hub = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("self_growth_enabled:") {
+            config.self_growth_enabled = val.trim() == "true";
+        } else if let Some(val) = line.strip_prefix("self_growth_interval_hours:") {
+            if let Ok(n) = val.trim().parse() {
+                config.self_growth_interval_hours = n;
+            }
         } else if let Some(val) = line.strip_prefix("identity_frozen:") {
             let v = val.trim().trim_matches('"').trim_matches('\'');
             config.identity_frozen_files = v
@@ -168,6 +183,8 @@ mod tests {
         assert_eq!(config.bloat_stale_days, 30);
         assert_eq!(config.bloat_delete_days, 60);
         assert!(!config.feedback_to_hub);
+        assert!(!config.self_growth_enabled);
+        assert_eq!(config.self_growth_interval_hours, 6);
     }
 
     #[test]
@@ -187,6 +204,8 @@ auto_compile: false
 bloat_stale_days: 14
 bloat_delete_days: 30
 feedback_to_hub: true
+self_growth_enabled: true
+self_growth_interval_hours: 12
 ---
 
 ## Custom rules
@@ -200,6 +219,22 @@ Some custom rules here.
         assert_eq!(config.bloat_stale_days, 14);
         assert_eq!(config.bloat_delete_days, 30);
         assert!(config.feedback_to_hub);
+        // self_growth fields must actually parse (cf. compile_interval_hours,
+        // which has no parse branch and silently stays at default).
+        assert!(config.self_growth_enabled);
+        assert_eq!(config.self_growth_interval_hours, 12);
+    }
+
+    #[test]
+    fn test_self_growth_defaults_when_absent() {
+        // Frontmatter without self_growth keys → defaults (off, 6h).
+        let content = r#"---
+evolution_mode: "conservative"
+---
+"#;
+        let config = parse_evolution_config(content);
+        assert!(!config.self_growth_enabled);
+        assert_eq!(config.self_growth_interval_hours, 6);
     }
 
     #[test]
