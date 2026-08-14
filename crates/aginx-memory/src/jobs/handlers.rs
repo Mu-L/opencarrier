@@ -13,8 +13,8 @@ use memory::tree::entity_store::EntityIndexEntry;
 use memory::tree::extract::extract_entities;
 use memory::tree::summariser::inert::InertSummariser;
 use memory::tree::types::{
-    AppendBufferPayload, AppendTarget, ExtractChunkPayload, FlushStalePayload, Job, JobKind,
-    NodeRef, NewJob, SealPayload, TopicRoutePayload, DEFAULT_FLUSH_AGE_SECS,
+    AppendBufferPayload, AppendTarget, DigestDailyPayload, ExtractChunkPayload, FlushStalePayload,
+    Job, JobKind, NodeRef, NewJob, SealPayload, TopicRoutePayload, DEFAULT_FLUSH_AGE_SECS,
 };
 use types::error::{CarrierError, CarrierResult};
 use types::memory_tree::TreeKind;
@@ -362,15 +362,28 @@ async fn handle_digest_daily(
     pool: &Pool,
     content_root: &Path,
     owner_id: &str,
-    _job: &Job,
+    job: &Job,
 ) -> CarrierResult<JobOutcome> {
-    match end_of_day_digest(pool, content_root, owner_id, &InertSummariser).await? {
+    let date = serde_json::from_str::<DigestDailyPayload>(&job.payload_json)
+        .ok()
+        .and_then(|p| chrono::NaiveDate::parse_from_str(&p.date_iso, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| chrono::Utc::now().date_naive() - chrono::Duration::days(1));
+
+    match end_of_day_digest(pool, content_root, owner_id, date, &InertSummariser).await? {
         DigestOutcome::Emitted { daily_id, .. } => {
-            tracing::info!("[tree_jobs] emitted digest daily_id={daily_id}");
+            tracing::info!(
+                date = %date,
+                daily_id = %daily_id,
+                "[tree_jobs] emitted digest"
+            );
         }
         DigestOutcome::EmptyDay => {}
         DigestOutcome::Skipped { existing_id } => {
-            tracing::debug!("[tree_jobs] digest skipped existing_id={existing_id}");
+            tracing::info!(
+                date = %date,
+                existing_id = %existing_id,
+                "[tree_jobs] digest skipped (already have this day)"
+            );
         }
     }
     Ok(JobOutcome::Done)
@@ -421,7 +434,7 @@ async fn handle_flush_stale(
 mod tests {
     use super::*;
     use deadpool_postgres::Manager;
-    use memory::tree::types::{Chunk, DigestDailyPayload, JobStatus, SourceKind};
+    use memory::tree::types::{Chunk, JobStatus, SourceKind};
     use std::path::PathBuf;
     use tempfile::TempDir;
 

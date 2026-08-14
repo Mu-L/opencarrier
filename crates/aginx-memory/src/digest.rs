@@ -10,6 +10,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
 use deadpool_postgres::Pool;
 use memory::tree::content_store::ContentStore;
 use memory::tree::summariser::{Summariser, SummaryContext, SummaryInput};
@@ -23,6 +24,53 @@ use crate::bucket_seal::BucketSealEngine;
 use crate::pg::chunk_store::ChunkStore;
 use crate::pg::tree_store::TreeStore;
 
+/// Topic stamped on each L0 daily node so later runs can find "this day's"
+/// digest. Format: `digest:YYYY-MM-DD` (UTC calendar date from the job).
+pub const DIGEST_TOPIC_PREFIX: &str = "digest:";
+
+/// Topic tag for the daily digest of `date`.
+pub fn digest_topic(date: NaiveDate) -> String {
+    format!("{DIGEST_TOPIC_PREFIX}{}", date.format("%Y-%m-%d"))
+}
+
+/// Inclusive UTC millisecond bounds of `date` (00:00:00.000 .. 23:59:59.999).
+pub fn utc_day_bounds_ms(date: NaiveDate) -> (i64, i64) {
+    let start = Utc
+        .with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
+        .single()
+        .expect("valid midnight")
+        .timestamp_millis();
+    let next_date = date + Duration::days(1);
+    let next = Utc
+        .with_ymd_and_hms(
+            next_date.year(),
+            next_date.month(),
+            next_date.day(),
+            0,
+            0,
+            0,
+        )
+        .single()
+        .expect("valid next midnight")
+        .timestamp_millis();
+    (start, next - 1)
+}
+
+/// True when `node` is the L0 daily recap for `date`.
+///
+/// Match on the `digest:YYYY-MM-DD` topic (new nodes) or on an exact UTC-day
+/// time range (same contract, in case a writer omitted the topic). A leftover
+/// L0 whose range is the source material — not a calendar day — does not match,
+/// so it cannot block the next day's digest.
+pub fn is_daily_for_date(node: &SummaryNode, date: NaiveDate) -> bool {
+    let tag = digest_topic(date);
+    if node.topics.iter().any(|t| t == &tag) {
+        return true;
+    }
+    let (start, end) = utc_day_bounds_ms(date);
+    node.time_range_start_ms == start && node.time_range_end_ms == end
+}
+
 /// Outcome of a single `end_of_day_digest` call.
 #[derive(Debug, Clone)]
 pub enum DigestOutcome {
@@ -34,11 +82,12 @@ pub enum DigestOutcome {
     Skipped { existing_id: String },
 }
 
-/// Run an end-of-day digest for a given owner.
+/// Run an end-of-day digest for a given owner and UTC calendar `date`.
 pub async fn end_of_day_digest(
     pool: &Pool,
     content_root: &Path,
     owner_id: &str,
+    date: NaiveDate,
     summariser: &dyn Summariser,
 ) -> CarrierResult<DigestOutcome> {
     let tree_store = TreeStore::new(pool.clone());
@@ -50,11 +99,16 @@ pub async fn end_of_day_digest(
         .get_or_create_tree(owner_id, "", TreeKind::Global, GLOBAL_SCOPE)
         .await?;
 
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = Utc::now().timestamp_millis();
+    let (day_start_ms, day_end_ms) = utc_day_bounds_ms(date);
 
-    // Check for an existing daily digest (idempotency)
-    if let Some(existing) = find_existing_daily(&tree_store, owner_id, &global.id).await? {
-        return Ok(DigestOutcome::Skipped { existing_id: existing });
+    // Idempotent per (owner, date): one L0 daily node per UTC day.
+    if let Some(existing) =
+        find_existing_daily(&tree_store, owner_id, &global.id, date).await?
+    {
+        return Ok(DigestOutcome::Skipped {
+            existing_id: existing,
+        });
     }
 
     // Gather one contribution per active source tree (cross-user by design -
@@ -91,7 +145,8 @@ pub async fn end_of_day_digest(
     };
     let output = summariser.summarise(&inputs, &ctx);
 
-    // Union entities from all inputs
+    // Union entities from all inputs; always stamp the calendar-day topic so
+    // the next day's run can tell this L0 apart from yesterday's.
     let mut entities_set = std::collections::BTreeSet::new();
     let mut topics_set = std::collections::BTreeSet::new();
     for inp in &inputs {
@@ -102,6 +157,7 @@ pub async fn end_of_day_digest(
             topics_set.insert(t.clone());
         }
     }
+    topics_set.insert(digest_topic(date));
 
     let score = inputs
         .iter()
@@ -123,8 +179,9 @@ pub async fn end_of_day_digest(
         token_count: output.token_count,
         entities: entities_set.into_iter().collect(),
         topics: topics_set.into_iter().collect(),
-        time_range_start_ms: inputs.iter().map(|i| i.time_range_start_ms).min().unwrap_or(now_ms),
-        time_range_end_ms: inputs.iter().map(|i| i.time_range_end_ms).max().unwrap_or(now_ms),
+        // L0 identity is the calendar day, not the source material's span.
+        time_range_start_ms: day_start_ms,
+        time_range_end_ms: day_end_ms,
         score,
         sealed_at_ms: now_ms,
         deleted: false,
@@ -166,12 +223,16 @@ async fn find_existing_daily(
     tree_store: &TreeStore,
     owner_id: &str,
     global_tree_id: &str,
+    date: NaiveDate,
 ) -> CarrierResult<Option<String>> {
-    // Check for any L0 summary in the global tree today
+    // Enough for several years of one-L0-per-day (weekly seals keep L0 rows).
     let summaries = tree_store
-        .list_summaries(owner_id, None, global_tree_id, Some(0), 1)
+        .list_summaries(owner_id, None, global_tree_id, Some(0), 2000)
         .await?;
-    Ok(summaries.first().map(|s| s.id.clone()))
+    Ok(summaries
+        .into_iter()
+        .find(|n| is_daily_for_date(n, date))
+        .map(|n| n.id))
 }
 
 async fn pick_source_contribution(
@@ -232,7 +293,8 @@ mod tests {
                 return;
             }
         };
-        let result = end_of_day_digest(&pool, &content_root, "owner_1", &InertSummariser)
+        let date = NaiveDate::from_ymd_opt(2026, 5, 16).expect("valid date");
+        let result = end_of_day_digest(&pool, &content_root, "owner_1", date, &InertSummariser)
             .await
             .unwrap();
         assert!(matches!(result, DigestOutcome::EmptyDay));
@@ -282,22 +344,109 @@ mod tests {
 
         let content_store = ContentStore::new(content_root.to_path_buf());
         content_store.ensure_dirs("owner_1").unwrap();
-        let result = end_of_day_digest(&pool, &content_root, "owner_1", &InertSummariser)
-            .await
-            .unwrap();
+        let date = NaiveDate::from_ymd_opt(2026, 5, 16).expect("valid date");
+        let result =
+            end_of_day_digest(&pool, &content_root, "owner_1", date, &InertSummariser)
+                .await
+                .unwrap();
 
-        match result {
-            DigestOutcome::Emitted { source_count, .. } => {
+        let first_id = match result {
+            DigestOutcome::Emitted { source_count, daily_id } => {
                 assert!(source_count >= 1);
+                daily_id
             }
-            _ => panic!("expected Emitted, got {:?}", result),
-        }
+            other => panic!("expected Emitted, got {other:?}"),
+        };
 
-        // Global tree should now exist.
+        // Global tree should now exist, stamped for this date.
         let global = tree_store
             .get_or_create_tree("owner_1", "", TreeKind::Global, GLOBAL_SCOPE)
             .await
             .unwrap();
         assert_eq!(global.kind, TreeKind::Global);
+        let dailies = tree_store
+            .list_summaries("owner_1", None, &global.id, Some(0), 10)
+            .await
+            .unwrap();
+        assert_eq!(dailies.len(), 1);
+        assert!(is_daily_for_date(&dailies[0], date));
+        assert!(dailies[0].topics.contains(&digest_topic(date)));
+
+        // Same date is idempotent.
+        let again =
+            end_of_day_digest(&pool, &content_root, "owner_1", date, &InertSummariser)
+                .await
+                .unwrap();
+        match again {
+            DigestOutcome::Skipped { existing_id } => assert_eq!(existing_id, first_id),
+            other => panic!("expected Skipped, got {other:?}"),
+        }
+
+        // A different date emits a second L0 (the leftover day does not block).
+        let next_date = NaiveDate::from_ymd_opt(2026, 5, 17).expect("valid date");
+        let next =
+            end_of_day_digest(&pool, &content_root, "owner_1", next_date, &InertSummariser)
+                .await
+                .unwrap();
+        assert!(matches!(next, DigestOutcome::Emitted { .. }));
+        let dailies = tree_store
+            .list_summaries("owner_1", None, &global.id, Some(0), 10)
+            .await
+            .unwrap();
+        assert_eq!(dailies.len(), 2);
+    }
+
+    fn sample_node(topics: Vec<String>, start: i64, end: i64) -> SummaryNode {
+        SummaryNode {
+            id: "sum_x".into(),
+            tree_id: "tree_g".into(),
+            user_id: String::new(),
+            tree_kind: TreeKind::Global,
+            level: 0,
+            parent_id: None,
+            child_ids: vec![],
+            content: String::new(),
+            token_count: 0,
+            entities: vec![],
+            topics,
+            time_range_start_ms: start,
+            time_range_end_ms: end,
+            score: 0.0,
+            sealed_at_ms: 0,
+            deleted: false,
+            embedding: None,
+        }
+    }
+
+    #[test]
+    fn daily_match_by_topic() {
+        let date = NaiveDate::from_ymd_opt(2026, 8, 13).unwrap();
+        let node = sample_node(vec![digest_topic(date)], 0, 1);
+        assert!(is_daily_for_date(&node, date));
+        assert!(!is_daily_for_date(
+            &node,
+            NaiveDate::from_ymd_opt(2026, 8, 14).unwrap()
+        ));
+    }
+
+    #[test]
+    fn daily_match_by_utc_day_range() {
+        let date = NaiveDate::from_ymd_opt(2026, 8, 13).unwrap();
+        let (start, end) = utc_day_bounds_ms(date);
+        let node = sample_node(vec![], start, end);
+        assert!(is_daily_for_date(&node, date));
+        assert!(!is_daily_for_date(
+            &node,
+            NaiveDate::from_ymd_opt(2026, 8, 14).unwrap()
+        ));
+    }
+
+    #[test]
+    fn leftover_source_span_does_not_block() {
+        // Production L0s written before the date stamp used the source
+        // material's time span, not a calendar day.
+        let date = NaiveDate::from_ymd_opt(2026, 8, 13).unwrap();
+        let node = sample_node(vec![], 1_700_000_000_000, 1_754_000_000_000);
+        assert!(!is_daily_for_date(&node, date));
     }
 }
