@@ -81,12 +81,12 @@ async fn tool_user_profile(
             // Merge updates
             if let Some(updates) = input.get("updates").and_then(|u| u.as_object()) {
                 for (key, value) in updates {
-                    // Only allow known safe keys
                     match key.as_str() {
-                        "display_name" | "preferences" | "interaction_patterns" | "notes" => {
+                        "display_name" | "interaction_patterns" | "notes" => {
                             profile[key] = value.clone();
                         }
-                        _ => {} // ignore unknown keys
+                        "preferences" => apply_preferences_update(&mut profile, value),
+                        _ => {}
                     }
                 }
             }
@@ -109,6 +109,68 @@ async fn tool_user_profile(
             "Unknown action '{other}'. Use 'read' or 'update'."
         ))),
     }
+}
+
+/// Shallow-merge `updates.preferences` onto the existing object.
+///
+/// `wechat_accounts` is merged by `app_id` (same id updates fields, new id
+/// appends, unmentioned accounts stay). An omitted or empty incoming array
+/// does not wipe stored credentials — models routinely send only the account
+/// they just heard.
+fn apply_preferences_update(profile: &mut serde_json::Value, incoming: &serde_json::Value) {
+    let Some(new_prefs) = incoming.as_object() else {
+        return;
+    };
+    let mut prefs = profile
+        .get("preferences")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+
+    for (k, v) in new_prefs {
+        if k == "wechat_accounts" {
+            let existing = prefs
+                .get("wechat_accounts")
+                .and_then(|a| a.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let incoming_accts = v.as_array().cloned().unwrap_or_default();
+            prefs.insert(
+                "wechat_accounts".into(),
+                serde_json::Value::Array(merge_wechat_accounts(&existing, &incoming_accts)),
+            );
+        } else {
+            prefs.insert(k.clone(), v.clone());
+        }
+    }
+    profile["preferences"] = serde_json::Value::Object(prefs);
+}
+
+/// Merge incoming OA accounts into `existing` by `app_id`.
+///
+/// Items without `app_id` are skipped. Same `app_id` overwrites fields on the
+/// existing object (so a new `app_secret` updates, other keys stay unless
+/// resent). New ids are appended. Incoming empty → existing unchanged.
+fn merge_wechat_accounts(existing: &[serde_json::Value], incoming: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let mut accounts = existing.to_vec();
+    for inc in incoming {
+        let Some(id) = inc.get("app_id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if let Some(pos) = accounts
+            .iter()
+            .position(|a| a.get("app_id").and_then(|v| v.as_str()) == Some(id))
+        {
+            if let (Some(old), Some(new_fields)) = (accounts[pos].as_object_mut(), inc.as_object()) {
+                for (k, v) in new_fields {
+                    old.insert(k.clone(), v.clone());
+                }
+            }
+        } else {
+            accounts.push(inc.clone());
+        }
+    }
+    accounts
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +236,7 @@ impl ToolModule for DelegationTools {
                     "type": "object",
                     "properties": {
                         "action": {"type": "string", "enum": ["read", "update"], "description": "Read the profile or update it with new key-value pairs"},
-                        "updates": {"type": "object", "description": "Key-value pairs to merge into the profile (only for action=update). Supported keys: display_name, preferences (object), interaction_patterns (object), notes (string)"},
+                        "updates": {"type": "object", "description": "Key-value pairs to merge into the profile (only for action=update). Supported keys: display_name, preferences (object; wechat_accounts merged by app_id, other keys shallow-merged), interaction_patterns (object), notes (string)"},
                     },
                     "required": ["action"],
                 }),
@@ -215,5 +277,122 @@ impl ToolModule for DelegationTools {
             name if name.starts_with("delegate_") => types::tool::PermissionLevel::Execute,
             _ => types::tool::PermissionLevel::Dangerous,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn acct(app_id: &str, secret: &str) -> serde_json::Value {
+        json!({"app_id": app_id, "app_secret": secret})
+    }
+
+    #[test]
+    fn merge_appends_new_app_id() {
+        let existing = vec![acct("wxAAA", "old")];
+        let incoming = vec![acct("wxBBB", "new")];
+        let out = merge_wechat_accounts(&existing, &incoming);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["app_secret"], "old");
+        assert_eq!(out[1]["app_id"], "wxBBB");
+        assert_eq!(out[1]["app_secret"], "new");
+    }
+
+    #[test]
+    fn merge_updates_secret_same_app_id() {
+        let existing = vec![acct("wxAAA", "old")];
+        let incoming = vec![acct("wxAAA", "rotated")];
+        let out = merge_wechat_accounts(&existing, &incoming);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["app_secret"], "rotated");
+    }
+
+    #[test]
+    fn merge_empty_incoming_keeps_existing() {
+        let existing = vec![acct("wxAAA", "old")];
+        let out = merge_wechat_accounts(&existing, &[]);
+        assert_eq!(out, existing);
+    }
+
+    #[test]
+    fn merge_skips_items_without_app_id() {
+        let existing = vec![acct("wxAAA", "old")];
+        let incoming = vec![json!({"app_secret": "orphan"}), acct("wxBBB", "b")];
+        let out = merge_wechat_accounts(&existing, &incoming);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[1]["app_id"], "wxBBB");
+    }
+
+    #[test]
+    fn prefs_new_account_keeps_old_and_other_keys() {
+        let mut profile = json!({
+            "preferences": {
+                "tone": "正式",
+                "wechat_accounts": [{"app_id": "wxAAA", "app_secret": "AAA"}]
+            }
+        });
+        apply_preferences_update(
+            &mut profile,
+            &json!({"wechat_accounts": [{"app_id": "wxBBB", "app_secret": "BBB"}]}),
+        );
+        let accts = profile["preferences"]["wechat_accounts"].as_array().unwrap();
+        assert_eq!(accts.len(), 2);
+        assert_eq!(accts[0]["app_secret"], "AAA");
+        assert_eq!(accts[1]["app_secret"], "BBB");
+        assert_eq!(profile["preferences"]["tone"], "正式");
+    }
+
+    #[test]
+    fn prefs_tone_only_does_not_drop_accounts() {
+        let mut profile = json!({
+            "preferences": {
+                "wechat_accounts": [{"app_id": "wxAAA", "app_secret": "AAA"}]
+            }
+        });
+        apply_preferences_update(&mut profile, &json!({"tone": "轻松"}));
+        let accts = profile["preferences"]["wechat_accounts"].as_array().unwrap();
+        assert_eq!(accts.len(), 1);
+        assert_eq!(accts[0]["app_secret"], "AAA");
+        assert_eq!(profile["preferences"]["tone"], "轻松");
+    }
+
+    #[tokio::test]
+    async fn user_profile_update_merges_accounts_on_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let input = json!({
+            "action": "update",
+            "updates": {
+                "preferences": {
+                    "wechat_accounts": [{"app_id": "wxAAA", "app_secret": "AAA"}]
+                }
+            }
+        });
+        tool_user_profile(&input, Some(home), Some("agent1"), Some("owner1"), Some("owner1"))
+            .await
+            .unwrap();
+
+        let input2 = json!({
+            "action": "update",
+            "updates": {
+                "preferences": {
+                    "wechat_accounts": [{"app_id": "wxBBB", "app_secret": "BBB"}]
+                }
+            }
+        });
+        tool_user_profile(&input2, Some(home), Some("agent1"), Some("owner1"), Some("owner1"))
+            .await
+            .unwrap();
+
+        let path = types::config::sender_data_dir(home, "owner1", "agent1", Some("owner1"))
+            .join("profile.json");
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let accts = saved["preferences"]["wechat_accounts"].as_array().unwrap();
+        assert_eq!(accts.len(), 2);
+        assert_eq!(accts[0]["app_id"], "wxAAA");
+        assert_eq!(accts[1]["app_id"], "wxBBB");
     }
 }
