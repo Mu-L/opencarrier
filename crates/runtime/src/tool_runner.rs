@@ -24,6 +24,20 @@ pub(crate) fn base_tool_name(n: &str) -> &str {
     n.rsplit_once("__").map(|(_, b)| b).unwrap_or(n)
 }
 
+/// Whether `tool_name` may appear in the LLM tool list / be discovered under a
+/// flow `tools:` hard sandbox. `None` or empty allow-list = no sandbox.
+/// `mcp_*` is always permitted (same rule as execute-time).
+pub(crate) fn tool_permitted_in_flow(tool_name: &str, allowed: Option<&[String]>) -> bool {
+    let Some(allowed) = allowed.filter(|a| !a.is_empty()) else {
+        return true;
+    };
+    if tool_name.starts_with("mcp_") {
+        return true;
+    }
+    let called = base_tool_name(tool_name);
+    allowed.iter().any(|a| base_tool_name(a) == called)
+}
+
 /// Execute a tool by name with the given input, returning a ToolResult.
 ///
 /// The optional `kernel` handle enables inter-agent tools. If `None`,
@@ -95,30 +109,19 @@ pub async fn execute_tool(
     // clone-creator reaching train_write instead of the declared clone_install).
     // Both sides are normalized to base names ("filesystem__x" → "x") so
     // toolset-prefixed names compare equal.
-    if let Some(allowed) = flow_allowed_tools {
-        // MCP tools (mcp_* namespaced) are exempt from the hard sandbox: they are
-        // externally-provided capabilities that flows legitimately call without
-        // declaring each one (e.g. ai-writer flows call mcp_wechat_oa_create_draft
-        // / mcp_wecom_send_kf_message in their body, yet no flow declares them in
-        // `tools:`). The sandbox targets the builtin catalog (train_write etc.)
-        // where wandering is the observed failure mode.
-        if !tool_name.starts_with("mcp_") {
-            let called = base_tool_name(tool_name);
-            if !allowed.iter().any(|a| base_tool_name(a) == called) {
-                warn!(
-                    tool_name,
-                    allowed_count = allowed.len(),
-                    "Permission denied: tool not in flow's declared tool set"
-                );
-                return ToolResult {
-                    tool_use_id: tool_use_id.to_string(),
-                    content: format!(
-                        "Permission denied: '{tool_name}' 不在当前 flow 声明的工具集中（flow tools 硬沙箱）。请只使用 flow `tools:` 声明的工具来完成本任务——不要 tool_search 或调用 flow 未声明的工具。"
-                    ),
-                    is_error: true,
-                };
-            }
-        }
+    if !tool_permitted_in_flow(tool_name, flow_allowed_tools) {
+        warn!(
+            tool_name,
+            allowed_count = flow_allowed_tools.map(|a| a.len()).unwrap_or(0),
+            "Permission denied: tool not in flow's declared tool set"
+        );
+        return ToolResult {
+            tool_use_id: tool_use_id.to_string(),
+            content: format!(
+                "Permission denied: '{tool_name}' 不在当前 flow 声明的工具集中（flow tools 硬沙箱）。请只使用 flow `tools:` 声明的工具来完成本任务——不要 tool_search 或调用 flow 未声明的工具。"
+            ),
+            is_error: true,
+        };
     }
 
     // Admin gate — orthogonal to max_tool_level. A small set of irreversible /
@@ -510,6 +513,16 @@ mod tests {
             "unexpected permission deny: {}",
             result.content
         );
+    }
+
+    #[test]
+    fn test_tool_permitted_in_flow_filters_catalog() {
+        let allowed = ["file_read".to_string(), "clone_install".to_string()];
+        assert!(tool_permitted_in_flow("file_read", Some(&allowed)));
+        assert!(tool_permitted_in_flow("mcp_wecom_x", Some(&allowed)));
+        assert!(!tool_permitted_in_flow("train_write", Some(&allowed)));
+        assert!(tool_permitted_in_flow("train_write", None));
+        assert!(tool_permitted_in_flow("train_write", Some(&[])));
     }
 
     #[tokio::test]

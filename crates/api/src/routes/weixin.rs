@@ -630,6 +630,7 @@ pub async fn channels_status(State(state): State<Arc<AppState>>) -> impl IntoRes
     let mut wecom_bots: Vec<serde_json::Value> = Vec::new();
     let mut feishu_bots: Vec<serde_json::Value> = Vec::new();
     let mut dingtalk_bots: Vec<serde_json::Value> = Vec::new();
+    let mut weixin_oa_bots: Vec<serde_json::Value> = Vec::new();
 
     for (sender_id, json) in types::config::scan_sender_sessions(home) {
         let channel = json.get("channel").and_then(|v| v.as_str()).unwrap_or("");
@@ -671,6 +672,19 @@ pub async fn channels_status(State(state): State<Arc<AppState>>) -> impl IntoRes
                     "bind_agent": json.get("bind_agent").and_then(|v| v.as_str()).unwrap_or(""),
                 }));
             }
+            "weixin-oa" => {
+                weixin_oa_bots.push(serde_json::json!({
+                    "sender_id": sender_id,
+                    "name": json.get("name").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    "app_id": json.get("app_id").and_then(|v| v.as_str()).unwrap_or(sender_id.as_str()),
+                    "bind_agent": json.get("bind_agent").and_then(|v| v.as_str()).unwrap_or(""),
+                    "has_token": json.get("token").and_then(|v| v.as_str()).is_some_and(|t| !t.is_empty()),
+                    "has_app_secret": json
+                        .get("app_secret")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|t| !t.is_empty()),
+                }));
+            }
             _ => {}
         }
     }
@@ -682,6 +696,7 @@ pub async fn channels_status(State(state): State<Arc<AppState>>) -> impl IntoRes
             "wecom": { "bots": wecom_bots, "count": wecom_bots.len() },
             "feishu": { "bots": feishu_bots, "count": feishu_bots.len() },
             "dingtalk": { "bots": dingtalk_bots, "count": dingtalk_bots.len() },
+            "weixin_oa": { "bots": weixin_oa_bots, "count": weixin_oa_bots.len() },
         })),
     )
 }

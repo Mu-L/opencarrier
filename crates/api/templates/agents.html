@@ -58,6 +58,7 @@
       <label style="font-size:13px">原始 ID（可选）<input id="oa-wechat-id" class="input" placeholder="gh_…" style="width:100%;margin-top:4px"></label>
       <label style="font-size:13px">app_id<input id="oa-app-id" class="input" placeholder="wx…" style="width:100%;margin-top:4px"></label>
       <label style="font-size:13px">app_secret<input id="oa-app-secret" class="input" type="password" placeholder="开发者密码（必填）" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">bind_openid_url（可选）<input id="oa-bind-openid-url" class="input" placeholder="关注/消息时 POST {openid} 的后端地址" style="width:100%;margin-top:4px"></label>
       <button class="btn btn-primary btn-sm" onclick="bindOa()" style="width:fit-content">提交并生成微信配置</button>
       <p id="oa-form-msg" style="font-size:13px;color:var(--text-dim);margin:0"></p>
       <div id="oa-setup-panel" style="display:none;margin-top:8px;padding:14px;border:1px solid var(--border, #ddd);border-radius:8px;background:var(--bg-soft, #f8f9fa)"></div>
@@ -86,6 +87,7 @@
       <label style="font-size:13px">secret<input id="kf-secret" class="input" type="password" placeholder="客服 Secret" style="width:100%;margin-top:4px"></label>
       <label style="font-size:13px">callback_token（可选）<input id="kf-callback-token" class="input" type="password" style="width:100%;margin-top:4px"></label>
       <label style="font-size:13px">encoding_aes_key（可选）<input id="kf-aes-key" class="input" type="password" style="width:100%;margin-top:4px"></label>
+      <label style="font-size:13px">bind_wecom_url（可选）<input id="kf-bind-wecom-url" class="input" placeholder="客服 unionid 绑定后端，如 86 助手" style="width:100%;margin-top:4px"></label>
       <input id="kf-port" type="hidden" value="9100">
       <button class="btn btn-primary btn-sm" onclick="bindKf()" style="width:fit-content">保存绑定</button>
       <p id="kf-form-msg" style="font-size:13px;color:var(--text-dim)"></p>
@@ -385,6 +387,14 @@ async function loadChannels() {
         </tr>`;
         }).join('') + '</tbody></table></div>';
     }
+    const oaBind = document.getElementById('oa-bind-openid-url');
+    if (oaBind && oa.length && !oaBind.value) {
+      oaBind.value = oa[0].bind_openid_url || '';
+    }
+    const kfBind = document.getElementById('kf-bind-wecom-url');
+    if (kfBind && kf.length && !kfBind.value) {
+      kfBind.value = kf[0].bind_wecom_url || '';
+    }
   } catch (e) {
     oaEl.innerHTML = `<p style="color:#e74c3c">请求失败: ${esc(e.message)}</p>`;
   }
@@ -461,6 +471,7 @@ async function bindOa() {
     app_id: document.getElementById('oa-app-id').value.trim(),
     app_secret: document.getElementById('oa-app-secret').value.trim(),
     wechat_id: document.getElementById('oa-wechat-id').value.trim(),
+    bind_openid_url: document.getElementById('oa-bind-openid-url').value.trim(),
   };
   if (!body.app_id) { msg.textContent = '请填写 app_id'; msg.style.color = '#e74c3c'; return; }
   if (!body.app_secret) { msg.textContent = '请填写 app_secret'; msg.style.color = '#e74c3c'; return; }
@@ -505,6 +516,7 @@ async function bindKf() {
     callback_token: document.getElementById('kf-callback-token').value.trim(),
     encoding_aes_key: document.getElementById('kf-aes-key').value.trim(),
     webhook_port: parseInt(document.getElementById('kf-port').value, 10) || 9100,
+    bind_wecom_url: document.getElementById('kf-bind-wecom-url').value.trim(),
   };
   if (!body.name || !body.corp_id || !body.open_kfid || !body.secret) {
     msg.textContent = '名称 / corp_id / open_kfid / secret 必填';

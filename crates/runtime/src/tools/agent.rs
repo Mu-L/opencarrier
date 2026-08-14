@@ -82,10 +82,13 @@ async fn tool_user_profile(
             if let Some(updates) = input.get("updates").and_then(|u| u.as_object()) {
                 for (key, value) in updates {
                     match key.as_str() {
-                        "display_name" | "interaction_patterns" | "notes" => {
+                        "display_name" | "notes" => {
                             profile[key] = value.clone();
                         }
                         "preferences" => apply_preferences_update(&mut profile, value),
+                        "interaction_patterns" => {
+                            apply_object_shallow_merge(&mut profile, "interaction_patterns", value)
+                        }
                         _ => {}
                     }
                 }
@@ -144,6 +147,26 @@ fn apply_preferences_update(profile: &mut serde_json::Value, incoming: &serde_js
         }
     }
     profile["preferences"] = serde_json::Value::Object(prefs);
+}
+
+/// Shallow-merge an object field: incoming keys overwrite, unmentioned stay.
+fn apply_object_shallow_merge(
+    profile: &mut serde_json::Value,
+    field: &str,
+    incoming: &serde_json::Value,
+) {
+    let Some(new_obj) = incoming.as_object() else {
+        return;
+    };
+    let mut cur = profile
+        .get(field)
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    for (k, v) in new_obj {
+        cur.insert(k.clone(), v.clone());
+    }
+    profile[field] = serde_json::Value::Object(cur);
 }
 
 /// Merge incoming OA accounts into `existing` by `app_id`.
@@ -342,6 +365,20 @@ mod tests {
         assert_eq!(accts[0]["app_secret"], "AAA");
         assert_eq!(accts[1]["app_secret"], "BBB");
         assert_eq!(profile["preferences"]["tone"], "正式");
+    }
+
+    #[test]
+    fn interaction_patterns_shallow_merge() {
+        let mut profile = json!({
+            "interaction_patterns": { "asks_for_schedule": true, "lang": "zh" }
+        });
+        apply_object_shallow_merge(
+            &mut profile,
+            "interaction_patterns",
+            &json!({"lang": "en"}),
+        );
+        assert_eq!(profile["interaction_patterns"]["asks_for_schedule"], true);
+        assert_eq!(profile["interaction_patterns"]["lang"], "en");
     }
 
     #[test]

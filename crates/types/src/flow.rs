@@ -179,6 +179,8 @@ pub const META_FLOW_DENY_TOOLS: &str = "flow_deny_tools";
 /// the assembled tool names at flow-load time (frozen — `tool_search` cannot
 /// widen it by discovering out-of-set tools).
 pub const META_FLOW_ALLOWED_TOOLS: &str = "flow_allowed_tools";
+/// Set when a flow or subagent declared `max_iterations` (not the AutonomousConfig default).
+pub const META_MAX_ITERATIONS_DECLARED: &str = "max_iterations_declared";
 
 /// A parsed flow definition.
 #[derive(Debug, Clone, Default)]

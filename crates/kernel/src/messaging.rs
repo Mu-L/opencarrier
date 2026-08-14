@@ -816,6 +816,10 @@ impl CarrierKernel {
         // Apply flow's max_iterations override
         if let Some(max_iter) = flow_max_iterations {
             manifest.autonomous.get_or_insert_with(Default::default).max_iterations = max_iter;
+            manifest.metadata.insert(
+                types::flow::META_MAX_ITERATIONS_DECLARED.to_string(),
+                serde_json::json!(max_iter),
+            );
             info!(
                 agent = %agent_name,
                 max_iterations = max_iter,
@@ -827,6 +831,10 @@ impl CarrierKernel {
         if let Some(sa) = subagent_config {
             manifest.autonomous.get_or_insert_with(Default::default).max_iterations = sa.max_iterations;
             manifest.metadata.insert("is_subagent".to_string(), serde_json::json!(true));
+            manifest.metadata.insert(
+                types::flow::META_MAX_ITERATIONS_DECLARED.to_string(),
+                serde_json::json!(sa.max_iterations),
+            );
             info!(
                 agent = %agent_name,
                 subagent = %sa.name,

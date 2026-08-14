@@ -86,6 +86,14 @@ pub trait Channel: Send + Sync {
         RoutingMode::SenderBased
     }
 
+    /// Routing mode for a specific bot on this channel.
+    ///
+    /// Default: same as [`routing_mode`]. WeCom overrides this so kf bots are
+    /// `DirectBind` while SmartBot/App stay `SenderBased`.
+    fn routing_mode_for(&self, _bot_id: &str) -> RoutingMode {
+        self.routing_mode()
+    }
+
     /// Start receiving messages from the channel.
     ///
     /// Inbound messages are sent through `sender` for routing to agents.

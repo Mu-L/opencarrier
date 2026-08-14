@@ -161,15 +161,16 @@ impl ChannelManager {
 
         // Set up routing-mode probe so the bridge can branch on DirectBind vs SenderBased
         let channels_for_mode = self.channels.clone();
-        let mode_fn: crate::plugin::bridge::RoutingModeFn = Arc::new(move |channel_type| {
-            let channels = channels_for_mode.lock().unwrap_or_else(|e| e.into_inner());
-            for channel in channels.values() {
-                if channel.channel_type() == channel_type {
-                    return channel.routing_mode();
+        let mode_fn: crate::plugin::bridge::RoutingModeFn =
+            Arc::new(move |channel_type, bot_id| {
+                let channels = channels_for_mode.lock().unwrap_or_else(|e| e.into_inner());
+                for channel in channels.values() {
+                    if channel.channel_type() == channel_type {
+                        return channel.routing_mode_for(bot_id);
+                    }
                 }
-            }
-            types::channel::RoutingMode::SenderBased
-        });
+                types::channel::RoutingMode::SenderBased
+            });
         bridge.set_routing_mode_fn(mode_fn);
 
         // Load notify routes — enables [NOTIFY:type]content[/NOTIFY] markers → cross-channel push.
@@ -344,13 +345,20 @@ impl ChannelManager {
     /// Used by the bridge to decide whether to run the multi-clone pipeline
     /// (SenderBased) or route straight to the bound agent (DirectBind).
     pub fn routing_mode(&self, channel_type: &str) -> types::channel::RoutingMode {
+        self.routing_mode_for(channel_type, "")
+    }
+
+    pub fn routing_mode_for(
+        &self,
+        channel_type: &str,
+        bot_id: &str,
+    ) -> types::channel::RoutingMode {
         let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
         for channel in channels.values() {
             if channel.channel_type() == channel_type {
-                return channel.routing_mode();
+                return channel.routing_mode_for(bot_id);
             }
         }
-        // Unknown channel types default to SenderBased (current behavior).
         types::channel::RoutingMode::SenderBased
     }
 

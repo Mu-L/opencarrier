@@ -31,6 +31,18 @@ impl ContextPressure {
             ContextPressure::Critical => "critical",
         }
     }
+
+    pub fn from_usage_pct(pct: f64) -> Self {
+        if pct >= 0.85 {
+            ContextPressure::Critical
+        } else if pct >= 0.70 {
+            ContextPressure::High
+        } else if pct >= 0.50 {
+            ContextPressure::Elevated
+        } else {
+            ContextPressure::Normal
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +180,8 @@ pub struct LoopState {
     pub text_recovery_retries: u32,
     pub last_run: Option<LastRunSummary>,
     pub turn_log: Vec<TurnLogEntry>,
+    /// Flow/subagent-declared iteration budget. `None` = no cap (stuck detection only).
+    pub max_iterations: Option<u32>,
 }
 
 impl LoopState {
@@ -189,6 +203,7 @@ impl LoopState {
             text_recovery_retries: 0,
             last_run: None,
             turn_log: Vec::new(),
+            max_iterations: None,
         }
     }
 
@@ -274,7 +289,26 @@ impl LoopState {
             _ => {}
         }
 
+        if let Some(n) = self.max_iterations {
+            if self.iteration + 1 >= n {
+                msg.push_str(&format!(
+                    "\n⚠️ 本 flow 预算 {n} 轮已到（当前第 {} 轮），请收束并给出目前能给的结论。",
+                    self.iteration + 1
+                ));
+            }
+        }
+
         msg
+    }
+
+    /// Soft hint is in [`Self::build_status_message`] at N. Hard stop after N+2
+    /// completed iterations so the model has two extra turns to wrap up.
+    /// `None` = no declared cap (stuck detection only).
+    pub fn declared_max_exceeded(&self) -> bool {
+        match self.max_iterations {
+            Some(n) => self.iteration >= n.saturating_add(2),
+            None => false,
+        }
     }
 
     pub fn to_last_run(&self, outcome: RunOutcome) -> LastRunSummary {

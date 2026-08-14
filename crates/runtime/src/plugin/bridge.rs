@@ -253,7 +253,7 @@ impl PluginBridgeManager {
         let direct_bind = self
             .routing_mode_fn
             .as_ref()
-            .map(|f| f(&msg.channel_type) == RoutingMode::DirectBind)
+            .map(|f| f(&msg.channel_type, &msg.bot_id) == RoutingMode::DirectBind)
             .unwrap_or(false);
 
         // Multi-clone pipeline: naming flow, rename detection, @-name switching,

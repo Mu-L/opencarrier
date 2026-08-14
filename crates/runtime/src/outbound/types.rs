@@ -20,9 +20,10 @@ pub type ChannelDeliverFn = Arc<
         + Sync,
 >;
 
-/// A function that reports a channel type's routing mode.
-/// Used by the bridge to decide whether to run the multi-clone pipeline.
-pub type RoutingModeFn = Arc<dyn Fn(&str) -> RoutingMode + Send + Sync>;
+/// A function that reports a channel+bot routing mode.
+/// `(channel_type, bot_id)` — bot_id lets mixed channels (wecom kf vs SmartBot)
+/// pick DirectBind per sender.
+pub type RoutingModeFn = Arc<dyn Fn(&str, &str) -> RoutingMode + Send + Sync>;
 
 /// Where to push a notification of a given type.
 ///

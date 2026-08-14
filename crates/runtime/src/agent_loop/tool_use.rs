@@ -623,8 +623,25 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 const MAX_TOTAL_TOOLS: usize = 64;
                 let current_count = tools_owned.len();
                 let remaining_capacity = MAX_TOTAL_TOOLS.saturating_sub(current_count);
+                let flow_allowed_owned: Vec<String> = manifest
+                    .metadata
+                    .get(types::flow::META_FLOW_ALLOWED_TOOLS)
+                    .and_then(|v| {
+                        v.as_array().map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .collect()
+                        })
+                    })
+                    .unwrap_or_default();
+                let flow_allowed = if flow_allowed_owned.is_empty() {
+                    None
+                } else {
+                    Some(flow_allowed_owned.as_slice())
+                };
                 let to_add: Vec<_> = found_tools
                     .into_iter()
+                    .filter(|t| crate::tool_runner::tool_permitted_in_flow(&t.name, flow_allowed))
                     .filter(|t| !tools_owned.iter().any(|existing| existing.name == t.name))
                     .take(remaining_capacity)
                     .collect();

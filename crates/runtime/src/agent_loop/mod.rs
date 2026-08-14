@@ -324,6 +324,11 @@ async fn run_agent_loop_impl(
     let context_budget = ContextBudget::new(ctx_window);
 
     let mut state = LoopState::new(ctx_window);
+    state.max_iterations = manifest
+        .metadata
+        .get(types::flow::META_MAX_ITERATIONS_DECLARED)
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
 
     // O8: Restore last run summary from cross-session state
     if let Some(mh) = &memory_handle {
@@ -445,6 +450,9 @@ async fn loop_iteration(ctx: &mut LoopContext<'_>) -> CarrierResult<LoopAction> 
 
     ctx.state.total_usage.input_tokens += response.usage.input_tokens;
     ctx.state.total_usage.output_tokens += response.usage.output_tokens;
+    ctx.state.context_tokens_used_estimate = response.usage.input_tokens as usize;
+    ctx.state.context_pressure =
+        state::ContextPressure::from_usage_pct(ctx.state.context_usage_pct());
 
     // ---- Text tool call recovery ----
     // Capture stop_reason before `response` is moved/consumed; it drives the
@@ -484,6 +492,19 @@ async fn loop_iteration(ctx: &mut LoopContext<'_>) -> CarrierResult<LoopAction> 
         );
         return Err(CarrierError::Internal(format!(
             "agent 连续 {streak} 轮无进展（无工具调用、无最终答案），判定卡死，终止本轮"
+        )));
+    }
+
+    if ctx.state.declared_max_exceeded() {
+        let n = ctx.state.max_iterations.unwrap_or(0);
+        warn!(
+            iteration = ctx.state.iteration,
+            max_iterations = n,
+            "Declared flow/subagent max_iterations exceeded — aborting"
+        );
+        return Err(CarrierError::Internal(format!(
+            "agent 已跑 {} 轮，超过本 flow 声明的 max_iterations={n}+2，判定卡死，终止本轮",
+            ctx.state.iteration
         )));
     }
 
@@ -668,6 +689,23 @@ async fn handle_text_recovery(
             })
         })
         .unwrap_or_default();
+    let flow_allowed: Vec<String> = ctx
+        .manifest
+        .metadata
+        .get(types::flow::META_FLOW_ALLOWED_TOOLS)
+        .and_then(|v| {
+            v.as_array().map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
+    let allowed_slice = if flow_allowed.is_empty() {
+        None
+    } else {
+        Some(flow_allowed.as_slice())
+    };
 
     // Discovery: resolve narrated tool names via the kernel and add any new
     // ones to the toolset so the retry can actually call them with tool_use.
@@ -678,6 +716,10 @@ async fn handle_text_recovery(
         for name in &mentions {
             if deny.iter().any(|d| d == name) {
                 info!(tool = %name, "Skipping text-narrated tool (flow deny_tools)");
+                continue;
+            }
+            if !crate::tool_runner::tool_permitted_in_flow(name, allowed_slice) {
+                info!(tool = %name, "Skipping text-narrated tool (flow tools sandbox)");
                 continue;
             }
             // Dedup against tools already present (flow inject / prior tool_search).

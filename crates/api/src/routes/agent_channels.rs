@@ -176,7 +176,7 @@ pub async fn list_agent_channels(
                     "token": token,
                     "callback_url": callback_path,
                     "setup": setup,
-                    "bind_openid_url": json.get("bind_openid_url").and_then(|v| v.as_str()),
+                    "bind_openid_url": json.get("bind_openid_url").and_then(|v| v.as_str()).unwrap_or(""),
                 }));
             }
             "wecom" => {
@@ -212,6 +212,7 @@ pub async fn list_agent_channels(
                     "has_secret": secret_ok,
                     "callback_path": WECOM_KF_CALLBACK_PATH,
                     "callback_url": wecom_kf_callback_url(public_base_from_headers(&headers).as_deref()),
+                    "bind_wecom_url": json.get("bind_wecom_url").and_then(|v| v.as_str()).unwrap_or(""),
                 }));
             }
             _ => {}
@@ -318,12 +319,10 @@ pub async fn bind_weixin_oa(
         .or_else(|| existing.as_ref().map(|e| e.wechat_id.clone()))
         .unwrap_or_default();
 
-    let bind_openid_url = body
-        .get("bind_openid_url")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .or_else(|| existing.as_ref().and_then(|e| e.bind_openid_url.clone()));
+    let bind_openid_url = match body.get("bind_openid_url") {
+        Some(v) => v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()),
+        None => existing.as_ref().and_then(|e| e.bind_openid_url.clone()),
+    };
 
     let sf = channel_weixin_oa::WeixinOaSessionFile {
         channel: "weixin-oa".to_string(),
@@ -572,16 +571,14 @@ pub async fn bind_wecom_kf(
         .or_else(|| existing.as_ref().and_then(|e| e.webhook_port))
         .unwrap_or(9100);
     // bind_wecom_url: optional backend endpoint for auto-binding kf customers to
-    // a member (kf/customer/batchget unionid -> POST). Not in the simplified
-    // dashboard form; set via direct session.json edit. Preserve the existing
-    // value if the request omits it (mirrors weixin-oa bind_openid_url) so
-    // re-saving the kf config through the form doesn't clobber it.
-    let bind_wecom_url = body
-        .get("bind_wecom_url")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .or_else(|| existing.as_ref().and_then(|e| e.bind_wecom_url.clone()));
+    // a member (kf/customer/batchget unionid -> POST). Dashboard field; explicit
+    // empty string clears. Omit the key to keep the existing value (mirrors
+    // weixin-oa bind_openid_url) so a re-save that doesn't send the field
+    // doesn't clobber it.
+    let bind_wecom_url = match body.get("bind_wecom_url") {
+        Some(v) => v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()),
+        None => existing.as_ref().and_then(|e| e.bind_wecom_url.clone()),
+    };
 
     let sf = channel_wecom::token::WecomSessionFile {
         channel: "wecom".to_string(),

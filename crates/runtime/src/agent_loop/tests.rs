@@ -7,6 +7,26 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 
     #[test]
+    fn test_context_pressure_from_usage_pct() {
+        assert_eq!(
+            state::ContextPressure::from_usage_pct(0.2),
+            state::ContextPressure::Normal
+        );
+        assert_eq!(
+            state::ContextPressure::from_usage_pct(0.55),
+            state::ContextPressure::Elevated
+        );
+        assert_eq!(
+            state::ContextPressure::from_usage_pct(0.75),
+            state::ContextPressure::High
+        );
+        assert_eq!(
+            state::ContextPressure::from_usage_pct(0.9),
+            state::ContextPressure::Critical
+        );
+    }
+
+    #[test]
     fn test_no_progress_threshold_constant() {
         assert_eq!(NO_PROGRESS_THRESHOLD, 3);
     }
@@ -85,6 +105,28 @@ use std::sync::atomic::{AtomicU32, Ordering};
         for _ in 0..100 {
             assert_eq!(state.record_iteration_progress(true), None);
         }
+    }
+
+    #[test]
+    fn declared_max_iterations_soft_at_n_hard_at_n_plus_2() {
+        let mut state = LoopState::new(128_000);
+        state.max_iterations = Some(3);
+        state.iteration = 2; // current turn = 3
+        let msg = state.build_status_message();
+        assert!(msg.contains("预算 3 轮"), "{msg}");
+        assert!(!state.declared_max_exceeded());
+        state.iteration = 4; // N+1 completed
+        assert!(!state.declared_max_exceeded());
+        state.iteration = 5; // N+2
+        assert!(state.declared_max_exceeded());
+    }
+
+    #[test]
+    fn undeclared_max_iterations_never_exceeded() {
+        let mut state = LoopState::new(128_000);
+        state.iteration = 10_000;
+        assert!(!state.declared_max_exceeded());
+        assert!(!state.build_status_message().contains("预算"));
     }
 
     #[test]

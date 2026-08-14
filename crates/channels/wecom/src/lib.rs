@@ -7,7 +7,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use types::channel::Channel;
+use types::channel::{Channel, RoutingMode};
 use types::error::{CarrierError, CarrierResult};
 use types::plugin::PluginMessage;
 use tokio::sync::mpsc;
@@ -193,6 +193,14 @@ async fn deliver_kf_rich(
     ))
 }
 
+/// Kf is one-to-one (`DirectBind`). App / SmartBot stay `SenderBased`.
+fn routing_mode_for_wecom(mode: &token::WecomMode) -> RoutingMode {
+    match mode {
+        token::WecomMode::Kf { .. } => RoutingMode::DirectBind,
+        _ => RoutingMode::SenderBased,
+    }
+}
+
 impl Channel for SessionWatcher {
     fn channel_type(&self) -> &str {
         "wecom"
@@ -211,6 +219,16 @@ impl Channel for SessionWatcher {
 
     fn bot_id(&self) -> &str {
         ""
+    }
+
+    fn routing_mode_for(&self, bot_id: &str) -> RoutingMode {
+        if bot_id.is_empty() {
+            return RoutingMode::SenderBased;
+        }
+        match token::WECOM_STATE.get_session_for_send(bot_id) {
+            Some(s) => routing_mode_for_wecom(&s.entry.mode),
+            None => RoutingMode::SenderBased,
+        }
     }
 
     fn start(&mut self, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
@@ -408,5 +426,33 @@ fn spawn_single_bot(
                 });
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod routing_mode_tests {
+    use super::*;
+
+    #[test]
+    fn kf_is_direct_bind_app_and_smartbot_are_sender_based() {
+        assert_eq!(
+            routing_mode_for_wecom(&token::WecomMode::Kf {
+                open_kfid: "kf".into()
+            }),
+            RoutingMode::DirectBind
+        );
+        assert_eq!(
+            routing_mode_for_wecom(&token::WecomMode::App {
+                agent_id: "1".into()
+            }),
+            RoutingMode::SenderBased
+        );
+        assert_eq!(
+            routing_mode_for_wecom(&token::WecomMode::SmartBot {
+                bot_id: "b".into(),
+                secret: "s".into(),
+            }),
+            RoutingMode::SenderBased
+        );
     }
 }
