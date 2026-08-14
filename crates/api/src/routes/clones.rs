@@ -570,7 +570,7 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/clones/{name}", routing::delete(uninstall_clone))
         .route("/api/clones/{name}/compile", routing::post(clone_compile))
         .route(
-            "/api/clones/{name}/evaluate?mode=deterministic|full",
+            "/api/clones/{name}/evaluate",
             routing::get(clone_evaluate),
         )
         .route(

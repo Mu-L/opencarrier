@@ -349,11 +349,7 @@ async fn run_agent_loop_impl(
 
     // Inject last run context into messages if available
     if let Some(last) = &state.last_run {
-        let summary = format!(
-            "📋 上次 loop 运行: {} 轮, 原因: {}, 结果: {:?}",
-            last.iterations, last.stop_reason, last.outcome
-        );
-        messages.push(Message::system(&summary));
+        messages.push(Message::system(last.prompt_line()));
     }
 
     let mut ctx = LoopContext {
@@ -395,7 +391,15 @@ async fn run_agent_loop_impl(
     // task plan (BreakForPlan), or stuck detection (returns Err). max_iterations
     // is advisory only.
     loop {
-        let action = loop_iteration(&mut ctx).await?;
+        let action = match loop_iteration(&mut ctx).await {
+            Ok(a) => a,
+            Err(e) => {
+                // Stuck / tool-loop / LLM failure: persist so the next turn
+                // sees "上次卡死" instead of a clean slate.
+                ctx.persist_last_run(state::outcome_from_loop_err(&e));
+                return Err(e);
+            }
+        };
         match action {
             LoopAction::Continue => {}
             LoopAction::Complete(result) => return Ok(result),
@@ -855,6 +859,7 @@ async fn dispatch(
                     );
                 }
                 max_tokens::MaxTokensAction::Complete(result) => {
+                    ctx.persist_last_run(state::RunOutcome::Complete);
                     return Ok(LoopAction::Complete(result));
                 }
             }
@@ -910,10 +915,12 @@ async fn teardown(ctx: &mut LoopContext<'_>) -> CarrierResult<AgentLoopResult> {
 
     // Defensive: teardown reached without a plan (should not happen - the loop
     // only `break`s on BreakForPlan). Treat as an abnormal exit.
-    Err(CarrierError::Internal(format!(
+    let e = CarrierError::Internal(format!(
         "agent loop exited abnormally at iteration {} without completion or plan",
         ctx.state.iteration
-    )))
+    ));
+    ctx.persist_last_run(state::outcome_from_loop_err(&e));
+    Err(e)
 }
 
 #[cfg(test)]

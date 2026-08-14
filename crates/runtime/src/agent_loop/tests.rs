@@ -1,4 +1,5 @@
 use super::*;
+use super::state;
 use crate::llm_driver::{CompletionResponse, LlmError};
 use async_trait::async_trait;
 use types::tool::ToolCall;
@@ -8,6 +9,51 @@ use std::sync::atomic::{AtomicU32, Ordering};
     #[test]
     fn test_no_progress_threshold_constant() {
         assert_eq!(NO_PROGRESS_THRESHOLD, 3);
+    }
+
+    #[test]
+    fn test_outcome_from_loop_err_stuck_no_progress() {
+        let e = types::error::CarrierError::Internal(
+            "agent 连续 3 轮无进展（无工具调用、无最终答案），判定卡死，终止本轮".into(),
+        );
+        match state::outcome_from_loop_err(&e) {
+            state::RunOutcome::Stuck(s) => assert!(s.contains("无进展")),
+            other => panic!("expected Stuck, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_outcome_from_loop_err_stuck_tool_loop() {
+        let e = types::error::CarrierError::Internal(
+            "agent stuck in a tool loop on `file_read` after 3 corrective nudges".into(),
+        );
+        assert!(matches!(
+            state::outcome_from_loop_err(&e),
+            state::RunOutcome::Stuck(_)
+        ));
+    }
+
+    #[test]
+    fn test_outcome_from_loop_err_other_is_error() {
+        let e = types::error::CarrierError::Network("llm timeout".into());
+        match state::outcome_from_loop_err(&e) {
+            state::RunOutcome::Error(s) => assert!(s.contains("timeout")),
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_last_run_stuck_prompt_warns_next_turn() {
+        let last = state::LastRunSummary {
+            timestamp: "t".into(),
+            iterations: 4,
+            stop_reason: "stuck: idle".into(),
+            tokens_used: 10,
+            outcome: state::RunOutcome::Stuck("连续 3 轮无进展".into()),
+        };
+        let line = last.prompt_line();
+        assert!(line.contains("卡死"), "{line}");
+        assert!(line.contains("不要重复"), "{line}");
     }
 
     #[test]

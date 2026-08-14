@@ -112,6 +112,8 @@ pub enum RunOutcome {
     BudgetExhausted,
     MaxIterations,
     ContextOverflow,
+    /// Turn aborted by stuck detection (no-progress idle or tool-call loop).
+    Stuck(String),
     Error(String),
 }
 
@@ -284,10 +286,43 @@ impl LoopState {
                 RunOutcome::BudgetExhausted => "budget_exhausted".to_string(),
                 RunOutcome::MaxIterations => "max_iterations".to_string(),
                 RunOutcome::ContextOverflow => "context_overflow".to_string(),
+                RunOutcome::Stuck(s) => format!("stuck: {s}"),
                 RunOutcome::Error(e) => format!("error: {e}"),
             },
             tokens_used: self.total_usage.total(),
             outcome,
         }
+    }
+}
+
+impl LastRunSummary {
+    /// System-message line injected at the start of the next turn.
+    pub fn prompt_line(&self) -> String {
+        match &self.outcome {
+            RunOutcome::Stuck(reason) => format!(
+                "📋 上次 loop 卡死：跑了 {} 轮后被终止。原因：{reason}。不要重复同样的工具调用或空转，换做法或直接给出目前能给的结论。",
+                self.iterations
+            ),
+            _ => format!(
+                "📋 上次 loop 运行: {} 轮, 原因: {}, 结果: {:?}",
+                self.iterations, self.stop_reason, self.outcome
+            ),
+        }
+    }
+}
+
+/// Map a loop-abort error to a persistable outcome so the next turn can see it.
+pub fn outcome_from_loop_err(err: &types::error::CarrierError) -> RunOutcome {
+    let msg = err.to_string();
+    if msg.contains("无进展")
+        || msg.contains("卡死")
+        || msg.contains("tool loop")
+        || msg.contains("re-called")
+        || msg.contains("rotating repetition")
+        || msg.contains("陷入工具循环")
+    {
+        RunOutcome::Stuck(msg)
+    } else {
+        RunOutcome::Error(msg)
     }
 }
