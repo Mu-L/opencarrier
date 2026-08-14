@@ -657,6 +657,14 @@ impl CarrierKernel {
                 }
             }
         } else {
+            // Nothing happens invisibly: record WHY the classifier could not
+            // even run (silent (None, None, None) here leaves the turn with
+            // no flow prompt and no explanation in the logs).
+            match (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
+                (None, _) => warn!(agent = %entry.name, "Flow classification skipped — no workspace (no flows to match)"),
+                (Some(_), None) => warn!(agent = %entry.name, "Flow classification skipped — no brain configured"),
+                _ => {}
+            }
             (None, None, None)
         }
     }

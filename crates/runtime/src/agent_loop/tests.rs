@@ -200,7 +200,40 @@ use std::sync::atomic::{AtomicU32, Ordering};
     // --- Loop detection ---
 
     fn make_call(name: &str, input: serde_json::Value) -> (String, u64) {
-        (name.to_string(), tool_input_hash(&input))
+        tool_call_key(name, &input)
+    }
+
+    #[test]
+    fn test_input_hash_ignores_object_key_order() {
+        // Loop identity must not depend on the order the model emitted keys
+        // (serde_json default BTreeMap gives canonical sorted-key
+        // serialization). Parsed from raw strings so a future
+        // `preserve_order` feature flip would fail this test.
+        let a: serde_json::Value =
+            serde_json::from_str(r#"{"q":"rust","limit":10}"#).unwrap();
+        let b: serde_json::Value =
+            serde_json::from_str(r#"{"limit":10,"q":"rust"}"#).unwrap();
+        assert_eq!(tool_input_hash(&a), tool_input_hash(&b));
+        // Nested objects too.
+        let c: serde_json::Value = serde_json::from_str(
+            r#"{"filter":{"b":2,"a":1},"q":"x"}"#,
+        )
+        .unwrap();
+        let d: serde_json::Value = serde_json::from_str(
+            r#"{"q":"x","filter":{"a":1,"b":2}}"#,
+        )
+        .unwrap();
+        assert_eq!(tool_input_hash(&c), tool_input_hash(&d));
+    }
+
+    #[test]
+    fn test_tool_call_key_normalizes_name() {
+        // Free-text recovery artifacts like `web_search,` must count as the
+        // SAME call as a clean `web_search` — otherwise the repetition
+        // counters reset on every dirty name and miss the loop.
+        let clean = tool_call_key("web_search", &serde_json::json!({"q": "rust"}));
+        let dirty = tool_call_key("web_search,", &serde_json::json!({"q": "rust"}));
+        assert_eq!(clean, dirty);
     }
 
     #[test]
@@ -255,8 +288,21 @@ use std::sync::atomic::{AtomicU32, Ordering};
     // --- Cumulative (rotating) repetition ---
 
     #[test]
-    fn test_cumulative_threshold_constant() {
-        assert_eq!(CUMULATIVE_LOOP_THRESHOLD, 3);
+    fn test_cumulative_threshold_constants() {
+        // Progressive cadence (dsh repeat-tool-reminder): remind → escalate → break.
+        assert_eq!(CUMULATIVE_REMIND_AT, 3);
+        assert_eq!(CUMULATIVE_ESCALATE_AT, 5);
+        assert_eq!(CUMULATIVE_BREAK_AT, 8);
+    }
+
+    #[test]
+    fn test_args_preview_truncates() {
+        let long = serde_json::json!({"content": "x".repeat(300)});
+        let preview = tool_args_preview(&long, 120);
+        assert!(preview.chars().count() <= 121, "preview must be bounded");
+        assert!(preview.ends_with('…'));
+        let short = serde_json::json!({"path": "大纲.md"});
+        assert_eq!(tool_args_preview(&short, 120), r#"{"path":"大纲.md"}"#);
     }
 
     /// Mirrors the in-loop counter in handle_tool_use: a per-(name, input_hash)
@@ -287,17 +333,17 @@ use std::sync::atomic::{AtomicU32, Ordering};
         // Consecutive window (4) does NOT fire — tail is mixed.
         assert!(detect_tool_loop(&recent, LOOP_DETECTION_WINDOW).is_none());
 
-        // Cumulative count of 大纲.md hits the threshold (3).
+        // Cumulative count of 大纲.md hits the reminder threshold (3).
         let counts = cumulative_count(&recent);
         let dagan = make_call("file_read", serde_json::json!({"path": "大纲.md"}));
         let dagan_count = *counts.get(&dagan).unwrap();
         assert_eq!(dagan_count, 3);
-        assert!(dagan_count >= CUMULATIVE_LOOP_THRESHOLD);
+        assert!(dagan_count >= CUMULATIVE_REMIND_AT);
     }
 
     #[test]
     fn test_cumulative_repetition_below_threshold_no_trigger() {
-        // Only 2 identical calls — under the cumulative threshold.
+        // Only 2 identical calls — under the reminder threshold.
         let recent: Vec<(String, u64)> = vec![
             make_call("file_read", serde_json::json!({"path": "大纲.md"})),
             make_call("file_read", serde_json::json!({"path": "素材.md"})),
@@ -307,7 +353,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
         let dagan = make_call("file_read", serde_json::json!({"path": "大纲.md"}));
         let dagan_count = *counts.get(&dagan).unwrap();
         assert_eq!(dagan_count, 2);
-        assert!(dagan_count < CUMULATIVE_LOOP_THRESHOLD);
+        assert!(dagan_count < CUMULATIVE_REMIND_AT);
     }
 
     #[test]
@@ -319,8 +365,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
             make_call("web_search", serde_json::json!({"q": "rust page 3"})),
         ];
         let counts = cumulative_count(&recent);
-        // No single (name, hash) pair reaches 3.
-        assert!(counts.values().all(|c| *c < CUMULATIVE_LOOP_THRESHOLD));
+        // No single (name, hash) pair reaches the reminder threshold.
+        assert!(counts.values().all(|c| *c < CUMULATIVE_REMIND_AT));
     }
 
     // --- Integration tests for empty response guards ---

@@ -523,7 +523,19 @@ fn collect_flow_summaries(flows_dir: &Path) -> Vec<(String, String, std::path::P
             Err(_) => continue,
         };
         let (name, description, _, _, _) = parse_flow_full(content.trim());
-        if description.is_empty() {
+        if name.is_empty() || description.is_empty() {
+            // Nothing happens invisibly: an empty name/description drops the
+            // flow from the catalog, so the classifier never sees it AND
+            // load_flow_by_name can't find it — its declared tools silently
+            // never inject (clone-generate 2026-08 incident: three tools
+            // declared, all unreachable, no log anywhere).
+            tracing::warn!(
+                flow_file = %flow_path.display(),
+                name = %name,
+                "Flow skipped from catalog (empty frontmatter field — flow is \
+                 invisible to both the classifier and load_flow_by_name; fix \
+                 the frontmatter `description:` to re-enable it)"
+            );
             continue;
         }
         out.push((name, description, flow_path));
@@ -950,5 +962,31 @@ mod tests {
         let (name, _, _, tools, _) = parse_flow_full(content);
         assert_eq!(name, "test-flow");
         assert_eq!(tools, vec!["foo", "bar"]);
+    }
+
+    /// Empty frontmatter name/description drops a flow from the catalog — the
+    /// 2026-08 clone-generate incident (flow invisible to classifier AND
+    /// load_flow_by_name, tools never injected, no log). Guards the skip
+    /// (and its warn trace) so the field stays a hard requirement.
+    #[test]
+    fn test_collect_flow_summaries_skips_empty_description() {
+        let dir = tempfile::tempdir().unwrap();
+        let flows = dir.path().join("flows");
+        std::fs::create_dir_all(flows.join("broken")).unwrap();
+        std::fs::write(
+            flows.join("broken").join("flow.md"),
+            "---\nname: broken\ndescription:\n---\nBody",
+        )
+        .unwrap();
+        std::fs::create_dir_all(flows.join("healthy")).unwrap();
+        std::fs::write(
+            flows.join("healthy").join("flow.md"),
+            "---\nname: healthy\ndescription: works\n---\nBody",
+        )
+        .unwrap();
+
+        let summaries = collect_flow_summaries(&flows);
+        let names: Vec<&str> = summaries.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["healthy"], "empty-description flow must be skipped");
     }
 }

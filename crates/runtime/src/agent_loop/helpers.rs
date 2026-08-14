@@ -108,16 +108,27 @@ pub const LOOP_DETECTION_WINDOW: usize = 4;
 /// without removing the tool.
 pub const SOFT_LOOP_WINDOW: usize = 2;
 
-/// Cumulative (whole-turn) repetition threshold: if the SAME `(tool_name,
-/// input_hash)` pair is called this many times total within a turn — even when
-/// interleaved with other calls so the consecutive `LOOP_DETECTION_WINDOW`
-/// never fills — we `BreakToolLoop` immediately. Catches ROTATING repetition
-/// (e.g. file_read on 4 paths cycled, each read 3× total but never 4-in-a-row)
-/// that the consecutive-only detector misses. N=3 is already lenient — 3
-/// identical reads of one file is clearly stuck, and guidance does not fix
+/// Cumulative (whole-turn) repetition thresholds — progressive, educate first
+/// (dsh guard/repeat-tool-reminder cadence): at 3 identical calls inject a
+/// reminder carrying the args preview, at 5 escalate the wording, at 8 abort
+/// the turn. Counts accumulate per (normalized name, input hash) across the
+/// WHOLE turn, even when interleaved with other calls so the consecutive
+/// `LOOP_DETECTION_WINDOW` never fills — catches ROTATING repetition (e.g.
+/// file_read on 4 paths cycled) that the consecutive-only detector misses.
+///
+/// Calls that are DENIED or error out still count: a model hammering a
+/// denied call (allowlist wall, missing tool) is exactly the loop worth
+/// breaking (dsh rationale: "a model hammering a denied call is exactly the
+/// loop worth breaking").
+pub const CUMULATIVE_REMIND_AT: u32 = 3;
+/// Second cumulative stage — escalated wording after the first reminder was
+/// ignored (see [`CUMULATIVE_REMIND_AT`]).
+pub const CUMULATIVE_ESCALATE_AT: u32 = 5;
+/// Final cumulative stage — abort the turn. 8 identical calls with two
+/// ignored warnings is stuck by any measure; guidance does not fix
 /// input-cycling (the 16:29 ai-writer turn had soft-loop reminders and still
-/// burned 600s). Distinct from `LOOP_BREAK_THRESHOLD` (consecutive escalation).
-pub const CUMULATIVE_LOOP_THRESHOLD: u32 = 3;
+/// burned 600s).
+pub const CUMULATIVE_BREAK_AT: u32 = 8;
 
 /// Default context window size (tokens) for token-based trimming.
 pub(in crate::agent_loop) const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
@@ -128,6 +139,11 @@ pub(in crate::agent_loop) const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
 
 /// Hash a tool input value for loop detection. Two calls with the same hash
 /// are considered identical for loop-detection purposes.
+///
+/// Canonical by construction: serde_json's default map is a BTreeMap, so
+/// object keys serialize in sorted order no matter the order the model
+/// emitted them — `{"a":1,"b":2}` and `{"b":2,"a":1}` hash identically,
+/// nested objects included. Array order stays significant (it is semantic).
 pub fn tool_input_hash(input: &serde_json::Value) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -135,6 +151,31 @@ pub fn tool_input_hash(input: &serde_json::Value) -> u64 {
     let mut hasher = DefaultHasher::new();
     serialized.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Loop-detection key for a tool call: `(normalized name, input hash)`.
+///
+/// The name goes through the same normalization as dispatch
+/// (`normalize_tool_name`), so a free-text recovery artifact like `web_search,`
+/// and a clean `web_search` count as the SAME call — without this the
+/// cumulative/consecutive counters reset on every dirty name and miss the
+/// loop.
+pub fn tool_call_key(name: &str, input: &serde_json::Value) -> (String, u64) {
+    (
+        types::tool_compat::normalize_tool_name(name).to_string(),
+        tool_input_hash(input),
+    )
+}
+
+/// Short human-readable preview of a tool input for loop-warning messages.
+pub fn tool_args_preview(input: &serde_json::Value, max_chars: usize) -> String {
+    let s = serde_json::to_string(input).unwrap_or_default();
+    if s.chars().count() <= max_chars {
+        s
+    } else {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{truncated}…")
+    }
 }
 
 /// Detect a tool-use loop: returns the (name, input_hash) of the looping call

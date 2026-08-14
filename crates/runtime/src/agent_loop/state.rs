@@ -171,10 +171,12 @@ pub struct LoopState {
     /// Per-`(tool_name, input_hash)` call count across the WHOLE turn (not the
     /// sliding `recent_tool_calls` window). Survives `recent_tool_calls.clear()`.
     /// Distinct from `tool_loop_rearm` (per-NAME escalation, only bumps on
-    /// consecutive-window hits). When any single pair reaches
-    /// [`super::helpers::CUMULATIVE_LOOP_THRESHOLD`], the turn is aborted — this
-    /// catches ROTATING repetition (e.g. file_read on 4 paths cycled, each read
-    /// 3× total but never 4-in-a-row) that the consecutive-only window misses.
+    /// consecutive-window hits). Progressive thresholds: remind at
+    /// [`super::helpers::CUMULATIVE_REMIND_AT`], escalate at
+    /// [`super::helpers::CUMULATIVE_ESCALATE_AT`], abort the turn at
+    /// [`super::helpers::CUMULATIVE_BREAK_AT`] — this catches ROTATING
+    /// repetition (e.g. file_read on 4 paths cycled, each read 3× total but
+    /// never 4-in-a-row) that the consecutive-only window misses.
     pub tool_call_counts: HashMap<(String, u64), u32>,
     pub consecutive_max_tokens: u32,
     pub text_recovery_retries: u32,

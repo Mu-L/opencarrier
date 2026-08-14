@@ -57,15 +57,15 @@ pub use helpers::TOOL_TIMEOUT_LONG_SECS;
 pub use helpers::TOOL_LONG_TIMEOUT_NAMES;
 pub use max_tokens::MAX_CONTINUATIONS;
 // Re-export constants and functions used by tests via `use super::*`.
-pub use helpers::{MAX_RETRIES, BASE_RETRY_DELAY_MS, MAX_HISTORY_MESSAGES, LOOP_DETECTION_WINDOW, SOFT_LOOP_WINDOW, CUMULATIVE_LOOP_THRESHOLD};
-pub use helpers::{tool_input_hash, detect_tool_loop, detect_soft_loop};
+pub use helpers::{MAX_RETRIES, BASE_RETRY_DELAY_MS, MAX_HISTORY_MESSAGES, LOOP_DETECTION_WINDOW, SOFT_LOOP_WINDOW, CUMULATIVE_REMIND_AT, CUMULATIVE_ESCALATE_AT, CUMULATIVE_BREAK_AT};
+pub use helpers::{tool_input_hash, tool_call_key, tool_args_preview, detect_tool_loop, detect_soft_loop};
 // Re-export the kv-drawer knowledge merge so the kernel's compaction path can
 // flush facts with the same idempotent semantics as the per-turn path.
 pub use knowledge::merge_key_facts;
 
 /// Consecutive no-progress iterations (no tool call, no final answer, not
 /// actively generating via MaxTokens) after which the turn is aborted as stuck.
-/// Aligns with `CUMULATIVE_LOOP_THRESHOLD` - 3 idle turns is clearly spinning.
+/// Aligns with `CUMULATIVE_REMIND_AT` - 3 idle turns is clearly spinning.
 const NO_PROGRESS_THRESHOLD: u32 = 3;
 
 const MAX_TEXT_RECOVERY_RETRIES: u32 = 2;

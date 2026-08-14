@@ -166,6 +166,46 @@ impl ToolModule for ShellTools {
 /// failing occupancy/seedream generation mid-run.
 const FLOW_SHELL_DEFAULT_TIMEOUT_SECS: u64 = 300;
 
+/// Orthogonal exit-status header for a finished subprocess.
+///
+/// dsh defensive-pattern: `timed_out` / `signal` / `exit_code` are
+/// independent facts and must be reported separately, never folded into one
+/// another. In particular `status.code()` is `None` when the process was
+/// killed by a signal — reporting that as `-1` (the old behavior) fabricated
+/// an exit code and hid the signal from the model, which could read a
+/// signal-killed run as a clean non-zero exit (or vice versa).
+fn exit_status_header(status: &std::process::ExitStatus) -> String {
+    match status.code() {
+        Some(code) => format!("Exit code: {code}"),
+        None => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                match status.signal() {
+                    Some(sig) => format!("Exit code: none (killed by signal {sig})"),
+                    None => "Exit code: none (terminated without an exit status)".to_string(),
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = status;
+                "Exit code: none (terminated without an exit status)".to_string()
+            }
+        }
+    }
+}
+
+/// Orthogonal timeout error for a killed-on-deadline subprocess. A timeout is
+/// NOT an exit code: the process was killed, so there is no exit status and
+/// no captured output — say exactly that instead of implying a command
+/// failure the model might retry blindly.
+fn timeout_error(timeout_secs: u64) -> CarrierError {
+    CarrierError::Internal(format!(
+        "Timed out: true (after {timeout_secs}s) — process killed, no exit \
+         status or output captured"
+    ))
+}
+
 async fn exec_shell(
     input: &Value,
     effective_command: &str,
@@ -254,7 +294,7 @@ async fn exec_shell(
         Ok(Ok(output)) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let exit_code = output.status.code().unwrap_or(-1);
+            let header = exit_status_header(&output.status);
 
             let max_output = 100_000;
             let stdout_str = if stdout.len() > max_output {
@@ -277,11 +317,11 @@ async fn exec_shell(
             };
 
             Ok(format!(
-                "Exit code: {exit_code}\n\nSTDOUT:\n{stdout_str}\nSTDERR:\n{stderr_str}"
+                "{header}\n\nSTDOUT:\n{stdout_str}\nSTDERR:\n{stderr_str}"
             ))
         }
         Ok(Err(e)) => Err(CarrierError::Internal(format!("Failed to execute command: {e}"))),
-        Err(_) => Err(CarrierError::Internal(format!("Command timed out after {timeout_secs}s"))),
+        Err(_) => Err(timeout_error(timeout_secs)),
     }
 }
 
@@ -420,7 +460,7 @@ impl ToolModule for CliExecTools {
             Ok(Ok(output)) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                let exit_code = output.status.code().unwrap_or(-1);
+                let header = exit_status_header(&output.status);
 
                 let max_output = 100_000;
                 let stdout_str = if stdout.len() > max_output {
@@ -443,16 +483,60 @@ impl ToolModule for CliExecTools {
                 };
 
                 Some(Ok(format!(
-                    "Exit code: {exit_code}\n\nSTDOUT:\n{stdout_str}\nSTDERR:\n{stderr_str}"
+                    "{header}\n\nSTDOUT:\n{stdout_str}\nSTDERR:\n{stderr_str}"
                 )))
             }
             Ok(Err(e)) => Some(Err(CarrierError::Sandbox(format!("Failed to execute command: {e}")))),
-            Err(_) => Some(Err(CarrierError::Sandbox(format!("Command timed out after {timeout_secs}s")))),
+            Err(_) => Some(Err(timeout_error(timeout_secs))),
         }
     }
 
     fn permission_level(&self, _tool_name: &str) -> types::tool::PermissionLevel {
         // cli_exec is restricted to whitelisted commands only — safe for Write-level agents
         types::tool::PermissionLevel::Write
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_header_reports_plain_code() {
+        // Raw wait status 0<<8 = exited with code 0.
+        let status = std::os::unix::process::ExitStatusExt::from_raw(0 << 8);
+        assert_eq!(exit_status_header(&status), "Exit code: 0");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_header_reports_signal_without_fabricating_code() {
+        // Raw wait status 15 = killed by SIGTERM: code() is None, signal() is 15.
+        // The old `unwrap_or(-1)` reported this as "Exit code: -1", hiding the
+        // signal entirely.
+        let status = std::os::unix::process::ExitStatusExt::from_raw(15);
+        assert_eq!(
+            exit_status_header(&status),
+            "Exit code: none (killed by signal 15)"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exit_header_distinguishes_signal_kill_from_exit_15() {
+        // Exit code 15 (raw 15<<8 | 0) must NOT be confused with SIGTERM.
+        let exited = std::os::unix::process::ExitStatusExt::from_raw(15 << 8);
+        assert_eq!(exit_status_header(&exited), "Exit code: 15");
+    }
+
+    #[test]
+    fn timeout_error_names_its_facts() {
+        let msg = timeout_error(30).to_string();
+        assert!(msg.contains("Timed out: true"), "must state timed_out: {msg}");
+        assert!(
+            msg.contains("no exit status"),
+            "must state no exit code was captured: {msg}"
+        );
     }
 }

@@ -111,38 +111,78 @@ pub(in crate::agent_loop) async fn handle_tool_use(
 
     let caller_id_str = session.agent_name.to_string();
 
-    // Track tool calls for loop detection BEFORE execution
+    // Track tool calls for loop detection BEFORE execution — denied/errored
+    // calls count too: a model hammering a denied call (allowlist wall,
+    // missing tool) is exactly the loop worth breaking.
+    let mut cumulative_warnings: Vec<String> = Vec::new();
     for tc in &response.tool_calls {
-        let key = (tc.name.clone(), super::helpers::tool_input_hash(&tc.input));
+        let key = super::helpers::tool_call_key(&tc.name, &tc.input);
         recent_tool_calls.push(key.clone());
         // Cumulative (whole-turn) repetition counter — distinct from the
         // sliding window above. Survives recent_tool_calls.clear(). Catches
         // ROTATING repetition (same call interleaved with others so the
         // consecutive window never fills) that detect_tool_loop misses.
+        // Progressive (dsh repeat-tool-reminder cadence): remind at 3,
+        // escalate at 5, abort at 8 — educate before punishing.
         let count = {
             let e = tool_call_counts.entry(key.clone()).or_insert(0);
             *e += 1;
             *e
         };
-        if count >= super::helpers::CUMULATIVE_LOOP_THRESHOLD {
+        if count == super::helpers::CUMULATIVE_BREAK_AT {
             warn!(
                 agent = %manifest.name,
-                tool = %tc.name,
+                tool = %key.0,
                 count,
-                threshold = super::helpers::CUMULATIVE_LOOP_THRESHOLD,
+                threshold = super::helpers::CUMULATIVE_BREAK_AT,
                 iteration,
                 "Cumulative tool-call repetition (rotating) — aborting turn \
                  (consecutive-window loop detection misses interleaved repetition)"
             );
             return ToolUseAction::BreakToolLoop(format!(
                 "agent re-called `{name}` with identical args {count}× total this turn \
-                 (interleaved with other calls so the consecutive loop detector never fired). \
-                 This is rotating repetition — the agent is re-reading inputs without \
-                 progressing, which guidance does not fix. Turn aborted to save the iteration \
-                 budget. Fix the flow/tool guidance and retry.",
-                name = tc.name
+                 (interleaved with other calls so the consecutive loop detector never fired) \
+                 and ignored two escalating warnings. This is rotating repetition — the agent \
+                 is re-reading inputs without progressing, which guidance does not fix. \
+                 Turn aborted to save the iteration budget. Fix the flow/tool guidance \
+                 and retry.",
+                name = key.0
             ));
         }
+        if count == super::helpers::CUMULATIVE_ESCALATE_AT {
+            warn!(
+                agent = %manifest.name,
+                tool = %key.0,
+                count,
+                iteration,
+                "Cumulative tool-call repetition — escalating warning injected"
+            );
+            cumulative_warnings.push(format!(
+                "⚠️⚠️ 工具 `{name}`（参数 {preview}）本轮已第 {count} 次被完全相同地调用，\
+                 此前的提醒没有生效。必须立刻停止重复该调用——下一步要么换一种做法（换参数/换工具），\
+                 要么直接基于已有结果产出最终答案。第 {break_at} 次相同调用将终止本任务。",
+                name = key.0,
+                preview = super::helpers::tool_args_preview(&tc.input, 120),
+                break_at = super::helpers::CUMULATIVE_BREAK_AT,
+            ));
+        } else if count == super::helpers::CUMULATIVE_REMIND_AT {
+            warn!(
+                agent = %manifest.name,
+                tool = %key.0,
+                count,
+                iteration,
+                "Cumulative tool-call repetition — reminder injected"
+            );
+            cumulative_warnings.push(format!(
+                "注意：工具 `{name}`（参数 {preview}）本轮已第 {count} 次被完全相同地调用。\
+                 重复同样的调用不会产生新结果——请改变做法：换参数、换工具，或直接基于已有结果产出答案。",
+                name = key.0,
+                preview = super::helpers::tool_args_preview(&tc.input, 120),
+            ));
+        }
+    }
+    for warning in cumulative_warnings {
+        messages.push(Message::system(&warning));
     }
     if recent_tool_calls.len() > super::helpers::LOOP_DETECTION_WINDOW * 3 {
         let drain_count =
