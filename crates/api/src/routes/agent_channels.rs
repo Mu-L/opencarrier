@@ -60,6 +60,17 @@ fn weixin_ip_whitelist() -> Vec<String> {
     Vec::new()
 }
 
+/// Public callback path pasted into 企业微信「微信客服」后台.
+/// nginx `location = /wecom/kf` publishes this; the process also serves it.
+const WECOM_KF_CALLBACK_PATH: &str = "/wecom/kf";
+
+fn wecom_kf_callback_url(public_base: Option<&str>) -> String {
+    match public_base {
+        Some(b) => format!("{}{WECOM_KF_CALLBACK_PATH}", b.trim_end_matches('/')),
+        None => WECOM_KF_CALLBACK_PATH.to_string(),
+    }
+}
+
 /// Setup guide for 微信公众平台 after bind (all values we provide except app_id/secret).
 fn weixin_oa_setup_guide(
     app_id: &str,
@@ -104,6 +115,7 @@ fn weixin_oa_setup_guide(
 pub async fn list_agent_channels(
     State(state): State<Arc<AppState>>,
     Path(agent): Path<String>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let agent_name = match resolve_to_name(&agent, &state.kernel.registry) {
         Ok(n) => n,
@@ -198,7 +210,8 @@ pub async fn list_agent_channels(
                     "open_kfid": open_kfid,
                     "corp_id": corp_id,
                     "has_secret": secret_ok,
-                    "webhook_port": json.get("webhook_port").and_then(|v| v.as_u64()).unwrap_or(9100),
+                    "callback_path": WECOM_KF_CALLBACK_PATH,
+                    "callback_url": wecom_kf_callback_url(public_base_from_headers(&headers).as_deref()),
                 }));
             }
             _ => {}
@@ -481,6 +494,7 @@ pub async fn unbind_weixin_oa(
 pub async fn bind_wecom_kf(
     State(state): State<Arc<AppState>>,
     Path(agent): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let agent_name = match resolve_to_name(&agent, &state.kernel.registry) {
@@ -602,6 +616,7 @@ pub async fn bind_wecom_kf(
 
     info!(%name, %open_kfid, agent = %agent_name, "Bound wecom-kf channel to agent");
 
+    let callback_url = wecom_kf_callback_url(public_base_from_headers(&headers).as_deref());
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -611,6 +626,9 @@ pub async fn bind_wecom_kf(
             "open_kfid": open_kfid,
             "corp_id": corp_id,
             "agent": agent_name,
+            "callback_path": WECOM_KF_CALLBACK_PATH,
+            "callback_url": callback_url,
+            "message": "已绑定。企微后台回调 URL 填 callback_url（只认 https）",
         })),
     )
         .into_response()

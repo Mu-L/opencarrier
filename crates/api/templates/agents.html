@@ -74,8 +74,11 @@
     <div style="margin-top:12px;display:grid;gap:10px;max-width:480px">
       <p style="font-size:13px;color:var(--text-dim);margin:0;line-height:1.5">
         <strong>第一步</strong>：打开企业微信管理后台（<strong>网页</strong> <code>https://work.weixin.qq.com/</code>，管理员账号登录）→「应用管理 → 微信客服」创建客服账号，记录 <code>corp_id</code>（企业ID，ww…）、<code>open_kfid</code>（客服ID，wk…）、<code>secret</code>（客服密钥）。<br>
-        <strong>第二步</strong>：在同页「回调 / 接收消息」里填回调 URL <code>https://你的域名/wecom/kf</code>（公网路径，nginx 反代到内部 9100），记录系统给的 <code>callback_token</code> 与 <code>encoding_aes_key</code>（消息实际由系统主动 <code>sync_msg</code> 拉取，回调仅校验签名）。<br>
-        <strong>第三步</strong>：webhook 端口（默认 9100，只监听本机）需 nginx 反代到公网 https（企微只认 https）。把上述凭证填入下方表单保存，本分身即接待该客服会话。
+        <strong>第二步</strong>：在同页「回调 / 接收消息」里填回调 URL<br>
+        <code id="kf-public-url">https://carrier.yinnho.cn/wecom/kf</code>
+        <button type="button" class="btn btn-sm btn-ghost" onclick="navigator.clipboard.writeText(document.getElementById('kf-public-url').textContent)">复制</button><br>
+        企微只认 https。再把后台给的 <code>callback_token</code> 与 <code>encoding_aes_key</code> 填入下方（回调只校验签名，消息由系统 <code>sync_msg</code> 拉取）。<br>
+        <strong>第三步</strong>：把凭证保存，本分身即接待该客服会话。
       </p>
       <label style="font-size:13px">名称（标识）<input id="kf-name" class="input" placeholder="如 86bus-kf" style="width:100%;margin-top:4px"></label>
       <label style="font-size:13px">corp_id<input id="kf-corp-id" class="input" placeholder="ww…" style="width:100%;margin-top:4px"></label>
@@ -83,7 +86,7 @@
       <label style="font-size:13px">secret<input id="kf-secret" class="input" type="password" placeholder="客服 Secret" style="width:100%;margin-top:4px"></label>
       <label style="font-size:13px">callback_token（可选）<input id="kf-callback-token" class="input" type="password" style="width:100%;margin-top:4px"></label>
       <label style="font-size:13px">encoding_aes_key（可选）<input id="kf-aes-key" class="input" type="password" style="width:100%;margin-top:4px"></label>
-      <label style="font-size:13px">webhook 端口<input id="kf-port" class="input" type="number" value="9100" style="width:100%;margin-top:4px"></label>
+      <input id="kf-port" type="hidden" value="9100">
       <button class="btn btn-primary btn-sm" onclick="bindKf()" style="width:fit-content">保存绑定</button>
       <p id="kf-form-msg" style="font-size:13px;color:var(--text-dim)"></p>
     </div>
@@ -369,18 +372,28 @@ async function loadChannels() {
     if (kf.length === 0) {
       kfEl.innerHTML = '<p style="color:var(--text-dim);font-size:13px">尚未绑定微信客服</p>';
     } else {
-      kfEl.innerHTML = '<div class="table-wrap"><table><thead><tr><th>名称</th><th>open_kfid</th><th>corp_id</th><th>凭证</th><th>操作</th></tr></thead><tbody>' +
-        kf.map(c => `<tr>
+      kfEl.innerHTML = '<div class="table-wrap"><table><thead><tr><th>名称</th><th>open_kfid</th><th>回调 URL</th><th>凭证</th><th>操作</th></tr></thead><tbody>' +
+        kf.map(c => {
+          const url = kfFullCallbackUrl(c);
+          return `<tr>
           <td style="font-weight:500">${esc(c.name)}</td>
           <td style="font-size:12px;font-family:monospace">${esc(c.open_kfid || '')}</td>
-          <td style="font-size:12px;font-family:monospace">${esc(c.corp_id || '')}</td>
+          <td style="font-size:12px;word-break:break-all"><code>${esc(url)}</code>
+            <button class="btn btn-sm btn-ghost" type="button" onclick="navigator.clipboard.writeText(${JSON.stringify(url)})">复制</button></td>
           <td style="font-size:12px">${c.has_secret ? '<span class="badge badge-green">已配置</span>' : '<span class="badge badge-yellow">缺 secret</span>'}</td>
           <td><button class="btn btn-sm btn-danger" onclick="unbindKf(${JSON.stringify(c.name)})">解绑</button></td>
-        </tr>`).join('') + '</tbody></table></div>';
+        </tr>`;
+        }).join('') + '</tbody></table></div>';
     }
   } catch (e) {
     oaEl.innerHTML = `<p style="color:#e74c3c">请求失败: ${esc(e.message)}</p>`;
   }
+}
+
+function kfFullCallbackUrl(c) {
+  const path = (c && c.callback_url) || (c && c.callback_path) || '/wecom/kf';
+  if (path.startsWith('http')) return path;
+  return location.origin + path;
 }
 
 function oaFullCallbackUrl(c) {
@@ -506,7 +519,10 @@ async function bindKf() {
     });
     const data = await res.json();
     if (!res.ok) { msg.textContent = data.error || '失败'; return; }
-    msg.textContent = '已绑定微信客服';
+    const url = (data.callback_url && data.callback_url.startsWith('http'))
+      ? data.callback_url
+      : (location.origin + (data.callback_path || '/wecom/kf'));
+    msg.textContent = '已绑定。企微后台回调 URL：' + url;
     loadChannels();
   } catch (e) { msg.textContent = e.message; }
 }
@@ -520,6 +536,8 @@ async function unbindKf(name) {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+  const kfUrl = document.getElementById('kf-public-url');
+  if (kfUrl) kfUrl.textContent = location.origin + '/wecom/kf';
   loadChannels();
 });
 

@@ -844,7 +844,8 @@ impl WecomState {
                     warn!(name = %sf.name, "Skipping kf session: missing corp_id or open_kfid");
                     return None;
                 }
-                let webhook_port = sf.webhook_port.unwrap_or(8454);
+                // 9100 is the port nginx publishes as https://host/wecom/kf.
+                let webhook_port = sf.webhook_port.unwrap_or(9100);
                 Some(BotEntry::new_kf(
                     sf.name.clone(),
                     corp_id,

@@ -153,7 +153,11 @@ async fn run_webhook_server(
         tx,
     };
 
+    // Public URL is https://<host>/wecom/kf (nginx). Also keep /wecom/webhook
+    // so the existing rewrite `proxy_pass …/wecom/webhook` still works.
     let app = Router::new()
+        .route("/wecom/kf", get(webhook_get))
+        .route("/wecom/kf", post(webhook_post))
         .route("/wecom/webhook", get(webhook_get))
         .route("/wecom/webhook", post(webhook_post))
         .with_state(std::sync::Arc::new(state));
