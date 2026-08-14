@@ -91,6 +91,13 @@ pub enum CarrierError {
     #[error("Internal error: {0}")]
     Internal(String),
 
+    /// The agent loop was aborted by stuck detection (no-progress idle, tool
+    /// loop, or declared max_iterations exceeded). Distinct variant so callers
+    /// (e.g. `outcome_from_loop_err`) classify structurally instead of
+    /// matching on message wording.
+    #[error("Agent loop stuck: {0}")]
+    LoopStuck(String),
+
     /// Authentication/authorization denied.
     #[error("Auth denied: {0}")]
     AuthDenied(String),

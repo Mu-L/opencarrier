@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
     fn test_outcome_from_loop_err_stuck_no_progress() {
-        let e = types::error::CarrierError::Internal(
+        let e = types::error::CarrierError::LoopStuck(
             "agent 连续 3 轮无进展（无工具调用、无最终答案），判定卡死，终止本轮".into(),
         );
         match state::outcome_from_loop_err(&e) {
@@ -44,12 +44,23 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
     fn test_outcome_from_loop_err_stuck_tool_loop() {
-        let e = types::error::CarrierError::Internal(
+        let e = types::error::CarrierError::LoopStuck(
             "agent stuck in a tool loop on `file_read` after 3 corrective nudges".into(),
         );
         assert!(matches!(
             state::outcome_from_loop_err(&e),
             state::RunOutcome::Stuck(_)
+        ));
+    }
+
+    #[test]
+    fn test_outcome_from_loop_err_internal_with_stuck_wording_is_error() {
+        // Structural, not textual: an Internal error that merely *sounds*
+        // stuck must classify as Error — only LoopStuck is Stuck.
+        let e = types::error::CarrierError::Internal("判定卡死 wording".into());
+        assert!(matches!(
+            state::outcome_from_loop_err(&e),
+            state::RunOutcome::Error(_)
         ));
     }
 

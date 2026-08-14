@@ -367,7 +367,13 @@ async fn handle_digest_daily(
     let date = serde_json::from_str::<DigestDailyPayload>(&job.payload_json)
         .ok()
         .and_then(|p| chrono::NaiveDate::parse_from_str(&p.date_iso, "%Y-%m-%d").ok())
-        .unwrap_or_else(|| chrono::Utc::now().date_naive() - chrono::Duration::days(1));
+        .unwrap_or_else(|| {
+            // Yesterday in the digest calendar timezone (Asia/Shanghai).
+            (chrono::Utc::now() + chrono::Duration::seconds(crate::digest::digest_tz()
+                .local_minus_utc() as i64))
+                .date_naive()
+                - chrono::Duration::days(1)
+        });
 
     match end_of_day_digest(pool, content_root, owner_id, date, &InertSummariser).await? {
         DigestOutcome::Emitted { daily_id, .. } => {

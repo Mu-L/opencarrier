@@ -25,23 +25,34 @@ use crate::pg::chunk_store::ChunkStore;
 use crate::pg::tree_store::TreeStore;
 
 /// Topic stamped on each L0 daily node so later runs can find "this day's"
-/// digest. Format: `digest:YYYY-MM-DD` (UTC calendar date from the job).
+/// digest. Format: `digest:YYYY-MM-DD` (calendar date from the job).
 pub const DIGEST_TOPIC_PREFIX: &str = "digest:";
+
+/// Calendar-day timezone for daily digests: Asia/Shanghai (UTC+8).
+/// A user's "day" ends at local midnight — with UTC the split lands at
+/// 08:00 local, so an evening chat and the 2am follow-up land in different
+/// digest days. All `digest:*` date math (topic stamps, day windows,
+/// scheduler wake) uses this offset.
+pub fn digest_tz() -> chrono::FixedOffset {
+    chrono::FixedOffset::east_opt(8 * 3600).expect("valid offset")
+}
 
 /// Topic tag for the daily digest of `date`.
 pub fn digest_topic(date: NaiveDate) -> String {
     format!("{DIGEST_TOPIC_PREFIX}{}", date.format("%Y-%m-%d"))
 }
 
-/// Inclusive UTC millisecond bounds of `date` (00:00:00.000 .. 23:59:59.999).
-pub fn utc_day_bounds_ms(date: NaiveDate) -> (i64, i64) {
-    let start = Utc
+/// Inclusive millisecond bounds of `date` in [`DIGEST_TZ`]
+/// (00:00:00.000 .. 23:59:59.999 local, expressed as absolute UTC ms).
+pub fn day_bounds_ms(date: NaiveDate) -> (i64, i64) {
+    let tz = digest_tz();
+    let start = tz
         .with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0)
         .single()
         .expect("valid midnight")
         .timestamp_millis();
     let next_date = date + Duration::days(1);
-    let next = Utc
+    let next = tz
         .with_ymd_and_hms(
             next_date.year(),
             next_date.month(),
@@ -58,7 +69,7 @@ pub fn utc_day_bounds_ms(date: NaiveDate) -> (i64, i64) {
 
 /// True when `node` is the L0 daily recap for `date`.
 ///
-/// Match on the `digest:YYYY-MM-DD` topic (new nodes) or on an exact UTC-day
+/// Match on the `digest:YYYY-MM-DD` topic (new nodes) or on an exact local-day
 /// time range (same contract, in case a writer omitted the topic). A leftover
 /// L0 whose range is the source material — not a calendar day — does not match,
 /// so it cannot block the next day's digest.
@@ -67,7 +78,7 @@ pub fn is_daily_for_date(node: &SummaryNode, date: NaiveDate) -> bool {
     if node.topics.iter().any(|t| t == &tag) {
         return true;
     }
-    let (start, end) = utc_day_bounds_ms(date);
+    let (start, end) = day_bounds_ms(date);
     node.time_range_start_ms == start && node.time_range_end_ms == end
 }
 
@@ -82,7 +93,8 @@ pub enum DigestOutcome {
     Skipped { existing_id: String },
 }
 
-/// Run an end-of-day digest for a given owner and UTC calendar `date`.
+/// Run an end-of-day digest for a given owner and calendar `date` (in
+/// [`digest_tz`]).
 pub async fn end_of_day_digest(
     pool: &Pool,
     content_root: &Path,
@@ -100,7 +112,7 @@ pub async fn end_of_day_digest(
         .await?;
 
     let now_ms = Utc::now().timestamp_millis();
-    let (day_start_ms, day_end_ms) = utc_day_bounds_ms(date);
+    let (day_start_ms, day_end_ms) = day_bounds_ms(date);
 
     // Idempotent per (owner, date): one L0 daily node per UTC day.
     if let Some(existing) =
@@ -430,15 +442,25 @@ mod tests {
     }
 
     #[test]
-    fn daily_match_by_utc_day_range() {
+    fn daily_match_by_local_day_range() {
         let date = NaiveDate::from_ymd_opt(2026, 8, 13).unwrap();
-        let (start, end) = utc_day_bounds_ms(date);
+        let (start, end) = day_bounds_ms(date);
         let node = sample_node(vec![], start, end);
         assert!(is_daily_for_date(&node, date));
         assert!(!is_daily_for_date(
             &node,
             NaiveDate::from_ymd_opt(2026, 8, 14).unwrap()
         ));
+    }
+
+    #[test]
+    fn day_bounds_are_shanghai_midnights() {
+        // 2026-08-13 00:00 +08:00 == 2026-08-12 16:00 UTC.
+        let (start, end) = day_bounds_ms(NaiveDate::from_ymd_opt(2026, 8, 13).unwrap());
+        let start_utc = chrono::DateTime::from_timestamp_millis(start).unwrap();
+        assert_eq!(start_utc.to_rfc3339(), "2026-08-12T16:00:00+00:00");
+        // end = next midnight - 1ms
+        assert_eq!(end - start, 86_399_999);
     }
 
     #[test]

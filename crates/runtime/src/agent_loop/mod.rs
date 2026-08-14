@@ -490,7 +490,7 @@ async fn loop_iteration(ctx: &mut LoopContext<'_>) -> CarrierResult<LoopAction> 
             idle_streak = streak,
             "No progress for {streak} consecutive iterations - aborting turn as stuck"
         );
-        return Err(CarrierError::Internal(format!(
+        return Err(CarrierError::LoopStuck(format!(
             "agent 连续 {streak} 轮无进展（无工具调用、无最终答案），判定卡死，终止本轮"
         )));
     }
@@ -502,7 +502,7 @@ async fn loop_iteration(ctx: &mut LoopContext<'_>) -> CarrierResult<LoopAction> 
             max_iterations = n,
             "Declared flow/subagent max_iterations exceeded — aborting"
         );
-        return Err(CarrierError::Internal(format!(
+        return Err(CarrierError::LoopStuck(format!(
             "agent 已跑 {} 轮，超过本 flow 声明的 max_iterations={n}+2，判定卡死，终止本轮",
             ctx.state.iteration
         )));
@@ -869,7 +869,7 @@ async fn dispatch(
                     return Ok(LoopAction::BreakForPlan);
                 }
                 tool_use::ToolUseAction::BreakToolLoop(msg) => {
-                    return Err(CarrierError::Internal(msg));
+                    return Err(CarrierError::LoopStuck(msg));
                 }
             }
         }

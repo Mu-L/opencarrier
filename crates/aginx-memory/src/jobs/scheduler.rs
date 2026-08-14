@@ -1,5 +1,5 @@
-//! Daily scheduler that wakes after UTC midnight to enqueue DigestDaily
-//! and FlushStale jobs.
+//! Daily scheduler that wakes after Asia/Shanghai midnight (see
+//! [`crate::digest::DIGEST_TZ`]) to enqueue DigestDaily and FlushStale jobs.
 //!
 //! Ported from `memory::tree::jobs::scheduler` - same schedule, backed by the
 //! PG async pool. `list_owners_with_trees` is rewritten as a PG query
@@ -16,8 +16,8 @@ use crate::pg::job_store::JobStore;
 use memory::tree::types::{DigestDailyPayload, FlushStalePayload, JobKind, NewJob};
 
 /// Start the daily scheduler. Enqueues a DigestDaily for yesterday and a
-/// FlushStale for today shortly after UTC midnight, for every owner that has
-/// trees. Also runs a periodic stale-lock recovery.
+/// FlushStale for today shortly after local (Asia/Shanghai) midnight, for
+/// every owner that has trees. Also runs a periodic stale-lock recovery.
 pub fn start_scheduler(pool: Pool, content_root: PathBuf) {
     let pool1 = pool.clone();
     tokio::spawn(async move {
@@ -48,8 +48,11 @@ pub fn start_scheduler(pool: Pool, content_root: PathBuf) {
 
 async fn enqueue_daily_jobs(pool: &Pool) -> CarrierResult<()> {
     let job_store = JobStore::new(pool.clone());
-    let now = chrono::Utc::now();
-    let yesterday = now.date_naive() - chrono::Duration::days(1);
+    // Digest days run on the Asia/Shanghai calendar ([`crate::digest::digest_tz`])
+    // — a user's "day" ends at local midnight, not 08:00 UTC.
+    let tz = crate::digest::digest_tz();
+    let now_local = tz.from_utc_datetime(&chrono::Utc::now().naive_utc());
+    let yesterday = now_local.date_naive() - chrono::Duration::days(1);
     let date_iso = yesterday.format("%Y-%m-%d").to_string();
 
     // Find all owners that have trees.
@@ -74,7 +77,7 @@ async fn enqueue_daily_jobs(pool: &Pool) -> CarrierResult<()> {
 
         // FlushStale for today
         let flush_payload = FlushStalePayload::default();
-        let today_iso = now.date_naive().format("%Y-%m-%d").to_string();
+        let today_iso = now_local.date_naive().format("%Y-%m-%d").to_string();
         let dedupe_key = format!("flush_stale:{}:{}", owner_id, today_iso);
         let new_job = NewJob {
             owner_id: owner_id.clone(),
@@ -147,9 +150,12 @@ async fn list_owners_with_trees(pool: &Pool) -> CarrierResult<Vec<String>> {
 }
 
 fn next_sleep_duration() -> Duration {
-    let now = chrono::Utc::now();
-    let tomorrow = now.date_naive() + chrono::Duration::days(1);
-    let next = chrono::Utc
+    // Wake at 00:05 Asia/Shanghai (16:05 UTC the previous day) so the digest
+    // for "yesterday" is enqueued right after the local day rolls over.
+    let tz = crate::digest::digest_tz();
+    let now_local = tz.from_utc_datetime(&chrono::Utc::now().naive_utc());
+    let tomorrow = now_local.date_naive() + chrono::Duration::days(1);
+    let next_local = tz
         .with_ymd_and_hms(
             tomorrow.year(),
             tomorrow.month(),
@@ -159,8 +165,8 @@ fn next_sleep_duration() -> Duration {
             0,
         )
         .single()
-        .unwrap_or_else(|| now + chrono::Duration::hours(24));
-    (next - now)
+        .unwrap_or_else(|| now_local + chrono::Duration::hours(24));
+    (next_local - now_local)
         .to_std()
         .unwrap_or_else(|_| Duration::from_secs(60))
 }

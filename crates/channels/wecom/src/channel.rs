@@ -502,11 +502,10 @@ async fn webhook_post(
 // ---------------------------------------------------------------------------
 
 /// Media that must be fetched via `cgi-bin/media/get` before we can hand it
-/// to the bridge (image/voice/video/file all arrive as `media_id` only).
+/// to the bridge (image/video/file all arrive as `media_id` only).
 #[derive(Debug)]
 enum KfMediaKind {
     Image,
-    Voice,
     Video,
     File,
 }
@@ -545,10 +544,18 @@ fn parse_kf_inbound(m: &serde_json::Value) -> Option<KfInbound> {
             media_id: json_str(m, &["image", "media_id"]).to_string(),
             kind: KfMediaKind::Image,
         },
-        "voice" => KfInbound::FetchMedia {
-            media_id: json_str(m, &["voice", "media_id"]).to_string(),
-            kind: KfMediaKind::Voice,
-        },
+        // Voice: WeCom kf sync_msg carries no `recognition` field (unlike the
+        // weixin-oa XML, where WeChat server-side ASR fills it) and the system
+        // has no ASR of its own — downloading an .amr nobody can process just
+        // wastes a media/get call and leaves the agent hinting at media_describe
+        // on audio. Forward an honest placeholder with the duration instead.
+        "voice" => {
+            let secs = m["voice"]["play_length"].as_u64().unwrap_or(0);
+            KfInbound::Ready(PluginContent::Text(format!(
+                "[语音消息]（约 {secs} 秒）：系统暂不支持语音转写，无法获知内容。\
+                 如果这条语音很重要，请请用户改发文字。"
+            )))
+        }
         "video" => KfInbound::FetchMedia {
             media_id: json_str(m, &["video", "media_id"]).to_string(),
             kind: KfMediaKind::Video,
@@ -653,11 +660,6 @@ async fn materialize_kf_inbound(
             caption: None,
             data: bytes,
         },
-        KfMediaKind::Voice => PluginContent::File {
-            url: String::new(),
-            filename: filename.unwrap_or_else(|| "voice.amr".into()),
-            data: bytes,
-        },
         KfMediaKind::Video => PluginContent::File {
             url: String::new(),
             filename: filename.unwrap_or_else(|| "video.mp4".into()),
@@ -722,13 +724,14 @@ mod kf_inbound_tests {
             )),
             "MID_IMG"
         );
-        assert_eq!(
-            media_id_of(&msg(
-                "voice",
-                serde_json::json!({"voice": {"media_id": "MID_VOC"}})
-            )),
-            "MID_VOC"
-        );
+        // Voice is NOT fetched: no ASR in the system, forward a placeholder.
+        let voice = ready_text(&msg(
+            "voice",
+            serde_json::json!({"voice": {"media_id": "MID_VOC", "play_length": 7}}),
+        ));
+        assert!(voice.contains("语音消息"));
+        assert!(voice.contains("7 秒"));
+        assert!(voice.contains("改发文字"));
         assert_eq!(
             media_id_of(&msg(
                 "video",

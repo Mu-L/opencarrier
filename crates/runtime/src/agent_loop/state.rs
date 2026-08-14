@@ -346,17 +346,14 @@ impl LastRunSummary {
 }
 
 /// Map a loop-abort error to a persistable outcome so the next turn can see it.
+///
+/// Classification is structural: stuck detection raises [`CarrierError::LoopStuck`]
+/// (no-progress idle, tool loop, declared max_iterations exceeded), everything
+/// else (LLM/network/etc.) is an Error. Matching on the variant keeps this
+/// correct when the message wording changes.
 pub fn outcome_from_loop_err(err: &types::error::CarrierError) -> RunOutcome {
-    let msg = err.to_string();
-    if msg.contains("无进展")
-        || msg.contains("卡死")
-        || msg.contains("tool loop")
-        || msg.contains("re-called")
-        || msg.contains("rotating repetition")
-        || msg.contains("陷入工具循环")
-    {
-        RunOutcome::Stuck(msg)
-    } else {
-        RunOutcome::Error(msg)
+    match err {
+        types::error::CarrierError::LoopStuck(reason) => RunOutcome::Stuck(reason.clone()),
+        _ => RunOutcome::Error(err.to_string()),
     }
 }
