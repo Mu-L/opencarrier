@@ -17,11 +17,16 @@
 /// knowledge gained from external research, never edit existing files. This
 /// prevents the "audit-and-rewrite" failure mode where the agent mistakes
 /// "learn" for "fix my knowledge base".
+///
+/// `max_iterations: 12` is measured, not guessed: observed learn rounds need
+/// 8+ iterations (search → read → knowledge_add → log append), and the
+/// declared cap hard-stops at N+2 — a 6 was observed killing a healthy run
+/// at wrap-up (2026-08-14).
 pub const DEFAULT_SELF_GROWTH_FLOW: &str = r#"---
 name: self-growth
 description: 自主成长（空闲时自动学习/创作）。由 self-growth cron 触发，mode 由系统消息给出（learn=只学习；create app_id=xxx=写公众号草稿）。学习=去网上搜本领域新信息→追加新知识；绝不整理/修复/改写既有文件。创作=写新文章建草稿。严格遵守下方铁红线。
 version: 2
-max_iterations: 6
+max_iterations: 12
 tools: [system_time, web_search, web_fetch, knowledge_list, knowledge_read, knowledge_add, file_read, file_write]
 ---
 

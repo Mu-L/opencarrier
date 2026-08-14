@@ -108,6 +108,47 @@ async fn tool_user_profile(
                 .map_err(|e| CarrierError::Internal(format!("Failed to write profile: {e}")))?;
             Ok(format!("Profile updated for user '{}'", sender))
         }
+        "remove_account" => {
+            // Delete one wechat_accounts entry by app_id. The update path can
+            // only add/modify (merge by app_id never removes), so revoking a
+            // stale account needs an explicit action.
+            let app_id = input["app_id"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    CarrierError::InvalidInput(
+                        "remove_account requires a non-empty 'app_id'".to_string(),
+                    )
+                })?;
+            if !profile_path.exists() {
+                return Ok(format!("No profile for user '{sender}' — nothing to remove."));
+            }
+            let mut profile: serde_json::Value = {
+                let content = tokio::fs::read_to_string(&profile_path)
+                    .await
+                    .map_err(|e| CarrierError::Internal(format!("Failed to read profile: {e}")))?;
+                serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+            };
+            let accounts = profile
+                .get_mut("preferences")
+                .and_then(|p| p.get_mut("wechat_accounts"))
+                .and_then(|a| a.as_array_mut());
+            let Some(accounts) = accounts else {
+                return Ok(format!("User '{sender}' has no wechat_accounts — nothing to remove."));
+            };
+            let before = accounts.len();
+            accounts.retain(|a| a.get("app_id").and_then(|v| v.as_str()) != Some(app_id));
+            if accounts.len() == before {
+                return Ok(format!("app_id '{app_id}' not found in user '{sender}' wechat_accounts."));
+            }
+            let output = serde_json::to_string_pretty(&profile)
+                .map_err(|e| CarrierError::Serialization(format!("Failed to serialize profile: {e}")))?;
+            tokio::fs::write(&profile_path, &output)
+                .await
+                .map_err(|e| CarrierError::Internal(format!("Failed to write profile: {e}")))?;
+            Ok(format!("Removed app_id '{app_id}' from user '{sender}' wechat_accounts."))
+        }
         other => Err(CarrierError::InvalidInput(format!(
             "Unknown action '{other}'. Use 'read' or 'update'."
         ))),
@@ -258,8 +299,9 @@ impl ToolModule for DelegationTools {
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ["read", "update"], "description": "Read the profile or update it with new key-value pairs"},
+                        "action": {"type": "string", "enum": ["read", "update", "remove_account"], "description": "Read the profile, update it with new key-value pairs, or remove one wechat_accounts entry"},
                         "updates": {"type": "object", "description": "Key-value pairs to merge into the profile (only for action=update). Supported keys: display_name, preferences (object; wechat_accounts merged by app_id, other keys shallow-merged), interaction_patterns (object), notes (string)"},
+                        "app_id": {"type": "string", "description": "app_id of the wechat_accounts entry to delete (only for action=remove_account)"},
                     },
                     "required": ["action"],
                 }),
@@ -431,5 +473,98 @@ mod tests {
         assert_eq!(accts.len(), 2);
         assert_eq!(accts[0]["app_id"], "wxAAA");
         assert_eq!(accts[1]["app_id"], "wxBBB");
+    }
+
+    #[tokio::test]
+    async fn user_profile_remove_account_deletes_only_named_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        for app_id in ["wxAAA", "wxBBB"] {
+            let input = json!({
+                "action": "update",
+                "updates": {
+                    "preferences": {
+                        "wechat_accounts": [{"app_id": app_id, "app_secret": "s"}]
+                    }
+                }
+            });
+            tool_user_profile(&input, Some(home), Some("agent1"), Some("owner1"), Some("owner1"))
+                .await
+                .unwrap();
+        }
+
+        let out = tool_user_profile(
+            &json!({"action": "remove_account", "app_id": "wxAAA"}),
+            Some(home),
+            Some("agent1"),
+            Some("owner1"),
+            Some("owner1"),
+        )
+        .await
+        .unwrap();
+        assert!(out.contains("Removed app_id 'wxAAA'"));
+
+        let path = types::config::sender_data_dir(home, "owner1", "agent1", Some("owner1"))
+            .join("profile.json");
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let accts = saved["preferences"]["wechat_accounts"].as_array().unwrap();
+        assert_eq!(accts.len(), 1);
+        assert_eq!(accts[0]["app_id"], "wxBBB");
+    }
+
+    #[tokio::test]
+    async fn user_profile_remove_account_unknown_id_is_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        tool_user_profile(
+            &json!({
+                "action": "update",
+                "updates": {
+                    "preferences": {
+                        "wechat_accounts": [{"app_id": "wxAAA", "app_secret": "s"}]
+                    }
+                }
+            }),
+            Some(home),
+            Some("agent1"),
+            Some("owner1"),
+            Some("owner1"),
+        )
+        .await
+        .unwrap();
+
+        let out = tool_user_profile(
+            &json!({"action": "remove_account", "app_id": "wxNOPE"}),
+            Some(home),
+            Some("agent1"),
+            Some("owner1"),
+            Some("owner1"),
+        )
+        .await
+        .unwrap();
+        assert!(out.contains("not found"));
+
+        let path = types::config::sender_data_dir(home, "owner1", "agent1", Some("owner1"))
+            .join("profile.json");
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let accts = saved["preferences"]["wechat_accounts"].as_array().unwrap();
+        assert_eq!(accts.len(), 1, "unknown app_id must not delete anything");
+    }
+
+    #[tokio::test]
+    async fn user_profile_remove_account_requires_app_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = tool_user_profile(
+            &json!({"action": "remove_account"}),
+            Some(tmp.path()),
+            Some("agent1"),
+            Some("owner1"),
+            Some("owner1"),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("app_id"));
     }
 }
