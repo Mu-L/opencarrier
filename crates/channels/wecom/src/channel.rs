@@ -413,12 +413,17 @@ async fn webhook_post(
                         if m["origin"].as_i64() != Some(3) {
                             continue;
                         }
-                        let content = match m["msgtype"].as_str() {
-                            Some("text") => PluginContent::Text(
-                                m["text"]["content"].as_str().unwrap_or("").to_string(),
-                            ),
-                            _ => continue,
+                        let Some(content) =
+                            materialize_kf_inbound(&http, &access_token, m).await
+                        else {
+                            continue;
                         };
+                        info!(
+                            bot = %bot_id,
+                            msgtype = m["msgtype"].as_str().unwrap_or(""),
+                            msgid = m["msgid"].as_str().unwrap_or(""),
+                            "kf inbound customer message"
+                        );
                         let ext = m["external_userid"].as_str().unwrap_or("").to_string();
                         // Auto-bind: resolve this customer's unionid via batchget
                         // and POST {wecom_external_id, unionid} to the backend so
@@ -486,4 +491,306 @@ async fn webhook_post(
     let _ = state.tx.send(message).await;
 
     "success"
+}
+
+// ---------------------------------------------------------------------------
+// Kf sync_msg inbound: every official customer msgtype (origin=3)
+// ---------------------------------------------------------------------------
+
+/// Media that must be fetched via `cgi-bin/media/get` before we can hand it
+/// to the bridge (image/voice/video/file all arrive as `media_id` only).
+#[derive(Debug)]
+enum KfMediaKind {
+    Image,
+    Voice,
+    Video,
+    File,
+}
+
+#[derive(Debug)]
+enum KfInbound {
+    Ready(PluginContent),
+    FetchMedia { media_id: String, kind: KfMediaKind },
+}
+
+fn json_str<'a>(v: &'a serde_json::Value, path: &[&str]) -> &'a str {
+    let mut cur = v;
+    for key in path {
+        cur = &cur[*key];
+    }
+    cur.as_str().unwrap_or("")
+}
+
+/// Classify a customer `sync_msg` item. Pure — no I/O — so every official
+/// msgtype has a fixture test. Unknown types become a text placeholder
+/// (never silent-drop).
+fn parse_kf_inbound(m: &serde_json::Value) -> Option<KfInbound> {
+    let msgtype = m.get("msgtype")?.as_str()?;
+    Some(match msgtype {
+        "text" => {
+            let text = json_str(m, &["text", "content"]);
+            let menu_id = json_str(m, &["text", "menu_id"]);
+            let body = if menu_id.is_empty() {
+                text.to_string()
+            } else {
+                format!("{text}\n[menu_id: {menu_id}]")
+            };
+            KfInbound::Ready(PluginContent::Text(body))
+        }
+        "image" => KfInbound::FetchMedia {
+            media_id: json_str(m, &["image", "media_id"]).to_string(),
+            kind: KfMediaKind::Image,
+        },
+        "voice" => KfInbound::FetchMedia {
+            media_id: json_str(m, &["voice", "media_id"]).to_string(),
+            kind: KfMediaKind::Voice,
+        },
+        "video" => KfInbound::FetchMedia {
+            media_id: json_str(m, &["video", "media_id"]).to_string(),
+            kind: KfMediaKind::Video,
+        },
+        "file" => KfInbound::FetchMedia {
+            media_id: json_str(m, &["file", "media_id"]).to_string(),
+            kind: KfMediaKind::File,
+        },
+        "location" => {
+            let lat = m["location"]["latitude"].as_f64().unwrap_or(0.0);
+            let lon = m["location"]["longitude"].as_f64().unwrap_or(0.0);
+            let name = json_str(m, &["location", "name"]);
+            let address = json_str(m, &["location", "address"]);
+            KfInbound::Ready(PluginContent::Text(format!(
+                "[位置] {name}\n{address}\n纬度 {lat} 经度 {lon}"
+            )))
+        }
+        "link" => {
+            let title = json_str(m, &["link", "title"]);
+            let desc = json_str(m, &["link", "desc"]);
+            let url = json_str(m, &["link", "url"]);
+            KfInbound::Ready(PluginContent::Text(format!(
+                "[链接] {title}\n{desc}\n{url}"
+            )))
+        }
+        "business_card" => {
+            let userid = json_str(m, &["business_card", "userid"]);
+            KfInbound::Ready(PluginContent::Text(format!("[名片] userid={userid}")))
+        }
+        "miniprogram" => {
+            let title = json_str(m, &["miniprogram", "title"]);
+            let appid = json_str(m, &["miniprogram", "appid"]);
+            let pagepath = json_str(m, &["miniprogram", "pagepath"]);
+            KfInbound::Ready(PluginContent::Text(format!(
+                "[小程序] {title}\nappid={appid}\npagepath={pagepath}"
+            )))
+        }
+        "msgmenu" => {
+            let head = json_str(m, &["msgmenu", "head_content"]);
+            KfInbound::Ready(PluginContent::Text(format!("[菜单消息] {head}")))
+        }
+        "channels" | "channels_shop_product" | "channels_shop_order" => {
+            KfInbound::Ready(PluginContent::Text(format!(
+                "[视频号] {msgtype}\n{m}"
+            )))
+        }
+        "merged_msg" => KfInbound::Ready(PluginContent::Text("[聊天记录]".into())),
+        "meeting" | "schedule" => {
+            KfInbound::Ready(PluginContent::Text(format!("[{msgtype}]")))
+        }
+        "event" => {
+            let ev = json_str(m, &["event", "event_type"]);
+            let ev = if ev.is_empty() { "event" } else { ev };
+            KfInbound::Ready(PluginContent::Command {
+                name: ev.to_string(),
+                args: vec![],
+            })
+        }
+        other => {
+            warn!(msgtype = other, "kf unknown msgtype — forwarding as text");
+            KfInbound::Ready(PluginContent::Text(format!(
+                "[未识别的客服消息类型: {other}]"
+            )))
+        }
+    })
+}
+
+async fn materialize_kf_inbound(
+    http: &reqwest::Client,
+    access_token: &str,
+    m: &serde_json::Value,
+) -> Option<PluginContent> {
+    let parsed = parse_kf_inbound(m)?;
+    let (media_id, kind) = match parsed {
+        KfInbound::Ready(c) => return Some(c),
+        KfInbound::FetchMedia { media_id, kind } => (media_id, kind),
+    };
+
+    let (bytes, filename) = if media_id.is_empty() {
+        warn!(
+            msgid = m["msgid"].as_str().unwrap_or(""),
+            "kf media message missing media_id"
+        );
+        (None, None)
+    } else {
+        match token::download_kf_media(http, access_token, &media_id).await {
+            Ok((b, f)) => (Some(b), f),
+            Err(e) => {
+                warn!(
+                    media_id = %media_id,
+                    error = %e,
+                    "kf media download failed — still forwarding placeholder"
+                );
+                (None, None)
+            }
+        }
+    };
+
+    Some(match kind {
+        KfMediaKind::Image => PluginContent::Image {
+            url: String::new(),
+            caption: None,
+            data: bytes,
+        },
+        KfMediaKind::Voice => PluginContent::File {
+            url: String::new(),
+            filename: filename.unwrap_or_else(|| "voice.amr".into()),
+            data: bytes,
+        },
+        KfMediaKind::Video => PluginContent::File {
+            url: String::new(),
+            filename: filename.unwrap_or_else(|| "video.mp4".into()),
+            data: bytes,
+        },
+        KfMediaKind::File => PluginContent::File {
+            url: String::new(),
+            filename: filename.unwrap_or_else(|| "file".into()),
+            data: bytes,
+        },
+    })
+}
+
+#[cfg(test)]
+mod kf_inbound_tests {
+    use super::*;
+
+    fn msg(msgtype: &str, body: serde_json::Value) -> serde_json::Value {
+        let mut v = serde_json::json!({
+            "msgid": "m1",
+            "origin": 3,
+            "msgtype": msgtype,
+        });
+        if let serde_json::Value::Object(map) = body {
+            for (k, val) in map {
+                v[k] = val;
+            }
+        }
+        v
+    }
+
+    fn ready_text(m: &serde_json::Value) -> String {
+        match parse_kf_inbound(m) {
+            Some(KfInbound::Ready(PluginContent::Text(t))) => t,
+            other => panic!("expected Ready text, got {other:?}"),
+        }
+    }
+
+    fn media_id_of(m: &serde_json::Value) -> String {
+        match parse_kf_inbound(m) {
+            Some(KfInbound::FetchMedia { media_id, .. }) => media_id,
+            other => panic!("expected FetchMedia, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_and_menu_id() {
+        let t = ready_text(&msg(
+            "text",
+            serde_json::json!({"text": {"content": "hello", "menu_id": "101"}}),
+        ));
+        assert!(t.contains("hello"));
+        assert!(t.contains("menu_id: 101"));
+    }
+
+    #[test]
+    fn image_voice_video_file_fetch() {
+        assert_eq!(
+            media_id_of(&msg(
+                "image",
+                serde_json::json!({"image": {"media_id": "MID_IMG"}})
+            )),
+            "MID_IMG"
+        );
+        assert_eq!(
+            media_id_of(&msg(
+                "voice",
+                serde_json::json!({"voice": {"media_id": "MID_VOC"}})
+            )),
+            "MID_VOC"
+        );
+        assert_eq!(
+            media_id_of(&msg(
+                "video",
+                serde_json::json!({"video": {"media_id": "MID_VID"}})
+            )),
+            "MID_VID"
+        );
+        assert_eq!(
+            media_id_of(&msg(
+                "file",
+                serde_json::json!({"file": {"media_id": "MID_FIL"}})
+            )),
+            "MID_FIL"
+        );
+    }
+
+    #[test]
+    fn location_link_card_miniprogram_menu() {
+        let loc = ready_text(&msg(
+            "location",
+            serde_json::json!({"location": {
+                "latitude": 23.1,
+                "longitude": 113.3,
+                "name": "媒体港",
+                "address": "海珠区"
+            }}),
+        ));
+        assert!(loc.contains("媒体港") && loc.contains("海珠区") && loc.contains("23.1"));
+
+        let link = ready_text(&msg(
+            "link",
+            serde_json::json!({"link": {"title": "T", "desc": "D", "url": "https://x"}}),
+        ));
+        assert!(link.contains("T") && link.contains("https://x"));
+
+        let card = ready_text(&msg(
+            "business_card",
+            serde_json::json!({"business_card": {"userid": "zhangsan"}}),
+        ));
+        assert!(card.contains("zhangsan"));
+
+        let mp = ready_text(&msg(
+            "miniprogram",
+            serde_json::json!({"miniprogram": {
+                "title": "班次",
+                "appid": "wxAPP",
+                "pagepath": "pages/index"
+            }}),
+        ));
+        assert!(mp.contains("wxAPP") && mp.contains("pages/index"));
+
+        let menu = ready_text(&msg(
+            "msgmenu",
+            serde_json::json!({"msgmenu": {"head_content": "满意吗"}}),
+        ));
+        assert!(menu.contains("满意吗"));
+    }
+
+    #[test]
+    fn unknown_is_placeholder_not_drop() {
+        let t = ready_text(&msg("totally_new", serde_json::json!({})));
+        assert!(t.contains("totally_new"));
+    }
+
+    #[test]
+    fn missing_msgtype_is_none() {
+        assert!(parse_kf_inbound(&serde_json::json!({"origin": 3})).is_none());
+    }
 }

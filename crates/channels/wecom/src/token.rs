@@ -587,6 +587,108 @@ pub async fn upload_kf_media(
         .ok_or_else(|| CarrierError::Serialization("media upload returned no media_id".to_string()))
 }
 
+/// Download a temporary media file (`cgi-bin/media/get`) identified by the
+/// `media_id` on a kf inbound image/voice/video/file message.
+///
+/// WeCom returns the raw bytes on success, or a JSON `{errcode, errmsg}` body
+/// on failure (same URL). Filename is taken from `Content-Disposition` when
+/// present.
+pub async fn download_kf_media(
+    http: &Client,
+    access_token: &str,
+    media_id: &str,
+) -> CarrierResult<(Vec<u8>, Option<String>)> {
+    if media_id.is_empty() {
+        return Err(CarrierError::InvalidInput("empty media_id".to_string()));
+    }
+    let url = format!(
+        "{WECOM_API_BASE}/cgi-bin/media/get?access_token={}&media_id={}",
+        urlencoding::encode(access_token),
+        urlencoding::encode(media_id)
+    );
+    let resp = http
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| CarrierError::Network(format!("media get request failed: {e}")))?;
+    let ctype = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let filename = resp
+        .headers()
+        .get(reqwest::header::CONTENT_DISPOSITION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(filename_from_disposition);
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| CarrierError::Network(format!("media get body: {e}")))?;
+    if ctype.contains("application/json") || bytes.starts_with(b"{") {
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        let errcode = v["errcode"].as_i64().unwrap_or(-1);
+        if errcode != 0 {
+            let errmsg = v["errmsg"].as_str().unwrap_or("unknown");
+            return Err(CarrierError::Network(format!(
+                "media get error {errcode}: {errmsg}"
+            )));
+        }
+    }
+    Ok((bytes.to_vec(), filename))
+}
+
+fn filename_from_disposition(header: &str) -> Option<String> {
+    // filename="foo.jpg" or filename*=UTF-8''foo.jpg
+    if let Some(rest) = header.split("filename*=").nth(1) {
+        let encoded = rest
+            .trim()
+            .trim_matches('"')
+            .trim()
+            .rsplit("''")
+            .next()
+            .unwrap_or("");
+        let decoded = urlencoding::decode(encoded).ok()?;
+        let name = decoded.trim();
+        if !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+    let rest = header.split("filename=").nth(1)?;
+    let name = rest
+        .trim()
+        .trim_matches('"')
+        .trim_end_matches(';')
+        .trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+#[cfg(test)]
+mod filename_tests {
+    use super::filename_from_disposition;
+
+    #[test]
+    fn quoted_filename() {
+        assert_eq!(
+            filename_from_disposition(r#"attachment; filename="photo.jpg""#).as_deref(),
+            Some("photo.jpg")
+        );
+    }
+
+    #[test]
+    fn rfc5987_filename() {
+        assert_eq!(
+            filename_from_disposition("attachment; filename*=UTF-8''%E5%9B%BE.png").as_deref(),
+            Some("图.png")
+        );
+    }
+}
+
 /// Send an arbitrary kf message via `cgi-bin/kf/send_msg`. `body` must contain
 /// `msgtype` + the msgtype-specific field (text/image/voice/video/file/link/
 /// miniprogram/menu). `touser` (= external_userid) and `open_kfid` are injected
