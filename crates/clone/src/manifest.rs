@@ -205,6 +205,81 @@ pub fn ensure_template_version(files: &mut BTreeMap<String, Vec<u8>>) -> bool {
     }
 }
 
+/// Install-time hard format validation (the "law enforcement" half of
+/// `docs/CLONE-FORMAT.md`). Rejects definition-layer layouts the runtime
+/// silently mis-parses — the two historical killers:
+///
+/// 1. Top-level `skills/` directory: `scan_flows` only scans `flows/`, so every
+///    skill shipped there is invisible (the batch-generation-era plague).
+/// 2. Flow files without a non-empty `description` frontmatter: the flow isn't
+///    injected, and every tool it declares is dead.
+///
+/// The error message is deliberately structured (file -> what's wrong ->
+/// expectation -> fix hint) so an agent receiving it via `Error: …` can
+/// self-repair in one round instead of hammering the same failing call.
+/// This is a WARN-level gate, not a hard reject, for `skills/` — legacy hub
+/// templates re-install through this path, and refusing them would break the
+/// hub reinstall flow wholesale. The errors below are returned as a list of
+/// actionable strings by the caller's discretion.
+pub fn validate_install_format(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<String>> {
+    let mut errors = Vec::new();
+
+    for (rel, content) in files {
+        let top = rel.split('/').next().unwrap_or(rel);
+        // 1. Legacy `skills/` top-level directory — dead on arrival.
+        if top == "skills" {
+            errors.push(format!(
+                "文件 '{rel}' 位于已废弃的 skills/ 目录——运行时只扫描 flows/，skills/ 下的流程完全不可见。\
+                 修复：把 skills/<名称>/SKILL.md 移到 flows/<名称>/flow.md（frontmatter 保持 name/description/version），\
+                 并从本次提交中删除 skills/ 路径的文件"
+            ));
+            continue;
+        }
+
+        // 2. Flow definition files under flows/ must carry a non-empty
+        //    single-line `description` (block scalars read as literal "|").
+        let segs: Vec<&str> = rel.split('/').collect();
+        if segs.len() >= 3 && segs[0] == "flows" {
+            let fname = segs.last().copied().unwrap_or_default();
+            if fname == "flow.md" || fname == "SKILL.md" {
+                let text = String::from_utf8_lossy(content);
+                if let Some(desc) = extract_frontmatter_description(&text) {
+                    let trimmed = desc.trim();
+                    if trimmed.is_empty() || trimmed == "|" || trimmed.len() < 4 {
+                        errors.push(format!(
+                            "流程文件 '{rel}' 的 description 为空/过短/块标量——空 description 的 flow 不会被注入，\
+                             其声明的工具全部失效。修复：frontmatter 写单行非空 description（一句话用途，≤50字），\
+                             不要用 YAML 块标量（description: | 多行）"
+                        ));
+                    }
+                } else {
+                    errors.push(format!(
+                        "流程文件 '{rel}' 缺少 description 字段（或无 frontmatter）——\
+                         修复：frontmatter 必须包含 name、description（单行非空）、version"
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(errors)
+}
+
+/// Extract the `description:` value from a flow file's frontmatter
+/// (line-oriented, mirrors `types::flow::parse_flow_def` — including its
+/// single-line limitation, which is exactly what we're validating against).
+fn extract_frontmatter_description(content: &str) -> Option<String> {
+    let rest = content.strip_prefix("---")?;
+    let end = rest.find("\n---")?;
+    for line in rest[..end].lines() {
+        let t = line.trim();
+        if let Some(v) = t.strip_prefix("description:") {
+            return Some(v.trim().trim_matches('"').trim_matches('\'').to_string());
+        }
+    }
+    None
+}
+
 /// Write a set of files (`path -> bytes`) into `workspace`, enforcing the same
 /// definition-layer + traversal safety as the `dup` push endpoint. Creates
 /// parent dirs and writes atomically (`.duptmp` + rename). Files outside the
@@ -398,5 +473,51 @@ mod tests {
         assert_eq!(collected["SOUL.md"], b"soul");
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn validate_install_format_rejects_legacy_layouts() {
+        let mut files = BTreeMap::new();
+        files.insert(
+            "skills/answer/SKILL.md".to_string(),
+            b"---\nname: answer\ndescription: x\nversion: 1\n---\nbody".to_vec(),
+        );
+        let errs = validate_install_format(&files).unwrap();
+        assert!(errs.len() == 1 && errs[0].contains("skills/"), "{errs:?}");
+
+        // Flow without description -> rejected.
+        let mut files = BTreeMap::new();
+        files.insert(
+            "flows/write/flow.md".to_string(),
+            b"---\nname: write\nversion: 1\n---\nbody".to_vec(),
+        );
+        let errs = validate_install_format(&files).unwrap();
+        assert!(errs.len() == 1 && errs[0].contains("description"), "{errs:?}");
+
+        // YAML block scalar reads as literal "|" -> rejected.
+        let mut files = BTreeMap::new();
+        files.insert(
+            "flows/write/flow.md".to_string(),
+            b"---\nname: write\ndescription: |\n  multi line\nversion: 1\n---".to_vec(),
+        );
+        let errs = validate_install_format(&files).unwrap();
+        assert_eq!(errs.len(), 1, "{errs:?}");
+
+        // Canonical format passes clean.
+        let mut files = BTreeMap::new();
+        files.insert(
+            "flows/write/flow.md".to_string(),
+            "---\nname: write\ndescription: 写文章流程\nversion: 2\n---\nbody".as_bytes().to_vec(),
+        );
+        files.insert("template.json".to_string(), b"{}".to_vec());
+        assert!(validate_install_format(&files).unwrap().is_empty());
+
+        // Non-flow files under flows/ (scripts etc.) are not checked.
+        let mut files = BTreeMap::new();
+        files.insert(
+            "flows/write/scripts/run.py".to_string(),
+            b"print(1)".to_vec(),
+        );
+        assert!(validate_install_format(&files).unwrap().is_empty());
     }
 }

@@ -1029,6 +1029,22 @@ impl CarrierKernel {
             tracing::info!(name = %clone_name, "Added missing `version` field to template.json (DupHub listing metadata requires it)");
         }
 
+        // Install-time hard format gate (docs/CLONE-FORMAT.md enforcement):
+        // reject the two layouts the runtime silently mis-parses — top-level
+        // `skills/` (invisible to scan_flows) and flow files without a
+        // non-empty description (flow never injected, tools dead). The
+        // structured error tells the caller (usually the clone-creator agent)
+        // exactly what to fix, so it self-repairs instead of retrying blind.
+        let format_errors = clone::validate_install_format(&files)
+            .map_err(|e| CarrierError::Internal(format!("format validation: {e}")))?;
+        if !format_errors.is_empty() {
+            return Err(CarrierError::Internal(format!(
+                "分身格式校验未通过（共 {} 项，修复后重新提交）：\n- {}",
+                format_errors.len(),
+                format_errors.join("\n- ")
+            )));
+        }
+
         // File-level write of the fetched definition files.
         let security_warnings =
             write_files_to_workspace(&files, &workspace_dir).map_err(|e| {
@@ -1049,6 +1065,24 @@ impl CarrierKernel {
             if let Err(e) = std::fs::write(&self_growth_flow, clone::DEFAULT_SELF_GROWTH_FLOW) {
                 tracing::warn!(name = %clone_name, error = %e, "failed to seed default self-growth flow");
             }
+        }
+
+        // Seed the clone format spec (`knowledge/format-spec.md`) so the
+        // clone-creator (and any agent) reads the CURRENT format rules rather
+        // than a possibly-stale copy baked into its own definition layer.
+        // Unlike self-growth, this file is system-owned: the daemon's reseeding
+        // reconciler overwrites it when the binary's spec version changes.
+        let spec_path = workspace_dir.join("knowledge/format-spec.md");
+        if let Some(parent) = spec_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let stamped = format!(
+            "<!-- clone-format-spec {} (system-seeded; do not edit) -->\n{}",
+            clone::CLONE_FORMAT_SPEC_VERSION,
+            clone::CLONE_FORMAT_SPEC
+        );
+        if let Err(e) = std::fs::write(&spec_path, stamped) {
+            tracing::warn!(name = %clone_name, error = %e, "failed to seed format spec");
         }
 
         let mut manifest = build_manifest_from_workspace(&workspace_dir, &clone_name, Some(clone_name.clone()))

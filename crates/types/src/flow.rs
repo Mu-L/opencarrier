@@ -1924,4 +1924,58 @@ mod report_matrix_tests {
         assert_eq!(extract_json_span("纯文字没有结构"), None);
         assert_eq!(extract_json_span("{"), None);
     }
+
+    /// Golden sample: the flow example embedded in `docs/CLONE-FORMAT.md` must
+    /// parse with THIS parser exactly as the doc promises. The doc is the
+    /// published format spec (also seeded into every clone's
+    /// `knowledge/format-spec.md`); if someone changes the parser without the
+    /// doc — or vice versa — this test fails. That is the machine gate that
+    /// keeps the spec from drifting, the failure mode that let clone-creator
+    /// ship `when_to_use`/`SKILL.md` for a runtime that reads
+    /// `description`/`flow.md`.
+    #[test]
+    fn clone_format_doc_golden_sample() {
+        let doc = include_str!("../../../docs/CLONE-FORMAT.md");
+        // Extract the fenced flow example under the flow definition heading.
+        let canonical = doc
+            .split("flows/<name>/flow.md — 流程定义")
+            .nth(1)
+            .expect("CLONE-FORMAT.md lost its flow definition section");
+        let block = canonical
+            .split("```markdown\n")
+            .nth(1)
+            .and_then(|s| s.split("\n```").next())
+            .expect("CLONE-FORMAT.md lost its markdown example block");
+        let def = parse_flow_def(block);
+        assert_eq!(def.name, "flow-name", "doc example name must parse");
+        assert!(
+            !def.description.is_empty(),
+            "doc example description must parse non-empty — the doc teaches that \
+             empty description kills the flow, so its own example must demo the fix"
+        );
+        assert!(
+            def.description.starts_with("一句话用途描述"),
+            "doc example description drifted: {desc}",
+            desc = def.description
+        );
+        // The example declares `tools` as a block array — must survive parsing.
+        assert!(
+            def.tools.iter().any(|t| t == "file_read"),
+            "doc example tools block must parse, got {tools:?}",
+            tools = def.tools
+        );
+        // `deny_tools` block too.
+        assert!(def.deny_tools.iter().any(|t| t == "task_plan"));
+        // `shell_allow` quoted glob.
+        assert!(!def.shell_allow.is_empty(), "shell_allow must parse");
+        // max_iterations numeric.
+        assert_eq!(def.max_iterations, Some(8));
+        // The doc must also still teach the two hard rules; if these strings
+        // vanish the enforcement copy has drifted as surely as the example.
+        assert!(doc.contains("skills/"), "doc must document the skills/ ban");
+        assert!(
+            doc.contains("description"),
+            "doc must document the description requirement"
+        );
+    }
 }

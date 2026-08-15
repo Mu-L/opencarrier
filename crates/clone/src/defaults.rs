@@ -77,3 +77,22 @@ tools: [system_time, web_search, web_fetch, knowledge_list, knowledge_read, know
 - 创作轮：回复就是带 `[PUBLISH]` 标记的发布指令 + 一句说明。
 - 不要调 message_push/send 类工具，不要给用户推消息。
 "#;
+
+/// The clone format spec, seeded into every new clone's `knowledge/format-spec.md`.
+///
+/// Source of truth is `docs/CLONE-FORMAT.md` in this repo — the runtime parser
+/// (`types::flow::parse_flow_def`, `manifest_builder::scan_flows`) is the
+/// legislator, this doc is its published translation. Keeping it `include_str!`
+/// from the repo doc means the spec ships with the binary version: upgrading
+/// opencarrier upgrades every clone's spec (via the reseeding reconciler),
+/// without any hub round-trip.
+///
+/// A golden-sample test parses the flow example embedded in this doc with
+/// `parse_flow_def`; if the doc and the parser disagree, CI fails.
+pub const CLONE_FORMAT_SPEC: &str = include_str!("../../../docs/CLONE-FORMAT.md");
+
+/// Marker stamped at the top of the seeded spec file so the reseeding
+/// reconciler can tell "system-seeded spec" (version-tracked, may overwrite)
+/// from "clone-authored file" (never touched). Bump when the spec changes
+/// materially.
+pub const CLONE_FORMAT_SPEC_VERSION: &str = "v1";

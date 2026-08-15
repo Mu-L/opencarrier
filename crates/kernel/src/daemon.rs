@@ -550,7 +550,47 @@ impl CarrierKernel {
     /// Called at startup (start_background_agents) and periodically from the
     /// cron tick loop (~every 60s), so config flips and new installs converge
     /// without a restart.
+    /// Reseed `knowledge/format-spec.md` into every clone workspace whose
+    /// stamped spec version is older than the binary's. Unlike the self-growth
+    /// seed (never overwrite — the clone may own it), the format spec is
+    /// system-owned: it must track the binary so the clone-creator always
+    /// generates against the format the RUNNING parser accepts. The stamped
+    /// HTML comment marker distinguishes system-seeded copies (version-
+    /// tracked, may overwrite) from clone-authored files (never touched).
+    fn reseed_format_spec(&self) {
+        let marker = format!(
+            "<!-- clone-format-spec {} (system-seeded; do not edit) -->",
+            clone::CLONE_FORMAT_SPEC_VERSION
+        );
+        let desired = format!(
+            "{marker}\n{}",
+            clone::CLONE_FORMAT_SPEC
+        );
+        for entry in self.registry.list() {
+            if entry.manifest.clone_source.is_none() {
+                continue;
+            }
+            let Some(ref workspace) = entry.manifest.workspace else {
+                continue;
+            };
+            let spec = workspace.join("knowledge/format-spec.md");
+            let current = std::fs::read_to_string(&spec).unwrap_or_default();
+            let seeded_before = current.starts_with("<!-- clone-format-spec");
+            let stale = !current.starts_with(&marker);
+            if (current.is_empty() || (seeded_before && stale))
+                && std::fs::write(&spec, &desired).is_ok()
+            {
+                tracing::debug!(
+                    agent = %entry.manifest.name,
+                    version = clone::CLONE_FORMAT_SPEC_VERSION,
+                    "Reseeded format spec"
+                );
+            }
+        }
+    }
+
     fn reconcile_self_growth(&self) {
+        self.reseed_format_spec();
         let global_on = self.config.clone_lifecycle.self_growth_enabled;
 
         // Master switch off → strip self-growth jobs from every clone.
