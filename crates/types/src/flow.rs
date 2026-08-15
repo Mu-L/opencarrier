@@ -99,6 +99,19 @@ impl StepOutputMode {
 /// orchestration rounds must stay bounded (dsh tool-ralph `maxHandoffChars`).
 pub const REPORT_HANDOFF_MAX_CHARS: usize = 16384;
 
+/// Extract the outermost `{ ... }` span from a fenced or prose-wrapped
+/// message (models love wrapping structured output in ```json ... ```).
+/// `None` when the text has no `{`/`}` span at all.
+pub fn extract_json_span(msg: &str) -> Option<&str> {
+    let start = msg.find('{')?;
+    let end = msg.rfind('}')?;
+    if end > start {
+        Some(&msg[start..=end])
+    } else {
+        None
+    }
+}
+
 /// Validate a structured step report against the Ralph per-status constraint
 /// matrix (dsh tool-ralph `validateReport`). Constraints live on FIELDS, not
 /// free text — an invalid combination is rejected with a precise, field-level
@@ -295,6 +308,11 @@ pub const META_FLOW_DENY_TOOLS: &str = "flow_deny_tools";
 pub const META_FLOW_ALLOWED_TOOLS: &str = "flow_allowed_tools";
 /// Set when a flow or subagent declared `max_iterations` (not the AutonomousConfig default).
 pub const META_MAX_ITERATIONS_DECLARED: &str = "max_iterations_declared";
+/// Set when the matched flow's top-level `output:` is `report`: the agent
+/// turn's FINAL message must carry a valid Ralph report (validated by
+/// `validate_step_report` in end_turn) — a hard gate for chained pipeline
+/// steps whose quality otherwise rides on agent goodwill.
+pub const META_OUTPUT_REPORT: &str = "flow_output_report";
 
 /// A parsed flow definition.
 #[derive(Debug, Clone, Default)]
@@ -1889,5 +1907,21 @@ mod report_matrix_tests {
         let big = "x".repeat(REPORT_HANDOFF_MAX_CHARS);
         let v = json!({"status": "blocked", "blocker": big});
         assert!(validate_step_report(&v).is_err());
+    }
+
+    #[test]
+    fn extract_json_span_tolerates_fences_and_prose() {
+        // The end_turn report gate feeds model output through this — models
+        // wrap JSON in fences or lead with prose.
+        assert_eq!(
+            extract_json_span("```json\n{\"status\":\"complete\"}\n```"),
+            Some("{\"status\":\"complete\"}")
+        );
+        assert_eq!(
+            extract_json_span("好的，结果如下：{\"status\":\"blocked\",\"blocker\":\"x\"} 以上。"),
+            Some("{\"status\":\"blocked\",\"blocker\":\"x\"}")
+        );
+        assert_eq!(extract_json_span("纯文字没有结构"), None);
+        assert_eq!(extract_json_span("{"), None);
     }
 }

@@ -128,6 +128,12 @@ pub enum CronAction {
         /// flow classifier (loaded by name, like a resume). None = classify.
         #[serde(default)]
         active_flow: Option<String>,
+        /// Session isolation override for chained pipelines: when set, the
+        /// turn runs in its OWN session (label used verbatim) instead of the
+        /// sender's — user chat interleaving mid-chain cannot pollute
+        /// pipeline steps. sender_id still routes file paths and delivery.
+        #[serde(default)]
+        session_label: Option<String>,
     },
 }
 
@@ -400,6 +406,40 @@ mod tests {
 
     // -- CronJobId --
 
+    /// Chained-pipeline session isolation: `session_label` rides the agent_turn
+    /// wire format, absent on old payloads (serde default).
+    #[test]
+    fn agent_turn_session_label_wire_roundtrip() {
+        let action = CronAction::AgentTurn {
+            message: "写正文".into(),
+            model_override: None,
+            timeout_secs: None,
+            active_flow: Some("article-writer".into()),
+            session_label: Some("pipeline:20260815-glm53".into()),
+        };
+        let v = serde_json::to_value(&action).unwrap();
+        assert_eq!(v["kind"], "agent_turn");
+        assert_eq!(v["session_label"], "pipeline:20260815-glm53");
+        let back: CronAction = serde_json::from_value(v).unwrap();
+        match back {
+            CronAction::AgentTurn { session_label, .. } => {
+                assert_eq!(session_label.as_deref(), Some("pipeline:20260815-glm53"));
+            }
+            other => panic!("expected AgentTurn, got {other:?}"),
+        }
+
+        // Old payload without the field still parses (None).
+        let legacy = serde_json::json!({
+            "kind": "agent_turn",
+            "message": "hi",
+        });
+        let back: CronAction = serde_json::from_value(legacy).unwrap();
+        match back {
+            CronAction::AgentTurn { session_label, .. } => assert!(session_label.is_none()),
+            other => panic!("expected AgentTurn, got {other:?}"),
+        }
+    }
+
     #[test]
     fn cron_job_id_display_roundtrip() {
         let id = CronJobId::new();
@@ -642,6 +682,7 @@ mod tests {
             model_override: None,
             timeout_secs: None,
             active_flow: None,
+            session_label: None,
         };
         let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("empty"), "{err}");
@@ -655,6 +696,7 @@ mod tests {
             model_override: None,
             timeout_secs: None,
             active_flow: None,
+            session_label: None,
         };
         let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("too long"), "{err}");
@@ -668,6 +710,7 @@ mod tests {
             model_override: None,
             timeout_secs: Some(9),
             active_flow: None,
+            session_label: None,
         };
         let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("too small"), "{err}");
@@ -681,6 +724,7 @@ mod tests {
             model_override: None,
             timeout_secs: Some(86_401),
             active_flow: None,
+            session_label: None,
         };
         let err = job.validate(0).unwrap_err().to_string();
         assert!(err.contains("too large"), "{err}");
@@ -694,6 +738,7 @@ mod tests {
             model_override: Some("claude-haiku-4-5-20251001".into()),
             timeout_secs: Some(10),
             active_flow: None,
+            session_label: None,
         };
         assert!(job.validate(0).is_ok());
 
@@ -702,6 +747,7 @@ mod tests {
             model_override: None,
             timeout_secs: Some(86_400),
             active_flow: None,
+            session_label: None,
         };
         assert!(job.validate(0).is_ok());
     }
@@ -714,6 +760,7 @@ mod tests {
             model_override: None,
             timeout_secs: None,
             active_flow: None,
+            session_label: None,
         };
         assert!(job.validate(0).is_ok());
     }
@@ -802,6 +849,7 @@ mod tests {
             model_override: None,
             timeout_secs: Some(30),
             active_flow: None,
+            session_label: None,
         };
         let json = serde_json::to_string(&action).unwrap();
         assert!(json.contains("\"kind\":\"agent_turn\""));

@@ -46,6 +46,22 @@ fn count_trailing_retries(messages: &[Message]) -> usize {
     count
 }
 
+/// Prefix of the corrective user message pushed by the flow `output: report`
+/// gate. Counting occurrences in the loop history bounds the retry attempts
+/// (same pattern as `count_trailing_retries` for empty responses).
+const REPORT_FIX_PREFIX: &str = "[report-invalid]";
+
+/// How many report-gate corrections already happened this turn.
+fn count_report_fixes(messages: &[Message]) -> usize {
+    messages
+        .iter()
+        .filter(|m| {
+            m.role == types::message::Role::User
+                && matches!(&m.content, types::message::MessageContent::Text(t) if t.starts_with(REPORT_FIX_PREFIX))
+        })
+        .count()
+}
+
 /// Handle a `StopReason::EndTurn | StopReason::StopSequence` response.
 ///
 /// Returns an `EndTurnAction` indicating whether the loop should retry
@@ -196,7 +212,65 @@ pub(in crate::agent_loop) async fn handle_end_turn(
     } else {
         text
     };
-    let final_response = text.clone();
+    let mut final_response = text.clone();
+
+    // Flow `output: report` hard gate: the final message must carry a valid
+    // Ralph report (validate_step_report). Chained pipeline steps (writing
+    // chain) can no longer end on free-form prose with no quality assertion.
+    // On failure the agent gets one corrective retry round (bounded by
+    // MAX_REPORT_RETRIES), then the turn is accepted with a warn — the gate
+    // must educate, never deadlock the loop.
+    if manifest
+        .metadata
+        .contains_key(types::flow::META_OUTPUT_REPORT)
+    {
+        const MAX_REPORT_RETRIES: usize = 2;
+        let parsed = types::flow::extract_json_span(&final_response)
+            .map(str::trim)
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+        let verdict = parsed
+            .as_ref()
+            .ok_or_else(|| "final message carries no JSON object".to_string())
+            .and_then(types::flow::validate_step_report);
+        match verdict {
+            Ok(()) => {
+                // The report JSON is for the orchestrator; chat sinks get the
+                // human-readable `message` field when the agent provided one.
+                if let Some(human) = parsed
+                    .as_ref()
+                    .and_then(|v| v.get("message"))
+                    .and_then(|m| m.as_str())
+                    .filter(|m| !m.trim().is_empty())
+                {
+                    final_response = human.to_string();
+                }
+            }
+            Err(reason) if count_report_fixes(messages) < MAX_REPORT_RETRIES => {
+                warn!(
+                    agent = %manifest.name,
+                    reason = %reason,
+                    fixes = count_report_fixes(messages),
+                    "Flow output:report gate rejected final message — corrective retry"
+                );
+                messages.push(Message::assistant(final_response.clone()));
+                messages.push(Message::user(format!(
+                    "{REPORT_FIX_PREFIX}你的最终回复未通过 report 校验：{reason}。\n\
+                     请修正问题后重新完成本轮任务，最终回复必须以一个 JSON 对象结尾：\n\
+                     {{\"status\":\"complete\",\"evidence\":\"...\",\"message\":\"给用户看的简短总结\"}}\n\
+                     （若无法完成则给 {{\"status\":\"blocked\",\"blocker\":\"原因\"}}）"
+                )));
+                return Ok(EndTurnAction::Retry);
+            }
+            Err(reason) => {
+                warn!(
+                    agent = %manifest.name,
+                    reason = %reason,
+                    "Flow output:report gate still invalid after retries; accepting with warn"
+                );
+            }
+        }
+    }
+
     // O6: Single-track — sync loop messages before pushing the final response
     super::helpers::sync_loop_messages(messages, session, session_base_len);
     session.messages.push(Message::assistant(text));

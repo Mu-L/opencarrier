@@ -96,15 +96,10 @@ pub(crate) fn select_output(
 }
 
 /// Extract the outermost `{ ... }` span from a fenced or prose-wrapped
-/// message. `None` when the text starts with `{` already (or has no span).
+/// message. Shared with the runtime's flow-level report gate — lives in
+/// `types::flow` so both crates see one implementation.
 fn extract_json_span(msg: &str) -> Option<&str> {
-    let start = msg.find('{')?;
-    let end = msg.rfind('}')?;
-    if end > start {
-        Some(&msg[start..=end])
-    } else {
-        None
-    }
+    types::flow::extract_json_span(msg)
 }
 
 /// Render `{{ ... }}` templates. Supports `{{ outputs.id }}`, `{{ outputs.id.field }}`,

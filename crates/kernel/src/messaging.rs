@@ -252,6 +252,7 @@ impl CarrierKernel {
         task_id: Option<&str>,
         resume_flow: Option<&memory::FlowRunRow>,
         active_flow: Option<&str>,
+        session_label: Option<&str>,
     ) -> KernelResult<PreparedContext> {
         let agent_name = self
             .registry
@@ -268,7 +269,7 @@ impl CarrierKernel {
         // present, hard-error so the call site is forced to pass an explicit
         // label rather than silently corrupting session isolation.
         let session = {
-            let label = Self::resolve_session_label(agent_id, sender_id, task_id, owner_id, channel_type)?;
+            let label = Self::resolve_session_label(agent_id, session_label, sender_id, task_id, owner_id, channel_type)?;
             // Windowed lookup: only resume a session updated within the
             // staleness window. A sender returning after the window starts a
             // fresh session (the old one stays archived-in-place, out of the
@@ -402,7 +403,8 @@ impl CarrierKernel {
 
     /// Resolve the session label from the available identifiers.
     ///
-    /// Priority: sender_id (user:<openid>) > task_id > owner_id > channel_type.
+    /// Priority: explicit override (chained pipelines) > sender_id
+    /// (user:<openid>) > task_id > owner_id > channel_type.
     /// There is NO silent fallback to an unlabeled "default" session — that
     /// fallback was the source of orphan sessions: calls with no sender (cron
     /// jobs without sender_id, background ticks, webhooks) all landed on the
@@ -412,12 +414,20 @@ impl CarrierKernel {
     /// label rather than silently corrupting session isolation.
     fn resolve_session_label(
         agent_id: AgentId,
+        session_label: Option<&str>,
         sender_id: &Option<String>,
         task_id: Option<&str>,
         owner_id: &Option<String>,
         channel_type: &Option<String>,
     ) -> KernelResult<String> {
-        let label = if let Some(ref sid) = sender_id {
+        let label = if let Some(explicit) = session_label.filter(|l| !l.trim().is_empty()) {
+            // Chained-pipeline isolation: cron AgentTurn turns with an
+            // explicit `session_label` run in their OWN session, so user
+            // chat interleaving mid-chain cannot pollute pipeline steps
+            // (and vice versa). The sender_id still routes file paths and
+            // delivery — only the session identity is overridden.
+            explicit.trim().to_string()
+        } else if let Some(ref sid) = sender_id {
             format!("user:{}", sid)
         } else if let Some(t) = task_id {
             format!("task:{}", t)
@@ -824,6 +834,26 @@ impl CarrierKernel {
                 "Flow tools hard sandbox stamped for this turn"
             );
         }
+        // Flow-level `output: report`: the turn's FINAL message must carry a
+        // valid Ralph report (types::flow::validate_step_report). end_turn
+        // enforces it as a hard gate — chained pipeline steps (writing chain)
+        // can no longer end on free-form prose with no quality assertion.
+        if flow
+            .flow_def
+            .output
+            .as_deref()
+            .is_some_and(|o| types::flow::StepOutputMode::parse(o.trim()) == types::flow::StepOutputMode::Report)
+        {
+            manifest.metadata.insert(
+                types::flow::META_OUTPUT_REPORT.to_string(),
+                serde_json::json!(true),
+            );
+            info!(
+                agent = %agent_name,
+                flow = %flow.name,
+                "Flow output:report gate stamped for this turn"
+            );
+        }
         if flow.elevates() {
             let required = flow.flow_def.required_max_tool_level();
             if required > manifest.max_tool_level {
@@ -934,6 +964,7 @@ impl CarrierKernel {
             channel_type,
             task_id,
             active_flow,
+            None,
         )
         .await
     }
@@ -989,6 +1020,7 @@ impl CarrierKernel {
         channel_type: Option<String>,
         task_id: Option<String>,
         active_flow: Option<&str>,
+        session_label: Option<&str>,
     ) -> KernelResult<AgentLoopResult> {
         // NOTE: The per-owner execution lock has been removed. Concurrent messages
         // for the same agent+owner now run in parallel (like nginx). Session
@@ -1086,6 +1118,7 @@ impl CarrierKernel {
             if sender_id.is_some() {
                 let label = Self::resolve_session_label(
                     agent_id,
+                    session_label,
                     &sender_id,
                     task_id.as_deref(),
                     &owner_id,
@@ -1127,6 +1160,7 @@ impl CarrierKernel {
                                     task_id,
                                     resume_row.as_ref(),
                                     active_flow,
+                                    session_label,
                                 ),
                                 turn_secs_g,
                                 &agent_id_str,
@@ -1161,6 +1195,7 @@ impl CarrierKernel {
                         task_id,
                         resume_row.as_ref(),
                         active_flow,
+                        session_label,
                     ),
                     turn_secs,
                     &agent_id_str,
@@ -1304,7 +1339,7 @@ impl CarrierKernel {
 
         // LLM agent: true streaming via agent loop
         let ctx = self.prepare_agent_context(
-            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type, None, None, active_flow,
+            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type, None, None, active_flow, None,
         ).await?;
         let PreparedContext { mut session, needs_compact, tools, manifest, driver, ctx_window, .. } = ctx;
 
@@ -1679,10 +1714,11 @@ impl CarrierKernel {
         task_id: Option<String>,
         resume: Option<&memory::FlowRunRow>,
         active_flow: Option<&str>,
+        session_label: Option<&str>,
     ) -> KernelResult<AgentLoopResult> {
         // Prepare shared context (session, tools, flow/subagent matching, manifest)
         let ctx = self.prepare_agent_context(
-            agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type, task_id.as_deref(), resume, active_flow,
+            agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type, task_id.as_deref(), resume, active_flow, session_label,
         ).await?;
         let PreparedContext { mut session, needs_compact, tools, manifest, flow, .. } = ctx;
 
@@ -2395,6 +2431,38 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn session_label_override_beats_sender_and_is_trimmed() {
+        // Chained pipelines: an explicit session_label wins over the sender's
+        // user:<openid> — pipeline steps run in their own session.
+        let sid = Some("oABC@im.wechat".to_string());
+        assert_eq!(
+            CarrierKernel::resolve_session_label(
+                AgentId::new(),
+                Some(" pipeline:20260815-glm53 "),
+                &sid,
+                Some("task-9"),
+                &None,
+                &None,
+            )
+            .unwrap(),
+            "pipeline:20260815-glm53"
+        );
+        // Blank override is ignored — falls through to the sender label.
+        assert_eq!(
+            CarrierKernel::resolve_session_label(
+                AgentId::new(),
+                Some("   "),
+                &sid,
+                None,
+                &None,
+                &None,
+            )
+            .unwrap(),
+            "user:oABC@im.wechat"
+        );
     }
 
     /// Real-world template.json shape: mcp_servers as OBJECTS ([{name,

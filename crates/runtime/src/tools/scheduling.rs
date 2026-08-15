@@ -401,7 +401,7 @@ impl ToolModule for SchedulingTools {
                         },
                         "action": {
                             "type": "object",
-                            "description": "Action: {\"kind\":\"system_event\",\"text\":\"...\"} or {\"kind\":\"agent_turn\",\"message\":\"...\",\"timeout_secs\":300,\"active_flow\":\"<flow_name>\"}. active_flow (optional) pins the flow to run, bypassing the LLM classifier."
+                            "description": "Action: {\"kind\":\"system_event\",\"text\":\"...\"} or {\"kind\":\"agent_turn\",\"message\":\"...\",\"timeout_secs\":300,\"active_flow\":\"<flow_name>\",\"session_label\":\"<label>\"}. active_flow (optional) pins the flow to run, bypassing the LLM classifier. session_label (optional, for chained pipelines) runs the turn in its own isolated session so user chat can't interleave — pass the SAME label for every step of one pipeline."
                         },
                         "delivery": {
                             "type": "object",

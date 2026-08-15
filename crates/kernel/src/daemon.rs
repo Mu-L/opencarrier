@@ -114,6 +114,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
             message,
             timeout_secs,
             active_flow,
+            session_label,
             ..
         } => {
             // Orphan-cron cleanup: if the agent vanished via a non-kill path
@@ -160,16 +161,23 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
             // timeout_s == 0 means "no backstop" - run unbounded (rely on stuck
             // detection + per-LLM-call stall timeout). Otherwise wrap in the
             // wall-clock backstop.
-            let turn_fut = kernel.send_message_with_handle(
+            // Chained-pipeline session isolation (CronAction::AgentTurn
+            // `session_label`): pipeline steps run in their own session so
+            // user chat mid-chain can't pollute them. sender_id is still
+            // passed through — it drives the workspace sender paths and
+            // delivery routing, only the session identity is overridden.
+            let turn_fut = kernel.send_message_with_handle_and_blocks(
                 agent_id,
                 message,
                 Some(kh),
+                None,
                 job.sender_id.clone(),
                 None,
                 job.owner_id.clone(),
                 None,
                 Some(task_id),
                 active_flow.as_deref(),
+                session_label.as_deref(),
             );
             let outcome = if timeout_s == 0 {
                 Some(turn_fut.await)
@@ -632,6 +640,7 @@ impl CarrierKernel {
                 model_override: None,
                 timeout_secs: None,
                 active_flow: Some("self-growth".to_string()),
+                session_label: Some("self-growth".to_string()),
             };
 
             // Idempotency: if exactly one existing job matches desired, skip.
