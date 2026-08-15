@@ -72,6 +72,11 @@ pub enum StepOutputMode {
     File(String),
     /// Parse the LLM final message as JSON.
     Json,
+    /// Parse the LLM final message as a JSON structured report and enforce
+    /// the Ralph constraint matrix (see [`validate_step_report`]). The step
+    /// FAILS with a precise field-level error when the report is malformed —
+    /// `on_failure` can route the repair.
+    Report,
 }
 
 impl StepOutputMode {
@@ -80,12 +85,121 @@ impl StepOutputMode {
         let s = s.trim();
         if s == "json" {
             Self::Json
+        } else if s == "report" {
+            Self::Report
         } else if let Some(p) = s.strip_prefix("file:") {
             Self::File(p.trim().to_string())
         } else {
             Self::Llm // "llm" or anything unrecognized -> default
         }
     }
+}
+
+/// Hard cap on a step report's serialized size — the handoff between
+/// orchestration rounds must stay bounded (dsh tool-ralph `maxHandoffChars`).
+pub const REPORT_HANDOFF_MAX_CHARS: usize = 16384;
+
+/// Validate a structured step report against the Ralph per-status constraint
+/// matrix (dsh tool-ralph `validateReport`). Constraints live on FIELDS, not
+/// free text — an invalid combination is rejected with a precise, field-level
+/// reason the caller can repair on:
+///
+/// - `status: continue` → `next_steps` non-empty (every entry non-blank),
+///   `blocker` absent/blank;
+/// - `status: complete` → `evidence` non-blank (string or array of non-blank
+///   entries), `next_steps` AND `blocker` absent/blank;
+/// - `status: blocked`  → `blocker` non-blank, `next_steps` absent/blank.
+///
+/// Every present string field must be "normalized" (non-blank after trim).
+/// The whole report must serialize under [`REPORT_HANDOFF_MAX_CHARS`].
+pub fn validate_step_report(value: &Value) -> Result<(), String> {
+    let obj = value.as_object().ok_or("report must be a JSON object")?;
+    let serialized_len = serde_json::to_string(value).map_err(|e| e.to_string())?.len();
+    if serialized_len > REPORT_HANDOFF_MAX_CHARS {
+        return Err(format!(
+            "report is {serialized_len} chars, over the {REPORT_HANDOFF_MAX_CHARS} handoff cap"
+        ));
+    }
+
+    fn blank(v: &Value) -> bool {
+        match v {
+            Value::String(s) => s.trim().is_empty(),
+            Value::Null => true,
+            Value::Array(a) => a.is_empty() || a.iter().all(blank),
+            _ => false,
+        }
+    }
+    fn nonblank_strings<'a>(v: &'a Value, field: &str) -> Result<Vec<&'a str>, String> {
+        match v {
+            Value::Array(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    let s = item
+                        .as_str()
+                        .filter(|s| !s.trim().is_empty())
+                        .ok_or_else(|| format_err(field))?;
+                    out.push(s);
+                }
+                if out.is_empty() {
+                    return Err(format_err(field));
+                }
+                Ok(out)
+            }
+            Value::String(s) if !s.trim().is_empty() => Ok(vec![s.as_str()]),
+            _ => Err(format_err(field)),
+        }
+    }
+    fn format_err(field: &str) -> String {
+        format!("field '{field}' must be a non-empty string or array of non-empty strings")
+    }
+
+    let status = obj
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| matches!(*s, "continue" | "complete" | "blocked"))
+        .ok_or_else(|| {
+            "field 'status' must be exactly one of \"continue\" | \"complete\" | \"blocked\"".to_string()
+        })?
+        .to_string();
+
+    let has_blocker = obj.get("blocker").is_some_and(|v| !blank(v));
+    let has_next = obj.get("next_steps").is_some_and(|v| !blank(v));
+
+    match status.as_str() {
+        "continue" => {
+            let next = obj
+                .get("next_steps")
+                .ok_or("status 'continue' requires a non-empty 'next_steps' array")?;
+            nonblank_strings(next, "next_steps")?;
+            if has_blocker {
+                return Err("status 'continue' must NOT carry a 'blocker'".to_string());
+            }
+        }
+        "complete" => {
+            let evidence = obj
+                .get("evidence")
+                .ok_or("status 'complete' requires non-empty 'evidence'")?;
+            nonblank_strings(evidence, "evidence")?;
+            if has_next {
+                return Err("status 'complete' must NOT carry 'next_steps'".to_string());
+            }
+            if has_blocker {
+                return Err("status 'complete' must NOT carry a 'blocker'".to_string());
+            }
+        }
+        "blocked" => {
+            let blocker = obj
+                .get("blocker")
+                .ok_or("status 'blocked' requires a non-empty 'blocker' string")?;
+            nonblank_strings(blocker, "blocker")?;
+            if has_next {
+                return Err("status 'blocked' must NOT carry 'next_steps'".to_string());
+            }
+        }
+        _ => unreachable!("status filtered above"),
+    }
+    Ok(())
 }
 
 /// A single step in a multi-step flow DAG.
@@ -1686,5 +1800,94 @@ deny_tools:
 body"#;
         let f = parse_flow_def(content);
         assert_eq!(f.deny_tools, vec!["image_generate", "video_generate"]);
+    }
+}
+
+#[cfg(test)]
+mod report_matrix_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn continue_ok() {
+        let v = json!({"status": "continue", "next_steps": ["写大纲", "查素材"]});
+        assert!(validate_step_report(&v).is_ok());
+    }
+
+    #[test]
+    fn continue_requires_next_steps() {
+        assert!(validate_step_report(&json!({"status": "continue"})).is_err());
+        assert!(
+            validate_step_report(&json!({"status": "continue", "next_steps": []})).is_err()
+        );
+        assert!(
+            validate_step_report(&json!({"status": "continue", "next_steps": ["  "]})).is_err()
+        );
+    }
+
+    #[test]
+    fn continue_must_not_carry_blocker() {
+        let v = json!({"status": "continue", "next_steps": ["x"], "blocker": "卡住了"});
+        assert!(validate_step_report(&v).is_err());
+    }
+
+    #[test]
+    fn complete_ok() {
+        let v = json!({"status": "complete", "evidence": ["output/x.md 已生成", "sha256 校验通过"]});
+        assert!(validate_step_report(&v).is_ok());
+        // evidence as a plain string is fine too
+        assert!(
+            validate_step_report(&json!({"status": "complete", "evidence": "文件已生成"})).is_ok()
+        );
+    }
+
+    #[test]
+    fn complete_requires_evidence() {
+        assert!(validate_step_report(&json!({"status": "complete"})).is_err());
+        assert!(
+            validate_step_report(&json!({"status": "complete", "evidence": ""})).is_err()
+        );
+    }
+
+    #[test]
+    fn complete_must_not_carry_next_steps_or_blocker() {
+        assert!(validate_step_report(
+            &json!({"status": "complete", "evidence": "x", "next_steps": ["y"]})
+        )
+        .is_err());
+        assert!(validate_step_report(
+            &json!({"status": "complete", "evidence": "x", "blocker": "b"})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn blocked_ok_and_constrained() {
+        assert!(validate_step_report(
+            &json!({"status": "blocked", "blocker": "缺少 API 凭证，无法继续"})
+        )
+        .is_ok());
+        assert!(validate_step_report(&json!({"status": "blocked"})).is_err());
+        assert!(validate_step_report(&json!({"status": "blocked", "blocker": "  "})).is_err());
+        assert!(validate_step_report(
+            &json!({"status": "blocked", "blocker": "x", "next_steps": ["y"]})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn status_must_be_exact() {
+        assert!(validate_step_report(&json!({"status": "done"})).is_err());
+        assert!(validate_step_report(&json!({"status": ""})).is_err());
+        assert!(validate_step_report(&json!({})).is_err());
+        assert!(validate_step_report(&json!("just a string")).is_err());
+        assert!(validate_step_report(&json!([])).is_err());
+    }
+
+    #[test]
+    fn handoff_cap_enforced() {
+        let big = "x".repeat(REPORT_HANDOFF_MAX_CHARS);
+        let v = json!({"status": "blocked", "blocker": big});
+        assert!(validate_step_report(&v).is_err());
     }
 }

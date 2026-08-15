@@ -65,6 +65,24 @@ pub(crate) fn select_output(
                 step.id, e
             )))
         }),
+        StepOutputMode::Report => {
+            // Tolerate markdown code fences around the JSON (models love
+            // wrapping structured output in ```json ... ```).
+            let body = extract_json_span(final_msg).unwrap_or(final_msg.trim());
+            let parsed: Value = serde_json::from_str(body).map_err(|e| {
+                KernelError::Carrier(CarrierError::Internal(format!(
+                    "step '{}' output:report parse failed (expected a JSON object): {}",
+                    step.id, e
+                )))
+            })?;
+            types::flow::validate_step_report(&parsed).map_err(|reason| {
+                KernelError::Carrier(CarrierError::Internal(format!(
+                    "step '{}' output:report invalid: {reason}",
+                    step.id
+                )))
+            })?;
+            Ok(parsed)
+        }
         StepOutputMode::File(path) => {
             let rendered = render_template(&path, outputs, input);
             std::fs::read_to_string(&rendered).map(Value::String).map_err(|e| {
@@ -74,6 +92,18 @@ pub(crate) fn select_output(
                 )))
             })
         }
+    }
+}
+
+/// Extract the outermost `{ ... }` span from a fenced or prose-wrapped
+/// message. `None` when the text starts with `{` already (or has no span).
+fn extract_json_span(msg: &str) -> Option<&str> {
+    let start = msg.find('{')?;
+    let end = msg.rfind('}')?;
+    if end > start {
+        Some(&msg[start..=end])
+    } else {
+        None
     }
 }
 
