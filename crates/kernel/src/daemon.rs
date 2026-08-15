@@ -575,8 +575,11 @@ impl CarrierKernel {
             };
             let spec = workspace.join("knowledge/format-spec.md");
             let current = std::fs::read_to_string(&spec).unwrap_or_default();
-            let seeded_before = current.starts_with("<!-- clone-format-spec");
-            let stale = !current.starts_with(&marker);
+            // The lifecycle knowledge-compile layer prepends standard knowledge
+            // frontmatter to `knowledge/*.md` files missing it, so the stamp may
+            // NOT be at byte 0 — match on containment, not starts_with.
+            let seeded_before = current.contains("<!-- clone-format-spec");
+            let stale = !current.contains(&marker);
             if (current.is_empty() || (seeded_before && stale))
                 && std::fs::write(&spec, &desired).is_ok()
             {
