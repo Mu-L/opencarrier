@@ -722,6 +722,12 @@ pub struct KernelConfig {
     /// When non-empty, `verify_with_trust_store()` is used instead.
     #[serde(default)]
     pub trusted_signing_keys: Vec<String>,
+    /// P1-C authority flip: load session history from the append-only event
+    /// log (`{data_dir}/session-events/`) instead of the sessions DB table.
+    /// The DB row stays as cache and identity index. Canaries per-deploy:
+    /// default off; enable in config.toml to flip a deployment, then fleet.
+    #[serde(default)]
+    pub session_event_source: bool,
 }
 
 /// Per-channel configuration for tool permission filtering.
@@ -953,6 +959,7 @@ impl Default for KernelConfig {
             llm_concurrency: default_llm_concurrency(),
             channels: HashMap::new(),
             trusted_signing_keys: Vec::new(),
+            session_event_source: false,
         }
     }
 }

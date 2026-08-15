@@ -475,6 +475,18 @@ impl MemorySubstrate {
         self.session_events.read(agent_id, session_id)
     }
 
+    /// Fold a session's durable surface from the event log (P1-C load path:
+    /// compaction summaries honored, tool blocks placeholder-rendered).
+    pub fn session_events_fold(
+        &self,
+        agent_id: &str,
+        session_id: &str,
+    ) -> CarrierResult<Vec<Message>> {
+        Ok(crate::session_events::fold_surface(
+            &self.session_events.read(agent_id, session_id)?,
+        ))
+    }
+
     /// Create a new empty session for an agent.
     pub fn create_session(&self, agent_id: String) -> CarrierResult<Session> {
         self.sessions.create_session(agent_id)

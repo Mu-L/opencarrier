@@ -273,7 +273,7 @@ impl CarrierKernel {
             // staleness window. A sender returning after the window starts a
             // fresh session (the old one stays archived-in-place, out of the
             // active window) — see SESSION_STALE_SECS.
-            match self
+            let mut session = match self
                 .memory
                 .find_active_session_by_label_async(&agent_name, &label, SESSION_STALE_SECS)
                 .await
@@ -284,7 +284,42 @@ impl CarrierKernel {
                     .memory
                     .create_session_with_label(agent_name.clone(), Some(&label))
                     .map_err(KernelError::Carrier)?,
+            };
+            // P1-C authority flip (config `session_event_source`): session
+            // history loads from the append-only event log; the sessions DB
+            // row stays as cache/identity. A fold-vs-cache length mismatch is
+            // warn-logged — the runtime form of the "model-visible ⟺
+            // logged" assertion (every mismatch is a divergence to inspect,
+            // never silently ignored). Missing log for an old session falls
+            // back to the DB row (pre-event-log sessions).
+            if self.config.session_event_source {
+                match self
+                    .memory
+                    .session_events_fold(&agent_name, &session.id.0.to_string())
+                {
+                    Ok(folded) if !folded.is_empty() => {
+                        if folded.len() != session.messages.len() {
+                            warn!(
+                                agent = %agent_name,
+                                session = %session.id.0,
+                                db_msgs = session.messages.len(),
+                                log_msgs = folded.len(),
+                                "session event log vs DB cache length mismatch (event log wins; inspect divergence)"
+                            );
+                        }
+                        session.messages = folded;
+                    }
+                    Ok(_) => {} // empty log: pre-event-log session, DB cache stands
+                    Err(e) => {
+                        warn!(
+                            agent = %agent_name,
+                            error = %e,
+                            "session event fold failed — falling back to DB cache"
+                        );
+                    }
+                }
             }
+            session
         };
 
         // Check if auto-compaction is needed

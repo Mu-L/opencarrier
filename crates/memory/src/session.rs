@@ -811,7 +811,7 @@ impl SessionStore {
 /// - User messages: kept as-is
 /// - Assistant messages: keep only text/thinking blocks, drop tool_use
 /// - Messages that become empty after stripping are removed entirely
-fn strip_tool_history(messages: &[Message]) -> Vec<Message> {
+pub(crate) fn strip_tool_history(messages: &[Message]) -> Vec<Message> {
     let mut clean = Vec::with_capacity(messages.len());
     for msg in messages {
         match &msg.content {

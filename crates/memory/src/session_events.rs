@@ -67,6 +67,18 @@ pub enum SessionEventKind {
         tool_errors: u32,
         outcome: String,
     },
+    /// A compaction summarized the first `shadowed_msgs` message events that
+    /// predate this event; the summary message replaces them in the folded
+    /// surface. The shadowed events STAY in the log (compaction is
+    /// non-destructive at the fact level — the original history remains
+    /// foldable for audit/rebuild). `shadowed_tokens_est` is the chars/4
+    /// estimate of the shadowed text; compaction enforces summary-est <
+    /// shadowed-est before emitting ("must be smaller").
+    CompactionSummary {
+        summary: String,
+        shadowed_msgs: u64,
+        shadowed_tokens_est: u64,
+    },
 }
 
 /// Map a persisted message batch to surface events.
@@ -262,6 +274,70 @@ pub fn derive_messages(events: &[SessionEvent]) -> Vec<Message> {
         .collect()
 }
 
+/// Fold the durable surface with the load-time projection (P1-C authority
+/// flip): what the model sees on the next turn.
+///
+/// Rules:
+/// - the LAST `CompactionSummary` wins: the first `shadowed_msgs` message
+///   events before it are replaced by the summary user-message; message
+///   events after the compaction point are unaffected;
+/// - tool blocks render as placeholders (`strip_tool_history` — the same
+///   rendering the sessions DB row always applied, now a projection rule
+///   instead of a destructive persist-time strip);
+/// - envelope events are skipped.
+///
+/// Older compactions are naturally covered: a later summary shadows a prefix
+/// that includes everything the earlier one summarized.
+pub fn fold_surface(events: &[SessionEvent]) -> Vec<Message> {
+    let (summary, summary_seq, shadowed) = events
+        .iter()
+        .rev()
+        .find_map(|ev| match &ev.kind {
+            SessionEventKind::CompactionSummary {
+                summary,
+                shadowed_msgs,
+                ..
+            } => Some((summary.clone(), ev.seq, *shadowed_msgs)),
+            _ => None,
+        })
+        .map(|(s, seq, n)| (Some(s), seq, n))
+        .unwrap_or((None, 0, 0));
+
+    let mut msg_events_before = 0u64;
+    let mut msgs = Vec::new();
+    for ev in events {
+        let (role, content) = match &ev.kind {
+            SessionEventKind::UserMessage { content } => (Role::User, content.clone()),
+            SessionEventKind::AssistantMessage { content } => (Role::Assistant, content.clone()),
+            _ => continue,
+        };
+        if ev.seq <= summary_seq {
+            msg_events_before += 1;
+            if msg_events_before <= shadowed {
+                continue; // shadowed by the compaction summary
+            }
+        }
+        msgs.push(Message {
+            role,
+            content,
+        });
+    }
+
+    let rendered = crate::session::strip_tool_history(&msgs);
+    match summary {
+        Some(s) if !s.is_empty() => {
+            let mut out = Vec::with_capacity(rendered.len() + 1);
+            out.push(Message {
+                role: Role::User,
+                content: MessageContent::Text(s),
+            });
+            out.extend(rendered);
+            out
+        }
+        _ => rendered,
+    }
+}
+
 /// Read the seq of the last complete line, or 0 for a fresh/absent file.
 /// Seeks near the tail instead of reading the whole file.
 fn last_seq_in_file(path: &std::path::Path) -> Option<u64> {
@@ -418,5 +494,101 @@ mod tests {
             }
             other => panic!("expected UserMessage, got {other:?}"),
         }
+    }
+
+    fn sequenced(kinds: Vec<SessionEventKind>) -> Vec<SessionEvent> {
+        kinds
+            .into_iter()
+            .enumerate()
+            .map(|(i, kind)| SessionEvent {
+                seq: (i + 1) as u64,
+                ts_ms: 0,
+                kind,
+            })
+            .collect()
+    }
+
+    fn text_msg(text: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: MessageContent::Text(text.to_string()),
+        }
+    }
+
+    #[test]
+    fn fold_surface_renders_tool_blocks_as_placeholders() {
+        // Same rendering the sessions DB row always applied — now a
+        // projection rule instead of a destructive persist-time strip.
+        let msgs = vec![
+            text_msg("查一下"),
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(vec![types::message::ContentBlock::ToolUse {
+                    id: "tu_1".into(),
+                    name: "file_read".into(),
+                    input: serde_json::json!({"path": "a.md"}),
+                    provider_metadata: None,
+                }]),
+            },
+        ];
+        let events = sequenced(message_events(&msgs));
+        let folded = fold_surface(&events);
+        assert_eq!(folded.len(), 2);
+        let serialized = serde_json::to_string(&folded[1].content).unwrap();
+        assert!(serialized.contains("[Called file_read]"), "tool_use renders as placeholder: {serialized}");
+    }
+
+    #[test]
+    fn fold_surface_honors_compaction_summary() {
+        // 6 surface messages, compaction shadows the first 4: fold =
+        // [summary] + last 2. Envelope events interleave untouched.
+        let mut kinds = vec![SessionEventKind::TurnStart];
+        kinds.extend(message_events(&[
+            text_msg("m1"),
+            text_msg("m2"),
+            text_msg("m3"),
+            text_msg("m4"),
+        ]));
+        kinds.push(SessionEventKind::CompactionSummary {
+            summary: "前情提要：m1 到 m4".into(),
+            shadowed_msgs: 4,
+            shadowed_tokens_est: 64,
+        });
+        kinds.extend(message_events(&[text_msg("m5"), text_msg("m6")]));
+        kinds.push(SessionEventKind::TurnEnd {
+            iterations: 1,
+            tools_called: 0,
+            tool_errors: 0,
+            outcome: "complete".into(),
+        });
+
+        let folded = fold_surface(&sequenced(kinds));
+        assert_eq!(folded.len(), 3);
+        assert!(matches!(&folded[0].content, MessageContent::Text(t) if t.contains("前情提要")));
+        assert!(matches!(&folded[1].content, MessageContent::Text(t) if t == "m5"));
+        assert!(matches!(&folded[2].content, MessageContent::Text(t) if t == "m6"));
+    }
+
+    #[test]
+    fn fold_surface_last_compaction_wins() {
+        // Two stacked compactions: the later one's shadow prefix covers the
+        // earlier summary's entire span.
+        let mut kinds = message_events(&[text_msg("m1"), text_msg("m2"), text_msg("m3")]);
+        kinds.push(SessionEventKind::CompactionSummary {
+            summary: "旧摘要".into(),
+            shadowed_msgs: 2,
+            shadowed_tokens_est: 64,
+        });
+        kinds.push(SessionEventKind::CompactionSummary {
+            summary: "新摘要（覆盖一切旧摘要）".into(),
+            shadowed_msgs: 4, // 3 original messages + the old summary message
+            shadowed_tokens_est: 64,
+        });
+        kinds.extend(message_events(&[text_msg("新消息")]));
+
+        let folded = fold_surface(&sequenced(kinds));
+        assert_eq!(folded.len(), 2);
+        assert!(matches!(&folded[0].content, MessageContent::Text(t) if t.contains("新摘要")));
+        assert!(matches!(&folded[1].content, MessageContent::Text(t) if t == "新消息"));
     }
 }

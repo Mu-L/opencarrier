@@ -460,6 +460,40 @@ impl CarrierKernel {
         final_messages.extend(repaired_messages);
 
         // Also update the regular session with the repaired messages
+        // P1-C: compaction becomes a replace event in the session event log
+        // (non-destructive at the fact level — the shadowed originals stay
+        // foldable for audit/rebuild). "Must be smaller": a summary that
+        // isn't cheaper than the span it shadows is rejected — the event is
+        // skipped so the folded surface keeps the pre-compaction history.
+        // (Counting note: `shadowed_msgs` is in DB-row message space, which
+        // maps 1:1 to message events for sessions born after P1-A; for a
+        // partially-logged legacy session the fold just shadows everything
+        // logged so far, which only ever over-summarizes the tail.)
+        {
+            let split = result.compacted_count.min(session.messages.len());
+            let shadowed_msgs = result.compacted_count as u64;
+            let shadowed_tokens_est =
+                estimate_token_count(&session.messages[..split], None, None) as u64;
+            let summary_tokens_est = (result.summary.len() as u64) / 4;
+            if summary_tokens_est < shadowed_tokens_est {
+                self.memory.session_events_append(
+                    &entry.name,
+                    &session_id.0.to_string(),
+                    vec![memory::SessionEventKind::CompactionSummary {
+                        summary: result.summary.clone(),
+                        shadowed_msgs,
+                        shadowed_tokens_est,
+                    }],
+                );
+            } else {
+                warn!(
+                    agent = %entry.name,
+                    summary_est = summary_tokens_est,
+                    shadowed_est = shadowed_tokens_est,
+                    "compaction summary not smaller than shadowed span — event skipped, folded surface unchanged"
+                );
+            }
+        }
         let mut updated_session = session;
         updated_session.messages = final_messages;
         // The compaction summary message (final_messages[0]) now captures the
