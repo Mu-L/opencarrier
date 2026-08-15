@@ -237,6 +237,20 @@ pub(in crate::agent_loop) async fn handle_end_turn(
             }
 
             tree_turn = Some((summary.user_intent.clone(), summary.assistant_outcome.clone()));
+            // P2-3 absorption step 1: the generated turn summary is now also
+            // an event — the sessions-row `turn_summaries` blob becomes
+            // derivable from the log instead of being the only copy (it is
+            // cleared on every compaction today, losing the L0 layer).
+            memory.session_events_append(
+                &session.agent_name,
+                &session.id.0.to_string(),
+                vec![memory::SessionEventKind::TurnSummaryGenerated {
+                    turn_number: summary.turn_number,
+                    user_intent: summary.user_intent.clone(),
+                    assistant_outcome: summary.assistant_outcome.clone(),
+                    key_facts: summary.key_facts.clone(),
+                }],
+            );
             session.turn_summaries.push(summary);
         }
     }

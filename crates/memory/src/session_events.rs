@@ -79,6 +79,18 @@ pub enum SessionEventKind {
         shadowed_msgs: u64,
         shadowed_tokens_est: u64,
     },
+    /// The L0 turn summary generated for a completed turn. Projection fact:
+    /// unlike the sessions-row `turn_summaries` blob (cleared by every
+    /// compaction), the evented copy survives — the L0 layer stays
+    /// reconstructable from the log. This is step one of absorbing the
+    /// derived stores (turn_summaries / kv drawer / tree ingest) into event
+    /// consumers.
+    TurnSummaryGenerated {
+        turn_number: u32,
+        user_intent: String,
+        assistant_outcome: String,
+        key_facts: Vec<String>,
+    },
 }
 
 /// Map a persisted message batch to surface events.
