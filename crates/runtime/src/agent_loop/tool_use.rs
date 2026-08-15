@@ -87,6 +87,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     tools_owned: &mut Vec<ToolDefinition>,
     discovered_tool_names: &mut std::collections::HashSet<String>,
     loaded_flows: &mut std::collections::HashSet<String>,
+    loaded_flow_shell_allow: &mut Vec<String>,
     error_tracker: &mut crate::agent_loop::state::ToolErrorTracker,
     tool_loop_rearm: &mut std::collections::HashMap<String, u32>,
     tool_call_counts: &mut std::collections::HashMap<(String, u64), u32>,
@@ -311,7 +312,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 })
             })
             .unwrap_or_default();
-        let flow_shell_allow_owned: Vec<String> = manifest
+        let mut flow_shell_allow_owned: Vec<String> = manifest
             .metadata
             .get(types::flow::META_FLOW_SHELL_ALLOW)
             .and_then(|v| {
@@ -322,6 +323,16 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 })
             })
             .unwrap_or_default();
+        // Union with patterns granted by flows loaded mid-turn via `flow_load`:
+        // loading a flow injects its body but historically left the shell gate
+        // frozen to the active/classified flow, so the loaded flow's `scripts/`
+        // were denied ("Allowed patterns" of the wrong flow — 2026-08-15
+        // wechat-writer: flow_load(topic-researcher) then denied its validator).
+        for pat in loaded_flow_shell_allow.iter() {
+            if !flow_shell_allow_owned.contains(pat) {
+                flow_shell_allow_owned.push(pat.clone());
+            }
+        }
         let flow_deny_owned: Vec<String> = manifest
             .metadata
             .get(types::flow::META_FLOW_DENY_TOOLS)
@@ -473,6 +484,16 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                     continue;
                 } else {
                     loaded_flows.insert(skill_name);
+                    // Grant the loaded flow's `shell_allow` for the rest of the
+                    // turn — mirrors what stamping it as active_flow would do.
+                    // flow_load reads clone-authored flow files only, so this
+                    // grants nothing the clone author didn't already declare.
+                    let loaded_def = types::flow::parse_flow_def(&result.content);
+                    for pat in &loaded_def.shell_allow {
+                        if !pat.is_empty() && !loaded_flow_shell_allow.contains(pat) {
+                            loaded_flow_shell_allow.push(pat.clone());
+                        }
+                    }
                 }
             }
         }

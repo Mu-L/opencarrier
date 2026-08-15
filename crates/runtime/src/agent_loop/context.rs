@@ -49,6 +49,11 @@ pub(super) struct LoopContext<'a> {
     pub tools_owned: Vec<ToolDefinition>,
     pub discovered_tool_names: std::collections::HashSet<String>,
     pub loaded_flows: std::collections::HashSet<String>,
+    /// Shell allow-patterns granted by flows loaded mid-turn via `flow_load`.
+    /// Unioned with the active flow's `shell_allow` so a just-loaded flow's
+    /// `scripts/` are runnable (historically `flow_load` injected the body but
+    /// left the turn's shell gate frozen to the active/classified flow).
+    pub loaded_flow_shell_allow: Vec<String>,
 
     // ---- Kernel & external ----
     pub kernel: Option<Arc<dyn KernelHandle>>,
