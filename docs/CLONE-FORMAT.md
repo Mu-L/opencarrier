@@ -7,6 +7,46 @@
 > 本文档通过 `include_str!` 种入每个新装分身的 `knowledge/format-spec.md`
 > （由 `clone::CLONE_FORMAT_SPEC` 提供）。
 
+## 治理钩子（Governance Hook）
+
+**这是强制流程，不是备忘。** 本仓库的格式正确性由以下钩子保证，违反其中
+任一条 = 未完成的变更：
+
+1. **格式变更必须同批改本文档**。改动以下任一位置，commit 必须同时更新本文档
+   的对应章节（字段表 / 目录结构 / 示例）：
+   - `crates/types/src/flow.rs` — `FlowDef` 结构、`parse_flow_def` 字段
+   - `crates/clone/src/manifest_builder.rs` — `scan_flows`、flow 文件发现
+   - `crates/clone/src/manifest.rs` — `write_files_to_workspace`、`validate_install_format`
+   - `crates/kernel/src/handle.rs` — `clone_install_files` 文件布局/种入
+
+2. **金样本测试是机器闸门**。`types::flow::tests::clone_format_doc_golden_sample`
+   用 `parse_flow_def` 解析本文档内嵌的 flow 示例——文档改了示例没跟解析器对齐、
+   或解析器改了字段没改文档，CI 都会失败。**不靠人记得改文档，靠测试挡。**
+
+3. **clone-creator 的 `knowledge/agx-format.md` 是复述，必须同步**。格式演进后，
+   clone-creator 定义层（agx-format.md、clone-generate flow 的格式段落、skill-designer/
+   quality-reviewer 子代理）要在同一批工作中清扫到新格式——否则源头继续产出
+   旧格式分身（"活病人"）。规范的真源只有本文档 + 解析器，clone-creator 是翻译层。
+
+4. **安装期硬校验兜底**。`validate_install_format` 在 `clone_install_files` 落盘前
+   拒收 `skills/` 根目录与缺非空 description 的 flow——即使某个 generator 产出了
+   旧格式，也进不了系统（结构化报错供 agent 自修复）。
+
+## 三端管线（分身定义层的流动方向）
+
+```
+本地 opencarrier-clones/<name>/   ← 唯一工作区（dup 库，最全）
+   │ 修改定义层
+   ├─ dup push → 服务器 workspace（carrier.yinnho.cn，运行真源，agent 在这跑）
+   └─ dup push → DupHub（duphub.com，分发镜像，用户安装从这来）
+```
+
+- 改分身定义层 = 本地改 → push 服务器 → push hub（两推都做）
+- **禁止 ssh 上服务器直接改分身文件**——会与 dup 管线 divergence
+- 每个分身目录带 `.dup/state.json`（remote_url / remote_base hash，进 git）
+- 推送工具用增量 sha256 对比（hub push 字段 `hash`，服务器 `base_hash`；
+  重型知识库分身必须增量推，否则撞 nginx 413）
+
 ## 顶层目录结构
 
 ```

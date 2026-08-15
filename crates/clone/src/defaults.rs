@@ -94,5 +94,7 @@ pub const CLONE_FORMAT_SPEC: &str = include_str!("../../../docs/CLONE-FORMAT.md"
 /// Marker stamped at the top of the seeded spec file so the reseeding
 /// reconciler can tell "system-seeded spec" (version-tracked, may overwrite)
 /// from "clone-authored file" (never touched). Bump when the spec changes
-/// materially.
-pub const CLONE_FORMAT_SPEC_VERSION: &str = "v1";
+/// materially — the reconciler only reseeds workspaces whose stamped version
+/// is older, so an edited doc WITHOUT a bump never reaches already-seeded
+/// clones.
+pub const CLONE_FORMAT_SPEC_VERSION: &str = "v2";
