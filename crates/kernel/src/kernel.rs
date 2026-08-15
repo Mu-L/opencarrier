@@ -133,6 +133,10 @@ pub struct CarrierKernel {
     pub memory: Arc<MemorySubstrate>,
     /// Merkle hash chain audit trail.
     pub audit_log: Arc<AuditLog>,
+    /// Per-(agent, sender-label) turn gate: serialize same-sender turns and
+    /// coalesce rapid-fire messages into one claim (dsh inbox+claim at turn
+    /// granularity). See `sender_gate`.
+    pub sender_gate: crate::sender_gate::SenderGate,
     /// Cost metering engine.
     pub metering: Arc<MeteringEngine>,
     /// Cron job scheduler.
@@ -566,6 +570,7 @@ impl CarrierKernel {
             registry: AgentRegistry::new(),
             memory: memory.clone(),
             audit_log: Arc::new(AuditLog::with_db(memory.usage_conn())),
+            sender_gate: crate::sender_gate::SenderGate::default(),
             metering,
             cron_scheduler,
             channel_send_fn: std::sync::RwLock::new(None),

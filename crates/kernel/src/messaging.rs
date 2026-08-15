@@ -1074,25 +1074,99 @@ impl CarrierKernel {
                 KernelError::Carrier(CarrierError::AgentNotFound(agent_id.to_string()))
             })?;
             // Default: LLM agent loop (builtin:chat or any unrecognized module)
-            Self::bounded_turn(
-                self.execute_llm_agent(
-                    &entry,
+            //
+            // Sender-gated path (dsh inbox+claim at turn granularity): a
+            // channel sender's messages serialize per (agent, label) and
+            // rapid-fire messages coalesce into ONE combined turn — the lock
+            // holder claims the whole inbox. A caller whose message was
+            // claimed by an earlier runner returns a synthetic empty/silent
+            // result (the combined reply already went to the same recipient;
+            // the bridge skips empty responses so nothing sends twice).
+            // API turns without a sender bypass the gate entirely.
+            if sender_id.is_some() {
+                let label = Self::resolve_session_label(
                     agent_id,
-                    message,
-                    kernel_handle,
-                    content_blocks,
-                    sender_id,
-                    sender_name,
-                    owner_id,
-                    channel_type.clone(),
-                    task_id,
-                    resume_row.as_ref(),
-                    active_flow,
-                ),
-                turn_secs,
-                &agent_id_str,
-            )
-            .await
+                    &sender_id,
+                    task_id.as_deref(),
+                    &owner_id,
+                    &channel_type,
+                )?;
+                let gate_key = format!("{agent_id_str}:{label}");
+                let turn_secs_g = turn_secs;
+                match self
+                    .sender_gate
+                    .run::<_, _, KernelResult<AgentLoopResult>>(
+                        &gate_key,
+                        message.to_string(),
+                        content_blocks.clone(),
+                        |batch| async move {
+                            let combined = batch.combined_message();
+                            let blocks = if batch.blocks.is_empty() {
+                                None
+                            } else {
+                                Some(batch.blocks)
+                            };
+                            if batch.len > 1 {
+                                tracing::info!(
+                                    agent = %agent_id_str,
+                                    coalesced = batch.len,
+                                    "Sender gate coalesced rapid-fire messages into one turn"
+                                );
+                            }
+                            Self::bounded_turn(
+                                self.execute_llm_agent(
+                                    &entry,
+                                    agent_id,
+                                    &combined,
+                                    kernel_handle,
+                                    blocks,
+                                    sender_id,
+                                    sender_name,
+                                    owner_id,
+                                    channel_type.clone(),
+                                    task_id,
+                                    resume_row.as_ref(),
+                                    active_flow,
+                                ),
+                                turn_secs_g,
+                                &agent_id_str,
+                            )
+                            .await
+                        },
+                    )
+                    .await
+                {
+                    crate::sender_gate::GatedOutcome::Ran(result) => result,
+                    crate::sender_gate::GatedOutcome::Merged => Ok(AgentLoopResult {
+                        response: String::new(),
+                        total_usage: Default::default(),
+                        iterations: 0,
+                        silent: true,
+                        directives: Default::default(),
+                        plan: None,
+                    }),
+                }
+            } else {
+                Self::bounded_turn(
+                    self.execute_llm_agent(
+                        &entry,
+                        agent_id,
+                        message,
+                        kernel_handle,
+                        content_blocks,
+                        sender_id,
+                        sender_name,
+                        owner_id,
+                        channel_type.clone(),
+                        task_id,
+                        resume_row.as_ref(),
+                        active_flow,
+                    ),
+                    turn_secs,
+                    &agent_id_str,
+                )
+                .await
+            }
         };
 
         match result {

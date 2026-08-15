@@ -12,7 +12,7 @@ use types::error::CarrierError;
 use types::plugin::{PluginContent, PluginMessage};
 use dashmap::DashMap;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::router::SenderRouter;
 use crate::kernel_handle::KernelHandle;
@@ -317,7 +317,17 @@ impl PluginBridgeManager {
                 )
                 .await
             {
-                Ok(response) => self.send_response(&msg, &response).await,
+                Ok(response) => {
+                    if response.trim().is_empty() {
+                        // Sender-gate Merged outcome: this message was
+                        // coalesced into an earlier combined turn whose reply
+                        // already went to this recipient — sending here would
+                        // duplicate it.
+                        debug!(agent = %agent_id, "empty response (merged into a prior turn) — no send");
+                    } else {
+                        self.send_response(&msg, &response).await;
+                    }
+                }
                 Err(e) => {
                     error!(agent = %agent_id, error = %e, "Failed to send message to agent");
                     self.send_response(&msg, "抱歉，处理消息时遇到了问题，请稍后再试。").await;

@@ -28,6 +28,7 @@ pub mod plugins;
 pub mod prompt_sources;
 pub mod registry;
 pub mod scheduler;
+pub mod sender_gate;
 pub mod sessions;
 pub mod supervisor;
 pub mod workspace;
