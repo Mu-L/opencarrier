@@ -238,6 +238,30 @@ impl SessionEventLog {
     }
 }
 
+/// Fold events back into the message list they produced (the projection half
+/// of the "model-visible ⟺ logged" invariant — inverse of [`message_events`]
+/// up to media redaction).
+///
+/// Envelope events (`TurnStart`/`TurnEnd`/`Silent`) are skipped: they
+/// describe turns, not surface. Every message the model ever saw therefore
+/// reconstructs from the log alone.
+pub fn derive_messages(events: &[SessionEvent]) -> Vec<Message> {
+    events
+        .iter()
+        .filter_map(|ev| match &ev.kind {
+            SessionEventKind::UserMessage { content } => Some(Message {
+                role: Role::User,
+                content: content.clone(),
+            }),
+            SessionEventKind::AssistantMessage { content } => Some(Message {
+                role: Role::Assistant,
+                content: content.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Read the seq of the last complete line, or 0 for a fresh/absent file.
 /// Seeks near the tail instead of reading the whole file.
 fn last_seq_in_file(path: &std::path::Path) -> Option<u64> {
