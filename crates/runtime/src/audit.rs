@@ -29,6 +29,10 @@ pub enum AuditAction {
     AuthAttempt,
     WireConnect,
     ConfigChange,
+    /// A cron job fire completed (outcome in the entry: ok / error reason).
+    /// Recorded by the daemon fire wrapper on EVERY outcome — the audit-chain
+    /// forensics for stuck/missed cron fires.
+    CronFire,
 }
 
 impl std::fmt::Display for AuditAction {
@@ -132,6 +136,7 @@ impl AuditLog {
                         "AuthAttempt" => AuditAction::AuthAttempt,
                         "WireConnect" => AuditAction::WireConnect,
                         "ConfigChange" => AuditAction::ConfigChange,
+                        "CronFire" => AuditAction::CronFire,
                         _ => AuditAction::ToolInvoke, // fallback
                     };
                     Ok(AuditEntry {

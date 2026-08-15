@@ -4,8 +4,6 @@
 
 use types::agent::{AgentId, AgentState, ScheduleMode};
 use types::error::{CarrierError, CarrierResult};
-use futures::stream::{FuturesUnordered, StreamExt};
-
 use super::handle::SYSTEM_AGENT_ID;
 use types::event::*;
 use types::scheduler::CronJob;
@@ -86,7 +84,10 @@ fn slugify(name: &str) -> String {
 }
 
 /// Fire a single cron job (system event or agent turn), recording success/failure.
-pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
+///
+/// Returns `Err(reason)` on failure paths (already recorded via
+/// `record_failure`) so the fire wrapper can audit the outcome.
+pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> Result<(), String> {
     let job_id = job.id;
     let agent_id = job.agent_id;
     let job_name = job.name.clone();
@@ -107,6 +108,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
             );
             kernel.publish_event(event).await;
             kernel.cron_scheduler.record_success(job_id);
+            Ok(())
         }
         types::scheduler::CronAction::AgentTurn {
             message,
@@ -129,7 +131,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
                     agent = %agent_id,
                     "Removed orphan cron job — agent no longer in registry"
                 );
-                return;
+                return Ok(());
             }
             tracing::debug!(job = %job_name, agent = %agent_id, "Cron: firing agent turn");
             // Default to the shared agent-turn backstop (KernelConfig.
@@ -193,10 +195,13 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
                         Ok(()) => {
                             tracing::info!(job = %job_name, "Cron job completed successfully");
                             kernel.cron_scheduler.record_success(job_id);
+                            Ok(())
                         }
                         Err(e) => {
-                            tracing::warn!(job = %job_name, error = %e, "Cron job delivery failed");
-                            kernel.cron_scheduler.record_failure(job_id, &e.to_string());
+                            let msg = e.to_string();
+                            tracing::warn!(job = %job_name, error = %msg, "Cron job delivery failed");
+                            kernel.cron_scheduler.record_failure(job_id, &msg);
+                            Err(format!("delivery failed: {msg}"))
                         }
                     }
                 }
@@ -204,6 +209,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
                     let err_msg = format!("{e}");
                     tracing::warn!(job = %job_name, error = %err_msg, "Cron job failed");
                     kernel.cron_scheduler.record_failure(job_id, &err_msg);
+                    let failure = Err(err_msg.clone());
                     let notice = format!(
                         "⚠️ 定时任务「{}」执行失败：{}",
                         job_name, err_msg
@@ -219,6 +225,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
                     {
                         tracing::warn!(job = %job_name, error = %de, "Failure-notice delivery failed");
                     }
+                    failure
                 }
                 None => {
                     tracing::warn!(job = %job_name, timeout_s, "Cron job timed out");
@@ -241,6 +248,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) {
                     {
                         tracing::warn!(job = %job_name, error = %de, "Timeout-notice delivery failed");
                     }
+                    Err(format!("timed out after {timeout_s}s"))
                 }
             }
         }
@@ -918,28 +926,34 @@ impl CarrierKernel {
                     }
 
                     let due = kernel.cron_scheduler.due_jobs();
-                    let mut handles = FuturesUnordered::new();
                     for job in due {
                         let job_id = job.id;
                         let job_name = job.name.clone();
+                        let agent_id = job.agent_id;
                         let k = Arc::clone(&kernel);
-                        handles.push(async move {
-                            let handle = tokio::spawn(async move {
-                                cron_fire_job(&k, job).await;
-                            });
-                            (job_id, job_name, handle.await)
+                        // Detached spawn (no tick barrier): one slow job no
+                        // longer stalls every other agent's crons. Re-entry
+                        // safety comes from the per-job in-flight guard set
+                        // in due_jobs — a due slot that lands while the
+                        // previous fire still runs is skipped, not queued.
+                        // The wrapper clears the guard on EVERY outcome
+                        // (including panic) so a crashed fire can never
+                        // leave a job permanently skipped, and records the
+                        // fire in the audit chain (cron forensics).
+                        tokio::spawn(async move {
+                            let outcome = cron_fire_job(&k, job).await;
+                            k.cron_scheduler.clear_running(job_id);
+                            let (status, detail) = match &outcome {
+                                Ok(()) => ("ok", format!("job={job_name}")),
+                                Err(e) => ("error", format!("job={job_name} error={e}")),
+                            };
+                            k.audit_log.record(
+                                agent_id.to_string(),
+                                runtime::audit::AuditAction::CronFire,
+                                detail,
+                                status,
+                            );
                         });
-                    }
-                    while let Some((job_id, job_name, result)) = handles.next().await {
-                        if let Err(join_error) = result {
-                            if join_error.is_panic() {
-                                tracing::error!(job = %job_name, "Cron job task panicked");
-                                kernel.cron_scheduler.record_failure(job_id, "cron task panicked");
-                            } else {
-                                tracing::error!(job = %job_name, "Cron job task cancelled");
-                                kernel.cron_scheduler.record_failure(job_id, "cron task cancelled");
-                            }
-                        }
                     }
 
                     persist_counter += 1;

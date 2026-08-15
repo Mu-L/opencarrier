@@ -285,14 +285,39 @@ impl CronScheduler {
         for mut entry in self.jobs.iter_mut() {
             let meta = entry.value_mut();
             if meta.job.enabled && meta.job.next_run.map(|t| t <= now).unwrap_or(false) {
-                due.push(meta.job.clone());
                 // Pre-advance next_run so the job won't fire again on the next
                 // tick while it's still executing. Use `now` as the base so the
                 // next fire time is computed strictly after the current moment.
-                meta.job.next_run = Some(compute_next_run_after(&meta.job.schedule, now));
+                let next = Some(compute_next_run_after(&meta.job.schedule, now));
+                if meta.running.load(std::sync::atomic::Ordering::Acquire) {
+                    // Previous fire still in flight: skip this slot. The
+                    // pre-advance above already moved next_run past it — the
+                    // interval is skipped, not queued.
+                    meta.job.next_run = next;
+                    tracing::warn!(
+                        job = %meta.job.name,
+                        "Cron due slot skipped — previous fire still running"
+                    );
+                    continue;
+                }
+                meta.job.next_run = next;
+                meta.running.store(true, std::sync::atomic::Ordering::Release);
+                due.push(meta.job.clone());
             }
         }
         due
+    }
+
+    /// Clear a job's in-flight guard. Called by the fire wrapper on EVERY
+    /// outcome (success, failure, timeout, panic, cancellation) so a crashed
+    /// fire can never leave a job permanently skipped.
+    pub fn clear_running(&self, job_id: CronJobId) {
+        if let Some(mut entry) = self.jobs.get_mut(&job_id) {
+            entry
+                .value_mut()
+                .running
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
     }
 
     // -- Outcome recording --------------------------------------------------
@@ -1277,5 +1302,41 @@ mod tests {
             assert!(sched.list_jobs(agent).is_empty());
             assert_eq!(sched.list_jobs(other).len(), 1);
         }
+    }
+
+    /// The in-flight guard: a due slot landing while the previous fire still
+    /// runs is SKIPPED (not queued), and clear_running re-arms the job.
+    #[test]
+    fn due_jobs_skips_running_job_and_clear_rearms() {
+        let (sched, _dir) = make_scheduler(10);
+        let agent = AgentId::new();
+        let id = sched.add_job(make_job(agent), false).unwrap();
+        // Force the first slot into the past (Every{3600} starts future).
+        {
+            let mut entry = sched.jobs.get_mut(&id).unwrap();
+            entry.value_mut().job.next_run = Some(Utc::now() - Duration::seconds(60));
+        }
+
+        // First collection fires and marks running.
+        let due = sched.due_jobs();
+        assert_eq!(due.len(), 1, "past-due job fires immediately");
+        // While running, force next_run into the past again (simulating a
+        // due slot landing mid-fire).
+        {
+            let mut entry = sched.jobs.get_mut(&id).unwrap();
+            entry.value_mut().job.next_run = Some(Utc::now() - Duration::seconds(30));
+        }
+        let skipped = sched.due_jobs();
+        assert!(skipped.is_empty(), "running job's due slot must be skipped");
+
+        // Fire wrapper clears the guard; when the NEXT scheduled slot comes
+        // due (forced into the past here), the job fires normally again.
+        sched.clear_running(id);
+        {
+            let mut entry = sched.jobs.get_mut(&id).unwrap();
+            entry.value_mut().job.next_run = Some(Utc::now() - Duration::seconds(30));
+        }
+        let again = sched.due_jobs();
+        assert_eq!(again.len(), 1, "cleared job fires on next due slot");
     }
 }

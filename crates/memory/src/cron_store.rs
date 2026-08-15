@@ -13,17 +13,46 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Runtime metadata not stored in CronJob itself.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct JobMeta {
     pub job: CronJob,
     pub one_shot: bool,
     pub last_status: Option<String>,
     pub consecutive_errors: u32,
+    /// In-flight guard: true while this job's fired turn is executing.
+    /// `due_jobs` skips (but still pre-advances) a running job so a
+    /// slow-running recurring fire is not re-entered concurrently — the
+    /// missed interval is skipped, the next scheduled slot fires normally.
+    /// Not persisted (transient runtime state).
+    #[serde(skip)]
+    pub running: std::sync::atomic::AtomicBool,
 }
 
 impl JobMeta {
     pub fn new(job: CronJob, one_shot: bool) -> Self {
-        Self { job, one_shot, last_status: None, consecutive_errors: 0 }
+        Self {
+            job,
+            one_shot,
+            last_status: None,
+            consecutive_errors: 0,
+            running: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+impl Clone for JobMeta {
+    fn clone(&self) -> Self {
+        Self {
+            job: self.job.clone(),
+            one_shot: self.one_shot,
+            last_status: self.last_status.clone(),
+            consecutive_errors: self.consecutive_errors,
+            // Cloning never carries an in-flight state — a clone of a running
+            // job is a fresh observation, not a running fire.
+            running: std::sync::atomic::AtomicBool::new(
+                self.running.load(std::sync::atomic::Ordering::Acquire),
+            ),
+        }
     }
 }
 
@@ -185,5 +214,6 @@ fn row_to_meta(r: RowData) -> Option<JobMeta> {
         one_shot: r.one_shot != 0,
         last_status: r.last_status,
         consecutive_errors: r.consecutive_errors as u32,
+        running: std::sync::atomic::AtomicBool::new(false),
     })
 }
