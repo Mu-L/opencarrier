@@ -286,6 +286,70 @@ pub fn derive_messages(events: &[SessionEvent]) -> Vec<Message> {
         .collect()
 }
 
+/// Rebuild the L0 turn-summary layer from the event log (projection replay —
+/// the pollution-cure path: a corrupted or compaction-cleared
+/// `turn_summaries` blob regenerates from facts instead of being lost).
+///
+/// Honors compaction: summaries whose turns were shadowed by a
+/// `CompactionSummary` are dropped, mirroring the live path's "clear stale
+/// L0 on compaction" rule. `key_facts` are also the recovery source for the
+/// kv drawer; intent/outcome for tree re-ingestion.
+pub fn rebuild_turn_summaries(events: &[SessionEvent]) -> Vec<types::message::TurnSummary> {
+    // The last compaction shadows the first `shadowed_msgs` message events
+    // (and everything older). Summaries generated before that point are
+    // stale by the same rule the live path applies.
+    let compaction = events.iter().rev().find_map(|ev| match &ev.kind {
+        SessionEventKind::CompactionSummary { shadowed_msgs, .. } => {
+            Some((ev.seq, *shadowed_msgs))
+        }
+        _ => None,
+    });
+    let mut cutoff_seq = 0u64;
+    if let Some((cseq, shadowed)) = compaction {
+        let mut msg_count = 0u64;
+        for ev in events {
+            if matches!(
+                ev.kind,
+                SessionEventKind::UserMessage { .. } | SessionEventKind::AssistantMessage { .. }
+            ) && ev.seq <= cseq
+            {
+                msg_count += 1;
+                if msg_count >= shadowed {
+                    cutoff_seq = cseq;
+                    break;
+                }
+            }
+        }
+    }
+
+    events
+        .iter()
+        .filter(|ev| ev.seq > cutoff_seq)
+        .filter_map(|ev| match &ev.kind {
+            SessionEventKind::TurnSummaryGenerated {
+                turn_number,
+                user_intent,
+                assistant_outcome,
+                key_facts,
+            } => Some(types::message::TurnSummary {
+                turn_number: *turn_number,
+                // Replay timestamp: the event's own time — the original
+                // generation time is the closest fact we have.
+                timestamp: chrono::DateTime::from_timestamp_millis(ev.ts_ms)
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_default(),
+                user_intent: user_intent.clone(),
+                assistant_outcome: assistant_outcome.clone(),
+                // tools_used was never evented (metadata, not content) — replay
+                // leaves it empty rather than fabricating.
+                tools_used: Vec::new(),
+                key_facts: key_facts.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Fold the durable surface with the load-time projection (P1-C authority
 /// flip): what the model sees on the next turn.
 ///
@@ -602,5 +666,45 @@ mod tests {
         assert_eq!(folded.len(), 2);
         assert!(matches!(&folded[0].content, MessageContent::Text(t) if t.contains("新摘要")));
         assert!(matches!(&folded[1].content, MessageContent::Text(t) if t == "新消息"));
+    }
+
+    #[test]
+    fn rebuild_turn_summaries_replays_and_honors_compaction() {
+        let mut kinds = vec![SessionEventKind::TurnStart];
+        kinds.extend(message_events(&[text_msg("m1"), Message {
+            role: Role::Assistant,
+            content: MessageContent::Text("a1".into()),
+        }]));
+        kinds.push(SessionEventKind::TurnSummaryGenerated {
+            turn_number: 1,
+            user_intent: "查月票".into(),
+            assistant_outcome: "已出票".into(),
+            key_facts: vec!["entity:月票M123".into()],
+        });
+        // Compaction shadows the 2 messages of turn 1.
+        kinds.push(SessionEventKind::CompactionSummary {
+            summary: "旧事".into(),
+            shadowed_msgs: 2,
+            shadowed_tokens_est: 64,
+        });
+        kinds.extend(message_events(&[text_msg("m2"), Message {
+            role: Role::Assistant,
+            content: MessageContent::Text("a2".into()),
+        }]));
+        kinds.push(SessionEventKind::TurnSummaryGenerated {
+            turn_number: 2,
+            user_intent: "问时刻表".into(),
+            assistant_outcome: "已给列表".into(),
+            key_facts: vec![],
+        });
+
+        let events = sequenced(kinds);
+        let rebuilt = rebuild_turn_summaries(&events);
+        // The pre-compaction summary is dropped (stale by the live rule);
+        // the post-compaction one replays with its key facts.
+        assert_eq!(rebuilt.len(), 1);
+        assert_eq!(rebuilt[0].turn_number, 2);
+        assert_eq!(rebuilt[0].user_intent, "问时刻表");
+        assert!(rebuilt[0].tools_used.is_empty(), "replay never fabricates tools_used");
     }
 }
