@@ -104,6 +104,18 @@ pub(in crate::agent_loop) async fn handle_end_turn(
             )
             .await
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        // P1-A: a skipped attempt leaves a trace (nothing happens invisibly).
+        memory.session_events_append(
+            &session.agent_name,
+            &session.id.0.to_string(),
+            vec![memory::SessionEventKind::Silent {
+                reason: if parsed_directives_s.silent {
+                    "silent directive".to_string()
+                } else {
+                    "no_reply sentinel".to_string()
+                },
+            }],
+        );
         return Ok(EndTurnAction::Complete(AgentLoopResult {
             response: String::new(),
             total_usage,

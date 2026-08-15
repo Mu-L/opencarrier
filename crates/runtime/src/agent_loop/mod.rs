@@ -256,6 +256,13 @@ async fn run_agent_loop_impl(
     llm_concurrency_limit: Option<Arc<tokio::sync::Semaphore>>,
 ) -> CarrierResult<AgentLoopResult> {
     info!(agent = %manifest.name, "Starting agent loop");
+    // P1-A observational bypass: turn envelope events (message-level surface
+    // events are appended inside save_session_append_async).
+    memory.session_events_append(
+        &manifest.name,
+        &session.id.0.to_string(),
+        vec![memory::SessionEventKind::TurnStart],
+    );
 
     let hand_allowed_env: Vec<String> = manifest
         .metadata
@@ -401,18 +408,32 @@ async fn run_agent_loop_impl(
             Err(e) => {
                 // Stuck / tool-loop / LLM failure: persist so the next turn
                 // sees "上次卡死" instead of a clean slate.
-                ctx.persist_last_run(state::outcome_from_loop_err(&e));
+                let outcome = state::outcome_from_loop_err(&e);
+                ctx.log_event(ctx.turn_end_event(&match &outcome {
+                    state::RunOutcome::Stuck(r) => format!("stuck: {r}"),
+                    state::RunOutcome::Error(r) => format!("error: {r}"),
+                    _ => "error".to_string(),
+                }));
+                ctx.persist_last_run(outcome);
                 return Err(e);
             }
         };
         match action {
             LoopAction::Continue => {}
-            LoopAction::Complete(result) => return Ok(result),
+            LoopAction::Complete(result) => {
+                ctx.log_event(ctx.turn_end_event(if result.silent {
+                    "silent"
+                } else {
+                    "complete"
+                }));
+                return Ok(result);
+            }
             LoopAction::BreakForPlan => break,
         }
     }
 
     // ---- TEARDOWN ---- (reached only via BreakForPlan)
+    ctx.log_event(ctx.turn_end_event("task_plan"));
     teardown(&mut ctx).await
 }
 

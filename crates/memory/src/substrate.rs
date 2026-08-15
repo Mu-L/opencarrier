@@ -45,6 +45,9 @@ pub struct MemorySubstrate {
     flow_runs: FlowRunStore,
     automation_rules: AutomationRuleStore,
     content_root: PathBuf,
+    /// Append-only session event log (P1-A observational bypass — see
+    /// [`crate::session_events`]).
+    session_events: crate::session_events::SessionEventLog,
 }
 
 impl MemorySubstrate {
@@ -63,6 +66,10 @@ impl MemorySubstrate {
             .unwrap_or(Path::new("."))
             .join("memory_tree")
             .join("content");
+        // Event log lives beside the db, kernel-owned (not per-workspace).
+        let events_root = db_path.parent()
+            .unwrap_or(Path::new("."))
+            .join("session-events");
 
         Ok(Self {
             conn: Arc::clone(&shared),
@@ -76,6 +83,7 @@ impl MemorySubstrate {
             flow_runs: FlowRunStore::new(Arc::clone(&shared)),
             automation_rules: AutomationRuleStore::new(Arc::clone(&shared)),
             content_root,
+            session_events: crate::session_events::SessionEventLog::new(events_root),
         })
     }
 
@@ -97,6 +105,14 @@ impl MemorySubstrate {
             flow_runs: FlowRunStore::new(Arc::clone(&shared)),
             automation_rules: AutomationRuleStore::new(Arc::clone(&shared)),
             content_root: PathBuf::from("/tmp/opencarrier_tree_content"),
+            // Tests share a per-process dir so cross-instance seq continuity
+            // is exercised without touching the real db location.
+            session_events: crate::session_events::SessionEventLog::new(
+                std::env::temp_dir().join(format!(
+                    "opencarrier-session-events-{}",
+                    std::process::id()
+                )),
+            ),
         })
     }
 
@@ -413,9 +429,50 @@ impl MemorySubstrate {
         label: Option<&str>,
         turn_summaries: Option<&[types::message::TurnSummary]>,
     ) -> CarrierResult<()> {
+        // P1-A observational bypass: every durable surface append is also an
+        // event. Written BEFORE the DB save so the log exists even if the
+        // save later fails (log is the more durable copy by design). Errors
+        // are logged, never propagated — the event log must not break the
+        // turn path while the sessions table is still authoritative.
+        self.session_events_append(
+            agent_id,
+            &session_id.0.to_string(),
+            crate::session_events::message_events(new_messages),
+        );
         self.sessions
             .save_session_append(session_id, agent_id, new_messages, context_window_tokens, label, turn_summaries)
             .await
+    }
+
+    /// Append events to a session's event log (observational, best-effort —
+    /// see [`crate::session_events`]). Failures are warn-logged, not
+    /// propagated.
+    pub fn session_events_append(
+        &self,
+        agent_id: &str,
+        session_id: &str,
+        kinds: Vec<crate::session_events::SessionEventKind>,
+    ) {
+        if kinds.is_empty() {
+            return;
+        }
+        if let Err(e) = self.session_events.append(agent_id, session_id, &kinds) {
+            tracing::warn!(
+                agent = agent_id,
+                session = session_id,
+                error = %e,
+                "session event append failed (observational log; turn continues)"
+            );
+        }
+    }
+
+    /// Read a session's event log (fold input — see P1-B).
+    pub fn session_events_read(
+        &self,
+        agent_id: &str,
+        session_id: &str,
+    ) -> CarrierResult<Vec<crate::session_events::SessionEvent>> {
+        self.session_events.read(agent_id, session_id)
     }
 
     /// Create a new empty session for an agent.

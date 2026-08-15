@@ -101,4 +101,35 @@ impl<'a> LoopContext<'a> {
             }
         }
     }
+
+    /// Append the turn envelope events to the session event log
+    /// (P1-A observational bypass — see `memory::session_events`).
+    /// `TurnStart` at loop open; `TurnEnd` at every exit (natural, stuck,
+    /// plan-break), absorbing the old in-memory `turn_log` totals.
+    pub fn log_event(&self, kind: memory::SessionEventKind) {
+        self.memory.session_events_append(
+            &self.session.agent_name,
+            &self.session.id.0.to_string(),
+            vec![kind],
+        );
+    }
+
+    /// `TurnEnd` payload from loop state. `tools_called`/`tool_errors` are
+    /// summed from `turn_log` (partial by design — entries are only written
+    /// on notable iterations), while `iterations` is authoritative.
+    pub fn turn_end_event(&self, outcome: &str) -> memory::SessionEventKind {
+        let tools_called: u32 = self
+            .state
+            .turn_log
+            .iter()
+            .map(|e| e.tools_called.len() as u32)
+            .sum();
+        let tool_errors: u32 = self.state.turn_log.iter().map(|e| e.tool_errors).sum();
+        memory::SessionEventKind::TurnEnd {
+            iterations: self.state.iteration,
+            tools_called,
+            tool_errors,
+            outcome: outcome.to_string(),
+        }
+    }
 }
