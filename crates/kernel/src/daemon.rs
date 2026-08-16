@@ -195,6 +195,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                         kernel,
                         agent_id,
                         owner_id.as_deref(),
+                        job.sender_id.as_deref(),
                         &result.response,
                         &delivery,
                     )
@@ -226,6 +227,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                         kernel,
                         agent_id,
                         owner_id.as_deref(),
+                        job.sender_id.as_deref(),
                         &notice,
                         &delivery,
                     )
@@ -249,6 +251,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                         kernel,
                         agent_id,
                         owner_id.as_deref(),
+                        job.sender_id.as_deref(),
                         &notice,
                         &delivery,
                     )
@@ -304,6 +307,7 @@ pub(super) async fn cron_deliver_response(
     kernel: &Arc<CarrierKernel>,
     agent_id: AgentId,
     owner_id: Option<&str>,
+    sender_id: Option<&str>,
     response: &str,
     delivery: &types::scheduler::CronDelivery,
 ) -> CarrierResult<()> {
@@ -319,7 +323,13 @@ pub(super) async fn cron_deliver_response(
     //
     // Use agent **name** (not UUID) for workspace/profile paths — see
     // [`outbound_agent_key`].
-    let sender_id = owner_id.unwrap_or("");
+    //
+    // Publish/outbound sender is the job's `sender_id` when present (per-user
+    // credentials in `preferences.wechat_accounts` are keyed by sender_id),
+    // falling back to `owner_id` for jobs created without an explicit sender
+    // (interactive chains set both to the openid; API/system jobs may set only
+    // one — resolving sender from owner alone broke credential lookup).
+    let sender_id = sender_id.or(owner_id).unwrap_or("");
     let (pchannel, pbot, psend_fn) = cron_publish_followup_target(kernel, sender_id);
     let deliver_fn = kernel
         .channel_deliver_fn
