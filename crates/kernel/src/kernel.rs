@@ -652,6 +652,17 @@ impl CarrierKernel {
                                 }
                                 let mut disk_manifest = disk_manifest;
                                 disk_manifest.workspace = Some(ws.clone());
+                                // Definition-layer overlay (same rationale as
+                                // reload_manifest_from_workspace): agent.toml is
+                                // install-time generated and dup pushes never
+                                // touch the runtime layer, so without this fill
+                                // every daemon restart would clobber the DB
+                                // manifest's presentation fields (display_name/
+                                // description) with the stale agent.toml copy.
+                                crate::sessions::fill_presentation_from_template_json(
+                                    &mut disk_manifest,
+                                    &ws,
+                                );
                                 if disk_manifest.exec_policy.is_none() {
                                     disk_manifest.exec_policy =
                                         Some(kernel.config.exec_policy.clone());

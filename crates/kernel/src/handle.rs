@@ -1074,7 +1074,7 @@ impl CarrierKernel {
 
         let plugins = std::fs::read_to_string(workspace_dir.join("template.json"))
             .ok()
-            .and_then(|s| serde_json::from_str::<clone::TemplateManifest>(&s).ok())
+            .and_then(|s| clone::parse_template_manifest_lenient(&s))
             .map(|t| t.plugins)
             .unwrap_or_default();
 

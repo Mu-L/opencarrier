@@ -11,7 +11,7 @@ use types::agent::{
 };
 use tracing::debug;
 
-use crate::loader::TemplateManifest;
+use crate::loader::{parse_template_manifest_lenient, TemplateManifest};
 
 /// Build an `AgentManifest` from an extracted v3 workspace directory.
 ///
@@ -184,7 +184,11 @@ pub fn build_manifest_from_workspace(
 fn read_template_json(workspace: &Path) -> Option<TemplateManifest> {
     let path = workspace.join("template.json");
     let content = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&content).ok()
+    // Lenient fallback on struct drift — a whole-struct failure here would
+    // silently drop display_name/description/plugins/mcp_servers/default_flow
+    // from every installed manifest (the mcp_servers object-array shape is
+    // the documented real-world drift). See parse_template_manifest_lenient.
+    parse_template_manifest_lenient(&content)
 }
 
 fn read_profile_description(workspace: &Path) -> String {

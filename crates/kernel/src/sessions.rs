@@ -859,7 +859,10 @@ impl CarrierKernel {
 /// required}]` where the struct wants `Vec<String>`), and a whole-struct
 /// parse failure would silently disable the fill — the same trap
 /// `read_template_default_flow` already guards against.
-fn fill_presentation_from_template_json(manifest: &mut AgentManifest, ws: &std::path::Path) {
+pub(crate) fn fill_presentation_from_template_json(
+    manifest: &mut AgentManifest,
+    ws: &std::path::Path,
+) {
     let Ok(content) = std::fs::read_to_string(ws.join("template.json")) else {
         return;
     };

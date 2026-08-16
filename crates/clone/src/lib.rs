@@ -17,6 +17,6 @@ pub use manifest::{
 };
 pub use loader::{
     format_string_array, parse_frontmatter, parse_string_array, parse_toml_description,
-    TemplateManifest,
+    parse_template_manifest_lenient, TemplateManifest,
 };
 pub use manifest_builder::build_manifest_from_workspace;

@@ -519,10 +519,6 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
             routing::post(switch_agent_session),
         )
         .route("/api/sessions", routing::get(list_sessions))
-        .route(
-            "/api/sessions/by-label/{label}",
-            routing::get(find_session_by_label),
-        )
         .route("/api/sessions/{id}", routing::delete(delete_session))
         .route("/api/sessions/{id}/label", routing::put(set_session_label))
 }
