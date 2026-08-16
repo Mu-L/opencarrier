@@ -192,7 +192,13 @@ fn row_to_meta(r: RowData) -> Option<JobMeta> {
     let last_run = r.last_run.and_then(|s| s.parse::<DateTime<Utc>>().ok());
     let next_run = r.next_run.and_then(|s| s.parse::<DateTime<Utc>>().ok());
     let id = CronJobId::from_str(&r.id).ok()?;
-    let agent_id = types::agent::AgentId::from_string(&r.agent_id);
+    // Parse (not from_string): agent_id is stored as its canonical UUID string
+    // and must round-trip losslessly. `from_string` is the deterministic v5
+    // hash helper — hashing the UUID string here silently produced a garbage
+    // AgentId on every daemon restart, so each DB-loaded cron job died in the
+    // orphan-cleanup check at fire time ("agent no longer in registry",
+    // 2026-08-16 jiakao publish job: 8f306fe4.. → v5 hash 6aae753e..).
+    let agent_id = r.agent_id.parse::<types::agent::AgentId>().ok()?;
 
     let job = CronJob {
         id,
@@ -216,4 +222,78 @@ fn row_to_meta(r: RowData) -> Option<JobMeta> {
         consecutive_errors: r.consecutive_errors as u32,
         running: std::sync::atomic::AtomicBool::new(false),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression (2026-08-16): `row_to_meta` converted the stored agent_id
+    /// string with `AgentId::from_string` — the deterministic UUID **v5 hash**
+    /// helper — instead of parsing it. Every daemon restart therefore
+    /// corrupted all DB-loaded cron jobs' agent_id (8f306fe4.. hashed into
+    /// 6aae753e..), and each job then died in the orphan-cleanup check at
+    /// fire time ("agent no longer in registry"). agent_id must round-trip
+    /// losslessly through save/load.
+    #[test]
+    fn agent_id_roundtrips_through_sqlite() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE cron_jobs (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                owner_id TEXT,
+                sender_id TEXT,
+                name TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                schedule TEXT NOT NULL,
+                action TEXT NOT NULL,
+                delivery TEXT NOT NULL,
+                one_shot INTEGER NOT NULL DEFAULT 0,
+                last_status TEXT,
+                consecutive_errors INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                last_run TEXT,
+                next_run TEXT)",
+            [],
+        )
+        .unwrap();
+        let store = CronJobStore::new(Arc::new(Mutex::new(conn)));
+
+        let agent_id = types::agent::AgentId::new();
+        let meta = JobMeta::new(
+            CronJob {
+                id: CronJobId::new(),
+                agent_id,
+                owner_id: None,
+                sender_id: Some("o-test@im.wechat".to_string()),
+                name: "roundtrip".to_string(),
+                schedule: CronSchedule::At {
+                    at: Utc::now(),
+                },
+                action: CronAction::AgentTurn {
+                    message: "m".to_string(),
+                    model_override: None,
+                    timeout_secs: Some(300),
+                    active_flow: Some("draft-publisher".to_string()),
+                    session_label: Some("lbl".to_string()),
+                },
+                delivery: CronDelivery::None,
+                enabled: true,
+                created_at: Utc::now(),
+                next_run: None,
+                last_run: None,
+            },
+            true,
+        );
+        store.save_all(&[meta]).unwrap();
+
+        let loaded = store.load_all().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(
+            loaded[0].job.agent_id, agent_id,
+            "agent_id must round-trip losslessly (from_string v5-hashed it into a garbage id)"
+        );
+        assert_eq!(loaded[0].job.sender_id.as_deref(), Some("o-test@im.wechat"));
+    }
 }
