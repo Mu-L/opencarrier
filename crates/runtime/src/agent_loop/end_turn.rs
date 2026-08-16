@@ -62,6 +62,60 @@ fn count_report_fixes(messages: &[Message]) -> usize {
         .count()
 }
 
+/// Verbatim side-effect marker spans in `text`: `[PUBLISH:…]…[/PUBLISH]`,
+/// `[NOTIFY:…]…[/NOTIFY]`, and single-tag `[DELIVER:key|f=v]` (body ends at
+/// the first `]` not preceded by a backslash, mirroring the outbound parser).
+/// Used by the report gate to carry markers through the human-message swap.
+/// Deduplicated, order of first appearance.
+fn side_effect_marker_spans(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |span: String| {
+        if !span.is_empty() && !out.contains(&span) {
+            out.push(span);
+        }
+    };
+    for (open, close) in [("[PUBLISH:", "[/PUBLISH]"), ("[NOTIFY:", "[/NOTIFY]")] {
+        let mut rest = text;
+        while let Some(i) = rest.find(open) {
+            let after = &rest[i..];
+            match after.find(close) {
+                Some(e) => {
+                    push(after[..e + close.len()].to_string());
+                    rest = &after[e + close.len()..];
+                }
+                None => break, // unterminated — the outbound parser ignores it too
+            }
+        }
+    }
+    let mut rest = text;
+    while let Some(i) = rest.find("[DELIVER:") {
+        let after = &rest[i..];
+        let bytes = after.as_bytes();
+        let mut j = 0;
+        let end = loop {
+            if j >= bytes.len() {
+                break None;
+            }
+            if bytes[j] == b'\\' {
+                j += 2;
+                continue;
+            }
+            if bytes[j] == b']' {
+                break Some(j);
+            }
+            j += 1;
+        };
+        match end {
+            Some(e) => {
+                push(after[..=e].to_string());
+                rest = &after[e + 1..];
+            }
+            None => break,
+        }
+    }
+    out
+}
+
 /// Handle a `StopReason::EndTurn | StopReason::StopSequence` response.
 ///
 /// Returns an `EndTurnAction` indicating whether the loop should retry
@@ -247,13 +301,25 @@ pub(in crate::agent_loop) async fn handle_end_turn(
             Ok(()) => {
                 // The report JSON is for the orchestrator; chat sinks get the
                 // human-readable `message` field when the agent provided one.
+                // Side-effect markers ([PUBLISH]/[NOTIFY]/[DELIVER]) usually
+                // live in the prose OUTSIDE the JSON — carry them through the
+                // swap verbatim, or their effects (draft creation, admin
+                // notify) silently never run (6b0b3a4 regression, caught
+                // 2026-08-17: chain publisher emitted [PUBLISH] but no draft
+                // was created — the outbound pipeline parses markers from the
+                // response text, which no longer contained it).
+                let markers = side_effect_marker_spans(&final_response);
                 if let Some(human) = parsed
                     .as_ref()
                     .and_then(|v| v.get("message"))
                     .and_then(|m| m.as_str())
                     .filter(|m| !m.trim().is_empty())
                 {
-                    final_response = human.to_string();
+                    final_response = if markers.is_empty() {
+                        human.to_string()
+                    } else {
+                        format!("{human}\n\n{}", markers.join("\n"))
+                    };
                 }
             }
             Err(reason) if count_report_fixes(messages) < MAX_REPORT_RETRIES => {
@@ -434,4 +500,39 @@ pub(in crate::agent_loop) async fn handle_end_turn(
         directives: Default::default(),
         plan: None,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::side_effect_marker_spans;
+
+    /// Markers must survive the report-gate human-message swap verbatim —
+    /// the 6b0b3a4 regression dropped them, so a chain publisher's
+    /// `[PUBLISH]` never reached the outbound pipeline (no draft created).
+    #[test]
+    fn side_effect_markers_extracted_verbatim() {
+        let text = "产物已���位，正在发布～\n\n[PUBLISH:wx4e35abcebe78a249]output/x/正文.html|标题|摘要[/PUBLISH]\n\n{\"status\":\"complete\",\"message\":\"已进入自动发布流程\"}";
+        let spans = side_effect_marker_spans(text);
+        assert_eq!(
+            spans,
+            vec!["[PUBLISH:wx4e35abcebe78a249]output/x/正文.html|标题|摘要[/PUBLISH]".to_string()]
+        );
+
+        // All three marker kinds, multiple occurrences, order of appearance,
+        // dedup of identical spans.
+        let mixed = "[NOTIFY:escalation]投诉[/NOTIFY]\n[DELIVER:yueka|user=o1]\n[NOTIFY:escalation]投诉[/NOTIFY]\n[PUBLISH:app2]p[/PUBLISH]";
+        assert_eq!(side_effect_marker_spans(mixed).len(), 3);
+
+        // Escaped ] inside a DELIVER body doesn't terminate the span early.
+        assert_eq!(
+            side_effect_marker_spans("[DELIVER:k|text=a\\]b]"),
+            vec!["[DELIVER:k|text=a\\]b]".to_string()]
+        );
+
+        // No markers → empty (no re-append, human message stays alone).
+        assert!(side_effect_marker_spans("普通回复，无标记").is_empty());
+
+        // Unterminated PUBLISH is ignored, same as the outbound parser.
+        assert!(side_effect_marker_spans("[PUBLISH:app]no close").is_empty());
+    }
 }
