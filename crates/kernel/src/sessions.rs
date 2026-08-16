@@ -593,65 +593,63 @@ impl CarrierKernel {
         // retrievable. The per-turn path already flushes each turn's key_facts
         // to the drawer, so this mainly (a) saves the cross-turn prose summary
         // and (b) rescues facts from turns whose per-turn summary failed.
-        // Skipped when no owner context is available (manual API/WS compact).
-        if let Some(owner) = owner_id {
-            // Resolve user: explicit param → session label ("user:{id}") → "".
-            let uid = user_id
-                .map(str::to_string)
-                .or_else(|| {
-                    updated_session
-                        .label
-                        .as_deref()
-                        .and_then(|l| l.strip_prefix("user:"))
-                        .map(str::to_string)
-                })
-                .unwrap_or_default();
+        // Runs on the canonical kv partition (owner_id or "") — the old
+        // `if let Some(owner)` guard skipped this entirely on every production
+        // path (API/channel/cron all pass owner_id=None), so compaction
+        // summaries were never persisted. The prompt side recalls the two most
+        // recent session_compaction.* entries (prefetch_kv_memories).
+        let owner = owner_id.unwrap_or("");
+        // Resolve user: explicit param → session label ("user:{id}") → "".
+        let uid = user_id
+            .map(str::to_string)
+            .or_else(|| {
+                updated_session
+                    .label
+                    .as_deref()
+                    .and_then(|l| l.strip_prefix("user:"))
+                    .map(str::to_string)
+            })
+            .unwrap_or_default();
 
-            // 1. Persist the prose compaction summary under a non-state prefix
-            //    (session_compaction.*) — retrievable via memory_kv but it does
-            //    NOT auto-inject into the prompt (keeps the prompt lean).
-            if !result.summary.is_empty() {
-                let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                let summary_key = format!("session_compaction.{date}");
-                // Route through the injected handle so AGINXMEMORY_URL is honoured
-                // (compaction writeback reaches the external aginxMemory service).
-                let mem_handle = crate::handle::make_memory_handle(std::sync::Arc::clone(&self.memory));
-                match mem_handle.kv_set(
-                    &agent_id.to_string(),
-                    owner,
-                    &uid,
-                    &summary_key,
-                    serde_json::Value::String(result.summary.clone()),
-                ) {
-                    Ok(()) => info!(
-                        agent_id = %agent_id, key = %summary_key,
-                        facts = result.key_facts.len(),
-                        "Compaction summary persisted to kv"
-                    ),
-                    Err(e) => warn!(
-                        agent_id = %agent_id, error = %e,
-                        "Failed to persist compaction summary to kv"
-                    ),
+        // 1. Persist the prose compaction summary under a non-state prefix
+        //    (session_compaction.*) — recalled into the next prompt as
+        //    cross-session memory (prefetch_kv_memories).
+        if !result.summary.is_empty() {
+            let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            let summary_key = format!("session_compaction.{date}");
+            // Route through the injected handle so AGINXMEMORY_URL is honoured
+            // (compaction writeback reaches the external aginxMemory service).
+            let mem_handle = crate::handle::make_memory_handle(std::sync::Arc::clone(&self.memory));
+            match mem_handle.kv_set(
+                &entry.name,
+                owner,
+                &uid,
+                &summary_key,
+                serde_json::Value::String(result.summary.clone()),
+            ) {
+                Ok(()) => info!(
+                    agent_id = %agent_id, key = %summary_key,
+                    facts = result.key_facts.len(),
+                    "Compaction summary persisted to kv"
+                ),
+                Err(e) => warn!(
+                    agent_id = %agent_id, error = %e,
+                    "Failed to persist compaction summary to kv"
+                ),
                 }
-            }
+        }
 
-            // 2. Flush structured facts via the same idempotent merge the
-            //    per-turn path uses (state keys dedup, event.* now dedup too).
-            if !result.key_facts.is_empty() {
-                let handle: Arc<dyn runtime::memory_handle::MemoryHandle> =
-                    crate::handle::make_memory_handle(Arc::clone(&self.memory));
-                runtime::agent_loop::merge_key_facts(
-                    &handle,
-                    &entry.name,
-                    owner,
-                    &uid,
-                    &result.key_facts,
-                );
-            }
-        } else {
-            debug!(
-                agent_id = %agent_id,
-                "Compaction write-back skipped (no owner context — manual compact)"
+        // 2. Flush structured facts via the same idempotent merge the
+        //    per-turn path uses (state keys dedup, event.* now dedup too).
+        if !result.key_facts.is_empty() {
+            let handle: Arc<dyn runtime::memory_handle::MemoryHandle> =
+                crate::handle::make_memory_handle(Arc::clone(&self.memory));
+            runtime::agent_loop::merge_key_facts(
+                &handle,
+                &entry.name,
+                owner,
+                &uid,
+                &result.key_facts,
             );
         }
 

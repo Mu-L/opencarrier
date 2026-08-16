@@ -1010,28 +1010,75 @@ impl CarrierKernel {
             .unwrap_or_else(|| ms.to_string())
     }
 
-    /// Prefetch 7-day global digest for prompt injection.
-    fn prefetch_tree_memories(&self, owner_id: &str) -> Vec<runtime::prompt_builder::TreeMemoryHit> {
-        use types::memory_tree::GlobalQuery;
+    /// Prefetch tree memories for prompt injection (检索回指).
+    ///
+    /// Reads back what `tree_ingest` writes every turn. When the turn has a
+    /// sender, query THEIR source trees (per-user isolation — the cross-user
+    /// global digest would leak other users' summaries into this prompt);
+    /// fall back to the global digest for sender-less turns (cron/background)
+    /// or when the sender has no history yet.
+    fn prefetch_tree_memories(
+        &self,
+        owner_id: &str,
+        sender_id: Option<&str>,
+    ) -> Vec<runtime::prompt_builder::TreeMemoryHit> {
+        use types::memory_tree::{GlobalQuery, SourceQuery};
 
-        let owner = owner_id.to_string();
-        let req = GlobalQuery {
-            owner_id: &owner,
-            time_window_days: Some(7),
-            query: None,
-            limit: 3,
-            user_id: None,
-        };
+        // Tree ingest partition: owner_id.unwrap_or("default"), user = sender.
+        let tree_owner = if owner_id.is_empty() { "default" } else { owner_id };
 
+        let handle = crate::handle::make_memory_handle(std::sync::Arc::clone(&self.memory));
         // Route through the injected handle so AGINXMEMORY_URL (external
         // aginxMemory) is honoured here too, not just at the tool/agent-loop
-        // injection points. tree_query_global is async on the trait; bridge from
-        // this sync method via block_in_place (safe: callers run us from an async
-        // context on the multi-thread runtime).
-        let handle = crate::handle::make_memory_handle(std::sync::Arc::clone(&self.memory));
-        let result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(handle.tree_query_global(req))
+        // injection points. tree_query_* are async on the trait; bridge from
+        // this sync method via block_in_place (safe: callers run us from an
+        // async context on the multi-thread runtime).
+        let per_user = sender_id.filter(|s| !s.is_empty()).map(|sender| {
+            let req = SourceQuery {
+                owner_id: tree_owner,
+                source_id: None,
+                source_kind: None,
+                time_window_days: Some(7),
+                query: None,
+                limit: 3,
+                user_id: Some(sender),
+            };
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(handle.tree_query_source(req))
+            })
         });
+
+        let result = match per_user {
+            // Sender has history → per-user hits only (no cross-user leak).
+            Some(Ok(resp)) if !resp.hits.is_empty() => Ok(resp),
+            // Sender has nothing yet → fall through to the global digest.
+            Some(Ok(_)) | None => {
+                let owner = tree_owner.to_string();
+                let req = GlobalQuery {
+                    owner_id: &owner,
+                    time_window_days: Some(7),
+                    query: None,
+                    limit: 3,
+                    user_id: None,
+                };
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(handle.tree_query_global(req))
+                })
+            }
+            Some(Err(_)) => {
+                let owner = tree_owner.to_string();
+                let req = GlobalQuery {
+                    owner_id: &owner,
+                    time_window_days: Some(7),
+                    query: None,
+                    limit: 3,
+                    user_id: None,
+                };
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(handle.tree_query_global(req))
+                })
+            }
+        };
 
         match result {
             Ok(resp) => resp
@@ -1052,53 +1099,89 @@ impl CarrierKernel {
         }
     }
 
-    /// Prefetch drawer entries from kv memory for prompt injection.
+    /// Prefetch kv memories for prompt injection (检索回指).
     ///
-    /// Reads all kv keys, filters to drawer prefixes (profile/preference/entity/fact/event),
-    /// and builds DrawerEntry structs for injection into the system prompt.
-    pub(crate) fn prefetch_drawer_entries(&self, agent_name: &str, owner_id: &str) -> Vec<runtime::prompt_builder::DrawerEntry> {
+    /// ONE kv_list on the canonical kv partition — `(agent_name, owner_id or
+    /// "", sender_id or "")` — which is where every writer puts data (kv_set
+    /// tool, per-turn key_facts, compaction write-back). The old code read
+    /// `(name, owner, owner)` — using the owner as the user — so every
+    /// sender-partitioned entry was invisible to the prompt (and multi-user
+    /// clones would have shown the owner's drawer to everyone).
+    ///
+    /// Returns (drawer entries, recalled memories):
+    /// - drawer: profile./preference./entity./fact./event.* keys
+    /// - recalled: the two most recent `session_compaction.*` summaries —
+    ///   the compaction write-back bridge's cross-session 回指 (old sessions
+    ///   stay recallable after their turn_summaries were compacted away).
+    pub(crate) fn prefetch_kv_memories(
+        &self,
+        agent_name: &str,
+        owner_id: &str,
+        sender_id: &str,
+    ) -> (
+        Vec<runtime::prompt_builder::DrawerEntry>,
+        Vec<(String, String)>,
+    ) {
         // Route through the injected handle so AGINXMEMORY_URL is honoured.
         let handle = crate::handle::make_memory_handle(std::sync::Arc::clone(&self.memory));
-        let all_pairs = match handle.kv_list(agent_name, owner_id, owner_id) {
+        let all_pairs = match handle.kv_list(agent_name, owner_id, sender_id) {
             Ok(pairs) => pairs,
             Err(e) => {
-                tracing::debug!("Drawer prefetch failed (non-fatal): {e}");
-                return Vec::new();
+                tracing::debug!("kv memory prefetch failed (non-fatal): {e}");
+                return (Vec::new(), Vec::new());
             }
         };
 
         const DRAWER_PREFIXES: &[&str] = &["profile.", "preference.", "entity.", "fact.", "event."];
+        const COMPACTION_PREFIX: &str = "session_compaction.";
+        const MAX_COMPACTION_RECALLED: usize = 2;
 
-        all_pairs
-            .into_iter()
-            .filter(|(key, _)| DRAWER_PREFIXES.iter().any(|p| key.starts_with(p)))
-            .filter_map(|(key, value)| {
-                let values = match value {
-                    serde_json::Value::Array(arr) => {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    }
-                    serde_json::Value::String(s) => vec![s],
-                    other => {
-                        // Fallback: serialize non-array/string as single string
-                        vec![other.to_string()]
-                    }
-                };
-                if values.is_empty() {
-                    None
-                } else {
-                    Some(runtime::prompt_builder::DrawerEntry { key, value: values })
+        let mut drawer = Vec::new();
+        let mut compactions: Vec<String> = Vec::new();
+        for (key, value) in all_pairs {
+            if key.starts_with(COMPACTION_PREFIX) {
+                if let serde_json::Value::String(s) = value {
+                    compactions.push(format!("{key}\u{1}{s}"));
                 }
+                continue;
+            }
+            if !DRAWER_PREFIXES.iter().any(|p| key.starts_with(p)) {
+                continue;
+            }
+            let values = match value {
+                serde_json::Value::Array(arr) => arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+                serde_json::Value::String(s) => vec![s],
+                other => vec![other.to_string()],
+            };
+            if !values.is_empty() {
+                drawer.push(runtime::prompt_builder::DrawerEntry { key, value: values });
+            }
+        }
+
+        // session_compaction.{YYYY-MM-DD} sorts lexicographically by date.
+        compactions.sort();
+        compactions.reverse();
+        let recalled = compactions
+            .into_iter()
+            .take(MAX_COMPACTION_RECALLED)
+            .map(|joined| {
+                let mut parts = joined.splitn(2, '\u{1}');
+                let key = parts.next().unwrap_or_default().to_string();
+                let val = parts.next().unwrap_or_default().to_string();
+                (key, val)
             })
-            .collect()
+            .collect();
+
+        (drawer, recalled)
     }
 
     /// Build PromptContext and apply it to the manifest's system prompt.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_and_apply_prompt(
         &self,
-        agent_id: &AgentId,
         manifest: &mut AgentManifest,
         tools: &[types::tool::ToolDefinition],
         sender_id: &Option<String>,
@@ -1107,14 +1190,19 @@ impl CarrierKernel {
         auto_matched_flow: Option<String>,
         turn_summaries: Vec<types::message::TurnSummary>,
         drawer_entries: Vec<runtime::prompt_builder::DrawerEntry>,
+        recalled_memories: Vec<(String, String)>,
         task_id: Option<String>,
     ) {
         let sid = sender_id.as_deref().unwrap_or("");
         let oid = owner_id.as_deref().unwrap_or(sid);
+        // Canonical kv partition owner: every kv writer uses
+        // owner_id.unwrap_or("") — NOT the sender fallback (that mismatch is
+        // what used to hide sender-partitioned memories from the prompt).
+        let kv_owner = owner_id.as_deref().unwrap_or("");
         // Route through the injected handle so AGINXMEMORY_URL is honoured.
         let mem_handle = crate::handle::make_memory_handle(std::sync::Arc::clone(&self.memory));
         let user_name = mem_handle
-            .kv_get(&agent_id.to_string(), sid, sid, "user_name")
+            .kv_get(&manifest.name, kv_owner, sid, "user_name")
             .ok()
             .flatten()
             .and_then(|v| v.as_str().map(String::from))
@@ -1138,8 +1226,8 @@ impl CarrierKernel {
             agent_description: manifest.description.clone(),
             base_system_prompt: manifest.model.system_prompt.clone(),
             granted_tools: tools.iter().map(|t| t.name.clone()).collect(),
-            recalled_memories: vec![],
-            tree_memories: self.prefetch_tree_memories(oid),
+            recalled_memories,
+            tree_memories: self.prefetch_tree_memories(kv_owner, sender_id.as_deref()),
             flow_summary: String::new(),
             flow_prompt_context: String::new(),
             mcp_summary: self.build_toolset_summary(),
@@ -1524,6 +1612,79 @@ mod tests {
     use crate::capabilities::manifest_to_capabilities;
     use types::capability::Capability;
     use std::collections::HashMap;
+
+    /// 检索回指 regression: kv prefetch must read the SAME partition the
+    /// writers use — `(agent_name, owner_id or "", sender_id or "")`. The old
+    /// code read `(name, owner, owner)` (owner as user), so sender-partitioned
+    /// drawer entries never reached the prompt and users would have seen the
+    /// owner's drawer instead of their own. Also covers the session_compaction
+    /// recall (two most recent, newest first) that the compaction write-back
+    /// bridge persists.
+    #[test]
+    fn kv_memory_recall_uses_sender_partition() {
+        let tmp = tempfile::tempdir().unwrap();
+        let brain = serde_json::json!({
+            "base_url": "http://127.0.0.1:1/v1/chat/completions",
+            "api_key_env": "",
+            "default_modality": "chat",
+            "modalities": { "chat": { "description": "test" } }
+        });
+        std::fs::write(tmp.path().join("brain.json"), brain.to_string()).unwrap();
+        let config = KernelConfig {
+            home_dir: tmp.path().to_path_buf(),
+            data_dir: tmp.path().join("data"),
+            ..KernelConfig::default()
+        };
+        let kernel = CarrierKernel::boot_with_config(config).expect("kernel should boot");
+
+        // Seed at the canonical writer partition (owner "" — every production
+        // entry point passes owner_id=None).
+        let handle = crate::handle::make_memory_handle(std::sync::Arc::clone(&kernel.memory));
+        handle
+            .kv_set("mem-agent", "", "user-A", "preference.tone", serde_json::json!("casual"))
+            .unwrap();
+        handle
+            .kv_set("mem-agent", "", "user-A", "session_compaction.2026-08-01", serde_json::json!("old summary"))
+            .unwrap();
+        handle
+            .kv_set("mem-agent", "", "user-A", "session_compaction.2026-08-17", serde_json::json!("new summary"))
+            .unwrap();
+        // Another user's data — must NOT leak into user-A's prefetch.
+        handle
+            .kv_set("mem-agent", "", "user-B", "preference.secret", serde_json::json!("B-only"))
+            .unwrap();
+
+        let (drawer, recalled) = kernel.prefetch_kv_memories("mem-agent", "", "user-A");
+
+        // Drawer: own entries visible, other users' hidden.
+        assert!(
+            drawer.iter().any(|d| d.key == "preference.tone"),
+            "sender-partitioned drawer entry must reach the prompt"
+        );
+        assert!(
+            !drawer.iter().any(|d| d.key == "preference.secret"),
+            "other users' drawer entries must not leak"
+        );
+
+        // Compaction recall: two most recent, newest first (date sort).
+        assert_eq!(recalled.len(), 2);
+        assert_eq!(recalled[0].0, "session_compaction.2026-08-17");
+        assert_eq!(recalled[0].1, "new summary");
+        assert_eq!(recalled[1].0, "session_compaction.2026-08-01");
+
+        // The OLD read partition (owner as user) must not be what we read:
+        // seeding there and asserting invisibility proves the coordinates.
+        handle
+            .kv_set("mem-agent", "user-A", "user-A", "preference.legacy", serde_json::json!("stale partition"))
+            .unwrap();
+        let (drawer2, _) = kernel.prefetch_kv_memories("mem-agent", "", "user-A");
+        assert!(
+            !drawer2.iter().any(|d| d.key == "preference.legacy"),
+            "prefetch must read (owner, sender), not (owner-as-user, owner-as-user)"
+        );
+
+        kernel.shutdown();
+    }
 
     #[test]
     fn test_manifest_to_capabilities() {

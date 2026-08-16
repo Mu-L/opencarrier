@@ -464,10 +464,15 @@ impl CarrierKernel {
         // L0 turn summaries from session
         let turn_summaries = session.turn_summaries.clone();
 
-        // Drawer entries from kv memory
-        let drawer_entries = self.prefetch_drawer_entries(&manifest.name, owner_id.as_deref().unwrap_or(sender_id.as_deref().unwrap_or("")));
+        // Drawer + compaction-recall from kv memory — canonical partition
+        // (agent_name, owner or "", sender or ""), same as every writer.
+        let (drawer_entries, recalled_memories) = self.prefetch_kv_memories(
+            &manifest.name,
+            owner_id.as_deref().unwrap_or(""),
+            sender_id.as_deref().unwrap_or(""),
+        );
 
-        self.build_and_apply_prompt(&agent_id, &mut manifest, &tools, sender_id, sender_name, owner_id, prompt_auto_match.clone(), turn_summaries, drawer_entries, task_id.map(|s| s.to_string()));
+        self.build_and_apply_prompt(&mut manifest, &tools, sender_id, sender_name, owner_id, prompt_auto_match.clone(), turn_summaries, drawer_entries, recalled_memories, task_id.map(|s| s.to_string()));
 
         Ok(PreparedContext {
             session,
