@@ -54,6 +54,15 @@ pub(super) struct LoopContext<'a> {
     /// `scripts/` are runnable (historically `flow_load` injected the body but
     /// left the turn's shell gate frozen to the active/classified flow).
     pub loaded_flow_shell_allow: Vec<String>,
+    /// Declared tools of ELEVATING flows (`shell_exec`/`process_start` +
+    /// non-empty `shell_allow`) loaded mid-turn via `flow_load`. Unioned into
+    /// the turn's `flow_elevated_tools` (level + admin-gate bypass) and the
+    /// flow `tools:` hard sandbox, mirroring what loading the flow as
+    /// active_flow would stamp. An explicit `flow_load` is sanctioned intent —
+    /// unlike the default_flow fallback cage, which never grants authority.
+    /// Commands stay scoped: elevation requires the flow's `shell_allow`, and
+    /// the pattern gate runs on every shell_exec.
+    pub loaded_flow_elevated_tools: Vec<String>,
 
     // ---- Kernel & external ----
     pub kernel: Option<Arc<dyn KernelHandle>>,

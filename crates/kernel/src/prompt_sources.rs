@@ -580,14 +580,10 @@ impl FlowMatch {
     /// and a non-empty `shell_allow` elevates for the turn — clone-local skills
     /// can run allowlisted commands without permanent agent shell access.
     /// (System-shared `privilege: system` elevation is gone — system flows were
-    /// abolished in favor of "全进分身".)
+    /// abolished in favor of "全进分身".) The predicate lives on
+    /// [`types::flow::FlowDef`] so mid-turn `flow_load` grants share it.
     pub fn elevates(&self) -> bool {
-        !self.flow_def.shell_allow.is_empty()
-            && self
-                .flow_def
-                .tools
-                .iter()
-                .any(|t| t == "shell_exec" || t == "process_start")
+        self.flow_def.elevates()
     }
 }
 

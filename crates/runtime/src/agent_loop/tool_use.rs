@@ -88,6 +88,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     discovered_tool_names: &mut std::collections::HashSet<String>,
     loaded_flows: &mut std::collections::HashSet<String>,
     loaded_flow_shell_allow: &mut Vec<String>,
+    loaded_flow_elevated_tools: &mut Vec<String>,
     error_tracker: &mut crate::agent_loop::state::ToolErrorTracker,
     tool_loop_rearm: &mut std::collections::HashMap<String, u32>,
     tool_call_counts: &mut std::collections::HashMap<(String, u64), u32>,
@@ -312,6 +313,15 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 })
             })
             .unwrap_or_default();
+        // Union tools granted by elevating flows loaded mid-turn via flow_load —
+        // they bypass the level/admin gates exactly like turn-start elevated
+        // tools (`flow_elevated` in tool_runner).
+        let mut flow_elevated_owned = flow_elevated_owned;
+        for t in loaded_flow_elevated_tools.iter() {
+            if !flow_elevated_owned.contains(t) {
+                flow_elevated_owned.push(t.clone());
+            }
+        }
         let mut flow_shell_allow_owned: Vec<String> = manifest
             .metadata
             .get(types::flow::META_FLOW_SHELL_ALLOW)
@@ -355,6 +365,17 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 })
             })
             .unwrap_or_default();
+        // Widen the frozen hard sandbox by the elevating loaded flows' declared
+        // tools — an explicitly flow_load-ed flow's tools are sanctioned, so
+        // the active flow's sandbox must not cage them (e.g. a chat turn
+        // caged to a flow without shell_exec, then the agent loads a validator
+        // flow that declares it).
+        let mut flow_allowed_owned = flow_allowed_owned;
+        for t in loaded_flow_elevated_tools.iter() {
+            if !flow_allowed_owned.contains(t) {
+                flow_allowed_owned.push(t.clone());
+            }
+        }
 
         let tool_ctx = ToolContext {
             kernel,
@@ -483,7 +504,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                     });
                     continue;
                 } else {
-                    loaded_flows.insert(skill_name);
+                    loaded_flows.insert(skill_name.clone());
                     // Grant the loaded flow's `shell_allow` for the rest of the
                     // turn — mirrors what stamping it as active_flow would do.
                     // flow_load reads clone-authored flow files only, so this
@@ -492,6 +513,36 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                     for pat in &loaded_def.shell_allow {
                         if !pat.is_empty() && !loaded_flow_shell_allow.contains(pat) {
                             loaded_flow_shell_allow.push(pat.clone());
+                        }
+                    }
+                    // Turn-scoped elevation for the loaded flow's declared
+                    // tools. Without this, the shell_allow union above was dead
+                    // code for a Write-capped agent: the level gate
+                    // (`level > max_tool_level && !flow_elevated`) rejects
+                    // shell_exec BEFORE the pattern gate ever runs, so an agent
+                    // that explicitly loaded a validator flow in a chat turn
+                    // still couldn't run its scripts (2026-08-17 86bus:
+                    // interactive outline step denied "requires Dangerous
+                    // level but agent is limited to Write" while the same flow
+                    // elevated fine via cron active_flow). An explicit
+                    // flow_load is sanctioned intent — the default_flow
+                    // fallback cage never reaches this path.
+                    if loaded_def.elevates() {
+                        let mut granted = 0;
+                        for t in &loaded_def.tools {
+                            if !t.is_empty() && !loaded_flow_elevated_tools.contains(t) {
+                                loaded_flow_elevated_tools.push(t.clone());
+                                granted += 1;
+                            }
+                        }
+                        if granted > 0 {
+                            info!(
+                                agent = %manifest.name,
+                                skill = %skill_name,
+                                granted,
+                                total = loaded_flow_elevated_tools.len(),
+                                "flow_load: flow elevates — granting turn-scoped tool authority"
+                            );
                         }
                     }
                 }
@@ -659,11 +710,20 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             let mut found_names: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
 
+            // With flow_load elevation active, search at Dangerous so the
+            // granted tools (e.g. shell_exec) are candidates at all — the
+            // post-filter below re-cages anything above the agent's own level
+            // that isn't in the granted set.
+            let search_level = if loaded_flow_elevated_tools.is_empty() {
+                manifest.max_tool_level
+            } else {
+                types::tool::PermissionLevel::Dangerous
+            };
             for q in &search_queries {
                 let results = kernel.search_tools(
                     q,
                     super::helpers::TOOL_SEARCH_RECALL_LIMIT,
-                    manifest.max_tool_level,
+                    search_level,
                 );
                 for (_, def) in results {
                     if found_names.insert(def.name.clone()) {
@@ -684,7 +744,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 const MAX_TOTAL_TOOLS: usize = 64;
                 let current_count = tools_owned.len();
                 let remaining_capacity = MAX_TOTAL_TOOLS.saturating_sub(current_count);
-                let flow_allowed_owned: Vec<String> = manifest
+                let mut flow_allowed_owned: Vec<String> = manifest
                     .metadata
                     .get(types::flow::META_FLOW_ALLOWED_TOOLS)
                     .and_then(|v| {
@@ -695,6 +755,13 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                         })
                     })
                     .unwrap_or_default();
+                // Same widening as the execute-time sandbox above: tools of
+                // elevating flow_load-ed flows are exempt from the cage.
+                for t in loaded_flow_elevated_tools.iter() {
+                    if !flow_allowed_owned.contains(t) {
+                        flow_allowed_owned.push(t.clone());
+                    }
+                }
                 let flow_allowed = if flow_allowed_owned.is_empty() {
                     None
                 } else {
@@ -703,6 +770,15 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 let to_add: Vec<_> = found_tools
                     .into_iter()
                     .filter(|t| crate::tool_runner::tool_permitted_in_flow(&t.name, flow_allowed))
+                    // Re-cage the elevated search: a tool above the agent's own
+                    // max_tool_level is only discoverable when flow_load granted
+                    // it (base names normalized on both sides).
+                    .filter(|t| {
+                        types::tool::PermissionLevel::for_tool(&t.name) <= manifest.max_tool_level
+                            || loaded_flow_elevated_tools
+                                .iter()
+                                .any(|g| crate::tool_runner::base_tool_name(g) == t.name)
+                    })
                     .filter(|t| !tools_owned.iter().any(|existing| existing.name == t.name))
                     .take(remaining_capacity)
                     .collect();

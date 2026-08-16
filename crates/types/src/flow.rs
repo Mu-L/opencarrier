@@ -348,6 +348,22 @@ impl FlowDef {
         !self.steps.is_empty()
     }
 
+    /// Turn-scoped tool elevation for this flow.
+    ///
+    /// A flow that declares both `shell_exec` (or `process_start`) and a
+    /// non-empty `shell_allow` elevates the turn — clone-local skills can run
+    /// allowlisted commands without permanent agent shell access. Used both at
+    /// flow match time (kernel `apply_flow_elevation`) and when the agent
+    /// explicitly `flow_load`s a flow mid-turn (runtime grants the same
+    /// turn-scoped authority for the loaded flow's declared tools).
+    pub fn elevates(&self) -> bool {
+        !self.shell_allow.is_empty()
+            && self
+                .tools
+                .iter()
+                .any(|t| t == "shell_exec" || t == "process_start")
+    }
+
     /// Highest permission level among declared tools (for turn elevation).
     pub fn required_max_tool_level(&self) -> crate::tool::PermissionLevel {
         self.tools
@@ -1123,6 +1139,34 @@ tools:
 body"#;
         let f = parse_flow_def(content);
         assert_eq!(f.tools, vec!["web_search", "knowledge_add"]);
+    }
+
+    /// Elevation predicate: shell_exec/process_start + non-empty shell_allow.
+    /// All four combinations — this is the gate both for turn-start flow
+    /// matching and for mid-turn `flow_load` grants.
+
+    #[test]
+    fn elevates_predicate_matrix() {
+        // Placeholders carry their own brackets (args are full inline lists).
+        let base = r#"---
+name: t
+description: d
+tools: {tools}
+shell_allow: {allow}
+---
+body"#;
+        let mk = |tools: &str, allow: &str| {
+            parse_flow_def(&base.replace("{tools}", tools).replace("{allow}", allow))
+        };
+
+        // shell_exec + shell_allow => elevates
+        assert!(mk(r#"["shell_exec", "file_read"]"#, r#"["python3 flows/t/scripts/*"]"#).elevates());
+        // process_start also counts
+        assert!(mk(r#"["process_start"]"#, r#"["./bin/*"]"#).elevates());
+        // shell_exec but empty shell_allow => no elevation (nothing to scope to)
+        assert!(!mk(r#"["shell_exec"]"#, "[]").elevates());
+        // shell_allow but no execution tool => no elevation
+        assert!(!mk(r#"["file_read"]"#, r#"["python3 x"]"#).elevates());
     }
 
     #[test]
