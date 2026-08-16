@@ -2,15 +2,23 @@
 
 use crate::routes::common::*;
 use crate::routes::state::AppState;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use std::collections::HashMap;
 use std::sync::Arc;
 /// GET /api/agents/:id/session -- Get agent session (conversation history).
+///
+/// Optional `?sender_id=` scopes the history to that sender's isolated
+/// session (`user:<sender_id>` label — the same routing `send_message`
+/// uses), so an API client renders its own conversation, not the agent's
+/// default session. Without the param the agent's current default session
+/// is returned (dashboard behavior, unchanged).
 pub async fn get_agent_session(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
         Ok(r) => r,
@@ -22,7 +30,19 @@ pub async fn get_agent_session(
         }
     };
 
-    match state.kernel.memory.get_session(entry.session_id) {
+    // sender-scoped history (agent-app API §3 G1): resolve the sender's
+    // isolated session by label instead of the agent's default session.
+    let requested_label = params
+        .get("sender_id")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|sid| format!("user:{sid}"));
+    let session_result = match &requested_label {
+        Some(label) => state.kernel.memory.find_session_by_label(&entry.name, label),
+        None => state.kernel.memory.get_session(entry.session_id),
+    };
+
+    match session_result {
         Ok(Some(session)) => {
             // Two-pass approach: ToolUse blocks live in Assistant messages while
             // ToolResult blocks arrive in subsequent User messages.  Pass 1
@@ -174,6 +194,7 @@ pub async fn get_agent_session(
                 "agent_id": entry.name.clone(),
                 "message_count": 0,
                 "context_window_tokens": 0,
+                "label": requested_label,
                 "messages": [],
             })),
         ),

@@ -1,0 +1,28 @@
+[package]
+name = "opencarrier-desktop"
+version = "0.1.0"
+description = "OpenCarrier desktop client — WeChat-style chat over the public API"
+edition = "2021"
+
+# Detached from the main workspace: this is a standalone client app, not a crate
+# of the server. Keeps tauri/wry deps out of the server dependency graph.
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+    "stream",
+] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+futures-util = "0.3"
+
+[profile.release]
+strip = true
+lto = true

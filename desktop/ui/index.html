@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenCarrier</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Sidebar: clone contact list -->
+  <aside id="sidebar">
+    <div class="side-head">
+      <div class="brand">
+        <span class="brand-mark">OC</span>
+        <span class="brand-name">OpenCarrier</span>
+      </div>
+      <button id="refresh-btn" class="icon-btn" title="刷新分身列表">⟳</button>
+      <button id="settings-btn" class="icon-btn" title="设置">⚙</button>
+    </div>
+    <div id="contact-list" class="contact-list">
+      <div class="empty-hint" id="list-hint">设置服务器后加载分身</div>
+    </div>
+    <div class="side-foot">
+      <span id="server-indicator" class="dot dot-off" title="连接状态"></span>
+      <span id="server-label" class="server-label">未连接</span>
+    </div>
+  </aside>
+
+  <!-- Chat pane -->
+  <main id="chat-pane">
+    <div id="chat-empty" class="chat-empty">
+      <div class="chat-empty-icon">💬</div>
+      <p>选择左侧分身开始对话</p>
+      <p class="dim">每个分身是一个独立的 agent，桌面端会话与渠道用户互不干扰</p>
+    </div>
+
+    <div id="chat-active" class="chat-active hidden">
+      <header class="chat-head">
+        <div class="chat-head-avatar" id="chat-avatar">?</div>
+        <div class="chat-head-meta">
+          <div class="chat-head-name" id="chat-name">—</div>
+          <div class="chat-head-sub" id="chat-sub">—</div>
+        </div>
+      </header>
+
+      <div class="chat-body" id="chat-body"></div>
+
+      <div class="chat-statusbar hidden" id="statusbar">
+        <span class="spinner"></span>
+        <span id="statusbar-text">思考中…</span>
+      </div>
+
+      <footer class="chat-input">
+        <textarea id="msg-input" rows="3" placeholder="输入消息，Enter 发送，Shift+Enter 换行"></textarea>
+        <button id="send-btn" class="send-btn">发送</button>
+      </footer>
+    </div>
+  </main>
+
+  <!-- Settings modal -->
+  <dialog id="settings-dialog">
+    <form method="dialog" class="settings-form">
+      <h2>连接设置</h2>
+      <label>
+        服务器
+        <input id="cfg-server" type="text" placeholder="carrier.yinnho.cn" spellcheck="false" />
+      </label>
+      <label>
+        API Key
+        <input id="cfg-key" type="password" placeholder="OC_API_KEY" spellcheck="false" />
+      </label>
+      <label>
+        我的身份（会话隔离标识）
+        <input id="cfg-sender" type="text" placeholder="desktop-sophie" spellcheck="false" />
+        <span class="field-hint">服务端按 user:&lt;身份&gt; 隔离会话，与渠道用户互不影响</span>
+      </label>
+      <div class="settings-actions">
+        <button type="submit" value="save" class="primary">保存并连接</button>
+        <button type="button" id="settings-close" class="ghost">取消</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
