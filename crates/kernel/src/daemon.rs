@@ -191,6 +191,39 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
             };
             match outcome {
                 Some(Ok(result)) => {
+                    // Chained-pipeline no-op guard (P2-3 follow-up): a cron turn
+                    // that "completes" without producing any usable output is a
+                    // silent chain-breaker — the step's one-shot job is deleted,
+                    // nothing schedules the next step, and no trace remains.
+                    // `end_turn` rewrites an empty response (with NO tools run)
+                    // to a fixed sentinel, so matching that sentinel is exactly
+                    // the "ran zero tools and got nothing" signal — no need to
+                    // thread a tools_called counter through AgentLoopResult.
+                    // Treat it as a failure (record + admins alert) instead of a
+                    // quiet success.
+                    if !result.silent && cron_turn_degenerate(&result.response) {
+                        let msg = "空转：turn 无实质产出（模型空响应/降智，未执行任何工具）";
+                        tracing::warn!(
+                            job = %job_name,
+                            agent = %agent_id,
+                            iterations = result.iterations,
+                            "Cron turn produced no usable output — recording failure"
+                        );
+                        kernel.cron_scheduler.record_failure(job_id, msg);
+                        let agent_name = outbound_agent_key(kernel, agent_id);
+                        let content = types::content::ContentDescriptor {
+                            text: Some(format!(
+                                "⚠️ 定时任务「{job_name}」（{agent_name}）空转失败：\
+                                 turn 结束但无实质产出——模型空响应或降智，未执行任何工具。\
+                                 若这是链式流水线的一步，链条可能已断，请检查。"
+                            )),
+                            ..Default::default()
+                        };
+                        let _ = kernel
+                            .do_push_message("admins", &content, &agent_id.to_string(), "")
+                            .await;
+                        return Ok(());
+                    }
                     match cron_deliver_response(
                         kernel,
                         agent_id,
@@ -412,6 +445,23 @@ pub(super) async fn cron_deliver_response(
             Ok(())
         }
     }
+}
+
+/// Did a cron agent turn produce usable output at all?
+///
+/// `end_turn` rewrites an empty LLM response into fixed sentinel text — and the
+/// `模型这次没有返回内容` variant is emitted ONLY when `any_tools_executed ==
+/// false` (a "已执行操作" variant is used otherwise). So matching it plus the
+/// raw-empty cases detects precisely the turns that ran zero tools and got
+/// nothing back (model degeneration / empty responses), without threading a
+/// tools_called counter through `AgentLoopResult`. The "tools ran but final
+/// text was empty" variant deliberately does NOT match — the step's work may
+/// have completed, only the closing prose was lost.
+fn cron_turn_degenerate(response: &str) -> bool {
+    let t = response.trim();
+    t.is_empty()
+        || t == "[no response]"
+        || t.contains("模型这次没有返回内容")
 }
 
 /// Best-effort channel target for a cron publish *follow-up* notification.
@@ -1290,7 +1340,7 @@ impl CarrierKernel {
 
 #[cfg(test)]
 mod tests {
-    use super::slugify;
+    use super::{cron_turn_degenerate, slugify};
     use crate::registry::AgentRegistry;
     use chrono::Utc;
     use std::collections::HashMap;
@@ -1377,6 +1427,30 @@ mod tests {
         assert!(!profile_via_uuid
             .to_string_lossy()
             .contains("workspaces/ai-writer/"));
+    }
+
+    /// Chained-pipeline no-op guard: the degenerate-response contract.
+    ///
+    /// `end_turn` emits the `模型这次没有返回内容` sentinel ONLY for turns that
+    /// ran zero tools and got an empty response back — matching it (plus raw
+    /// empty / `[no response]`) detects silent chain-breakers. The
+    /// tools-ran-but-no-closing-prose variant must NOT match (work may be done).
+    #[test]
+    fn cron_turn_degenerate_matches_empty_and_sentinel_only() {
+        // Degenerate: empty / whitespace / retry marker / zero-tools sentinel
+        assert!(cron_turn_degenerate(""));
+        assert!(cron_turn_degenerate("   \n\t "));
+        assert!(cron_turn_degenerate("[no response]"));
+        assert!(cron_turn_degenerate(
+            "(模型这次没有返回内容,可能是服务繁忙或上下文过长。请稍后重试,或简化一下你的请求。)"
+        ));
+        // Healthy: real prose, even short
+        assert!(!cron_turn_degenerate("✅ Step 4 排版完成，正文.html 已落盘。"));
+        assert!(!cron_turn_degenerate("无新知。"));
+        // Tools ran, closing prose lost — NOT a chain-breaker
+        assert!(!cron_turn_degenerate(
+            "(已执行操作,但这次没能生成回复文字。请稍后重试,或重新说一下你的需求。)"
+        ));
     }
 
     #[test]
