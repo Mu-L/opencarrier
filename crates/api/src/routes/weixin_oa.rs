@@ -211,6 +211,48 @@ pub async fn weixin_oa_callback(
 
     let from_user = msg.from_user.clone();
 
+    // Followers ledger (automation Phase 2): subscribe upserts (with QR scene),
+    // unsubscribe marks gone (must run BEFORE the needs_reply drop — that is
+    // where unsubscribe events exit), every other inbound refreshes last_seen
+    // (bounds the 48h customer-service push window). Fire-and-forget: ledger
+    // failures never block the reply path.
+    {
+        let kernel = std::sync::Arc::clone(&state.kernel);
+        let unionid = (!msg.unionid.is_empty()).then(|| msg.unionid.clone());
+        let (aid, openid, msg_type, event, unionid, event_key) = (
+            app_id.clone(),
+            from_user.clone(),
+            msg.msg_type.clone(),
+            msg.event.clone(),
+            unionid,
+            msg.event_key.clone(),
+        );
+        tokio::spawn(async move {
+            let res = if msg_type == "event" && event == "subscribe" {
+                let scene = event_key.strip_prefix("qrscene_").map(str::to_string);
+                kernel
+                    .follower_record_follow(
+                        "weixin-oa",
+                        &aid,
+                        &openid,
+                        unionid.as_deref(),
+                        scene.as_deref(),
+                    )
+                    .await
+            } else if msg_type == "event" && event == "unsubscribe" {
+                kernel
+                    .follower_mark_unfollowed("weixin-oa", &aid, &openid)
+                    .await
+            } else {
+                kernel.follower_touch("weixin-oa", &aid, &openid).await
+            };
+            if let Err(e) = res {
+                tracing::warn!(app_id = %aid, openid = %openid, error = %e,
+                    "weixin-oa: followers ledger update failed");
+            }
+        });
+    }
+
     // Drop pure-receipt events (TEMPLATESENDJOBFINISH, unsubscribe, etc.)
     // before they reach the agent — zero token cost.
     if !channel_weixin_oa::needs_reply(&msg) {
@@ -253,6 +295,24 @@ pub async fn weixin_oa_callback(
                 msg.msg_type == "text"
                     && !rule.trigger_data.is_empty()
                     && msg.content.trim().contains(rule.trigger_data.trim())
+            }
+            types::automation::TriggerKind::MenuClick => {
+                msg.msg_type == "event"
+                    && msg.event == "CLICK"
+                    && !rule.trigger_data.is_empty()
+                    && msg.event_key.trim().contains(rule.trigger_data.trim())
+            }
+            types::automation::TriggerKind::Scan => {
+                // Already-followed QR re-scan (event=SCAN) or a new follow via
+                // QR (subscribe carrying qrscene_*). Plain subscribes (no
+                // qrscene) match Subscribe rules only.
+                msg.msg_type == "event"
+                    && !rule.trigger_data.is_empty()
+                    && ((msg.event == "SCAN"
+                        && msg.event_key.trim().contains(rule.trigger_data.trim()))
+                        || (msg.event == "subscribe"
+                            && msg.event_key.starts_with("qrscene_")
+                            && msg.event_key.trim().contains(rule.trigger_data.trim())))
             }
         };
         if !hit {

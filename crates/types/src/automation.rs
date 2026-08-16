@@ -20,6 +20,14 @@ pub enum TriggerKind {
     Subscribe,
     /// `msg_type=text` whose content contains `trigger_data` (substring).
     Keyword,
+    /// Custom-menu click: `msg_type=event & event=CLICK` whose `EventKey`
+    /// contains `trigger_data` (substring). A click opens the 48h customer
+    /// service window, so pushes deliver via the API path.
+    MenuClick,
+    /// QR scene scan: `event=SCAN` (already-followed re-scan) or a subscribe
+    /// carrying `qrscene_*` (new follow via QR). `trigger_data` = scene
+    /// substring matched against `EventKey`.
+    Scan,
 }
 
 impl TriggerKind {
@@ -27,6 +35,8 @@ impl TriggerKind {
         match self {
             Self::Subscribe => "subscribe",
             Self::Keyword => "keyword",
+            Self::MenuClick => "menu_click",
+            Self::Scan => "scan",
         }
     }
 }

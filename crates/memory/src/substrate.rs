@@ -5,6 +5,7 @@
 
 use crate::cron_delivery::CronDeliveryStore;
 use crate::cron_store::CronJobStore;
+use crate::follower_store::FollowerStore;
 use crate::automation_store::AutomationRuleStore;
 use crate::flow_run::FlowRunStore;
 use crate::weixin_store::WeixinSessionStore;
@@ -38,6 +39,7 @@ pub struct MemorySubstrate {
     sessions: SessionStore,
     cron_delivery: CronDeliveryStore,
     cron_store: CronJobStore,
+    followers: FollowerStore,
     weixin_store: WeixinSessionStore,
     notify_store: NotifyRouteStore,
     flow_runs: FlowRunStore,
@@ -75,6 +77,7 @@ impl MemorySubstrate {
             sessions: SessionStore::new(Arc::clone(&shared)),
             cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
             cron_store: CronJobStore::new(Arc::clone(&shared)),
+            followers: FollowerStore::new(Arc::clone(&shared)),
             weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
             notify_store: NotifyRouteStore::new(Arc::clone(&shared)),
             flow_runs: FlowRunStore::new(Arc::clone(&shared)),
@@ -96,6 +99,7 @@ impl MemorySubstrate {
             sessions: SessionStore::new(Arc::clone(&shared)),
             cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
             cron_store: CronJobStore::new(Arc::clone(&shared)),
+            followers: FollowerStore::new(Arc::clone(&shared)),
             weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
             notify_store: NotifyRouteStore::new(Arc::clone(&shared)),
             flow_runs: FlowRunStore::new(Arc::clone(&shared)),
@@ -175,6 +179,91 @@ impl MemorySubstrate {
         tokio::task::spawn_blocking(move || store.delete(&id))
             .await
             .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    // -----------------------------------------------------------------
+    // Followers ledger (automation Phase 2: scheduled pushes + growth digests)
+    // -----------------------------------------------------------------
+
+    /// Record a follow (upsert; re-follow clears unfollowed_at).
+    pub async fn follower_record_follow(
+        &self,
+        channel: &str,
+        app_id: &str,
+        openid: &str,
+        unionid: Option<&str>,
+        scene: Option<&str>,
+    ) -> CarrierResult<()> {
+        let store = self.followers.clone();
+        let (channel, app_id, openid) = (channel.to_string(), app_id.to_string(), openid.to_string());
+        let (unionid, scene) = (unionid.map(str::to_string), scene.map(str::to_string));
+        let now = chrono::Utc::now().to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            store.record_follow(&channel, &app_id, &openid, unionid.as_deref(), scene.as_deref(), &now)
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Refresh `last_seen` on any inbound message (creates the row if missing).
+    pub async fn follower_touch(&self, channel: &str, app_id: &str, openid: &str) -> CarrierResult<()> {
+        let store = self.followers.clone();
+        let (channel, app_id, openid) = (channel.to_string(), app_id.to_string(), openid.to_string());
+        let now = chrono::Utc::now().to_rfc3339();
+        tokio::task::spawn_blocking(move || store.touch(&channel, &app_id, &openid, &now))
+            .await
+            .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Stamp unfollowed_at (row kept for growth stats).
+    pub async fn follower_mark_unfollowed(
+        &self,
+        channel: &str,
+        app_id: &str,
+        openid: &str,
+    ) -> CarrierResult<()> {
+        let store = self.followers.clone();
+        let (channel, app_id, openid) = (channel.to_string(), app_id.to_string(), openid.to_string());
+        let now = chrono::Utc::now().to_rfc3339();
+        tokio::task::spawn_blocking(move || store.mark_unfollowed(&channel, &app_id, &openid, &now))
+            .await
+            .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Active followers with `last_seen_at` >= since (deliverable audience).
+    pub async fn follower_list_pushable(
+        &self,
+        channel: &str,
+        app_id: &str,
+        since_rfc3339: &str,
+    ) -> CarrierResult<Vec<String>> {
+        let store = self.followers.clone();
+        let (channel, app_id, since) = (channel.to_string(), app_id.to_string(), since_rfc3339.to_string());
+        tokio::task::spawn_blocking(move || store.list_pushable_since(&channel, &app_id, &since))
+            .await
+            .map_err(|e| CarrierError::Internal(e.to_string()))?
+    }
+
+    /// Growth summary for FollowerReport digests.
+    pub async fn follower_stats(
+        &self,
+        channel: &str,
+        app_id: &str,
+        since_rfc3339: &str,
+        push_window_since_rfc3339: &str,
+    ) -> CarrierResult<crate::follower_store::FollowerStats> {
+        let store = self.followers.clone();
+        let (channel, app_id, s1, s2) = (
+            channel.to_string(),
+            app_id.to_string(),
+            since_rfc3339.to_string(),
+            push_window_since_rfc3339.to_string(),
+        );
+        tokio::task::spawn_blocking(move || {
+            store.stats_since(&channel, &app_id, &s1, &s2)
+        })
+        .await
+        .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
 
     // -----------------------------------------------------------------

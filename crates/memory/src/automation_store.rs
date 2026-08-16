@@ -139,6 +139,8 @@ fn row_to_rule(r: RowData) -> CarrierResult<AutomationRule> {
     let trigger_kind = match r.trigger_kind.as_str() {
         "subscribe" => TriggerKind::Subscribe,
         "keyword" => TriggerKind::Keyword,
+        "menu_click" => TriggerKind::MenuClick,
+        "scan" => TriggerKind::Scan,
         other => {
             return Err(CarrierError::Serialization(format!(
                 "unknown trigger_kind {other}"
@@ -203,7 +205,9 @@ mod tests {
             priority: prio,
             trigger_kind: trig,
             trigger_data: match trig {
-                TriggerKind::Keyword => "月卡".to_string(),
+                TriggerKind::Keyword | TriggerKind::MenuClick | TriggerKind::Scan => {
+                    "月卡".to_string()
+                }
                 TriggerKind::Subscribe => String::new(),
             },
             task_kind: task,

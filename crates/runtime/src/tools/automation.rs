@@ -51,14 +51,15 @@ impl ToolModule for AutomationRulesTools {
             },
             ToolDefinition {
                 name: "automation_rule_upsert".to_string(),
-                description: "Create or update an automation rule (admin only). On a matching inbound event: push_text/push_miniprogram deliver a fixed reply and skip the agent; notify_admin pushes to admins (notify_type→notify_routes) as a bypass while the agent still replies to the user. trigger: subscribe|keyword.".to_string(),
+                description: "Create or update an automation rule (admin only). On a matching inbound event: push_text/push_miniprogram deliver a fixed reply and skip the agent; notify_admin pushes to admins (notify_type→notify_routes) as a bypass while the agent still replies to the user. trigger: subscribe|keyword|menu_click|scan (menu_click matches the menu EventKey substring; scan matches the QR scene substring on SCAN and on qrscene_ subscribes).".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "app_id": { "type": "string" },
                         "name": { "type": "string", "description": "Human-readable rule name" },
-                        "trigger": { "type": "string", "enum": ["subscribe", "keyword"] },
-                        "keyword": { "type": "string", "description": "Required when trigger=keyword (substring match on text)" },
+                        "trigger": { "type": "string", "enum": ["subscribe", "keyword", "menu_click", "scan"] },
+                        "keyword": { "type": "string", "description": "Required when trigger=keyword (substring match on text); for menu_click/scan also accepted as the EventKey/scene substring" },
+                        "key": { "type": "string", "description": "EventKey/scene substring for trigger=menu_click or trigger=scan" },
                         "task": { "type": "string", "enum": ["push_text", "push_miniprogram", "notify_admin"] },
                         "text": { "type": "string", "description": "Required when task=push_text" },
                         "miniprogram": { "type": "object", "description": "Required when task=push_miniprogram: {appid, pagepath, title, thumb_media_id}" },
@@ -173,9 +174,11 @@ async fn tool_rule_upsert(
     let trigger_kind = match trigger {
         "subscribe" => TriggerKind::Subscribe,
         "keyword" => TriggerKind::Keyword,
+        "menu_click" => TriggerKind::MenuClick,
+        "scan" => TriggerKind::Scan,
         other => {
             return Err(CarrierError::InvalidInput(format!(
-                "unknown trigger '{other}' (subscribe|keyword)"
+                "unknown trigger '{other}' (subscribe|keyword|menu_click|scan)"
             )))
         }
     };
@@ -196,6 +199,31 @@ async fn tool_rule_upsert(
             .as_str()
             .ok_or_else(|| {
                 CarrierError::InvalidInput("trigger=keyword requires 'keyword'".to_string())
+            })?
+            .to_string(),
+        // Menu click: EventKey substring. Accept "key" or the shared "keyword"
+        // habit; an empty key would match every click, which is almost never
+        // intended, so it is required.
+        TriggerKind::MenuClick => input["key"]
+            .as_str()
+            .or_else(|| input["keyword"].as_str())
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| {
+                CarrierError::InvalidInput(
+                    "trigger=menu_click requires 'key' (menu EventKey substring)".to_string(),
+                )
+            })?
+            .to_string(),
+        // QR scan: scene substring, matched against SCAN EventKey and against
+        // qrscene_* on subscribe (new follow via QR).
+        TriggerKind::Scan => input["key"]
+            .as_str()
+            .or_else(|| input["keyword"].as_str())
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| {
+                CarrierError::InvalidInput(
+                    "trigger=scan requires 'key' (QR scene substring)".to_string(),
+                )
             })?
             .to_string(),
         TriggerKind::Subscribe => String::new(),

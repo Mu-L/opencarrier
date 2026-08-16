@@ -1471,6 +1471,62 @@ impl CarrierKernel {
         Ok(())
     }
 
+    /// Followers ledger (automation Phase 2). Thin substrate passthroughs —
+    /// callers: the weixin-oa webhook (follow/touch/unfollow) and cron
+    /// `Push`/`FollowerReport` actions (audience + growth stats).
+    pub async fn follower_record_follow(
+        &self,
+        channel: &str,
+        app_id: &str,
+        openid: &str,
+        unionid: Option<&str>,
+        scene: Option<&str>,
+    ) -> CarrierResult<()> {
+        self.memory
+            .follower_record_follow(channel, app_id, openid, unionid, scene)
+            .await
+    }
+
+    pub async fn follower_touch(&self, channel: &str, app_id: &str, openid: &str) -> CarrierResult<()> {
+        self.memory.follower_touch(channel, app_id, openid).await
+    }
+
+    pub async fn follower_mark_unfollowed(
+        &self,
+        channel: &str,
+        app_id: &str,
+        openid: &str,
+    ) -> CarrierResult<()> {
+        self.memory
+            .follower_mark_unfollowed(channel, app_id, openid)
+            .await
+    }
+
+    /// Active followers seen since `since_rfc3339` — the deliverable audience
+    /// for a scheduled push (OA customer-service 48h window).
+    pub async fn follower_list_pushable(
+        &self,
+        channel: &str,
+        app_id: &str,
+        since_rfc3339: &str,
+    ) -> CarrierResult<Vec<String>> {
+        self.memory
+            .follower_list_pushable(channel, app_id, since_rfc3339)
+            .await
+    }
+
+    pub async fn follower_stats(
+        &self,
+        channel: &str,
+        app_id: &str,
+        since_rfc3339: &str,
+        push_window_since_rfc3339: &str,
+    ) -> CarrierResult<memory::follower_store::FollowerStats> {
+        self.memory
+            .follower_stats(channel, app_id, since_rfc3339, push_window_since_rfc3339)
+            .await
+    }
+
     /// Unified push: deliver a `ContentDescriptor` (text/miniprogram/image/link)
     /// to any target — a specific user_id or `"admins"` (fan-out). Uses
     /// `channel_deliver_fn` (supports rich content on all channels). The agent

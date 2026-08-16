@@ -135,6 +135,34 @@ pub enum CronAction {
         #[serde(default)]
         session_label: Option<String>,
     },
+    /// Push fixed content on a schedule WITHOUT an agent turn (automation
+    /// Phase 2). Payload is the same `ContentDescriptor`-shaped JSON as
+    /// automation-rule `task_payload`, executed through the same
+    /// `do_push_message` path — no LLM, no session.
+    Push {
+        /// Channel the bot lives on (`"weixin-oa"`; informational for routing
+        /// diagnostics — delivery resolves per-recipient via sender_channels).
+        channel: String,
+        /// Channel bot id (weixin-oa: the service-account app_id). Also the
+        /// `source_bot_id` handed to `do_push_message`.
+        bot_id: String,
+        /// `ContentDescriptor`-shaped JSON: `{"text": "..."}` or
+        /// `{"miniprogram": {appid, pagepath, title, thumb_media_id}}`.
+        payload: serde_json::Value,
+        /// Audience: `"admins"` (fan-out via admins.json), `"followers"`
+        /// (pushable followers of bot_id), or a raw user id (openid) — the
+        /// same vocabulary as automation-rule `target`.
+        target: String,
+    },
+    /// Follower-growth digest pushed to admins (no LLM). Computes new/unfollow
+    /// counts since this job's previous fire from the followers ledger and
+    /// delivers a fixed-format text to the agent's admins.
+    FollowerReport {
+        /// Channel of the ledger rows to summarize (`"weixin-oa"`).
+        channel: String,
+        /// Bot id (app_id) whose followers are summarized.
+        bot_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +370,48 @@ impl CronJob {
                     }
                 }
             }
+            CronAction::Push {
+                channel,
+                bot_id,
+                payload,
+                target,
+            } => {
+                if channel.trim().is_empty() || bot_id.trim().is_empty() {
+                    return Err(CarrierError::InvalidInput(
+                        "push action requires non-empty channel and bot_id".into(),
+                    ));
+                }
+                if target.trim().is_empty() {
+                    return Err(CarrierError::InvalidInput(
+                        "push action requires a target (\"admins\" | \"followers\" | user id)".into(),
+                    ));
+                }
+                // Payload must be a valid NON-EMPTY ContentDescriptor — every
+                // field is optional, so a bare `{"unexpected": true}` would
+                // otherwise parse into an empty descriptor and deliver nothing.
+                match serde_json::from_value::<crate::content::ContentDescriptor>(payload.clone()) {
+                    Ok(c)
+                        if c.text.is_some()
+                            || c.link.is_some()
+                            || c.image.is_some()
+                            || c.video.is_some()
+                            || c.file.is_some()
+                            || c.voice.is_some()
+                            || c.miniprogram.is_some() => {}
+                    _ => {
+                        return Err(CarrierError::InvalidInput(
+                            "push payload must be ContentDescriptor-shaped and non-empty: {\"text\": \"...\"} or {\"miniprogram\": {appid, pagepath, title, thumb_media_id}}".into(),
+                        ));
+                    }
+                }
+            }
+            CronAction::FollowerReport { channel, bot_id } => {
+                if channel.trim().is_empty() || bot_id.trim().is_empty() {
+                    return Err(CarrierError::InvalidInput(
+                        "follower_report action requires non-empty channel and bot_id".into(),
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -431,6 +501,59 @@ mod tests {
             last_run: None,
             next_run: None,
         }
+    }
+
+    #[test]
+    fn validate_push_action_roundtrip() {
+        // Valid: ContentDescriptor-shaped payload + explicit target.
+        let mut job = valid_job();
+        job.action = CronAction::Push {
+            channel: "weixin-oa".into(),
+            bot_id: "wx123".into(),
+            payload: serde_json::json!({"text": "早上好"}),
+            target: "followers".into(),
+        };
+        assert!(job.validate(0).is_ok());
+
+        // Bad payload shape -> rejected at creation, not at fire time.
+        job.action = CronAction::Push {
+            channel: "weixin-oa".into(),
+            bot_id: "wx123".into(),
+            payload: serde_json::json!({"unexpected": true}),
+            target: "admins".into(),
+        };
+        assert!(job.validate(0).is_err());
+
+        // Empty target rejected.
+        job.action = CronAction::Push {
+            channel: "weixin-oa".into(),
+            bot_id: "wx123".into(),
+            payload: serde_json::json!({"text": "hi"}),
+            target: "".into(),
+        };
+        assert!(job.validate(0).is_err());
+
+        // Serde roundtrip keeps the new variant's tag shape (cron_create sends
+        // {"kind":"push",...}).
+        let json = serde_json::to_value(&job.action).unwrap();
+        assert_eq!(json["kind"], "push");
+        let back: CronAction = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, CronAction::Push { ref target, .. } if target.is_empty()));
+    }
+
+    #[test]
+    fn validate_follower_report_action() {
+        let mut job = valid_job();
+        job.action = CronAction::FollowerReport {
+            channel: "weixin-oa".into(),
+            bot_id: "wx123".into(),
+        };
+        assert!(job.validate(0).is_ok());
+
+        let json = serde_json::to_value(&job.action).unwrap();
+        assert_eq!(json["kind"], "follower_report");
+        let back: CronAction = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, CronAction::FollowerReport { .. }));
     }
 
     // -- CronJobId --

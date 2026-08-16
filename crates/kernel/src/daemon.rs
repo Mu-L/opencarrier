@@ -349,6 +349,131 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                 }
             }
         }
+        // Scheduled fixed-content push (automation Phase 2): no LLM, no
+        // session — the payload is the same ContentDescriptor shape as an
+        // automation rule's task_payload, delivered via the same
+        // do_push_message path (sender_channels routing + admins fan-out).
+        types::scheduler::CronAction::Push {
+            channel,
+            bot_id,
+            payload,
+            target,
+        } => {
+            tracing::info!(job = %job_name, target = %target, channel = %channel,
+                "Cron: firing scheduled push (no LLM)");
+            let content = match serde_json::from_value::<types::content::ContentDescriptor>(
+                payload.clone(),
+            ) {
+                Ok(c) => c,
+                Err(e) => {
+                    // validate_action rejects this shape at creation — a bad
+                    // payload here means the job predates a schema drift.
+                    let msg = format!("push payload is not ContentDescriptor-shaped: {e}");
+                    kernel.cron_scheduler.record_failure(job_id, &msg);
+                    return Err(msg);
+                }
+            };
+            // Audience: "followers" expands to the pushable subset (the OA
+            // customer-service API only delivers within 48h of the user's last
+            // message — 44h leaves margin); everything else ("admins", a raw
+            // openid) goes to do_push_message as-is.
+            let recipients: Vec<String> = if target == "followers" {
+                let since = (chrono::Utc::now() - chrono::Duration::hours(44)).to_rfc3339();
+                match kernel.follower_list_pushable(channel, bot_id, &since).await {
+                    Ok(list) => list,
+                    Err(e) => {
+                        let msg = format!("follower audience lookup failed: {e}");
+                        kernel.cron_scheduler.record_failure(job_id, &msg);
+                        return Err(msg);
+                    }
+                }
+            } else {
+                vec![target.clone()]
+            };
+            if recipients.is_empty() {
+                let msg = "push to 'followers': no pushable followers in the 48h window";
+                kernel.cron_scheduler.record_failure(job_id, msg);
+                return Err(msg.to_string());
+            }
+            let mut delivered = 0usize;
+            let mut failed = 0usize;
+            for user in &recipients {
+                match kernel
+                    .do_push_message(user, &content, &agent_id.to_string(), bot_id)
+                    .await
+                {
+                    Ok(()) => delivered += 1,
+                    Err(e) => {
+                        failed += 1;
+                        tracing::warn!(job = %job_name, target_user = %user, error = %e,
+                            "Cron push delivery failed");
+                    }
+                }
+            }
+            if delivered == 0 {
+                let msg = format!(
+                    "push to '{target}': all {} deliveries failed",
+                    recipients.len()
+                );
+                kernel.cron_scheduler.record_failure(job_id, &msg);
+                return Err(msg);
+            }
+            tracing::info!(job = %job_name, delivered, failed,
+                "Cron push complete");
+            if failed > 0 {
+                tracing::warn!(job = %job_name, failed, total = recipients.len(),
+                    "Cron push partially delivered (cold followers outside the 48h \
+                     window are skipped by the sender_channels gate)");
+            }
+            kernel.cron_scheduler.record_success(job_id);
+            Ok(())
+        }
+        // Follower-growth digest (automation Phase 2): deterministic counts
+        // from the followers ledger since the previous fire, pushed to the
+        // agent's admins. No LLM.
+        types::scheduler::CronAction::FollowerReport { channel, bot_id } => {
+            tracing::info!(job = %job_name, channel = %channel,
+                "Cron: firing follower report (no LLM)");
+            // job.last_run is the PREVIOUS fire (record_success stamps it after
+            // the arm runs). First fire falls back to a 24h window.
+            let since = job
+                .last_run
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_else(|| (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339());
+            let push_since = (chrono::Utc::now() - chrono::Duration::hours(44)).to_rfc3339();
+            let stats = match kernel.follower_stats(channel, bot_id, &since, &push_since).await {
+                Ok(s) => s,
+                Err(e) => {
+                    let msg = format!("follower stats lookup failed: {e}");
+                    kernel.cron_scheduler.record_failure(job_id, &msg);
+                    return Err(msg);
+                }
+            };
+            let agent_name = outbound_agent_key(kernel, agent_id);
+            let text = format!(
+                "📈 涨粉日报（{agent_name}，自 {since} 起）：新增关注 {} 人，取关 {} 人，\
+                 当前关注 {} 人，近48h可推送 {} 人。",
+                stats.new_followers, stats.unfollows, stats.active, stats.pushable
+            );
+            let content = types::content::ContentDescriptor {
+                text: Some(text),
+                ..Default::default()
+            };
+            match kernel
+                .do_push_message("admins", &content, &agent_id.to_string(), bot_id)
+                .await
+            {
+                Ok(()) => {
+                    kernel.cron_scheduler.record_success(job_id);
+                    Ok(())
+                }
+                Err(e) => {
+                    let msg = format!("follower report push failed: {e}");
+                    kernel.cron_scheduler.record_failure(job_id, &msg);
+                    Err(msg)
+                }
+            }
+        }
     }
 }
 

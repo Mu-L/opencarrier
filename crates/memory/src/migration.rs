@@ -46,6 +46,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         (28, migrate_v28),
         (29, migrate_v29),
         (30, migrate_v30),
+        (31, migrate_v31),
     ];
 
     for (version, migrate_fn) in &migrations {
@@ -1257,6 +1258,34 @@ fn migrate_v30(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![30, "Chained cron: chain (ChainMeta JSON) column on cron_jobs"],
+    )?;
+    Ok(())
+}
+
+/// Version 31: channel followers ledger (automation Phase 2). Records
+/// follow/unfollow lifecycle + `last_seen` (any inbound refresh) per
+/// `(channel, app_id, openid)`. `last_seen` bounds the deliverable audience
+/// for scheduled pushes (OA customer-service 48h window) and feeds
+/// `FollowerReport` growth digests.
+fn migrate_v31(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS channel_followers (
+            channel TEXT NOT NULL,
+            app_id TEXT NOT NULL,
+            openid TEXT NOT NULL,
+            unionid TEXT,
+            followed_at TEXT NOT NULL,
+            unfollowed_at TEXT,
+            last_seen_at TEXT NOT NULL,
+            last_scene TEXT,
+            PRIMARY KEY (channel, app_id, openid)
+        );
+        CREATE INDEX IF NOT EXISTS idx_followers_last_seen
+            ON channel_followers(channel, app_id, last_seen_at);",
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![31, "Followers ledger: channel_followers table (automation Phase 2)"],
     )?;
     Ok(())
 }
