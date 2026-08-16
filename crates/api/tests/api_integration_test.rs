@@ -110,6 +110,7 @@ async fn start_test_server_with_provider(
             axum::routing::delete(routes::kill_agent),
         )
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
+        .merge(routes::config::router())
         .layer(axum::middleware::from_fn(middleware::request_logging))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
@@ -707,4 +708,27 @@ async fn test_auth_disabled_when_no_key() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_config_set_blocks_default_model() {
+    // default_model is a dead concept in single-layer Brain (agents take their
+    // model from manifest/brain.json) — API writes must fail loudly, not
+    // silently persist a no-op key.
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    // CLI shape ({key, value}) and canonical shape ({path, value}) both blocked
+    for body in [
+        serde_json::json!({"key": "default_model.model", "value": "chat"}),
+        serde_json::json!({"path": "default_model.model", "value": "chat"}),
+    ] {
+        let resp = client
+            .post(format!("{}/api/config/set", server.base_url))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 403, "default_model write must be rejected");
+    }
 }

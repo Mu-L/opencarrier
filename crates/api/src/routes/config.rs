@@ -179,8 +179,11 @@ pub async fn config_set(
         }
     };
 
-    // Block sensitive keys that should not be changed via API
-    const BLOCKED_KEYS: &[&str] = &["api_key", "auth", "exec_policy", "vault", "hub", "brain", "oauth"];
+    // Block sensitive keys that should not be changed via API.
+    // `default_model`: dead concept in single-layer Brain — agents take their
+    // model from their own manifest / brain.json; writes via API are rejected
+    // so callers fail loudly instead of persisting a no-op key.
+    const BLOCKED_KEYS: &[&str] = &["api_key", "auth", "exec_policy", "vault", "hub", "brain", "oauth", "default_model"];
     let lower = path.to_lowercase();
     for blocked in BLOCKED_KEYS {
         if lower.starts_with(blocked) || lower.contains(&format!(".{blocked}")) {
