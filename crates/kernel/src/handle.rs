@@ -224,6 +224,36 @@ impl KernelHandle for CarrierKernel {
                                     }
                                     let name = entry.name.clone();
                                     let mut new_manifest = new_manifest;
+                                    // Definition layer (template.json) is the
+                                    // source of truth for presentation
+                                    // metadata. agent.toml is generated at
+                                    // install time and dup pushes never touch
+                                    // it, so a display_name/description
+                                    // backfill in template.json would never
+                                    // reach a running agent otherwise
+                                    // (2026-08-17: 8 clones showed empty
+                                    // display_name for exactly this reason).
+                                    // Fill-if-empty only — never clobber a
+                                    // non-empty runtime value.
+                                    let tpl_path = ws.join("template.json");
+                                    if let Ok(tpl_str) = std::fs::read_to_string(&tpl_path) {
+                                        if let Ok(tpl) =
+                                            serde_json::from_str::<clone::TemplateManifest>(&tpl_str)
+                                        {
+                                            if new_manifest.display_name.trim().is_empty()
+                                                && !tpl.display_name.trim().is_empty()
+                                            {
+                                                new_manifest.display_name =
+                                                    tpl.display_name.clone();
+                                            }
+                                            if new_manifest.description.trim().is_empty()
+                                                && !tpl.description.trim().is_empty()
+                                            {
+                                                new_manifest.description =
+                                                    tpl.description.clone();
+                                            }
+                                        }
+                                    }
                                     // Preserve workspace path (not in agent.toml)
                                     new_manifest.workspace = Some(ws.clone());
                                     // Preserve exec_policy inheritance
