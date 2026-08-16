@@ -228,7 +228,7 @@ pub async fn kill_agent(
     Path(id): Path<String>,
     _extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let agent_id = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let agent_id = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok((aid, _)) => aid,
         Err(resp) => return resp,
     };
@@ -256,7 +256,7 @@ pub async fn restart_agent(
     _extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (agent_id, entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -308,7 +308,7 @@ pub async fn reset_agent_session(
     _extensions: axum::http::Extensions,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (agent_id, entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -361,14 +361,20 @@ pub async fn set_agent_mode(
     };
 
     match state.kernel.registry.set_mode(agent_id, body.mode) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "updated",
-                "agent_id": id,
-                "mode": body.mode,
-            })),
-        ),
+        Ok(()) => {
+            // Persist — set_mode is an in-memory registry mutation; without
+            // this the change was lost on every daemon restart (suspend/
+            // resume siblings both persist).
+            state.kernel.persist_agent(agent_id);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "updated",
+                    "agent_id": id,
+                    "mode": body.mode,
+                })),
+            )
+        }
         Err(_) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Agent not found"})),
@@ -385,7 +391,7 @@ pub async fn get_agent(
     Path(id): Path<String>,
     _extensions: axum::http::Extensions,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (_agent_id, entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -433,10 +439,37 @@ pub async fn patch_agent(
     Path(id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (agent_id, _entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
+
+    // Same length limits as PATCH /{id}/config (shared constants — this
+    // endpoint used to accept unlimited input while its twin enforced caps).
+    if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+        if name.len() > MAX_NAME_LEN {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(serde_json::json!({"error": format!("Name exceeds max length ({MAX_NAME_LEN} chars)")})),
+            );
+        }
+    }
+    if let Some(desc) = body.get("description").and_then(|v| v.as_str()) {
+        if desc.len() > MAX_DESC_LEN {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(serde_json::json!({"error": format!("Description exceeds max length ({MAX_DESC_LEN} chars)")})),
+            );
+        }
+    }
+    if let Some(prompt) = body.get("system_prompt").and_then(|v| v.as_str()) {
+        if prompt.len() > MAX_PROMPT_LEN {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(serde_json::json!({"error": format!("System prompt exceeds max length ({MAX_PROMPT_LEN} chars)")})),
+            );
+        }
+    }
 
     // Apply partial updates using dedicated registry methods
     if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
@@ -484,22 +517,19 @@ pub async fn patch_agent(
         }
     }
 
-    // Persist updated entry to SQLite
-    if let Some(entry) = state.kernel.registry.get(agent_id) {
-        if let Err(e) = state.kernel.memory.save_agent(&entry) {
-            tracing::warn!("failed to persist agent: {e}");
-        }
-        (
+    // Persist updated entry to SQLite (shared kernel tail)
+    state.kernel.persist_agent(agent_id);
+    match state.kernel.registry.get(agent_id) {
+        Some(entry) => (
             StatusCode::OK,
             Json(
                 serde_json::json!({"status": "ok", "agent_id": entry.id.to_string(), "name": entry.name}),
             ),
-        )
-    } else {
-        (
+        ),
+        None => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "Agent vanished during update"})),
-        )
+        ),
     }
 }
 /// POST /api/agents/{id}/stop — Cancel an agent's current LLM run.
@@ -647,11 +677,7 @@ pub async fn suspend_agent(
             Json(serde_json::json!({"error": format!("{e}")})),
         );
     }
-    if let Some(updated) = state.kernel.registry.get(agent_id) {
-        if let Err(e) = state.kernel.memory.save_agent(&updated) {
-            tracing::warn!("failed to persist agent: {e}");
-        }
-    }
+    state.kernel.persist_agent(agent_id);
     // Cancel any active run
     let _ = state.kernel.stop_agent_run(agent_id);
     (
@@ -689,11 +715,7 @@ pub async fn resume_agent(
             Json(serde_json::json!({"error": format!("{e}")})),
         );
     }
-    if let Some(updated) = state.kernel.registry.get(agent_id) {
-        if let Err(e) = state.kernel.memory.save_agent(&updated) {
-            tracing::warn!("failed to persist agent: {e}");
-        }
-    }
+    state.kernel.persist_agent(agent_id);
     (
         StatusCode::OK,
         Json(serde_json::json!({"status": "running", "name": entry.name})),
@@ -762,48 +784,33 @@ pub async fn update_agent_identity(
             Json(serde_json::json!({"error": e.to_string()})),
         );
     }
-
-    // Validate color format if provided
-    if let Some(ref color) = req.color {
-        if !color.is_empty() && !color.starts_with('#') {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Color must be a hex code starting with '#'"})),
-            );
-        }
+    if let Err(e) = validate_identity_formats(req.color.as_deref(), req.avatar_url.as_deref()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        );
     }
 
-    // Validate avatar_url if provided
-    if let Some(ref url) = req.avatar_url {
-        if !url.is_empty()
-            && !url.starts_with("http://")
-            && !url.starts_with("https://")
-            && !url.starts_with("data:")
-        {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Avatar URL must be http/https or data URI"})),
-            );
-        }
-    }
-
-    let identity = AgentIdentity {
-        emoji: req.emoji,
-        avatar_url: req.avatar_url,
-        color: req.color,
-        archetype: req.archetype,
-        vibe: req.vibe,
-        greeting_style: req.greeting_style,
-    };
+    // Merge over the current identity (None = keep) — shared semantics with
+    // PATCH /{id}/config. The old REPLACE behavior wiped unset fields to None
+    // on partial updates (sending only {color} cleared emoji/avatar/etc.).
+    let identity = merge_identity(
+        &state.kernel.registry,
+        agent_id,
+        AgentIdentity {
+            emoji: req.emoji,
+            avatar_url: req.avatar_url,
+            color: req.color,
+            archetype: req.archetype,
+            vibe: req.vibe,
+            greeting_style: req.greeting_style,
+        },
+    );
 
     match state.kernel.registry.update_identity(agent_id, identity) {
         Ok(()) => {
             // Persist identity to SQLite
-            if let Some(entry) = state.kernel.registry.get(agent_id) {
-                if let Err(e) = state.kernel.memory.save_agent(&entry) {
-                    tracing::warn!("failed to persist agent: {e}");
-                }
-            }
+            state.kernel.persist_agent(agent_id);
             (
                 StatusCode::OK,
                 Json(serde_json::json!({"status": "ok", "agent_id": id})),
@@ -827,11 +834,7 @@ pub async fn patch_agent_config(
         Err(resp) => return resp,
     };
 
-    // Input length limits
-    const MAX_NAME_LEN: usize = 256;
-    const MAX_DESC_LEN: usize = 4096;
-    const MAX_PROMPT_LEN: usize = 65_536;
-
+    // Input length limits (shared constants with PATCH /api/agents/{id})
     if let Some(ref name) = req.name {
         if name.len() > MAX_NAME_LEN {
             return (
@@ -863,28 +866,11 @@ pub async fn patch_agent_config(
         }
     }
 
-    // Validate color format if provided
-    if let Some(ref color) = req.color {
-        if !color.is_empty() && !color.starts_with('#') {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Color must be a hex code starting with '#'"})),
-            );
-        }
-    }
-
-    // Validate avatar_url if provided
-    if let Some(ref url) = req.avatar_url {
-        if !url.is_empty()
-            && !url.starts_with("http://")
-            && !url.starts_with("https://")
-            && !url.starts_with("data:")
-        {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Avatar URL must be http/https or data URI"})),
-            );
-        }
+    if let Err(e) = validate_identity_formats(req.color.as_deref(), req.avatar_url.as_deref()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        );
     }
 
     // Update name
@@ -942,21 +928,20 @@ pub async fn patch_agent_config(
         || req.greeting_style.is_some();
 
     if has_identity_field {
-        // Read current identity, merge with provided fields
-        let current = state
-            .kernel
-            .registry
-            .get(agent_id)
-            .map(|e| e.identity)
-            .unwrap_or_default();
-        let merged = AgentIdentity {
-            emoji: req.emoji.or(current.emoji),
-            avatar_url: req.avatar_url.or(current.avatar_url),
-            color: req.color.or(current.color),
-            archetype: req.archetype.or(current.archetype),
-            vibe: req.vibe.or(current.vibe),
-            greeting_style: req.greeting_style.or(current.greeting_style),
-        };
+        // Merge over current identity (None = keep) — shared helper with
+        // PATCH /{id}/identity so the two endpoints can't diverge again.
+        let merged = merge_identity(
+            &state.kernel.registry,
+            agent_id,
+            AgentIdentity {
+                emoji: req.emoji,
+                avatar_url: req.avatar_url,
+                color: req.color,
+                archetype: req.archetype,
+                vibe: req.vibe,
+                greeting_style: req.greeting_style,
+            },
+        );
         if state
             .kernel
             .registry
@@ -987,11 +972,7 @@ pub async fn patch_agent_config(
     }
 
     // Persist updated manifest to database so changes survive restart
-    if let Some(entry) = state.kernel.registry.get(agent_id) {
-        if let Err(e) = state.kernel.memory.save_agent(&entry) {
-            tracing::warn!("Failed to persist agent config update: {e}");
-        }
-    }
+    state.kernel.persist_agent(agent_id);
 
     (
         StatusCode::OK,

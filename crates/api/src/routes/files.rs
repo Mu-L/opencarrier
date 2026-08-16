@@ -19,7 +19,7 @@ pub async fn list_agent_files(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (_agent_id, entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err((status, _)) => {
             return (
@@ -582,7 +582,7 @@ pub async fn list_output_files(
     Path(id): Path<String>,
     Query(params): Query<OutputQuery>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (_agent_id, entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -645,7 +645,7 @@ pub async fn serve_output_file(
 
     // Public download endpoint — skip tenant check. Path-based auth via sender_id
     // is sufficient: files are scoped to senders/{sender_id}/{agent_name}/output/.
-    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (_agent_id, entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(pair) => pair,
         Err((status, _)) => {
             let msg = if status == StatusCode::BAD_REQUEST {
@@ -732,7 +732,7 @@ pub async fn list_files_tree(
         (status, Json(serde_json::json!({"error": msg})))
     };
 
-    let (_agent_id, entry) = match parse_and_get_agent(&agent, &state.kernel.registry) {
+    let (_agent_id, entry) = match resolve_agent_id(&agent, &state.kernel.registry) {
         Ok(r) => r,
         Err((status, _)) => return err(status, "Agent not found"),
     };
@@ -942,7 +942,7 @@ pub async fn view_file(
         }
     }
 
-    let (_agent_id, entry) = match parse_and_get_agent(&agent, &state.kernel.registry) {
+    let (_agent_id, entry) = match resolve_agent_id(&agent, &state.kernel.registry) {
         Ok(pair) => pair,
         Err((status, _)) => return err(status, "Agent not found"),
     };

@@ -414,7 +414,7 @@ pub async fn get_agent_tools(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (_agent_id, entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -478,7 +478,7 @@ pub async fn get_agent_mcp_servers(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (_agent_id, entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };

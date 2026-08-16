@@ -19,7 +19,7 @@ pub async fn get_agent_kv(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (agent_id, _entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -46,7 +46,7 @@ pub async fn get_agent_kv_key(
     State(state): State<Arc<AppState>>,
     Path((id, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (agent_id, _entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -75,7 +75,7 @@ pub async fn set_agent_kv_key(
     Path((id, key)): Path<(String, String)>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (agent_id, _entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -113,7 +113,7 @@ pub async fn delete_agent_kv_key(
     State(state): State<Arc<AppState>>,
     Path((id, key)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (agent_id, _entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err(resp) => return resp,
     };

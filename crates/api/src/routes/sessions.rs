@@ -20,7 +20,7 @@ pub async fn get_agent_session(
     Path(id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let (_agent_id, entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (_agent_id, entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err((status, _)) => {
             return (
@@ -448,7 +448,7 @@ pub async fn clear_agent_history(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let (agent_id, _entry) = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let (agent_id, _entry) = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok(r) => r,
         Err((status, _)) => {
             return (

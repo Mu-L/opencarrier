@@ -105,7 +105,7 @@ pub async fn send_message(
     Path(id): Path<String>,
     Json(req): Json<MessageRequest>,
 ) -> impl IntoResponse {
-    let agent_id = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let agent_id = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok((aid, _)) => aid,
         Err((status, _)) => {
             return (
@@ -212,7 +212,7 @@ pub async fn send_message_stream(
             .into_response();
     }
 
-    let agent_id = match parse_and_get_agent(&id, &state.kernel.registry) {
+    let agent_id = match resolve_agent_id(&id, &state.kernel.registry) {
         Ok((aid, _)) => aid,
         Err((status, _)) => {
             return (

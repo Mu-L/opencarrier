@@ -267,6 +267,19 @@ impl CarrierKernel {
 
     // ── Agent configuration mutations ──────────────────────────
 
+    /// Persist the agent's current registry entry to SQLite (best-effort).
+    ///
+    /// Single shared tail for every registry mutation — previously inlined
+    /// 5× in kernel and 5× in the api routes with drifting warn messages,
+    /// and occasionally forgotten entirely (set_agent_mode).
+    pub fn persist_agent(&self, agent_id: AgentId) {
+        if let Some(entry) = self.registry.get(agent_id) {
+            if let Err(e) = self.memory.save_agent(&entry) {
+                warn!(agent_id = %agent_id, error = %e, "Failed to persist agent update");
+            }
+        }
+    }
+
     /// Switch an agent's modality (resolved to model by Brain at inference time).
     ///
     /// The `model` parameter is the modality name (e.g. "chat", "fast", "vision").
@@ -281,11 +294,7 @@ impl CarrierKernel {
         info!(agent_id = %agent_id, modality = %modality, "Agent modality updated");
 
         // Persist the updated entry
-        if let Some(entry) = self.registry.get(agent_id) {
-            if let Err(e) = self.memory.save_agent(&entry) {
-                warn!(agent_id = %agent_id, error = %e, "Failed to persist agent after modality update");
-            }
-        }
+        self.persist_agent(agent_id);
 
         // Clear canonical session to prevent memory poisoning from old model's responses
         debug!(agent_id = %agent_id, "Cleared canonical session after model switch");
@@ -299,11 +308,7 @@ impl CarrierKernel {
             .update_flows(agent_id, flows.clone())
             .map_err(KernelError::Carrier)?;
 
-        if let Some(entry) = self.registry.get(agent_id) {
-            if let Err(e) = self.memory.save_agent(&entry) {
-                warn!(agent_id = %agent_id, error = %e, "Failed to persist agent after flows update");
-            }
-        }
+        self.persist_agent(agent_id);
 
         info!(agent_id = %agent_id, flows = ?flows, "Agent flows updated");
         Ok(())
@@ -336,11 +341,7 @@ impl CarrierKernel {
             .update_mcp_servers(agent_id, servers.clone())
             .map_err(KernelError::Carrier)?;
 
-        if let Some(entry) = self.registry.get(agent_id) {
-            if let Err(e) = self.memory.save_agent(&entry) {
-                warn!(agent_id = %agent_id, error = %e, "Failed to persist agent update");
-            }
-        }
+        self.persist_agent(agent_id);
 
         info!(agent_id = %agent_id, servers = ?servers, "Agent MCP servers updated");
         Ok(())
@@ -357,11 +358,7 @@ impl CarrierKernel {
             .update_tool_filters(agent_id, allowlist.clone(), blocklist.clone())
             .map_err(KernelError::Carrier)?;
 
-        if let Some(entry) = self.registry.get(agent_id) {
-            if let Err(e) = self.memory.save_agent(&entry) {
-                warn!(agent_id = %agent_id, error = %e, "Failed to persist agent update");
-            }
-        }
+        self.persist_agent(agent_id);
 
         info!(
             agent_id = %agent_id,
@@ -440,13 +437,41 @@ impl CarrierKernel {
         }
         let caps = crate::capabilities::manifest_to_capabilities(&new_manifest);
         self.coordination.capabilities.grant(agent_id, caps);
-        if let Some(updated_entry) = self.registry.get(agent_id) {
-            if let Err(e) = self.memory.save_agent(&updated_entry) {
-                warn!(agent = %entry.name, "Failed to persist reloaded manifest: {e}");
-            }
-        }
+        self.persist_agent(agent_id);
         info!(agent = %entry.name, "Reloaded manifest from agent.toml (+template.json fill-if-empty overlay)");
         true
+    }
+
+    /// Resolve the "fast" modality (fallback: the agent's own) plus its model
+    /// and driver, for background LLM work (compaction, intent classification).
+    ///
+    /// Previously inlined twice in this file with drifting error strings — a
+    /// fix to one copy silently missed the other.
+    fn resolve_fast_llm(
+        &self,
+        entry: &AgentEntry,
+        purpose: &str,
+    ) -> KernelResult<(String, String, std::sync::Arc<dyn runtime::llm_driver::LlmDriver>)> {
+        let modality = if self.brain_read().has_modality("fast") {
+            "fast".to_string()
+        } else {
+            entry.manifest.model.modality.clone()
+        };
+        let model = self.brain_read().model_for(&modality);
+        let driver = {
+            let brain = self.brain_read();
+            let endpoints = brain.endpoints_for(&modality);
+            if let Some(ep) = endpoints.first() {
+                brain.driver_for_endpoint(&ep.id).ok_or_else(|| {
+                    KernelError::Carrier(CarrierError::LlmDriver(format!(
+                        "No driver for {purpose} modality '{modality}'"
+                    )))
+                })?
+            } else {
+                self.resolve_driver(&entry.manifest)?
+            }
+        };
+        Ok((modality, model, driver))
     }
 
     /// Compact an agent's session using LLM-based summarization.
@@ -496,19 +521,8 @@ impl CarrierKernel {
         }
 
         // Use "fast" modality for compaction (cheaper, faster); fall back to agent modality
-        let compaction_modality = if self.brain_read().has_modality("fast") { "fast" } else { &entry.manifest.model.modality };
-        let compaction_model = self.brain_read().model_for(compaction_modality);
-        let driver = {
-            let brain = self.brain_read();
-            let endpoints = brain.endpoints_for(compaction_modality);
-            if let Some(ep) = endpoints.first() {
-                brain.driver_for_endpoint(&ep.id).ok_or_else(|| KernelError::Carrier(CarrierError::LlmDriver(format!(
-                    "No driver for compaction modality '{compaction_modality}'"
-                ))))?
-            } else {
-                self.resolve_driver(&entry.manifest)?
-            }
-        };
+        let (_compaction_modality, compaction_model, driver) =
+            self.resolve_fast_llm(&entry, "compaction")?;
 
         let result = compact_session(driver, &compaction_model, &session, &config)
             .await
@@ -713,25 +727,7 @@ impl CarrierKernel {
             });
 
         // Prefer the "fast" modality for cheap/quick classification.
-        let modality = if self.brain_read().has_modality("fast") {
-            "fast"
-        } else {
-            &entry.manifest.model.modality
-        };
-        let model = self.brain_read().model_for(modality);
-        let driver = {
-            let brain = self.brain_read();
-            let endpoints = brain.endpoints_for(modality);
-            if let Some(ep) = endpoints.first() {
-                brain.driver_for_endpoint(&ep.id).ok_or_else(|| {
-                    KernelError::Carrier(CarrierError::LlmDriver(format!(
-                        "No driver for classifier modality '{modality}'"
-                    )))
-                })?
-            } else {
-                self.resolve_driver(&entry.manifest)?
-            }
-        };
+        let (_modality, model, driver) = self.resolve_fast_llm(entry, "classifier")?;
 
         let classification = classify_intent(driver, &model, last_assistant.as_deref(), new_user_msg)
             .await
