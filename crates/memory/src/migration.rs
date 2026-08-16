@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 29;
+const SCHEMA_VERSION: u32 = 30;
 
 /// Run all migrations to bring the database up to date.
 ///
@@ -45,6 +45,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         (27, migrate_v27),
         (28, migrate_v28),
         (29, migrate_v29),
+        (30, migrate_v30),
     ];
 
     for (version, migrate_fn) in &migrations {
@@ -1242,6 +1243,20 @@ fn migrate_v29(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![29, "Unified push: target column on automation_rules"],
+    )?;
+    Ok(())
+}
+
+/// Version 30: chained-pipeline identity column on cron_jobs (Plan A of
+/// broken-chain monitoring — `CronJob.chain: Option<ChainMeta>`). Nullable:
+/// existing jobs are not part of a declared chain and get no detection.
+fn migrate_v30(conn: &Connection) -> Result<(), rusqlite::Error> {
+    if !column_exists(conn, "cron_jobs", "chain") {
+        conn.execute_batch("ALTER TABLE cron_jobs ADD COLUMN chain TEXT;")?;
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![30, "Chained cron: chain (ChainMeta JSON) column on cron_jobs"],
     )?;
     Ok(())
 }

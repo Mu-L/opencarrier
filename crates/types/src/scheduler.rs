@@ -165,6 +165,30 @@ pub enum CronDelivery {
 // CronJob
 // ---------------------------------------------------------------------------
 
+/// Chained-pipeline identity for a cron job (Plan A of broken-chain
+/// monitoring). Chained pipelines (writing chains: research → outline →
+/// article → format → publish) run each step as a one-shot cron that ends by
+/// `cron_create`-ing the next step. A step that completes WITHOUT scheduling
+/// its successor breaks the chain silently — this metadata makes the
+/// expectation explicit so the daemon can detect and alert on it.
+///
+/// `chain_id` should match the pipeline id (and typically the `session_label`
+/// / `output/<pipeline_id>/` paths). `step` is 1-based; `step == total_steps`
+/// marks the tail step, which legitimately creates no successor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChainMeta {
+    pub chain_id: String,
+    pub step: u32,
+    pub total_steps: u32,
+}
+
+impl ChainMeta {
+    /// True when this job is the tail of its chain (no successor expected).
+    pub fn is_tail(&self) -> bool {
+        self.step >= self.total_steps
+    }
+}
+
 /// A scheduled job belonging to a specific agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CronJob {
@@ -188,6 +212,10 @@ pub struct CronJob {
     pub action: CronAction,
     /// Where to deliver the result.
     pub delivery: CronDelivery,
+    /// Chained-pipeline identity; when set on a non-tail step, the daemon
+    /// alerts if no same-chain job is pending after the turn completes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain: Option<ChainMeta>,
     /// When the job was created.
     pub created_at: DateTime<Utc>,
     /// When the job last fired (if ever).
@@ -398,6 +426,7 @@ mod tests {
                 text: "ping".into(),
             },
             delivery: CronDelivery::None,
+            chain: None,
             created_at: Utc::now(),
             last_run: None,
             next_run: None,
@@ -405,6 +434,20 @@ mod tests {
     }
 
     // -- CronJobId --
+
+    /// ChainMeta tail semantics: only `step == total_steps` is the tail (no
+    /// successor expected, no broken-chain alert). Anything less expects one.
+    #[test]
+    fn chain_meta_is_tail() {
+        let mid = ChainMeta { chain_id: "p".into(), step: 2, total_steps: 5 };
+        assert!(!mid.is_tail(), "step 2/5 is a mid step — successor expected");
+        let tail = ChainMeta { chain_id: "p".into(), step: 5, total_steps: 5 };
+        assert!(tail.is_tail(), "step 5/5 is the tail — no successor");
+        // step beyond total is treated as tail (defensive: validation rejects
+        // it at cron_create, but is_tail must never panic or flip the other way)
+        let over = ChainMeta { chain_id: "p".into(), step: 6, total_steps: 5 };
+        assert!(over.is_tail());
+    }
 
     /// Chained-pipeline session isolation: `session_label` rides the agent_turn
     /// wire format, absent on old payloads (serde default).

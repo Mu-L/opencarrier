@@ -73,7 +73,7 @@ impl CronJobStore {
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, owner_id, sender_id, name, enabled, schedule, action, delivery, \
-                    one_shot, last_status, consecutive_errors, created_at, last_run, next_run \
+                    one_shot, last_status, consecutive_errors, created_at, last_run, next_run, chain \
              FROM cron_jobs"
         ).map_err(|e| CarrierError::Memory(e.to_string()))?;
         let rows = stmt.query_map([], |row| {
@@ -93,6 +93,7 @@ impl CronJobStore {
                 created_at: row.get(12)?,
                 last_run: row.get(13)?,
                 next_run: row.get(14)?,
+                chain_json: row.get(15)?,
             })
         }).map_err(|e| CarrierError::Memory(e.to_string()))?;
 
@@ -141,6 +142,11 @@ impl CronJobStore {
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         let delivery_json = serde_json::to_string(&meta.job.delivery)
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let chain_json = meta
+            .job
+            .chain
+            .as_ref()
+            .and_then(|c| serde_json::to_string(c).ok());
         let created_at = meta.job.created_at.to_rfc3339();
         let last_run = meta.job.last_run.map(|t| t.to_rfc3339());
         let next_run = meta.job.next_run.map(|t| t.to_rfc3339());
@@ -149,17 +155,17 @@ impl CronJobStore {
 
         conn.execute(
             "INSERT INTO cron_jobs (id, agent_id, owner_id, sender_id, name, enabled, schedule, action, delivery, \
-                                    one_shot, last_status, consecutive_errors, created_at, last_run, next_run) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15) \
+                                    one_shot, last_status, consecutive_errors, created_at, last_run, next_run, chain) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
              ON CONFLICT(id) DO UPDATE SET \
                agent_id=?2, owner_id=?3, sender_id=?4, name=?5, enabled=?6, schedule=?7, action=?8, \
                delivery=?9, one_shot=?10, last_status=?11, consecutive_errors=?12, \
-               last_run=?14, next_run=?15",
+               last_run=?14, next_run=?15, chain=?16",
             rusqlite::params![
                 id, agent_id, meta.job.owner_id, meta.job.sender_id, meta.job.name,
                 meta.job.enabled as i32, schedule_json, action_json, delivery_json,
                 meta.one_shot as i32, meta.last_status, meta.consecutive_errors as i32,
-                created_at, last_run, next_run,
+                created_at, last_run, next_run, chain_json,
             ],
         ).map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())
@@ -182,6 +188,7 @@ struct RowData {
     created_at: String,
     last_run: Option<String>,
     next_run: Option<String>,
+    chain_json: Option<String>,
 }
 
 fn row_to_meta(r: RowData) -> Option<JobMeta> {
@@ -210,6 +217,7 @@ fn row_to_meta(r: RowData) -> Option<JobMeta> {
         schedule,
         action,
         delivery,
+        chain: r.chain_json.and_then(|s| serde_json::from_str(&s).ok()),
         created_at,
         last_run,
         next_run,
@@ -254,7 +262,8 @@ mod tests {
                 consecutive_errors INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 last_run TEXT,
-                next_run TEXT)",
+                next_run TEXT,
+                chain TEXT)",
             [],
         )
         .unwrap();
@@ -279,6 +288,11 @@ mod tests {
                     session_label: Some("lbl".to_string()),
                 },
                 delivery: CronDelivery::None,
+                chain: Some(types::scheduler::ChainMeta {
+                    chain_id: "pipeline-20260816-jiakao".to_string(),
+                    step: 4,
+                    total_steps: 5,
+                }),
                 enabled: true,
                 created_at: Utc::now(),
                 next_run: None,
@@ -295,5 +309,14 @@ mod tests {
             "agent_id must round-trip losslessly (from_string v5-hashed it into a garbage id)"
         );
         assert_eq!(loaded[0].job.sender_id.as_deref(), Some("o-test@im.wechat"));
+        // Chain identity (Plan A broken-chain detection) must persist too.
+        assert_eq!(
+            loaded[0].job.chain,
+            Some(types::scheduler::ChainMeta {
+                chain_id: "pipeline-20260816-jiakao".to_string(),
+                step: 4,
+                total_steps: 5,
+            })
+        );
     }
 }

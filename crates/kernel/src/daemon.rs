@@ -224,6 +224,59 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                             .await;
                         return Ok(());
                     }
+                    // Broken-chain detection (Plan A): a NON-tail chained step
+                    // completed — its successor must now be pending. The step
+                    // creates the next step via `cron_create` DURING its turn,
+                    // so by the time the turn returns the successor is already
+                    // in the scheduler (this job itself is still listed —
+                    // one-shot removal happens at record_success — so exclude
+                    // it). No successor after a completed step = the chain is
+                    // broken: nothing will ever fire step N+1. Alert instead of
+                    // failing silently (a human-cancelled chain will also trip
+                    // this — the alert says to ignore that case).
+                    if let Some(chain) = &job.chain {
+                        if !chain.is_tail() {
+                            let has_successor = kernel
+                                .cron_scheduler
+                                .list_jobs(agent_id)
+                                .into_iter()
+                                .any(|j| {
+                                    j.id != job_id
+                                        && j.chain
+                                            .as_ref()
+                                            .is_some_and(|c| c.chain_id == chain.chain_id)
+                                });
+                            if !has_successor {
+                                tracing::warn!(
+                                    job = %job_name,
+                                    agent = %agent_id,
+                                    chain_id = %chain.chain_id,
+                                    step = chain.step,
+                                    total_steps = chain.total_steps,
+                                    "Broken chain: step completed but no successor scheduled"
+                                );
+                                let agent_name = outbound_agent_key(kernel, agent_id);
+                                let content = types::content::ContentDescriptor {
+                                    text: Some(format!(
+                                        "⛓️ 断链告警：流水线「{chain_id}」第 {step}/{total} 步\
+                                         （{job_name}，{agent_name}）已完成，但没有调度下一步——\
+                                         链在此中断，第 {next} 步永远不会触发。若是人工取消请忽略，\
+                                         否则需要从断点重建（参照该流水线的接续手法）。",
+                                        chain_id = chain.chain_id,
+                                        step = chain.step,
+                                        total = chain.total_steps,
+                                        job_name = job_name,
+                                        agent_name = agent_name,
+                                        next = chain.step + 1,
+                                    )),
+                                    ..Default::default()
+                                };
+                                let _ = kernel
+                                    .do_push_message("admins", &content, &agent_id.to_string(), "")
+                                    .await;
+                            }
+                        }
+                    }
                     match cron_deliver_response(
                         kernel,
                         agent_id,
@@ -782,6 +835,7 @@ impl CarrierKernel {
                 schedule: desired_schedule,
                 action: desired_action,
                 delivery: types::scheduler::CronDelivery::None,
+                chain: None,
                 created_at: chrono::Utc::now(),
                 next_run: None,
                 last_run: None,

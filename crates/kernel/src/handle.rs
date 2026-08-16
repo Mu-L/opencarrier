@@ -466,6 +466,35 @@ impl KernelHandle for CarrierKernel {
         tracing::debug!(agent_id, "cron_create resolving agent_id");
         let (aid, _) = self.registry.resolve(agent_id)?;
 
+        // Chained-pipeline identity (optional; Plan A of broken-chain
+        // monitoring). Validated structurally so a malformed chain from the
+        // LLM is rejected with a message it can self-heal from, not silently
+        // stored as a broken expectation.
+        let chain: Option<types::scheduler::ChainMeta> = match job_json.get("chain") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(v) => {
+                let c: types::scheduler::ChainMeta = serde_json::from_value(v.clone())
+                    .map_err(|e| CarrierError::InvalidInput(format!(
+                        "Invalid chain metadata: {e}. Expected {{chain_id, step, total_steps}} — \
+                         chain_id=pipeline id, step=1-based current step, total_steps=chain length; \
+                         step==total_steps marks the tail (creates no successor)."
+                    )))?;
+                if c.chain_id.trim().is_empty() {
+                    return Err(CarrierError::InvalidInput(
+                        "chain.chain_id must be a non-empty pipeline id".into(),
+                    ));
+                }
+                if c.step < 1 || c.total_steps < 1 || c.step > c.total_steps {
+                    return Err(CarrierError::InvalidInput(format!(
+                        "chain step/total_steps out of range: step={} total_steps={} \
+                         (need 1 <= step <= total_steps)",
+                        c.step, c.total_steps
+                    )));
+                }
+                Some(c)
+            }
+        };
+
         let job = CronJob {
             id: CronJobId::new(),
             agent_id: aid,
@@ -475,6 +504,7 @@ impl KernelHandle for CarrierKernel {
             schedule,
             action,
             delivery,
+            chain,
             enabled: true,
             created_at: chrono::Utc::now(),
             next_run: None,

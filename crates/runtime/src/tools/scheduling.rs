@@ -407,7 +407,11 @@ impl ToolModule for SchedulingTools {
                             "type": "object",
                             "description": "Delivery target: {\"kind\":\"none\"} or {\"kind\":\"channel\",\"channel\":\"telegram\"} or {\"kind\":\"last_channel\"}"
                         },
-                        "one_shot": { "type": "boolean", "description": "If true, auto-delete after execution. Default: false" }
+                        "one_shot": { "type": "boolean", "description": "If true, auto-delete after execution. Default: false" },
+                        "chain": {
+                            "type": "object",
+                            "description": "Chained-pipeline identity (RECOMMENDED for pipeline steps): {\"chain_id\":\"<pipeline_id>\",\"step\":N,\"total_steps\":M}. chain_id = the pipeline id (same as session_label/output dir), step = 1-based current step, total_steps = chain length. The system alerts if a non-tail step (step < total_steps) completes without scheduling its successor — pass this on EVERY step of a chained pipeline, including the first one you create for step 1; the tail step (step == total_steps) legitimately creates no successor."
+                        }
                     },
                     "required": ["name", "schedule", "action"]
                 }),
