@@ -426,18 +426,7 @@ impl CarrierKernel {
         }
         // Definition-layer overlay: template.json fills empty presentation
         // metadata (see doc comment).
-        let tpl_path = ws.join("template.json");
-        if let Ok(tpl_str) = std::fs::read_to_string(&tpl_path) {
-            if let Ok(tpl) = serde_json::from_str::<clone::TemplateManifest>(&tpl_str) {
-                if new_manifest.display_name.trim().is_empty() && !tpl.display_name.trim().is_empty()
-                {
-                    new_manifest.display_name = tpl.display_name.clone();
-                }
-                if new_manifest.description.trim().is_empty() && !tpl.description.trim().is_empty() {
-                    new_manifest.description = tpl.description.clone();
-                }
-            }
-        }
+        fill_presentation_from_template_json(&mut new_manifest, ws);
         new_manifest.workspace = Some(ws.clone());
         if new_manifest.exec_policy.is_none() {
             new_manifest.exec_policy = Some(self.config.exec_policy.clone());
@@ -860,5 +849,104 @@ impl CarrierKernel {
 
         info!(agent = %entry.name, id = %agent_id, "Agent killed");
         Ok(())
+    }
+}
+
+/// Fill an empty `display_name`/`description` from the workspace's
+/// `template.json` (definition layer). Parses via `serde_json::Value` and
+/// extracts only the two fields: real-world template.json files drift from
+/// `clone::TemplateManifest` (e.g. `mcp_servers` as objects `[{name,
+/// required}]` where the struct wants `Vec<String>`), and a whole-struct
+/// parse failure would silently disable the fill — the same trap
+/// `read_template_default_flow` already guards against.
+fn fill_presentation_from_template_json(manifest: &mut AgentManifest, ws: &std::path::Path) {
+    let Ok(content) = std::fs::read_to_string(ws.join("template.json")) else {
+        return;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return;
+    };
+    if manifest.display_name.trim().is_empty() {
+        if let Some(dn) = v
+            .get("display_name")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.trim().is_empty())
+        {
+            manifest.display_name = dn.to_string();
+        }
+    }
+    if manifest.description.trim().is_empty() {
+        if let Some(d) = v
+            .get("description")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.trim().is_empty())
+        {
+            manifest.description = d.to_string();
+        }
+    }
+}
+
+#[cfg(test)]
+mod presentation_fill_tests {
+    use super::*;
+
+    fn temp_ws() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sessions-presentation-fill-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn bare_manifest() -> AgentManifest {
+        AgentManifest {
+            display_name: String::new(),
+            description: String::new(),
+            ..serde::Deserialize::deserialize(serde_json::json!({"name": "t"}))
+                .expect("manifest fixture")
+        }
+    }
+
+    /// Real-world template.json shape (mcp_servers as OBJECTS, exported_at as
+    /// string number) must not defeat the presentation fill — regression:
+    /// 2026-08-17 the overlay used full-struct TemplateManifest parsing and
+    /// silently skipped 8 clones whose template.json carried this drift.
+    #[test]
+    fn fill_ignores_struct_drift_and_fills_empty_fields() {
+        let ws = temp_ws();
+        std::fs::write(
+            ws.join("template.json"),
+            r#"{
+                "version": "2",
+                "name": "ai-writer",
+                "display_name": "AI科技写手",
+                "description": "AI科技公众号写手",
+                "exported_at": "1745395200",
+                "mcp_servers": [{"name": "searxng", "required": true}]
+            }"#,
+        )
+        .unwrap();
+        let mut m = bare_manifest();
+        fill_presentation_from_template_json(&mut m, &ws);
+        assert_eq!(m.display_name, "AI科技写手");
+        assert_eq!(m.description, "AI科技公众号写手");
+    }
+
+    /// Non-empty runtime values are never clobbered (fill-if-empty only).
+    #[test]
+    fn fill_never_clobbers_non_empty_runtime_values() {
+        let ws = temp_ws();
+        std::fs::write(
+            ws.join("template.json"),
+            r#"{"display_name": "模板名", "description": "模板描述"}"#,
+        )
+        .unwrap();
+        let mut m = bare_manifest();
+        m.display_name = "运行时名".into();
+        m.description = "运行时描述".into();
+        fill_presentation_from_template_json(&mut m, &ws);
+        assert_eq!(m.display_name, "运行时名");
+        assert_eq!(m.description, "运行时描述");
     }
 }
