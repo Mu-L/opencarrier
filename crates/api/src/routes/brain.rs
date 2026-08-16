@@ -287,6 +287,53 @@ pub async fn put_brain_config_raw(
     }
 }
 
+/// GET /api/models — Model catalog for CLI consumers (`opencarrier models list`).
+///
+/// Single-layer Brain: modalities ARE the model routing tags on the shared
+/// aginxbrain backend. Each row maps a modality to its routing tag.
+/// `?provider=` filters by provider name (always "aginxbrain").
+pub async fn models_list(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let brain = state.kernel.brain_info();
+    let provider_filter = params.get("provider").map(|s| s.to_lowercase());
+    let mut models: Vec<serde_json::Value> = brain
+        .list_modalities()
+        .into_iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": brain.model_for(&m.name), // routing tag sent to the backend
+                "provider": "aginxbrain",
+                "tier": m.name,                 // modality name
+                "context_window": 0,            // not tracked in single-layer brain
+            })
+        })
+        .collect();
+    if let Some(p) = provider_filter {
+        models.retain(|m| {
+            m["provider"]
+                .as_str()
+                .unwrap_or("")
+                .to_lowercase()
+                == p
+        });
+    }
+    Json(models)
+}
+
+/// GET /api/models/aliases — alias → resolved routing tag
+/// (CLI `opencarrier models aliases`; in single-layer brain the alias IS the
+/// modality name and the target is its routing tag).
+pub async fn models_aliases(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let brain = state.kernel.brain_info();
+    let mut map = serde_json::Map::new();
+    for m in brain.list_modalities() {
+        map.insert(m.name.clone(), serde_json::Value::String(brain.model_for(&m.name)));
+    }
+    Json(serde_json::Value::Object(map))
+}
+
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
@@ -307,4 +354,7 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
                 .put(set_brain_modality),
         )
         .route("/api/brain/reload", routing::post(reload_brain))
+        // CLI model-catalog surface (`opencarrier models list/aliases`)
+        .route("/api/models", routing::get(models_list))
+        .route("/api/models/aliases", routing::get(models_aliases))
 }

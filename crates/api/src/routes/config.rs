@@ -145,14 +145,21 @@ pub async fn config_schema(State(state): State<Arc<AppState>>) -> impl IntoRespo
 
 /// POST /api/config/set — Set a single config value and persist to config.toml.
 ///
-/// Accepts JSON `{ "path": "section.key", "value": "..." }`.
+/// Accepts JSON `{ "path": "section.key", "value": "..." }` — the field name
+/// `key` is accepted as an alias (the CLI sends `{"key": ..., "value": ...}`).
 /// Writes the value to the TOML config file and triggers a reload.
 pub async fn config_set(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> axum::response::Response {
-    let path = match body.get("path").and_then(|v| v.as_str()) {
-        Some(p) => p.to_string(),
+    // `key` alias first so the CLI shape keeps working; canonical is `path`.
+    let path = body
+        .get("path")
+        .or_else(|| body.get("key"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let path = match path {
+        Some(p) => p,
         None => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -310,6 +317,10 @@ fn json_to_toml_value(value: &serde_json::Value) -> toml::Value {
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
     axum::Router::new()
+        .route(
+            "/api/config/set",
+            routing::post(config_set), // CLI shape (`opencarrier models set` / config-set)
+        )
         .route("/api/config", routing::get(get_config).put(config_set))
         .route("/api/config/reload", routing::post(config_reload))
         .route("/api/config/schema", routing::get(config_schema))

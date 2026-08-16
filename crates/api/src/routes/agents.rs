@@ -210,6 +210,8 @@ pub async fn list_agents(
                 "model_provider": modality,
                 "model_name": model,
                 "ready": ready,
+                // Workspace path (CLI restart reads this to find agent.toml)
+                "workspace": e.manifest.workspace.as_ref().map(|p| p.to_string_lossy().to_string()),
                 "profile": e.manifest.profile,
                 "identity": {
                     "emoji": e.identity.emoji,
