@@ -103,6 +103,17 @@ pub(in crate::agent_loop) async fn handle_end_turn(
     // marker for prune/audit.
     if parsed_directives_s.silent || crate::outbound::is_no_reply_sentinel(&text) {
         debug!(agent = %manifest.name, "Agent chose NO_REPLY/silent — silent completion");
+        // Silent turns previously produced NO INFO-level completion log, so at
+        // INFO they were indistinguishable from a hung turn (2026-08-16: five
+        // silent weixin-oa event turns were misdiagnosed as hangs). INFO makes
+        // every silent completion visible without spamming (one line, only on
+        // the sentinel path).
+        info!(
+            agent = %manifest.name,
+            iterations = iteration + 1,
+            tokens = total_usage.total(),
+            "Streaming agent loop completed silently (no-reply sentinel)"
+        );
         // O6: Single-track — sync loop messages before pushing the final response
         super::helpers::sync_loop_messages(messages, session, session_base_len);
         session

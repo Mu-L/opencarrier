@@ -208,11 +208,18 @@ pub fn needs_reply(msg: &OaMessage) -> bool {
         "event" => match msg.event.as_str() {
             // Interactive events the agent should respond to
             "subscribe" | "SCAN" | "CLICK" => true,
-            // Receipts / passive events — drop silently
+            // Receipts / passive events — drop silently.
+            // `view_miniprogram` = menu item that opens a mini-program
+            // (WeChat's VIEW-for-miniprogram): zero conversational intent.
+            // Without this, every menu→小程序 click (86bus's main CTA)
+            // burned a full reasoning-model turn to earn a
+            // "[no reply needed]" (2026-08-16: 5 such turns, each ~4s,
+            // all correctly silent — pure LLM cost).
             "unsubscribe"
             | "TEMPLATESENDJOBFINISH"
             | "MASSSENDJOBFINISH"
             | "VIEW"
+            | "view_miniprogram"
             | "LOCATION" => false,
             // Unknown events: let the agent decide (conservative)
             _ => true,
@@ -598,6 +605,36 @@ impl Channel for SessionWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_needs_reply_filters_passive_events() {
+        // Menu→mini-program click: no conversational intent — must NOT burn an
+        // agent turn (2026-08-16: five such turns each spent a reasoning-model
+        // call to answer "[no reply needed]").
+        for ev in ["VIEW", "view_miniprogram", "unsubscribe", "TEMPLATESENDJOBFINISH"] {
+            let msg = OaMessage {
+                msg_type: "event".into(),
+                event: ev.into(),
+                ..Default::default()
+            };
+            assert!(!needs_reply(&msg), "event {ev} should be dropped");
+        }
+        // Interactive events and real messages still reach the agent.
+        for ev in ["subscribe", "SCAN", "CLICK"] {
+            let msg = OaMessage {
+                msg_type: "event".into(),
+                event: ev.into(),
+                ..Default::default()
+            };
+            assert!(needs_reply(&msg), "event {ev} should reach the agent");
+        }
+        let text = OaMessage {
+            msg_type: "text".into(),
+            content: "巴士路线".into(),
+            ..Default::default()
+        };
+        assert!(needs_reply(&text));
+    }
 
     #[test]
     fn test_build_message_text_subscribe() {
