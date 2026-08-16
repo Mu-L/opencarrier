@@ -14,7 +14,6 @@ pub mod cron;
 pub mod dup;
 pub mod files;
 pub mod hub;
-pub mod invites;
 pub mod kv;
 pub mod messaging;
 pub mod observability;

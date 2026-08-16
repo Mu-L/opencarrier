@@ -1,13 +1,12 @@
 //! MemorySubstrate: unified memory substrate built around the tree memory system.
 //!
-//! Composes the system KV store, session store, invite store, cron delivery store,
+//! Composes the system KV store, session store, cron delivery store,
 //! and tree memory behind a single API.
 
 use crate::cron_delivery::CronDeliveryStore;
 use crate::cron_store::CronJobStore;
 use crate::automation_store::AutomationRuleStore;
 use crate::flow_run::FlowRunStore;
-use crate::invites::InviteStore;
 use crate::weixin_store::WeixinSessionStore;
 use crate::notify_store::NotifyRouteStore;
 use crate::migration::run_migrations;
@@ -32,12 +31,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The unified memory substrate. Tree memory is the primary memory interface;
-/// system_kv, sessions, invites, and cron_delivery are infrastructure stores.
+/// system_kv, sessions, and cron_delivery are infrastructure stores.
 pub struct MemorySubstrate {
     conn: Arc<Mutex<Connection>>,
     system_kv: SystemKV,
     sessions: SessionStore,
-    invites: InviteStore,
     cron_delivery: CronDeliveryStore,
     cron_store: CronJobStore,
     weixin_store: WeixinSessionStore,
@@ -75,7 +73,6 @@ impl MemorySubstrate {
             conn: Arc::clone(&shared),
             system_kv: SystemKV::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
-            invites: InviteStore::new(Arc::clone(&shared)),
             cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
             cron_store: CronJobStore::new(Arc::clone(&shared)),
             weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
@@ -97,7 +94,6 @@ impl MemorySubstrate {
             conn: Arc::clone(&shared),
             system_kv: SystemKV::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
-            invites: InviteStore::new(Arc::clone(&shared)),
             cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
             cron_store: CronJobStore::new(Arc::clone(&shared)),
             weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
@@ -293,10 +289,6 @@ impl MemorySubstrate {
         }))
     }
 
-    /// Get a reference to the invite store.
-    pub fn invites(&self) -> &InviteStore {
-        &self.invites
-    }
 
     /// Create a new UsageStore from the shared connection.
     pub fn usage(&self) -> UsageStore {

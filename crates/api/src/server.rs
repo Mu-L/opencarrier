@@ -145,7 +145,6 @@ pub async fn build_router(
         .merge(routes::dup::router())
         .merge(routes::files::router())
         .merge(routes::hub::router())
-        .merge(routes::invites::router())
         .merge(routes::kv::router())
         .merge(routes::plugins::router())
         .merge(routes::messaging::router())
