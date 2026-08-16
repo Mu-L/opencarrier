@@ -28,6 +28,27 @@ use crate::workspace::append_daily_memory_log;
 /// one openid, two months, a dozen unrelated tasks in one 45-message session).
 const SESSION_STALE_SECS: i64 = 12 * 60 * 60; // 12 hours
 
+/// Rollover threshold for chained-pipeline sessions (explicit `session_label`).
+/// Above this the session is rolled to a fresh suffixed one: observed at
+/// 300K+ chars the LLM degrades (empty / text-only responses) AND the
+/// summarizer itself fails, so compaction cannot rescue it — the longer it
+/// gets the dumber it gets, a self-reinforcing loop (jiakao-20260815). User
+/// chat sessions are NOT rolled (history matters there; compaction + the
+/// staleness window govern them). Chain steps are safe to roll: pipeline
+/// state lives on disk (`output/<pipeline_id>/`) and each step's cron message
+/// is self-contained.
+const SESSION_ROLLOVER_CHARS: usize = 150_000;
+
+/// Approximate serialized size of a session's messages (chars). Cheap upper
+/// bound via serde; the cost is negligible next to the LLM call it protects.
+fn session_chars(session: &memory::session::Session) -> usize {
+    session
+        .messages
+        .iter()
+        .map(|m| serde_json::to_string(m).map(|s| s.len()).unwrap_or(0))
+        .sum()
+}
+
 /// List files under `output_dir` as relative paths (`foo.md`, `subdir/a.png`).
 fn list_output_rel_paths(output_dir: &Path) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
@@ -318,6 +339,51 @@ impl CarrierKernel {
                             "session event fold failed — falling back to DB cache"
                         );
                     }
+                }
+            }
+            // Session-too-long rollover (degeneration guard): a chained
+            // pipeline session (explicit `session_label`) that has ballooned is
+            // a model-degeneration trigger — the summarizer itself fails
+            // ("summarization unavailable") and the LLM degrades to empty /
+            // text-only responses. 300K-char sessions were observed doing this
+            // (jiakao-20260815). Roll THIS turn to a fresh suffixed session:
+            // pipeline state lives on disk (`output/<pipeline_id>/`) and each
+            // chain step's cron message is self-contained, so no context is
+            // lost. Only explicit-label (chained) sessions roll — user chat
+            // sessions keep their history (compaction + staleness window handle
+            // those).
+            if session_label.is_some_and(|l| !l.trim().is_empty()) {
+                let total_chars = session_chars(&session);
+                if total_chars > SESSION_ROLLOVER_CHARS {
+                    let mut suffix = 2u32;
+                    let new_label = loop {
+                        let cand = format!("{label}-r{suffix}");
+                        match self
+                            .memory
+                            .find_active_session_by_label_async(
+                                &agent_name,
+                                &cand,
+                                SESSION_STALE_SECS,
+                            )
+                            .await
+                            .map_err(KernelError::Carrier)?
+                        {
+                            Some(_) => suffix += 1,
+                            None => break cand,
+                        }
+                    };
+                    tracing::warn!(
+                        agent = %agent_name,
+                        old_label = %label,
+                        new_label = %new_label,
+                        session_chars = total_chars,
+                        threshold = SESSION_ROLLOVER_CHARS,
+                        "Chained-pipeline session too large — rolling to a fresh session to avoid model degeneration"
+                    );
+                    session = self
+                        .memory
+                        .create_session_with_label(agent_name.clone(), Some(&new_label))
+                        .map_err(KernelError::Carrier)?;
                 }
             }
             session
@@ -2431,6 +2497,49 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Rollover sizing: empty session is 0; messages count toward the
+    /// threshold; a realistic bloated chain session (the jiakao failure mode)
+    /// crosses SESSION_ROLLOVER_CHARS.
+    #[test]
+    fn session_chars_measures_rollover_pressure() {
+        use memory::session::Session;
+        use types::message::{Message, MessageContent, Role};
+
+        let mut s = Session {
+            id: SessionId::new(),
+            agent_name: "wechat-writer".into(),
+            messages: vec![],
+            turn_summaries: vec![],
+            context_window_tokens: 0,
+            label: None,
+        };
+        assert_eq!(session_chars(&s), 0, "empty session measures zero");
+
+        // A realistic long chain turn (user msg + assistant reply + tool
+        // exchange) — a few KB each. 50 of them is a heavy but healthy chain;
+        // it must stay under the rollover threshold.
+        s.messages.push(Message {
+            role: Role::User,
+            content: MessageContent::Text("x".repeat(2_000)),
+        });
+        s.messages.push(Message {
+            role: Role::Assistant,
+            content: MessageContent::Text("y".repeat(2_000)),
+        });
+        let per_turn = session_chars(&s);
+        assert!(per_turn > 4_000, "serde wrapper adds overhead: {per_turn}");
+        assert!(
+            per_turn * 25 < SESSION_ROLLOVER_CHARS,
+            "25 chain turns (~50 messages) must stay under rollover: {} vs {SESSION_ROLLOVER_CHARS}",
+            per_turn * 25
+        );
+        // The observed degeneration case: ~300K chars of history.
+        assert!(
+            per_turn * 150 > SESSION_ROLLOVER_CHARS,
+            "150 chain turns (~300K chars, the jiakao case) must exceed rollover"
+        );
     }
 
     #[test]
