@@ -350,7 +350,22 @@ $('settings-btn').onclick = openSettings;
 $('refresh-btn').onclick = loadClones;
 $('settings-close').onclick = () => $('settings-dialog').close();
 
-wireEvents().then(() => {
+wireEvents().then(async () => {
+  // First-run provisioning: adopt ~/.opencarrier/desktop.json when the UI
+  // has no saved config yet (deploy-script / handoff friendly).
+  if (!state.config.server || !state.config.apiKey) {
+    try {
+      const p = await invoke('get_provision');
+      if (p && p.server && p.apiKey) {
+        state.config = {
+          server: p.server,
+          apiKey: p.apiKey,
+          senderId: p.senderId || 'desktop-user',
+        };
+        saveConfig();
+      }
+    } catch {}
+  }
   loadClones();
   if (!state.config.server || !state.config.apiKey) openSettings();
 });

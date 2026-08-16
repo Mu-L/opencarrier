@@ -215,9 +215,33 @@ async fn chat_stream(app: AppHandle, args: ChatArgs) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Provision {
+    server: String,
+    api_key: String,
+    sender_id: String,
+}
+
+/// First-run provisioning: read `~/.opencarrier/desktop.json`
+/// (`{server, apiKey, senderId}`) so a machine can be pre-configured
+/// (deploy script / IT handoff) without typing the key into the UI.
+/// Absent file → None → the settings dialog opens as usual.
+#[tauri::command]
+fn get_provision() -> Option<Provision> {
+    let home = std::env::var("HOME").ok()?;
+    let path = std::path::PathBuf::from(home).join(".opencarrier").join("desktop.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![api_request, chat_stream])
+        .invoke_handler(tauri::generate_handler![
+            api_request,
+            chat_stream,
+            get_provision
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
