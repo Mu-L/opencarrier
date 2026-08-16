@@ -519,12 +519,20 @@ with its own iteration budget. Steps without dependencies run in parallel.
 - Simple tasks that complete in one turn
 - Tasks where stages are tightly interleaved
 
+**Flow annotation (重要):** each step inherits NOTHING from the current \
+turn — tools, flow rules and shell permissions are per-step. Before emitting \
+a plan, check the 流程目录 (flows catalog) section of your prompt: for every \
+step whose work matches one of those flows, set that step's `flow` field to \
+the flow's exact name. A step with `flow` runs with that flow's instructions, \
+tools and permissions; a step without it runs as a bare task with only the \
+generic tools. Omit `flow` only when no catalog entry matches.
+
 Example:
 ```json
 {\"title\": \"Write and publish article\", \"steps\": [
   {\"id\": \"research\", \"prompt\": \"Search for trending AI topics and select the best one\", \"depends_on\": []},
-  {\"id\": \"write\", \"prompt\": \"Write a 1000-word article about the selected topic\", \"depends_on\": [\"research\"]},
-  {\"id\": \"publish\", \"prompt\": \"Format the article and publish to WeChat\", \"depends_on\": [\"write\"]}
+  {\"id\": \"write\", \"prompt\": \"Write a 1000-word article about the selected topic\", \"depends_on\": [\"research\"], \"flow\": \"article-writer\"},
+  {\"id\": \"publish\", \"prompt\": \"Format the article and publish to WeChat\", \"depends_on\": [\"write\"], \"flow\": \"article-formatter\"}
 ]}
 ```";
 
