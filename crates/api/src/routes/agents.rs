@@ -269,38 +269,9 @@ pub async fn restart_agent(
     let was_running = state.kernel.stop_agent_run(agent_id).unwrap_or(false);
 
     // Re-read agent.toml from workspace to pick up tool/capability changes
-    let mut manifest_reloaded = false;
-    if let Some(ref entry) = state.kernel.registry.get(agent_id) {
-        if let Some(ref ws) = entry.manifest.workspace {
-            let toml_path = ws.join("agent.toml");
-            if toml_path.exists() {
-                if let Ok(toml_str) = std::fs::read_to_string(&toml_path) {
-                    if let Ok(new_manifest) = toml::from_str::<types::agent::AgentManifest>(&toml_str) {
-                        let _drift = types::serde_compat::take_lenient_diagnostics();
-                        if !_drift.is_empty() {
-                            tracing::warn!(agent = %entry.name, count = _drift.len(), details = ?_drift, "agent.toml fields fell back to empty defaults due to type drift — check tool_blocklist/tool_allowlist");
-                        }
-                        let mut new_manifest = new_manifest;
-                        new_manifest.workspace = Some(ws.clone());
-                        if new_manifest.exec_policy.is_none() {
-                            new_manifest.exec_policy = Some(state.kernel.config.exec_policy.clone());
-                        }
-                        if state.kernel.registry.update_manifest(agent_id, new_manifest.clone()).is_ok() {
-                            let caps = kernel::capabilities::manifest_to_capabilities(&new_manifest);
-                            state.kernel.coordination.capabilities.grant(agent_id, caps);
-                            if let Some(updated_entry) = state.kernel.registry.get(agent_id) {
-                                if let Err(e) = state.kernel.memory.save_agent(&updated_entry) {
-                                    tracing::warn!("failed to persist agent: {e}");
-                                }
-                            }
-                            manifest_reloaded = true;
-                            tracing::info!(agent = %agent_name, "Reloaded manifest from agent.toml on API restart");
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // (shared kernel path; also fills empty display_name/description from
+    // template.json — definition-layer backfills reach running agents here).
+    let manifest_reloaded = state.kernel.reload_manifest_from_workspace(agent_id);
 
     // Reset state to Running (also updates last_active)
     let _ = state

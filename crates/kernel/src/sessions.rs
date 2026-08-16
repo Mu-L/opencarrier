@@ -383,6 +383,83 @@ impl CarrierKernel {
         }
     }
 
+    /// Re-read `agent.toml` from the agent's workspace and swap the registry
+    /// manifest for the parsed copy (shared by the KernelHandle restart path
+    /// and the API restart route — previously two diverging copies).
+    ///
+    /// Empty `display_name`/`description` are filled from the workspace's
+    /// `template.json`: agent.toml is generated at install time and dup
+    /// pushes never touch the runtime layer, so definition-layer backfills
+    /// (e.g. 2026-08-17 Chinese display_name pass) would otherwise never
+    /// reach a running agent. Fill-if-empty only — a non-empty runtime
+    /// value is never clobbered.
+    ///
+    /// Returns true when the registry manifest was replaced.
+    pub fn reload_manifest_from_workspace(&self, agent_id: AgentId) -> bool {
+        let Some(entry) = self.registry.get(agent_id) else {
+            return false;
+        };
+        let Some(ref ws) = entry.manifest.workspace else {
+            return false;
+        };
+        let toml_path = ws.join("agent.toml");
+        if !toml_path.exists() {
+            return false;
+        }
+        let Ok(toml_str) = std::fs::read_to_string(&toml_path) else {
+            warn!(agent = %entry.name, "Failed to read agent.toml on restart");
+            return false;
+        };
+        let Ok(mut new_manifest) = toml::from_str::<AgentManifest>(&toml_str) else {
+            // Surface type drift that would silently empty security fields.
+            warn!(agent = %entry.name, "Failed to parse agent.toml on restart");
+            return false;
+        };
+        let drift = types::serde_compat::take_lenient_diagnostics();
+        if !drift.is_empty() {
+            warn!(
+                agent = %entry.name,
+                count = drift.len(),
+                details = ?drift,
+                "agent.toml fields fell back to empty defaults due to type drift — check tool_blocklist/tool_allowlist"
+            );
+        }
+        // Definition-layer overlay: template.json fills empty presentation
+        // metadata (see doc comment).
+        let tpl_path = ws.join("template.json");
+        if let Ok(tpl_str) = std::fs::read_to_string(&tpl_path) {
+            if let Ok(tpl) = serde_json::from_str::<clone::TemplateManifest>(&tpl_str) {
+                if new_manifest.display_name.trim().is_empty() && !tpl.display_name.trim().is_empty()
+                {
+                    new_manifest.display_name = tpl.display_name.clone();
+                }
+                if new_manifest.description.trim().is_empty() && !tpl.description.trim().is_empty() {
+                    new_manifest.description = tpl.description.clone();
+                }
+            }
+        }
+        new_manifest.workspace = Some(ws.clone());
+        if new_manifest.exec_policy.is_none() {
+            new_manifest.exec_policy = Some(self.config.exec_policy.clone());
+        }
+        if self
+            .registry
+            .update_manifest(agent_id, new_manifest.clone())
+            .is_err()
+        {
+            return false;
+        }
+        let caps = crate::capabilities::manifest_to_capabilities(&new_manifest);
+        self.coordination.capabilities.grant(agent_id, caps);
+        if let Some(updated_entry) = self.registry.get(agent_id) {
+            if let Err(e) = self.memory.save_agent(&updated_entry) {
+                warn!(agent = %entry.name, "Failed to persist reloaded manifest: {e}");
+            }
+        }
+        info!(agent = %entry.name, "Reloaded manifest from agent.toml (+template.json fill-if-empty overlay)");
+        true
+    }
+
     /// Compact an agent's session using LLM-based summarization.
     ///
     /// Replaces the existing text-truncation compaction with an intelligent
