@@ -3,7 +3,7 @@
 //! All CDN media uses AES-128-ECB with PKCS7-style padding.
 //! Ciphertext size = ceil((plaintext_size + 1) / 16) * 16.
 
-use aes::cipher::{generic_array::GenericArray, BlockDecrypt, BlockEncrypt, KeyInit};
+use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
 use base64::Engine;
 use reqwest::Client;
 use tracing::warn;
@@ -17,24 +17,6 @@ type Aes128 = aes::Aes128;
 /// Compute AES-ECB padded ciphertext size.
 pub fn aes_ecb_padded_size(plaintext_len: usize) -> usize {
     (plaintext_len + 1).div_ceil(16) * 16
-}
-
-/// AES-128-ECB encrypt with iLink padding.
-// SAFETY: WeChat CDN decryption uses AES-128-ECB as mandated by the
-// WeChat Mini Program protocol. ECB is required here because each
-// encrypted block is independent (no chaining across blocks).
-pub fn aes_128_ecb_encrypt(plaintext: &[u8], key: &[u8; 16]) -> Vec<u8> {
-    let cipher = Aes128::new(GenericArray::from_slice(key));
-    let padded_len = aes_ecb_padded_size(plaintext.len());
-    let mut buf = vec![0u8; padded_len];
-    buf[..plaintext.len()].copy_from_slice(plaintext);
-    // iLink pads with zeros (the +1 in padded_size handles the terminator)
-
-    for chunk in buf.chunks_mut(16) {
-        let block = GenericArray::from_mut_slice(chunk);
-        cipher.encrypt_block(block);
-    }
-    buf
 }
 
 /// AES-128-ECB decrypt. Returns plaintext (trailing zeros trimmed).
@@ -87,15 +69,6 @@ pub fn parse_aes_key(aes_key_b64: &str) -> Option<[u8; 16]> {
         }
         _ => None,
     }
-}
-
-/// Generate a random 16-byte AES key and return (raw_bytes, hex_string).
-pub fn generate_aes_key() -> ([u8; 16], String) {
-    use rand::Rng;
-    let mut key = [0u8; 16];
-    rand::thread_rng().fill(&mut key);
-    let hex_str = hex::encode(key);
-    (key, hex_str)
 }
 
 /// Download and decrypt a file from CDN.
@@ -169,10 +142,3 @@ pub fn cdn_download_url(encrypt_query_param: &str) -> String {
     )
 }
 
-/// Compute MD5 hex digest of data.
-pub fn md5_hex(data: &[u8]) -> String {
-    use md5::{Digest, Md5};
-    let mut hasher = Md5::new();
-    hasher.update(data);
-    hex::encode(hasher.finalize())
-}

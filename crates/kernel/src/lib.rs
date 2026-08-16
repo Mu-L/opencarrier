@@ -32,6 +32,5 @@ pub mod sender_gate;
 pub mod sessions;
 pub mod supervisor;
 pub mod workspace;
-pub mod wizard;
 pub use runtime::kernel_handle::KernelHandle;
 pub use kernel::CarrierKernel;

@@ -574,138 +574,6 @@ pub struct OutputQuery {
     pub owner_id: Option<String>,
 }
 
-/// GET /api/agents/{id}/output — List output files for a specific user.
-///
-/// Requires `?sender_id=xxx` query param. No fallback — sender_id is mandatory.
-pub async fn list_output_files(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Query(params): Query<OutputQuery>,
-) -> impl IntoResponse {
-    let (_agent_id, entry) = match resolve_agent_id(&id, &state.kernel.registry) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
-
-    let agent_name = &entry.manifest.name;
-    let output_dir = types::config::sender_data_dir(
-        &state.kernel.config.home_dir, params.owner_id.as_deref().unwrap_or(&params.sender_id), agent_name, Some(&params.sender_id),
-    ).join("output");
-
-    if !output_dir.exists() {
-        return (StatusCode::OK, Json(serde_json::json!({"files": []})));
-    }
-
-    let mut files = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&output_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            let modified = std::fs::metadata(&path)
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            files.push(serde_json::json!({
-                "name": name,
-                "size_bytes": size,
-                "modified_at": modified,
-            }));
-        }
-    }
-
-    (StatusCode::OK, Json(serde_json::json!({"files": files})))
-}
-
-/// GET /api/agents/{id}/output/{*path} — Download a single output file.
-///
-/// Requires `?sender_id=xxx` query param. No fallback.
-pub async fn serve_output_file(
-    State(state): State<Arc<AppState>>,
-    _extensions: axum::http::Extensions,
-    Path((id, file_path)): Path<(String, String)>,
-    Query(params): Query<OutputQuery>,
-) -> axum::response::Response {
-    let err = |status: StatusCode, msg: &str| -> axum::response::Response {
-        (
-            status,
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "application/json".to_string(),
-            )],
-            format!("{{\"error\":\"{}\"}}", msg).into_bytes(),
-        )
-            .into_response()
-    };
-
-    // Public download endpoint — skip tenant check. Path-based auth via sender_id
-    // is sufficient: files are scoped to senders/{sender_id}/{agent_name}/output/.
-    let (_agent_id, entry) = match resolve_agent_id(&id, &state.kernel.registry) {
-        Ok(pair) => pair,
-        Err((status, _)) => {
-            let msg = if status == StatusCode::BAD_REQUEST {
-                "Invalid agent ID"
-            } else {
-                "Agent not found"
-            };
-            return err(status, msg);
-        }
-    };
-
-    // Build the safe base: senders/{owner_id}/{agent_name}/.../output/
-    let agent_name = &entry.manifest.name;
-    let safe_base = types::config::sender_data_dir(
-        &state.kernel.config.home_dir, params.owner_id.as_deref().unwrap_or(&params.sender_id), agent_name, Some(&params.sender_id),
-    ).join("output");
-
-    // Reject any ".." in file_path
-    if file_path.contains("..") {
-        return err(StatusCode::FORBIDDEN, "Path traversal denied");
-    }
-
-    let target = safe_base.join(&file_path);
-
-    // Canonicalize and verify target stays inside safe_base
-    let base_canonical = match safe_base.canonicalize() {
-        Ok(p) => p,
-        Err(_) => return err(StatusCode::NOT_FOUND, "Output directory not found"),
-    };
-    let target_canonical = match target.canonicalize() {
-        Ok(p) => p,
-        Err(_) => return err(StatusCode::NOT_FOUND, "File not found"),
-    };
-
-    if !target_canonical.starts_with(&base_canonical) {
-        return err(StatusCode::FORBIDDEN, "Path traversal denied");
-    }
-
-    let data = match std::fs::read(&target_canonical) {
-        Ok(d) => d,
-        Err(_) => return err(StatusCode::NOT_FOUND, "File not found"),
-    };
-
-    // Extract filename for Content-Disposition
-    let filename = file_path.rsplit('/').next().unwrap_or(&file_path);
-
-    // Force download — never execute/render in browser
-    let resp = axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
-        .header(
-            "content-disposition",
-            format!("attachment; filename=\"{}\"", filename),
-        )
-        .header("x-content-type-options", "nosniff")
-        .body(data.into())
-        .unwrap();
-    resp
-}
-
 // ---------------------------------------------------------------------------
 // File Explorer endpoints — directory tree + browser-friendly file viewing
 // ---------------------------------------------------------------------------
@@ -866,30 +734,6 @@ fn mime_for_path(path: &str) -> &'static str {
     "application/octet-stream"
 }
 
-/// Whether a `view` path is public (no auth required).
-///
-/// Only the `output/` subtree holds published content meant for direct links
-/// (WeChat article images, rendered articles). Everything else under the sender
-/// dir — `profile.json` (OA secrets), `session.json`, `memory/`, `input/`, ... —
-/// requires authentication. Backslashes are normalized so Windows-style paths
-/// can't sneak past the prefix check.
-fn is_public_output_path(file_path: &str) -> bool {
-    let normalized = file_path.replace('\\', "/");
-    let rel = normalized.strip_prefix('/').unwrap_or(&normalized);
-    if rel == "output" || rel.starts_with("output/") {
-        return true;
-    }
-    // Allow anonymous read of image files under input/ so external vision
-    // providers (AginxBrain -> Kimi K3) can fetch them for analysis without
-    // opencarrier API credentials. Only image extensions are opened - secrets
-    // like profile.json / session.json / memory/ stay auth-gated. The path
-    // already carries the sender_id, and received images are not sensitive.
-    if rel.starts_with("input/") && is_image_extension(rel) {
-        return true;
-    }
-    false
-}
-
 /// True if `path` ends with a common image extension (case-insensitive).
 fn is_image_extension(path: &str) -> bool {
     let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
@@ -1041,6 +885,30 @@ pub async fn view_file(
         .unwrap()
 }
 
+/// Whether a `view` path is public (no auth required).
+///
+/// Only the `output/` subtree holds published content meant for direct links
+/// (WeChat article images, rendered articles). Everything else under the sender
+/// dir — `profile.json` (OA secrets), `session.json`, `memory/`, `input/`, ... —
+/// requires authentication. Backslashes are normalized so Windows-style paths
+/// can't sneak past the prefix check.
+fn is_public_output_path(file_path: &str) -> bool {
+    let normalized = file_path.replace('\\', "/");
+    let rel = normalized.strip_prefix('/').unwrap_or(&normalized);
+    if rel == "output" || rel.starts_with("output/") {
+        return true;
+    }
+    // Allow anonymous read of image files under input/ so external vision
+    // providers (AginxBrain -> Kimi K3) can fetch them for analysis without
+    // opencarrier API credentials. Only image extensions are opened - secrets
+    // like profile.json / session.json / memory/ stay auth-gated. The path
+    // already carries the sender_id, and received images are not sensitive.
+    if rel.starts_with("input/") && is_image_extension(rel) {
+        return true;
+    }
+    false
+}
+
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
@@ -1052,11 +920,6 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         )
         .route("/api/agents/{id}/upload", routing::post(upload_file))
         .route("/api/uploads/{file_id}", routing::get(serve_upload))
-        .route("/api/agents/{id}/output", routing::get(list_output_files))
-        .route(
-            "/api/agents/{id}/output/{*path}",
-            routing::get(serve_output_file),
-        )
         // File explorer endpoints
         .route("/api/files/tree/{agent}", routing::get(list_files_tree))
         .route("/api/files/view/{agent}/{*path}", routing::get(view_file))

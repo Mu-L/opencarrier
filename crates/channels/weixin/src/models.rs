@@ -33,17 +33,11 @@ pub const LONG_POLL_TIMEOUT_MS: u64 = 35_000;
 // Message types
 // ---------------------------------------------------------------------------
 
-/// Message type: none / unknown.
-pub const MSG_TYPE_NONE: u32 = 0;
 /// Message type: user message (inbound from WeChat user).
 pub const MSG_TYPE_USER: u32 = 1;
 /// Message type: bot message (outbound from our bot).
 pub const MSG_TYPE_BOT: u32 = 2;
 
-/// Message state: new.
-pub const MSG_STATE_NEW: u32 = 0;
-/// Message state: generating.
-pub const MSG_STATE_GENERATING: u32 = 1;
 /// Message state: finished (complete message).
 pub const MSG_STATE_FINISH: u32 = 2;
 
@@ -58,10 +52,6 @@ pub const ITEM_TYPE_FILE: u32 = 4;
 /// Item type: video.
 pub const ITEM_TYPE_VIDEO: u32 = 5;
 
-/// Typing status: typing.
-pub const TYPING_STATUS_TYPING: u32 = 1;
-/// Typing status: cancel typing.
-pub const TYPING_STATUS_CANCEL: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // Common
@@ -257,39 +247,6 @@ pub struct SendImageItem {
 #[derive(Debug, Clone, Serialize)]
 pub struct SendVideoItem {
     pub video_url: String,
-}
-
-// ---------------------------------------------------------------------------
-// GetConfig / SendTyping (Phase 2 — typing indicator)
-// ---------------------------------------------------------------------------
-
-/// Request body for `POST /ilink/bot/getconfig`.
-#[derive(Debug, Clone, Serialize)]
-#[allow(dead_code)]
-pub struct GetConfigRequest {
-    pub ilink_user_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_token: Option<String>,
-    pub base_info: BaseInfo,
-}
-
-/// Response from `POST /ilink/bot/getconfig`.
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
-pub struct GetConfigResponse {
-    pub ret: Option<i64>,
-    pub errmsg: Option<String>,
-    pub typing_ticket: Option<String>,
-}
-
-/// Request body for `POST /ilink/bot/sendtyping`.
-#[derive(Debug, Clone, Serialize)]
-#[allow(dead_code)]
-pub struct SendTypingRequest {
-    pub ilink_user_id: String,
-    pub typing_ticket: String,
-    pub status: u32,
-    pub base_info: BaseInfo,
 }
 
 // ---------------------------------------------------------------------------

@@ -15,8 +15,5 @@ pub use manifest::{
     build_manifest, is_bak, is_test_dir, sha256_hex, validate_install_format,
     write_files_to_workspace, Manifest,
 };
-pub use loader::{
-    format_string_array, parse_frontmatter, parse_string_array, parse_toml_description,
-    parse_template_manifest_lenient, TemplateManifest,
-};
+pub use loader::{parse_template_manifest_lenient, TemplateManifest};
 pub use manifest_builder::build_manifest_from_workspace;

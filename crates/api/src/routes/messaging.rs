@@ -291,73 +291,6 @@ pub async fn send_message_stream(
         .into_response()
 }
 
-/// Request body for `POST /api/deliver`.
-#[derive(Debug, serde::Deserialize)]
-pub struct DeliverRequest {
-    pub agent: String,
-    pub content_key: String,
-    pub channel_type: String,
-    pub bot_id: String,
-    pub user_id: String,
-}
-
-impl DeliverRequest {
-    fn validate(&self) -> Result<(), &'static str> {
-        if self.agent.is_empty()
-            || self.content_key.is_empty()
-            || self.channel_type.is_empty()
-            || self.bot_id.is_empty()
-            || self.user_id.is_empty()
-        {
-            return Err(
-                "missing required field: agent, content_key, channel_type, bot_id, user_id",
-            );
-        }
-        Ok(())
-    }
-}
-
-/// POST /api/deliver — Deliver rich content to a user without an agent loop.
-///
-/// Body: `{ "agent": "agent-name", "content_key": "月票",
-///          "channel_type": "wecom", "bot_id": "86bus-kf",
-///          "user_id": "wm..." }`
-///
-/// Looks up the content descriptor from the agent's `content.toml` and delivers
-/// it via the channel's best-supported form (miniprogram card / file / video /
-/// image / link / text).
-pub async fn deliver_content(
-    State(state): State<std::sync::Arc<crate::routes::state::AppState>>,
-    Json(payload): Json<DeliverRequest>,
-) -> impl axum::response::IntoResponse {
-    if let Err(msg) = payload.validate() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": msg })),
-        )
-            .into_response();
-    }
-
-    match state.kernel.deliver_content(
-        &payload.agent,
-        &payload.content_key,
-        &payload.channel_type,
-        &payload.bot_id,
-        &payload.user_id,
-    ) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "status": "delivered" })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing;
@@ -367,5 +300,4 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
             "/api/agents/{id}/message/stream",
             routing::post(send_message_stream),
         )
-        .route("/api/deliver", routing::post(deliver_content))
 }

@@ -3,7 +3,6 @@
 pub mod agent_channels;
 pub mod agents;
 pub mod auth;
-pub mod bindings;
 pub mod bots;
 pub mod brain;
 pub mod clones;
@@ -21,8 +20,6 @@ pub mod messaging;
 pub mod observability;
 pub mod plugin_toml;
 pub mod plugins;
-pub mod providers;
-pub mod sender_routes;
 pub mod sessions;
 pub mod state;
 pub mod tools_skills;
@@ -137,44 +134,3 @@ pub async fn list_commands(State(_state): State<Arc<AppState>>) -> impl IntoResp
     Json(serde_json::json!({"commands": commands}))
 }
 
-/// GET /api/plugins — list loaded plugin tool status.
-pub async fn plugins_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let plugin_statuses = if let Some(ref pm) = state.channel_manager {
-        let pm = pm.lock().await;
-        let statuses = pm.status();
-        drop(pm);
-        statuses
-            .into_iter()
-            .map(|s| {
-                serde_json::json!({
-                    "name": s.name,
-                    "version": s.version,
-                    "loaded": s.loaded,
-                    "channels": s.channels,
-                    "tools": s.tools,
-                })
-            })
-            .collect::<Vec<_>>()
-    } else {
-        let guard = state.kernel.plugins.plugin_tool_dispatcher.lock().unwrap();
-        if let Some(ref dispatcher) = *guard {
-            dispatcher
-                .definitions()
-                .into_iter()
-                .map(|t| {
-                    serde_json::json!({
-                        "name": t.name,
-                        "description": t.description,
-                    })
-                })
-                .collect()
-        } else {
-            vec![]
-        }
-    };
-
-    Json(serde_json::json!({
-        "plugins": plugin_statuses,
-        "count": plugin_statuses.len(),
-    }))
-}

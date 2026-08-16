@@ -39,13 +39,6 @@ pub async fn brain_info(State(state): State<Arc<AppState>>) -> impl IntoResponse
     }))
 }
 
-/// GET /api/brain/status — Brain health status (driver readiness, latency, success/failure).
-pub async fn brain_status(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let brain = state.kernel.brain_info();
-    let status = brain.status();
-    Json(serde_json::to_value(&status).unwrap_or_default())
-}
-
 /// GET /api/brain/modalities/{name} — Resolved endpoint for a single modality.
 pub async fn brain_modality_detail(
     State(state): State<Arc<AppState>>,
@@ -314,5 +307,4 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
                 .put(set_brain_modality),
         )
         .route("/api/brain/reload", routing::post(reload_brain))
-        .route("/api/brain/status", routing::get(brain_status))
 }

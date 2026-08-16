@@ -9,7 +9,7 @@ use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 use crate::models::*;
@@ -52,8 +52,6 @@ pub struct BotSession {
     pub http: Client,
     /// Per-user context_token cache: user_id → context_token.
     context_tokens: Mutex<HashMap<String, String>>,
-    /// Per-user typing_ticket cache: user_id → (ticket, cached_at).
-    typing_tickets: Mutex<HashMap<String, (String, Instant)>>,
     /// get_updates_buf cursor for long-polling.
     pub cursor: Mutex<String>,
     /// Whether the polling loop is active.
@@ -73,15 +71,6 @@ impl BotSession {
             .unwrap_or_default()
             .as_secs() as i64;
         now >= self.expires_at.load(Ordering::Relaxed)
-    }
-
-    /// Check if this bot's token will expire within the given number of seconds.
-    pub fn is_near_expiry(&self, within_secs: i64) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        now >= self.expires_at.load(Ordering::Relaxed) - within_secs
     }
 
     /// Seconds remaining until expiry.
@@ -104,30 +93,6 @@ impl BotSession {
     /// Get the cached context_token for a user.
     pub fn get_context_token(&self, user_id: &str) -> Option<String> {
         self.context_tokens.lock().unwrap_or_else(|e| e.into_inner()).get(user_id).cloned()
-    }
-
-    /// Cache a typing_ticket for a user (valid 24h, we cache for 23h).
-    pub fn store_typing_ticket(&self, user_id: &str, ticket: &str) {
-        self.typing_tickets
-            .lock()
-            .unwrap()
-            .insert(user_id.to_string(), (ticket.to_string(), Instant::now()));
-    }
-
-    /// Get a cached typing_ticket for a user (if fresh enough).
-    pub fn get_typing_ticket(&self, user_id: &str) -> Option<String> {
-        self.typing_tickets
-            .lock()
-            .unwrap()
-            .get(user_id)
-            .and_then(|(ticket, cached_at)| {
-                // Cache for 23 hours (typing_ticket valid for 24h)
-                if cached_at.elapsed().as_secs() < 23 * 3600 {
-                    Some(ticket.clone())
-                } else {
-                    None
-                }
-            })
     }
 }
 
@@ -225,7 +190,6 @@ impl WeixinState {
                 expires_at: AtomicI64::new(tf.expires_at),
                 http: crate::build_http_client(),
                 context_tokens: Mutex::new(persisted_ctx),
-                typing_tickets: Mutex::new(HashMap::new()),
                 cursor: Mutex::new(String::new()),
                 active: AtomicBool::new(false),
                 last_saved: AtomicI64::new(tf.expires_at - SESSION_DURATION_SECS),
@@ -262,7 +226,6 @@ impl WeixinState {
             expires_at: AtomicI64::new(now + SESSION_DURATION_SECS),
             http: crate::build_http_client(),
             context_tokens: Mutex::new(HashMap::new()),
-            typing_tickets: Mutex::new(HashMap::new()),
             cursor: Mutex::new(String::new()),
             active: AtomicBool::new(true),
             last_saved: AtomicI64::new(now),
@@ -383,15 +346,6 @@ impl WeixinState {
         self.bots.get(&found_key)
     }
 
-    /// List all active (non-expired) user IDs.
-    pub fn active_user_ids(&self) -> Vec<String> {
-        self.bots
-            .iter()
-            .filter(|e| !e.value().is_expired())
-            .map(|e| e.key().clone())
-            .collect()
-    }
-
     /// Load new bots — from DB if available, otherwise scan JSON files.
     /// Used by the dynamic session watcher to pick up QR-scanned bots.
     pub fn load_new_from_dir(&self) {
@@ -419,7 +373,6 @@ impl WeixinState {
                     expires_at: AtomicI64::new(tf.expires_at),
                     http: crate::build_http_client(),
                     context_tokens: Mutex::new(tf.context_tokens),
-                    typing_tickets: Mutex::new(HashMap::new()),
                     cursor: Mutex::new(String::new()),
                     active: AtomicBool::new(false),
                     last_saved: AtomicI64::new(tf.expires_at - SESSION_DURATION_SECS),
@@ -479,7 +432,6 @@ impl WeixinState {
                 expires_at: AtomicI64::new(tf.expires_at),
                 http: crate::build_http_client(),
                 context_tokens: Mutex::new(persisted_ctx),
-                typing_tickets: Mutex::new(HashMap::new()),
                 cursor: Mutex::new(String::new()),
                 active: AtomicBool::new(false),
                 last_saved: AtomicI64::new(tf.expires_at - SESSION_DURATION_SECS),
