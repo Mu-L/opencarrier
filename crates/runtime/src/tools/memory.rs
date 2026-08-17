@@ -365,8 +365,23 @@ fn format_hit_response(resp: types::memory_tree::QueryResponse) -> CarrierResult
     Ok(lines.join("\n"))
 }
 
-fn truncate_content(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { format!("{}...", &s[..max]) }
+/// Byte-budgeted truncation that never splits a UTF-8 character: the cut
+/// point snaps back to the nearest char boundary. A raw `&s[..max]` panics
+/// when byte `max` lands mid-character — Chinese tree content (3 bytes/char)
+/// hits it almost every time, which killed the first real `memory_tree` call
+/// in production (2026-08-17 86bus: "end byte index 200 is not a char
+/// boundary" panicked the whole agent turn). Shared with `toolset.rs`, whose
+/// tool-description preview has the same byte-slicing landmine.
+pub(crate) fn truncate_content(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        let mut end = max.min(s.len());
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
+    }
 }
 
 fn format_timestamp(ms: i64) -> String {
@@ -377,4 +392,31 @@ fn format_timestamp(ms: i64) -> String {
 
 fn format_time_range(start_ms: i64, end_ms: i64) -> String {
     format!("{} — {}", format_timestamp(start_ms), format_timestamp(end_ms))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_content;
+
+    /// The production panic (2026-08-17): Chinese tree content, byte cut at
+    /// 200 landed inside a 3-byte char and `&s[..200]` panicked the whole
+    /// agent turn. The cut must snap back to a char boundary instead.
+    #[test]
+    fn truncate_content_snaps_back_on_multibyte_boundary() {
+        let chinese = "心".repeat(100); // 300 bytes; byte 200 is mid-char (198..201)
+        let t = truncate_content(&chinese, 200);
+        let body = t.strip_suffix("...").expect("ellipsis appended");
+        assert_eq!(body.chars().count(), 66, "cut snaps to byte 198 = 66 chars");
+        assert!(!body.chars().any(|c| c == '\u{FFFD}'));
+
+        // Short input passes through unchanged; ASCII cuts exactly at the cap.
+        assert_eq!(truncate_content("abc", 5), "abc");
+        assert_eq!(truncate_content("abcdefgh", 5), "abcde...");
+
+        // Mixed content: cap lands mid-ASCII-char impossible, mid-CJK snaps.
+        let mixed = format!("{}月卡咨询", "x".repeat(197));
+        let t = truncate_content(&mixed, 200);
+        assert!(t.ends_with("..."));
+        assert!(t.is_char_boundary(t.len() - 3));
+    }
 }

@@ -69,11 +69,10 @@ impl ToolModule for ToolSearchTools {
 
         let mut out = format!("Found {} tool(s) matching \"{}\":\n\n", results.len(), query);
         for (_ts_name, def) in &results {
-            let desc_preview = if def.description.len() > 200 {
-                format!("{}...", &def.description[..197])
-            } else {
-                def.description.clone()
-            };
+            // Char-boundary-safe truncation: a raw `&def.description[..197]`
+            // panics when the byte cut lands inside a multi-byte UTF-8 char —
+            // Chinese tool descriptions (api_tools) hit it routinely.
+            let desc_preview = super::memory::truncate_content(&def.description, 200);
             out.push_str(&format!("## {}\n{}\n\n", def.name, desc_preview));
             // Include input_schema so LLM knows how to call the tool
             if !def.input_schema.is_null() {
