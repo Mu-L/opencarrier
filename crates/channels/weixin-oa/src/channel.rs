@@ -2,7 +2,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
 
 use dashmap::DashMap;
 use tokio::sync::mpsc;
@@ -22,8 +21,10 @@ pub struct OaAccountState {
     pub app_secret: String,
     pub name: String,
     pub bind_agent: Option<String>,
-    /// Cached access_token + expiry Instant.
-    pub token: tokio::sync::Mutex<Option<(String, Instant)>>,
+    /// Template-message fallback config (45015 window-closed replies), read
+    /// through from the session file.
+    pub fallback_template_id: Option<String>,
+    pub fallback_template_field: Option<String>,
     pub http: reqwest::Client,
 }
 
@@ -45,9 +46,6 @@ impl Default for WeixinOaState {
     }
 }
 
-/// Token cache TTL with early-expiry margin (300s before actual expiry).
-const TOKEN_MARGIN_SECS: u64 = 300;
-
 impl OaAccountState {
     pub fn from_session(session: &WeixinOaSessionFile) -> Self {
         OaAccountState {
@@ -55,38 +53,23 @@ impl OaAccountState {
             app_secret: session.app_secret.clone(),
             name: session.name.clone(),
             bind_agent: session.bind_agent.clone(),
-            token: tokio::sync::Mutex::new(None),
+            fallback_template_id: session.fallback_template_id.clone(),
+            fallback_template_field: session.fallback_template_field.clone(),
             http: reqwest::Client::new(),
         }
     }
 
-    /// Get a valid access_token, refreshing if needed.
+    /// Get a valid access_token. Delegates to the central `wechat-oa` core
+    /// cache (2026-08-18 three-shell convergence) — the per-account Mutex
+    /// cache is gone; every token in the process now flows through one
+    /// single-flight cache keyed by app_id.
     pub async fn get_token(&self) -> CarrierResult<String> {
-        let mut guard = self.token.lock().await;
-        if let Some((ref token, expiry)) = *guard {
-            if expiry > Instant::now() {
-                return Ok(token.clone());
-            }
-        }
-        let resp = api::get_access_token(&self.http, &self.app_id, &self.app_secret).await?;
-        let token = resp.access_token;
-        let token = token.ok_or_else(|| {
-            CarrierError::Network(format!(
-                "No access_token in response (errcode={:?}, errmsg={:?})",
-                resp.errcode, resp.errmsg
-            ))
-        })?;
-        let expires_in = resp.expires_in.unwrap_or(7200);
-        let margin = expires_in.saturating_sub(TOKEN_MARGIN_SECS);
-        let expiry = Instant::now() + std::time::Duration::from_secs(margin);
-        *guard = Some((token.clone(), expiry));
-        Ok(token)
+        wechat_oa::token::get_token(&self.http, &self.app_id, &self.app_secret).await
     }
 
     /// Invalidate the cached token (on 40001 errors).
     pub async fn invalidate_token(&self) {
-        let mut guard = self.token.lock().await;
-        *guard = None;
+        wechat_oa::token::invalidate(&self.app_id);
     }
 }
 
@@ -385,9 +368,26 @@ where
     }
 }
 
+/// Truncate a 45015-fallback text for a template field: template values are
+/// display-capped (~20 chars visible), so ship a compact summary + a nudge to
+/// come back into the account instead of a raw truncated reply.
+fn fallback_summary(text: &str) -> String {
+    const CAP: usize = 40;
+    let head: String = text.chars().take(CAP).collect();
+    if text.chars().count() > CAP {
+        format!("{head}…（进入公众号回复可继续查看）")
+    } else {
+        format!("{head}（进入公众号回复可继续查看）")
+    }
+}
+
 /// Deliver rich content to a weixin-oa follower. Priority: miniprogram, then
-/// image, then text (degrades via `as_text`, incl. a formatted link). Each send
-/// retries once on a 40001 (expired token) by refreshing.
+/// template, then image, then text (degrades via `as_text`, incl. a formatted
+/// link). Template sits above text so a text+template payload uses template as
+/// the carrier (it works outside the 48h window; text does not). Each send
+/// retries once on a 40001 (expired token) by refreshing; a text send that
+/// hits the 48h window (45015) falls back to a template message when the
+/// account has `fallback_template_id`/`fallback_template_field` configured.
 async fn deliver_oa(
     account: &Arc<OaAccountState>,
     openid: &str,
@@ -416,6 +416,34 @@ async fn deliver_oa(
         })
         .await;
     }
+    if let Some(tpl) = content.template.as_ref().filter(|t| t.is_complete()) {
+        let template_id = tpl.template_id.clone();
+        let data = tpl.data.clone();
+        let url = tpl.url.clone();
+        let mp = tpl.miniprogram.clone();
+        return with_token_retry(account, |token| {
+            let http = account.http.clone();
+            let openid = openid.to_string();
+            let template_id = template_id.clone();
+            let data = data.clone();
+            let url = url.clone();
+            let mp = mp.clone();
+            async move {
+                api::template_send(
+                    &http,
+                    &token,
+                    &openid,
+                    &template_id,
+                    url.as_deref(),
+                    mp.as_ref(),
+                    &data,
+                )
+                .await
+                .map(|_| ())
+            }
+        })
+        .await;
+    }
     if let Some(img) = content.image.as_ref() {
         if !img.is_empty() {
             let token = account.get_token().await?;
@@ -430,17 +458,62 @@ async fn deliver_oa(
         }
     }
     if let Some(text) = content.as_text() {
-        return with_token_retry(account, |token| {
+        let result = with_token_retry(account, |token| {
             let http = account.http.clone();
             let openid = openid.to_string();
             let text = text.clone();
             async move { api::custom_send_text(&http, &token, &openid, &text).await }
         })
         .await;
+        return match result {
+            Ok(()) => Ok(()),
+            // 48h customer-service window closed. If the account configured a
+            // fallback template, retry as a template message (no window limit)
+            // — the 86bus-era 45015 failure mode (~49/day) lands here.
+            Err(e) if wechat_oa::api::extract_errcode(&e.to_string()) == Some(45015) => {
+                template_fallback(account, openid, &text, e).await
+            }
+            Err(e) => Err(e),
+        };
     }
     Err(CarrierError::InvalidInput(
-        "weixin-oa: content has no miniprogram, image, or text representation".to_string(),
+        "weixin-oa: content has no miniprogram, template, image, or text representation".to_string(),
     ))
+}
+
+/// 45015 fallback: re-send the text as a template message using the account's
+/// configured `fallback_template_id` + `fallback_template_field`. Unconfigured
+/// accounts keep the original error (log-and-drop behavior unchanged).
+async fn template_fallback(
+    account: &Arc<OaAccountState>,
+    openid: &str,
+    text: &str,
+    original_err: CarrierError,
+) -> CarrierResult<()> {
+    let (Some(template_id), Some(field)) = (
+        account.fallback_template_id.as_deref().filter(|s| !s.is_empty()),
+        account.fallback_template_field.as_deref().filter(|s| !s.is_empty()),
+    ) else {
+        warn!(
+            app_id = %account.app_id,
+            openid,
+            error = %original_err,
+            "45015 window closed and no fallback template configured (set fallback_template_id + fallback_template_field in session.json)"
+        );
+        return Err(original_err);
+    };
+    let data = serde_json::json!({ field: { "value": fallback_summary(text) } });
+    let token = account.get_token().await?;
+    match api::template_send(&account.http, &token, openid, template_id, None, None, &data).await {
+        Ok(_) => {
+            info!(app_id = %account.app_id, openid, template_id, "45015 fallback delivered via template message");
+            Ok(())
+        }
+        Err(e) => {
+            warn!(app_id = %account.app_id, openid, error = %e, "45015 fallback template send failed");
+            Err(e)
+        }
+    }
 }
 
 /// Deliver a `ContentDescriptor` to an OA follower by `app_id`. Public entry

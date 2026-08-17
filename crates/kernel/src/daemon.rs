@@ -430,7 +430,9 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
         }
         // Follower-growth digest (automation Phase 2): deterministic counts
         // from the followers ledger since the previous fire, pushed to the
-        // agent's admins. No LLM.
+        // agent's admins. No LLM. Since 2026-08-18 the "当前关注" number for
+        // weixin-oa comes from the OFFICIAL user/get total — the ledger was
+        // born 08-16 and reports event-window counts, not the real 80K base.
         types::scheduler::CronAction::FollowerReport { channel, bot_id } => {
             tracing::info!(job = %job_name, channel = %channel,
                 "Cron: firing follower report (no LLM)");
@@ -449,12 +451,18 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                     return Err(msg);
                 }
             };
+            // Official total — best-effort: the report must NEVER stop firing
+            // because WeChat's API is down (graceful fallback to ledger).
+            let official = if channel == "weixin-oa" {
+                match wechat_oa_official_total(kernel, bot_id).await {
+                    Some(total) => OfficialTotal::Official(total),
+                    None => OfficialTotal::FallbackFailed,
+                }
+            } else {
+                OfficialTotal::NotApplicable
+            };
             let agent_name = outbound_agent_key(kernel, agent_id);
-            let text = format!(
-                "📈 涨粉日报（{agent_name}，自 {since} 起）：新增关注 {} 人，取关 {} 人，\
-                 当前关注 {} 人，近48h可推送 {} 人。",
-                stats.new_followers, stats.unfollows, stats.active, stats.pushable
-            );
+            let text = build_follower_report(&agent_name, &since, &stats, official);
             let content = types::content::ContentDescriptor {
                 text: Some(text),
                 ..Default::default()
@@ -474,7 +482,169 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                 }
             }
         }
+        // Publish-status poller (2026-08-18, no LLM): for each pending
+        // publish_id in the wechat-oa tracker, poll freepublish/get; on a
+        // terminal status push a one-line digest to admins and remove the id.
+        // Empty rounds bump a streak — after 3 consecutive empties the job
+        // deletes itself (the daemon reconcile re-creates it when the tracker
+        // fills again), so no forever-poller.
+        types::scheduler::CronAction::PublishPoll { channel: _, bot_id } => {
+            tracing::info!(job = %job_name, "Cron: firing publish poll (no LLM)");
+            let home = kernel.config.home_dir.clone();
+            let pending_ids = wechat_oa::publish_tracker::pending(&home, bot_id);
+            if pending_ids.is_empty() {
+                let streak = wechat_oa::publish_tracker::bump_streak(&home, bot_id)
+                    .unwrap_or_default();
+                if streak >= 3 {
+                    let _ = kernel.cron_scheduler.remove_job(job_id);
+                    let _ = kernel.cron_scheduler.persist();
+                    tracing::info!(job = %job_name, streak, "PublishPoll: self-deleted after consecutive empty rounds");
+                }
+                kernel.cron_scheduler.record_success(job_id);
+                return Ok(());
+            }
+
+            // Without server-side credentials the ids can never be polled —
+            // drop them (with a warning) instead of stranding them forever.
+            let Some(account) = wechat_oa::session::load_account(&home, bot_id) else {
+                tracing::warn!(job = %job_name, bot_id,
+                    "PublishPoll: no senders session, dropping pending ids (cannot resolve credentials)");
+                for pid in &pending_ids {
+                    let _ = wechat_oa::publish_tracker::remove(&home, bot_id, pid);
+                }
+                kernel.cron_scheduler.record_success(job_id);
+                return Ok(());
+            };
+            let http = reqwest::Client::new();
+            let token = match wechat_oa::token::get_token(
+                &http, &account.app_id, &account.app_secret,
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    let msg = format!("publish poll token failed: {e}");
+                    kernel.cron_scheduler.record_failure(job_id, &msg);
+                    return Err(msg);
+                }
+            };
+
+            let mut lines: Vec<String> = Vec::new();
+            for pid in &pending_ids {
+                match wechat_oa::api::freepublish_get(&http, &token, pid).await {
+                    Ok(v) => {
+                        // publish_status: 0/3/4/5 terminal success, 1/2 terminal
+                        // fail, 6/7 still in review (freepublish docs).
+                        let status = v["publish_status"].as_i64().unwrap_or(-1);
+                        let title = v["article_detail"]["article_item"][0]["title"]
+                            .as_str()
+                            .map(|t| truncate_chars(t, 20))
+                            .unwrap_or_default();
+                        match status {
+                            0 | 3 | 4 | 5 => {
+                                lines.push(format!("✅「{title}」发布成功"));
+                                let _ = wechat_oa::publish_tracker::remove(&home, bot_id, pid);
+                            }
+                            1 | 2 => {
+                                lines.push(format!(
+                                    "❌「{title}」发布失败(status={status})，请到后台查看原因"
+                                ));
+                                let _ = wechat_oa::publish_tracker::remove(&home, bot_id, pid);
+                            }
+                            _ => {} // still in review — keep pending
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(job = %job_name, publish_id = %pid, error = %e,
+                            "PublishPoll: freepublish_get failed (kept pending)");
+                    }
+                }
+            }
+
+            if !lines.is_empty() {
+                let agent_name = outbound_agent_key(kernel, agent_id);
+                let text = format!("📰 发布状态（{agent_name}）：{}", lines.join("；"));
+                let content = types::content::ContentDescriptor {
+                    text: Some(text),
+                    ..Default::default()
+                };
+                if let Err(e) = kernel
+                    .do_push_message("admins", &content, &agent_id.to_string(), bot_id)
+                    .await
+                {
+                    let msg = format!("publish poll report push failed: {e}");
+                    kernel.cron_scheduler.record_failure(job_id, &msg);
+                    return Err(msg);
+                }
+            }
+            kernel.cron_scheduler.record_success(job_id);
+            Ok(())
+        }
     }
+}
+
+/// Fetch the official follower total for a weixin-oa account (user/get first
+/// page). Best-effort — `None` on any failure (missing session, token,
+/// transport); the caller falls back to the ledger count with a note.
+async fn wechat_oa_official_total(kernel: &Arc<CarrierKernel>, app_id: &str) -> Option<i64> {
+    let account = wechat_oa::session::load_account(&kernel.config.home_dir, app_id)?;
+    let http = reqwest::Client::new();
+    let token = wechat_oa::token::get_token(&http, &account.app_id, &account.app_secret)
+        .await
+        .map_err(|e| {
+            tracing::warn!(app_id, error = %e, "follower report: official total token failed");
+            e
+        })
+        .ok()?;
+    match wechat_oa::api::user_get(&http, &token, None).await {
+        Ok(r) => Some(r.total),
+        Err(e) => {
+            tracing::warn!(app_id, error = %e, "follower report: official total user_get failed");
+            None
+        }
+    }
+}
+
+/// What "当前关注" in the follower report is backed by.
+enum OfficialTotal {
+    /// Real user/get total for a weixin-oa account.
+    Official(i64),
+    /// weixin-oa but the API call failed — ledger count + visible note.
+    FallbackFailed,
+    /// Non-weixin channel: the ledger IS the truth, no note.
+    NotApplicable,
+}
+
+/// Build the follower-report text. With an official total: "当前关注" carries
+/// the real number; without it the ledger count is used, annotated on
+/// weixin-oa so the false-number regression stays visible.
+fn build_follower_report(
+    agent_name: &str,
+    since: &str,
+    stats: &memory::follower_store::FollowerStats,
+    official: OfficialTotal,
+) -> String {
+    let base = format!(
+        "📈 涨粉日报（{agent_name}，自 {since} 起）：新增关注 {} 人，取关 {} 人，近48h可推送 {} 人。",
+        stats.new_followers, stats.unfollows, stats.pushable
+    );
+    match official {
+        OfficialTotal::Official(total) => {
+            format!("{base}当前关注 {total} 人（官方总数）。")
+        }
+        OfficialTotal::FallbackFailed => {
+            format!("{base}当前关注 {} 人（台账数，官方总数获取失败）。", stats.active)
+        }
+        OfficialTotal::NotApplicable => {
+            format!("{base}当前关注 {} 人。", stats.active)
+        }
+    }
+}
+
+/// Char-boundary-safe truncation for report lines (Chinese titles are 3
+/// bytes/char — a raw byte slice panics, the 2026-08-17 memory_tree lesson).
+fn truncate_chars(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
 }
 
 /// Should an OA-bound clone run the *create* branch this cycle?
@@ -977,6 +1147,72 @@ impl CarrierKernel {
         }
     }
 
+    /// Ensure a `publish-poll` cron exists for every weixin-oa account with
+    /// pending publishes (2026-08-18). Self-healing pairing with the poll
+    /// arm's self-delete: after 3 consecutive empty rounds the job removes
+    /// itself, and this reconcile re-creates it within ~60s of the tracker
+    /// refilling (a fresh freepublish submit). Idempotent — an existing live
+    /// poll job for the same bot_id is left untouched.
+    fn reconcile_publish_poll(&self) {
+        let home = &self.config.home_dir;
+        let accounts = wechat_oa::publish_tracker::pending_accounts(home);
+        if accounts.is_empty() {
+            return;
+        }
+        let mut changed = false;
+        for app_id in accounts {
+            let Some(session) = wechat_oa::session::load_account(home, &app_id) else {
+                continue;
+            };
+            let Some(agent_name) = session.bind_agent.clone() else {
+                continue;
+            };
+            let Ok((agent_id, _)) = self.registry.resolve(&agent_name) else {
+                continue;
+            };
+            let exists = self.cron_scheduler.list_jobs(agent_id).into_iter().any(|j| {
+                matches!(
+                    &j.action,
+                    types::scheduler::CronAction::PublishPoll { bot_id, .. } if bot_id == &app_id
+                )
+            });
+            if exists {
+                continue;
+            }
+            let job = types::scheduler::CronJob {
+                id: types::scheduler::CronJobId::new(),
+                agent_id,
+                owner_id: None,
+                sender_id: None,
+                name: "publish-poll".to_string(),
+                enabled: true,
+                schedule: types::scheduler::CronSchedule::Every { every_secs: 1800 },
+                action: types::scheduler::CronAction::PublishPoll {
+                    channel: "weixin-oa".to_string(),
+                    bot_id: app_id.clone(),
+                },
+                delivery: types::scheduler::CronDelivery::None,
+                chain: None,
+                created_at: chrono::Utc::now(),
+                next_run: None,
+                last_run: None,
+            };
+            match self.cron_scheduler.add_job(job, false) {
+                Ok(_) => {
+                    changed = true;
+                    tracing::info!(agent = %agent_name, bot_id = %app_id,
+                        "publish-poll cron created (pending publishes tracked)");
+                }
+                Err(e) => warn!(agent = %agent_name, error = %e, "publish-poll cron add failed"),
+            }
+        }
+        if changed {
+            if let Err(e) = self.cron_scheduler.persist() {
+                warn!("publish-poll reconcile persist failed: {e}");
+            }
+        }
+    }
+
     /// Start file watchers for clone agents to auto-compile on knowledge changes.
     fn start_clone_watchers(self: &Arc<Self>) {
         if !self.config.clone_lifecycle.evolution_enabled {
@@ -1269,6 +1505,7 @@ impl CarrierKernel {
                     if reconcile_counter >= 4 {
                         reconcile_counter = 0;
                         kernel.reconcile_self_growth();
+                        kernel.reconcile_publish_poll();
                     }
                 }
             });
@@ -1678,5 +1915,30 @@ mod tests {
         assert_eq!(slugify("a   b"), "a-b"); // spaces collapse
         assert_eq!(slugify("--weird--"), "weird"); // leading/trailing trimmed
         assert_eq!(slugify("   "), "job"); // all-hostile -> fallback
+    }
+
+    #[test]
+    fn follower_report_text_carries_official_total() {
+        use super::{build_follower_report, OfficialTotal};
+        let stats = memory::follower_store::FollowerStats {
+            new_followers: 12,
+            unfollows: 2,
+            active: 1095,
+            pushable: 40,
+        };
+        // Official total wins over the (2-day-old, event-window) ledger count.
+        let t = build_follower_report("86bus", "2026-08-18T13:00:00Z", &stats, OfficialTotal::Official(80330));
+        assert!(t.contains("新增关注 12 人"), "{t}");
+        assert!(t.contains("当前关注 80330 人（官方总数）"), "{t}");
+        assert!(!t.contains("1095"), "ledger active must not read as 当前关注: {t}");
+
+        // weixin-oa API failure: ledger count + a visible regression marker.
+        let t = build_follower_report("86bus", "s", &stats, OfficialTotal::FallbackFailed);
+        assert!(t.contains("当前关注 1095 人（台账数，官方总数获取失败）"), "{t}");
+
+        // Non-weixin channel: ledger is the truth, no misleading failure note.
+        let t = build_follower_report("ilink-bot", "s", &stats, OfficialTotal::NotApplicable);
+        assert!(t.contains("当前关注 1095 人。"), "{t}");
+        assert!(!t.contains("获取失败"), "{t}");
     }
 }

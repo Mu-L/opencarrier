@@ -324,6 +324,18 @@ pub async fn bind_weixin_oa(
         None => existing.as_ref().and_then(|e| e.bind_openid_url.clone()),
     };
 
+    // Template-message fallback for 48h-window (45015) customer-service replies.
+    // Same merge semantics as bind_openid_url: explicit body value wins,
+    // otherwise keep what the session already had.
+    let fallback_template_id = match body.get("fallback_template_id") {
+        Some(v) => v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()),
+        None => existing.as_ref().and_then(|e| e.fallback_template_id.clone()),
+    };
+    let fallback_template_field = match body.get("fallback_template_field") {
+        Some(v) => v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()),
+        None => existing.as_ref().and_then(|e| e.fallback_template_field.clone()),
+    };
+
     let sf = channel_weixin_oa::WeixinOaSessionFile {
         channel: "weixin-oa".to_string(),
         sender_key: "app_id".to_string(),
@@ -334,6 +346,8 @@ pub async fn bind_weixin_oa(
         wechat_id: wechat_id.clone(),
         bind_agent: Some(agent_name.clone()),
         bind_openid_url,
+        fallback_template_id,
+        fallback_template_field,
     };
 
     if let Err(e) = std::fs::create_dir_all(&dir) {

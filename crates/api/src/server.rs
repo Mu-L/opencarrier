@@ -154,6 +154,7 @@ pub async fn build_router(
         .merge(routes::webhooks::router())
         .merge(routes::weixin::router())
         .merge(routes::weixin_oa::router())
+        .merge(routes::wechat_oa::router())
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
         .route("/api/commands", axum::routing::get(routes::list_commands))
         .route("/api/shutdown", axum::routing::post(routes::shutdown))

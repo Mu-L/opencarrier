@@ -1,71 +1,14 @@
 //! Data models for WeChat Official Account channel.
+//!
+//! The session-file schema (`WeixinOaSessionFile`) and the API response types
+//! (`TokenResponse`/`WechatApiError`) moved to the shared `wechat-oa` core
+//! crate (2026-08-18) — re-exported here so every existing import keeps
+//! compiling. What remains in this module is the channel's inbound-parsing
+//! layer (XML + JSON proxy messages), which is channel concern, not API core.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-// --- Session file (persisted to senders/{app_id}/session.json) ---
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WeixinOaSessionFile {
-    #[serde(default = "default_channel")]
-    pub channel: String,
-    #[serde(default = "default_sender_key")]
-    pub sender_key: String,
-    #[serde(default)]
-    pub name: String,
-    pub app_id: String,
-    pub app_secret: String,
-    /// WeChat OA Token — shared secret used for checkSign signature verification.
-    /// Configured alongside the server URL in the 公众号后台.
-    #[serde(default)]
-    pub token: String,
-    #[serde(default)]
-    pub wechat_id: String,
-    #[serde(default)]
-    pub bind_agent: Option<String>,
-    /// Optional 86bus `bind-openid` endpoint. When set, the weixin-oa webhook
-    /// POSTs `{ "openid_sa": <from_user> }` on each inbound message so the 86bus
-    /// backend can associate the service-account openid with a business identity.
-    /// The returned `matched` role is cached and surfaced to the agent.
-    #[serde(default)]
-    pub bind_openid_url: Option<String>,
-}
-
-fn default_channel() -> String {
-    "weixin-oa".to_string()
-}
-
-fn default_sender_key() -> String {
-    "app_id".to_string()
-}
-
-// --- WeChat API types ---
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct TokenResponse {
-    pub access_token: Option<String>,
-    pub expires_in: Option<u64>,
-    #[serde(default)]
-    pub errcode: Option<i64>,
-    #[serde(default)]
-    pub errmsg: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct WechatApiError {
-    #[serde(default)]
-    pub errcode: i64,
-    #[serde(default)]
-    pub errmsg: String,
-}
-
-impl WechatApiError {
-    pub fn from_serde_json_err(e: serde_json::Error) -> Self {
-        WechatApiError {
-            errcode: -1,
-            errmsg: e.to_string(),
-        }
-    }
-}
+pub use wechat_oa::session::WeixinOaSessionFile;
 
 // --- WeChat XML message types ---
 

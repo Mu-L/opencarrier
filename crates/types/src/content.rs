@@ -67,6 +67,32 @@ pub struct MiniprogramContent {
     pub thumb_file: Option<String>,
 }
 
+/// A template message (WeChat OA template/send; other channels degrade to
+/// `as_text`). Carries no 48h-window limit on weixin-oa, which makes it the
+/// carrier for scheduled pushes to followers outside the customer-service
+/// window.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TemplateContent {
+    /// Template id from the account's template library.
+    pub template_id: String,
+    /// Per-template field map, e.g. `{"thing1": {"value": "..."}}`. Kept as
+    /// raw JSON because each template's field layout is account-specific.
+    pub data: serde_json::Value,
+    /// Optional jump URL (mutually exclusive with `miniprogram` on WeChat).
+    pub url: Option<String>,
+    /// Optional miniprogram jump target: `{"appid": "...", "pagepath": "..."}`.
+    pub miniprogram: Option<serde_json::Value>,
+}
+
+impl TemplateContent {
+    /// Whether this has the minimum the weixin-oa renderer needs (template_id
+    /// non-empty). Data may legitimately be `{}` for templates with no fields.
+    pub fn is_complete(&self) -> bool {
+        !self.template_id.is_empty()
+    }
+}
+
 /// Channel-agnostic rich content. Each representation is optional; a channel's
 /// `deliver()` picks the best one it supports and degrades to `text` otherwise.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -80,6 +106,7 @@ pub struct ContentDescriptor {
     pub file: Option<MediaRef>,
     pub voice: Option<MediaRef>,
     pub miniprogram: Option<MiniprogramContent>,
+    pub template: Option<TemplateContent>,
 }
 
 impl MiniprogramContent {
@@ -194,6 +221,18 @@ impl ContentDescriptor {
                     .get_or_insert_with(MiniprogramContent::default)
                     .thumb_file = Some(value.to_string());
             }
+            "template.template_id" => {
+                self.template
+                    .get_or_insert_with(TemplateContent::default)
+                    .template_id = value.to_string();
+            }
+            "template.url" => {
+                self.template.get_or_insert_with(TemplateContent::default).url =
+                    Some(value.to_string());
+            }
+            // `template.data` is a JSON object, not a scalar — deliberately NOT
+            // overridable via `field=value` strings (falls into the unknown-
+            // field error arm below on purpose).
             _ => {
                 return Err(CarrierError::InvalidInput(format!("unknown override field: {field}")));
             }
@@ -321,5 +360,36 @@ thumb_url = "https://mmecoa.qpic.cn/cover.png"
         d.apply_override("miniprogram.pagepath", "pages/x").unwrap();
         d.apply_override("miniprogram.title", "t").unwrap();
         assert!(d.miniprogram.as_ref().unwrap().is_complete());
+    }
+
+    /// Template payloads (zero-LLM scheduled pushes beyond the 48h window)
+    /// parse standalone and survive JSON round-trips; template.data is raw
+    /// JSON, so no scalar override arm exists for it.
+    #[test]
+    fn template_content_parses_and_overrides() {
+        let json = r#"{"template":{"template_id":"tpl-1","data":{"thing1":{"value":"月卡到期"}},"url":"https://x"}}"#;
+        let d: ContentDescriptor = serde_json::from_str(json).unwrap();
+        let t = d.template.as_ref().unwrap();
+        assert_eq!(t.template_id, "tpl-1");
+        assert_eq!(t.data["thing1"]["value"], "月卡到期");
+        assert!(t.is_complete());
+
+        // Old payloads without template still parse (additive field).
+        let old: ContentDescriptor = serde_json::from_str(r#"{"text":"hi"}"#).unwrap();
+        assert!(old.template.is_none());
+
+        // Scalar overrides cover template_id/url; data is deliberately not a
+        // string override (JSON object) and must error instead of half-applying.
+        let mut d2 = ContentDescriptor::default();
+        d2.apply_override("template.template_id", "tpl-2").unwrap();
+        d2.apply_override("template.url", "https://y").unwrap();
+        assert!(d2.apply_override("template.data", "{}").is_err());
+        assert!(d2.template.as_ref().unwrap().is_complete());
+        assert_eq!(d2.template.as_ref().unwrap().url.as_deref(), Some("https://y"));
+
+        // Round-trip through the full descriptor.
+        let rt: ContentDescriptor =
+            serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        assert_eq!(rt.template.unwrap().template_id, "tpl-1");
     }
 }

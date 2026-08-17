@@ -163,6 +163,18 @@ pub enum CronAction {
         /// Bot id (app_id) whose followers are summarized.
         bot_id: String,
     },
+    /// Poll pending freepublish ids for an account and report terminal states
+    /// to admins (no LLM). The pending list lives in the wechat-oa core
+    /// publish tracker (`~/.opencarrier/data/wechat_publish_pending.json`);
+    /// the publish tool records each submitted publish_id there. The arm
+    /// self-deletes this job after consecutive empty rounds — the daemon
+    /// reconcile loop re-creates it when new publishes appear.
+    PublishPoll {
+        /// Channel of the account (`"weixin-oa"`).
+        channel: String,
+        /// Bot id (app_id) whose publishes are polled.
+        bot_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -397,10 +409,11 @@ impl CronJob {
                             || c.video.is_some()
                             || c.file.is_some()
                             || c.voice.is_some()
-                            || c.miniprogram.is_some() => {}
+                            || c.miniprogram.is_some()
+                            || c.template.is_some() => {}
                     _ => {
                         return Err(CarrierError::InvalidInput(
-                            "push payload must be ContentDescriptor-shaped and non-empty: {\"text\": \"...\"} or {\"miniprogram\": {appid, pagepath, title, thumb_media_id}}".into(),
+                            "push payload must be ContentDescriptor-shaped and non-empty: {\"text\": \"...\"} or {\"miniprogram\": {appid, pagepath, title, thumb_media_id}} or {\"template\": {template_id, data}}".into(),
                         ));
                     }
                 }
@@ -409,6 +422,13 @@ impl CronJob {
                 if channel.trim().is_empty() || bot_id.trim().is_empty() {
                     return Err(CarrierError::InvalidInput(
                         "follower_report action requires non-empty channel and bot_id".into(),
+                    ));
+                }
+            }
+            CronAction::PublishPoll { channel, bot_id } => {
+                if channel.trim().is_empty() || bot_id.trim().is_empty() {
+                    return Err(CarrierError::InvalidInput(
+                        "publish_poll action requires non-empty channel and bot_id".into(),
                     ));
                 }
             }
@@ -554,6 +574,44 @@ mod tests {
         assert_eq!(json["kind"], "follower_report");
         let back: CronAction = serde_json::from_value(json).unwrap();
         assert!(matches!(back, CronAction::FollowerReport { .. }));
+    }
+
+    /// A template-only Push payload (zero-LLM scheduled push beyond the 48h
+    /// customer-service window) must pass creation validation, and the
+    /// publish_poll action kind round-trips its snake_case tag (old cron DB
+    /// rows with other kinds are unaffected — additive enum variant).
+    #[test]
+    fn validate_template_push_and_publish_poll() {
+        let mut job = valid_job();
+        job.action = CronAction::Push {
+            channel: "weixin-oa".into(),
+            bot_id: "wx123".into(),
+            payload: serde_json::json!({
+                "template": {
+                    "template_id": "tpl-1",
+                    "data": {"thing1": {"value": "月卡到期提醒"}}
+                }
+            }),
+            target: "followers".into(),
+        };
+        assert!(job.validate(0).is_ok());
+
+        job.action = CronAction::PublishPoll {
+            channel: "weixin-oa".into(),
+            bot_id: "wx123".into(),
+        };
+        assert!(job.validate(0).is_ok());
+        let json = serde_json::to_value(&job.action).unwrap();
+        assert_eq!(json["kind"], "publish_poll");
+        let back: CronAction = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, CronAction::PublishPoll { ref bot_id, .. } if bot_id == "wx123"));
+
+        // Empty bot_id rejected like the other zero-LLM actions.
+        job.action = CronAction::PublishPoll {
+            channel: "weixin-oa".into(),
+            bot_id: "  ".into(),
+        };
+        assert!(job.validate(0).is_err());
     }
 
     // -- CronJobId --

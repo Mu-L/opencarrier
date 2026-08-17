@@ -77,9 +77,9 @@ impl ToolProvider for WeixinOaPublishArticleTool {
         let digest = args["digest"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
         let author = args["author"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
 
-        // Build a fresh HTTP client and fetch an access_token directly from the
-        // user-supplied app_id/app_secret — no server-level WEIXIN_OA_STATE
-        // registration needed (publish is outbound, per-user).
+        // Build a fresh HTTP client; tokens flow through the central
+        // `wechat-oa` core cache (keyed by app_id) — no WEIXIN_OA_STATE
+        // registration needed and repeat publishes hit the cache.
         let http = reqwest::Client::new();
 
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -88,11 +88,9 @@ impl ToolProvider for WeixinOaPublishArticleTool {
             .map_err(|e| PluginToolError::tool(format!("runtime error: {e}")))?;
 
         rt.block_on(async move {
-            let mut token = api::get_access_token(&http, &app_id, &app_secret)
+            let mut token = wechat_oa::token::get_token(&http, &app_id, &app_secret)
                 .await
-                .map_err(|e| PluginToolError::tool(e.to_string()))?
-                .access_token
-                .ok_or_else(|| PluginToolError::tool("get_access_token returned no access_token"))?;
+                .map_err(|e| PluginToolError::tool(e.to_string()))?;
 
             // --- Resolve cover (mandatory — WeChat publish requires one) ---
             // Tier a: upload the generated cover_path. Tier b: first image in
@@ -153,11 +151,10 @@ impl ToolProvider for WeixinOaPublishArticleTool {
             {
                 Ok(mid) => mid,
                 Err(e) if is_token_expired(&e.to_string()) => {
-                    token = api::get_access_token(&http, &app_id, &app_secret)
+                    wechat_oa::token::invalidate(&app_id);
+                    token = wechat_oa::token::get_token(&http, &app_id, &app_secret)
                         .await
-                        .map_err(|e| PluginToolError::tool(e.to_string()))?
-                        .access_token
-                        .ok_or_else(|| PluginToolError::tool("get_access_token returned no access_token"))?;
+                        .map_err(|e| PluginToolError::tool(e.to_string()))?;
                     api::add_draft(&http, &token, &title, &content, Some(&thumb), author.as_deref(), digest.as_deref())
                         .await
                         .map_err(|e| PluginToolError::tool(e.to_string()))?
@@ -178,16 +175,14 @@ impl ToolProvider for WeixinOaPublishArticleTool {
                 match api::freepublish_submit(&http, &token, &draft_media_id).await {
                     Ok(pid) => publish_id = Some(pid),
                     Err(e) if is_token_expired(&e.to_string()) => {
-                        match api::get_access_token(&http, &app_id, &app_secret).await {
-                            Ok(resp) => match resp.access_token {
-                                Some(new_tok) => {
-                                    match api::freepublish_submit(&http, &new_tok, &draft_media_id).await {
-                                        Ok(pid) => publish_id = Some(pid),
-                                        Err(e2) => publish_error = Some(e2.to_string()),
-                                    }
+                        wechat_oa::token::invalidate(&app_id);
+                        match wechat_oa::token::get_token(&http, &app_id, &app_secret).await {
+                            Ok(new_tok) => {
+                                match api::freepublish_submit(&http, &new_tok, &draft_media_id).await {
+                                    Ok(pid) => publish_id = Some(pid),
+                                    Err(e2) => publish_error = Some(e2.to_string()),
                                 }
-                                None => publish_error = Some("get_access_token returned no access_token".to_string()),
-                            },
+                            }
                             Err(e2) => publish_error = Some(e2.to_string()),
                         }
                     }
@@ -206,6 +201,22 @@ impl ToolProvider for WeixinOaPublishArticleTool {
                 warn!(draft_media_id = %draft_media_id, error = %err, "Draft created but freepublish failed (account may lack publish permission, e.g. 48001)");
             }
             info!(draft_media_id = %draft_media_id, publish_id = ?publish_id, cover_source, status, "Article publish completed");
+
+            // Track the submitted publish for the daemon's zero-LLM PublishPoll
+            // arm — but only for server-bound accounts (a senders/<app_id>
+            // session exists): user-profile accounts have no credentials the
+            // poller could use, so tracking them would strand forever-pending
+            // ids that never resolve and never let the poller self-delete.
+            if let Some(ref pid) = publish_id {
+                let home = types::config::home_dir();
+                if wechat_oa::session::load_account(&home, &app_id).is_some() {
+                    if let Err(e) = wechat_oa::publish_tracker::track(&home, &app_id, pid) {
+                        warn!(error = %e, publish_id = %pid, "publish_tracker track failed (poll arm will not see this publish)");
+                    }
+                } else {
+                    info!(app_id = %app_id, publish_id = %pid, "user-profile account: publish status not tracked");
+                }
+            }
 
             Ok(serde_json::json!({
                 "media_id": draft_media_id,

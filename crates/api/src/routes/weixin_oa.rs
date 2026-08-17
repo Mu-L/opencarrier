@@ -11,11 +11,10 @@ use crate::routes::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
-use channel_weixin_oa::api::{check_sign, get_access_token, get_user_unionid};
+use channel_weixin_oa::api::{check_sign, get_user_unionid};
 use channel_weixin_oa::{build_plugin_message, parse_xml_message, ProxyMessage};
 use runtime::kernel_handle::KernelHandle;
 use types::error::{CarrierError, CarrierResult};
@@ -29,54 +28,6 @@ static BIND_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .build()
         .unwrap_or_default()
 });
-
-struct CachedToken {
-    token: String,
-    expires_at: Instant,
-}
-
-/// Per-app_id access_token cache. WeChat tokens are valid ~2h; refresh shortly
-/// before expiry to avoid one token fetch per inbound message.
-static OA_TOKENS: LazyLock<Mutex<HashMap<String, CachedToken>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Cached access_token for the given app_id/app_secret.
-async fn oa_access_token(app_id: &str, app_secret: &str) -> CarrierResult<String> {
-    {
-        let cache = OA_TOKENS.lock().unwrap();
-        if let Some(t) = cache.get(app_id) {
-            if t.expires_at > Instant::now() + Duration::from_secs(120) {
-                return Ok(t.token.clone());
-            }
-        }
-    }
-    let tok = get_access_token(&BIND_CLIENT, app_id, app_secret)
-        .await
-        .map_err(|e| CarrierError::Network(e.to_string()))?;
-    let token = tok
-        .access_token
-        .ok_or_else(|| CarrierError::Network("no access_token in response".to_string()))?;
-    let expires_in = tok.expires_in.unwrap_or(7200);
-    // Re-check cache — another request may have refreshed while we were fetching.
-    // If a concurrent fetch already cached a newer token, don't overwrite it
-    // (our token may have been invalidated by theirs, or vice-versa).
-    {
-        let cache = OA_TOKENS.lock().unwrap();
-        if let Some(t) = cache.get(app_id) {
-            if t.expires_at > Instant::now() + Duration::from_secs(1800) {
-                return Ok(t.token.clone());
-            }
-        }
-    }
-    OA_TOKENS.lock().unwrap().insert(
-        app_id.to_string(),
-        CachedToken {
-            token: token.clone(),
-            expires_at: Instant::now() + Duration::from_secs(expires_in),
-        },
-    );
-    Ok(token)
-}
 
 /// Query params sent by WeChat on every callback (GET verification + POST messages).
 #[derive(serde::Deserialize, Debug)]
@@ -94,23 +45,10 @@ pub struct WechatSignParams {
 /// Load the session file for an app_id from disk.
 ///
 /// The session.json is the source of truth for the OA token (checkSign secret)
-/// and bind_agent. Reading it here avoids coupling the HTTP layer to the
-/// channel's in-memory state.
+/// and bind_agent. Delegates to the shared `wechat-oa` core loader — the same
+/// single reader the daemon and admin endpoints use.
 fn load_session(state: &Arc<AppState>, app_id: &str) -> Option<channel_weixin_oa::WeixinOaSessionFile> {
-    let path = state
-        .kernel
-        .config
-        .home_dir
-        .join("senders")
-        .join(app_id)
-        .join("session.json");
-    let data = std::fs::read_to_string(&path).ok()?;
-    let session: channel_weixin_oa::WeixinOaSessionFile = serde_json::from_str(&data).ok()?;
-    if session.channel == "weixin-oa" && session.app_id == app_id {
-        Some(session)
-    } else {
-        None
-    }
+    wechat_oa::session::load_account(&state.kernel.config.home_dir, app_id)
 }
 
 /// GET `/api/weixin-oa/{app_id}/callback` — WeChat URL verification.
@@ -665,7 +603,7 @@ async fn resolve_and_bind(
                 Some(_) => None,
                 None => {
                     // Double-check pattern with lock to avoid token cache races
-                    match oa_access_token(app_id, app_secret).await {
+                    match wechat_oa::token::get_token(&BIND_CLIENT, app_id, app_secret).await {
                         Ok(token) => {
                             match get_user_unionid(&BIND_CLIENT, &token, openid_sa).await {
                                 Ok(Some(u)) => {

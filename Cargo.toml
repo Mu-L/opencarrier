@@ -14,6 +14,7 @@ members = [
     "crates/channels/weixin",
     "crates/channels/dingtalk",
     "crates/channels/weixin-oa",
+    "crates/wechat-oa",
     "crates/channels-common",
     "crates/aginx-memory",
     "xtask",

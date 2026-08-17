@@ -1,13 +1,12 @@
 [package]
-name = "channel-weixin-oa"
+name = "wechat-oa"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "WeChat Official Account channel adapter for OpenCarrier"
+description = "Shared WeChat Official Account API core (client + token cache + session) for OpenCarrier"
 
 [dependencies]
-types = { path = "../../types" }
-wechat-oa = { path = "../../wechat-oa" }
+types = { path = "../types" }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 dashmap = { workspace = true }
@@ -15,7 +14,4 @@ tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
-sha2 = { workspace = true }
-hmac = { workspace = true }
 hex = { workspace = true }
-roxmltree = { workspace = true }

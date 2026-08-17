@@ -223,6 +223,7 @@ dependencies = [
  "types",
  "urlencoding",
  "uuid",
+ "wechat-oa",
 ]
 
 [[package]]
@@ -645,6 +646,7 @@ dependencies = [
  "tokio",
  "tracing",
  "types",
+ "wechat-oa",
 ]
 
 [[package]]
@@ -2275,6 +2277,7 @@ dependencies = [
  "types",
  "urlencoding",
  "uuid",
+ "wechat-oa",
  "zeroize",
 ]
 
@@ -5269,6 +5272,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "wechat-oa"
+version = "0.3.0"
+dependencies = [
+ "dashmap",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tokio",
+ "tracing",
+ "types",
 ]
 
 [[package]]

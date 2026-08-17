@@ -96,8 +96,14 @@ Server → Client: {"type":"error","content":"..."}
 ```
 admin key（现 OC_API_KEY）→ 管理面：clones dup/compile/rollback、config、providers、shutdown、
                             全部 agents 管理端点 —— 仅供运维/dup CLI/dashboard
+                            WeChat OA 数据面 /api/wechat-oa/{app_id}/*（user/get、draft 盘点、
+                            freepublish/get、template/list+send，2026-08-18；凭证服务端解析不回显）
 user token（🔧 Phase 2）  → 用户面：登录、我的分身、发消息、读自己的会话、hub 安装/发布
 ```
+
+- **WeChat OA 端点细则**：只代理服务器绑定账号（`senders/<app_id>/session.json` 存在且
+  channel=weixin-oa），响应为微信 JSON 透传，错误归一 `{error, errcode, errmsg}`；路径前缀
+  `/api/wechat-oa/` 与公开 webhook 前缀 `/api/weixin-oa/` 刻意区分，不落 is_public 白名单。
 
 - user token 绑定 `user_id`，消息管线复用现有 `sender_id → user:<sender_id>` session 隔离与
   user_id 记忆隔离——**token 即身份，不新增隔离机制**。
