@@ -134,6 +134,18 @@ fn walk_collect(
         if name_str.ends_with(".dup-theirs") || name_str.ends_with(".duptmp") {
             continue;
         }
+        // Skip Python bytecode: `__pycache__/` dirs and loose `*.pyc` files.
+        // Server-side validator runs (`python3 flows/<n>/scripts/*.py`) drop
+        // __pycache__ next to the imported modules; regenerated on every run,
+        // they are runtime build artifacts, never definition layer. Unfiltered
+        // they polluted the dup manifest and drifted every local pull
+        // (2026-08-17: three .pyc entries in the 86bus manifest).
+        if path.is_dir() && name_str == "__pycache__" {
+            continue;
+        }
+        if name_str.ends_with(".pyc") {
+            continue;
+        }
 
         if path.is_dir() {
             walk_collect(base, &path, out)?;
@@ -313,6 +325,13 @@ pub fn write_files_to_workspace(
             warnings.push(format!("skipped non-definition-layer file: {rel}"));
             continue;
         }
+        // Python bytecode never re-enters via an old hub/remote manifest
+        // (built before the walk filter): mirror the walk_collect exclusion
+        // on the inbound path.
+        if rel.split('/').any(|c| c == "__pycache__") || rel.ends_with(".pyc") {
+            warnings.push(format!("skipped python bytecode artifact: {rel}"));
+            continue;
+        }
         let file_path = workspace.join(rel);
         // Defense-in-depth: for an EXISTING entry, canonicalize and ensure it
         // stays within the workspace (catches symlink escape). New files are
@@ -421,6 +440,55 @@ mod tests {
         files.insert("../escape.md".to_string(), b"x".to_vec());
         assert!(write_files_to_workspace(&files, &tmp).is_err());
         assert!(!tmp.join("../escape.md").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Python bytecode (`__pycache__/*.pyc`, loose `.pyc`) is a server-side
+    /// validator run artifact, not definition layer: the manifest walk must
+    /// never list it, and the inbound write path must refuse it even when an
+    /// old remote/hub manifest (built pre-filter) carries it.
+    #[test]
+    fn pycache_never_in_manifest_nor_written() {
+        let tmp = tmp_dir("pyc");
+        std::fs::create_dir_all(tmp.join("flows/t/scripts/__pycache__")).unwrap();
+        std::fs::write(tmp.join("flows/t/flow.md"), b"---\nname: t\n---\nb").unwrap();
+        std::fs::write(tmp.join("flows/t/scripts/v.py"), b"print(1)").unwrap();
+        std::fs::write(
+            tmp.join("flows/t/scripts/__pycache__/v.cpython-310.pyc"),
+            b"\x00 bytecode",
+        )
+        .unwrap();
+        std::fs::write(tmp.join("flows/t/loose.pyc"), b"\x00 bytecode").unwrap();
+
+        let manifest = build_manifest(&tmp).unwrap();
+        assert!(manifest.files.contains_key("flows/t/flow.md"));
+        assert!(manifest.files.contains_key("flows/t/scripts/v.py"));
+        assert!(
+            !manifest.files.keys().any(|p| p.contains("__pycache__") || p.ends_with(".pyc")),
+            "bytecode leaked into manifest: {:?}",
+            manifest.files.keys().filter(|p| p.contains("pycache") || p.ends_with(".pyc")).collect::<Vec<_>>()
+        );
+
+        // Inbound: a stale manifest carrying .pyc entries is skipped with a
+        // warning, never written to disk. (Drop the setup-time loose.pyc so
+        // the not-written assertion can't pass on a setup artifact.)
+        std::fs::remove_file(tmp.join("flows/t/loose.pyc")).unwrap();
+        let mut files = BTreeMap::new();
+        files.insert("flows/t/flow.md".to_string(), b"---\nname: t\n---\nb2".to_vec());
+        files.insert(
+            "flows/t/__pycache__/v.cpython-310.pyc".to_string(),
+            b"\x00 bytecode".to_vec(),
+        );
+        files.insert("flows/t/loose.pyc".to_string(), b"\x00 bytecode".to_vec());
+        let warnings = write_files_to_workspace(&files, &tmp).unwrap();
+        assert_eq!(
+            warnings.len(),
+            2,
+            "both bytecode entries warned: {warnings:?}"
+        );
+        assert!(!tmp.join("flows/t/__pycache__").exists());
+        assert!(!tmp.join("flows/t/loose.pyc").exists());
+        assert_eq!(std::fs::read(tmp.join("flows/t/flow.md")).unwrap(), b"---\nname: t\n---\nb2");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
