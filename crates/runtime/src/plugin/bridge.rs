@@ -414,10 +414,12 @@ impl PluginBridgeManager {
 
         // Automation rules (weixin iLink): fixed keyword replies, zero LLM.
         // Mirrors the weixin-oa webhook gate — rules scoped (channel "weixin",
-        // app_id = bot_id) matched on text deliver a fixed reply and SKIP the
-        // agent turn. Runs after the system interactions (naming / rename /
-        // @name / /list / admin request) so those keep their meaning even when
-        // a keyword rule would also match the same text.
+        // app_id = resolved agent) matched on text deliver a fixed reply and
+        // SKIP the agent turn. iLink bot_id is "default" for every session, so
+        // the agent is the only meaningful scope (one business = one rule set).
+        // Runs after the system interactions (naming / rename / @name / /list
+        // / admin request) so those keep their meaning even when a keyword
+        // rule would also match the same text.
         if msg.channel_type == "weixin"
             && self.weixin_automation_gate(&msg, &agent_id, &text).await
         {
@@ -482,18 +484,20 @@ impl PluginBridgeManager {
     // -----------------------------------------------------------------------
 
     /// iLink automation gate: deliver fixed replies for matching keyword
-    /// rules WITHOUT the agent LLM. Returns true when the inbound was fully
-    /// handled (at least one reply delivered, none failed) and the agent
-    /// turn should be skipped. Bypass tasks (`Push` to a target other than
-    /// `"current"`) are delivered but do NOT skip the agent — same
-    /// semantics as the weixin-oa webhook gate.
+    /// rules WITHOUT the agent LLM. Rules are scoped (channel "weixin",
+    /// app_id = the agent that would have answered) — iLink bot_id is
+    /// "default" for every session, so the resolved agent is the scope.
+    /// Returns true when the inbound was fully handled (at least one reply
+    /// delivered, none failed) and the agent turn should be skipped. Bypass
+    /// tasks (`Push` to a target other than `"current"`) are delivered but
+    /// do NOT skip the agent — same semantics as the weixin-oa webhook gate.
     async fn weixin_automation_gate(
         &self,
         msg: &PluginMessage,
         agent_id: &str,
         text: &str,
     ) -> bool {
-        let rules = match self.kernel.automation_rule_list("weixin", &msg.bot_id).await {
+        let rules = match self.kernel.automation_rule_list("weixin", agent_id).await {
             Ok(r) => r,
             Err(e) => {
                 warn!(bot = %msg.bot_id, error = %e, "weixin: automation_rule_list failed");

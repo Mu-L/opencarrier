@@ -40,7 +40,7 @@ impl ToolModule for AutomationRulesTools {
         vec![
             ToolDefinition {
                 name: "automation_rule_list".to_string(),
-                description: "List automation rules for a channel scope (admin only): weixin-oa app_id (default channel), or weixin (iLink) bot_id with channel='weixin'. Rules fire fixed replies on matching inbound without invoking the agent.".to_string(),
+                description: "List automation rules for a channel scope (admin only): weixin-oa app_id (default channel), or weixin (iLink) agent name with channel='weixin'. Rules fire fixed replies on matching inbound without invoking the agent.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -52,7 +52,7 @@ impl ToolModule for AutomationRulesTools {
             },
             ToolDefinition {
                 name: "automation_rule_upsert".to_string(),
-                description: "Create or update an automation rule (admin only). On a matching inbound event: push_text/push_miniprogram deliver a fixed reply and skip the agent; notify_admin pushes to admins (notify_type→notify_routes) as a bypass while the agent still replies to the user. trigger: subscribe|keyword|menu_click|scan (menu_click matches the menu EventKey substring; scan matches the QR scene substring on SCAN and on qrscene_ subscribes). channel='weixin' (iLink): app_id is the bot name, trigger must be keyword, task push_text/push only (iLink has no events and no miniprogram cards).".to_string(),
+                description: "Create or update an automation rule (admin only). On a matching inbound event: push_text/push_miniprogram deliver a fixed reply and skip the agent; notify_admin pushes to admins (notify_type→notify_routes) as a bypass while the agent still replies to the user. trigger: subscribe|keyword|menu_click|scan (menu_click matches the menu EventKey substring; scan matches the QR scene substring on SCAN and on qrscene_ subscribes). channel='weixin' (iLink): app_id is the agent name (iLink rules scope per agent), trigger must be keyword, task push_text/push only (iLink has no events and no miniprogram cards).".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
