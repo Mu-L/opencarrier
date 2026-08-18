@@ -4,7 +4,7 @@
 //! server to serve multiple app accounts simultaneously. Tokens are cached
 //! per `app_id` and auto-refreshed before expiry.
 //!
-//! Used by feishu-mcp, wecom-mcp, wechat-oa-mcp, etc.
+//! Used by feishu-mcp, wecom-mcp, etc.
 
 use std::collections::HashMap;
 use std::sync::Arc;

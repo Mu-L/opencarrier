@@ -104,8 +104,8 @@ HTTP 基础设施（认证、重试、错误分类、异步任务轮询）全部
 
 1. main() 入口样板（8 个工具 × ~15 行 = ~120 行）— 应提供 run_stdio_server! 宏
 2. 错误格式化 `format!("{{\"error\": \"{}\"}}", e)` — 200+ 处重复，且有 JSON 注入 bug
-3. wechat-oa-mcp/zhihu-mcp 本地重实现 mcp-common 已有函数
-4. bilibili-mcp/twitter-mcp/wechat-oa-mcp 各自定义 define_params! 宏绕过 mcp-common
+3. zhihu-mcp 本地重实现 mcp-common 已有函数（wechat-oa-mcp 已于 2026-08-18 整体移除，公众号能力收敛为 crates/wechat-oa 核心 + /api/wechat-oa/* 端点）
+4. bilibili-mcp/twitter-mcp 各自定义 define_params! 宏绕过 mcp-common
 
 ## 五、优化进度
 

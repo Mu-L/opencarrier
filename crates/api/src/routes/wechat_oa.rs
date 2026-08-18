@@ -216,6 +216,273 @@ pub async fn template_send(
     }
 }
 
+// ── Comment (留言) management ──────────────────────────────
+//
+// Thin proxies of the eight /cgi-bin/comment/* APIs, ported from the retired
+// wechat-oa-mcp server (2026-08-18). All bodies carry `msg_data_id` (from the
+// article's publish status) and optional `index` (article position in a
+// multi-article post, default 0).
+
+/// Parse an i64 from a JSON number or a numeric string — deterministic
+/// callers occasionally quote ids.
+fn flexible_i64(v: &serde_json::Value) -> Option<i64> {
+    v.as_i64()
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+}
+
+/// Extract the common `(msg_data_id, index)` pair from a comment body.
+fn comment_target(
+    body: &serde_json::Value,
+) -> Result<(i64, u32), (StatusCode, Json<serde_json::Value>)> {
+    match flexible_i64(&body["msg_data_id"]) {
+        Some(id) => Ok((id, flexible_i64(&body["index"]).unwrap_or(0).max(0) as u32)),
+        None => Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing msg_data_id"})),
+        )),
+    }
+}
+
+/// POST /api/wechat-oa/{app_id}/comment/open — open an article's comment
+/// section (a prerequisite for the others: list fails on a closed section).
+pub async fn comment_open(
+    State(state): State<Arc<AppState>>,
+    Path(app_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let (msg_data_id, index) = match comment_target(&body) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    match resolve_token(&state, &app_id).await {
+        Ok(token) => {
+            match wechat_oa::api::comment_open(&HTTP, &token, msg_data_id, index).await {
+                Ok(v) => (StatusCode::OK, Json(v)),
+                Err(e) => wechat_error(e),
+            }
+        }
+        Err(resp) => resp,
+    }
+}
+
+/// POST /api/wechat-oa/{app_id}/comment/close — close an article's comment
+/// section.
+pub async fn comment_close(
+    State(state): State<Arc<AppState>>,
+    Path(app_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let (msg_data_id, index) = match comment_target(&body) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    match resolve_token(&state, &app_id).await {
+        Ok(token) => {
+            match wechat_oa::api::comment_close(&HTTP, &token, msg_data_id, index).await {
+                Ok(v) => (StatusCode::OK, Json(v)),
+                Err(e) => wechat_error(e),
+            }
+        }
+        Err(resp) => resp,
+    }
+}
+
+/// POST /api/wechat-oa/{app_id}/comment/list — reader comments for an
+/// article. Body: `{msg_data_id, index?, comment_type?, offset?, count?}`
+/// (comment_type: 0=all 1=normal 2=featured; count clamped 1..=50).
+pub async fn comment_list(
+    State(state): State<Arc<AppState>>,
+    Path(app_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let (msg_data_id, index) = match comment_target(&body) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let comment_type = flexible_i64(&body["comment_type"]).unwrap_or(0).max(0) as u32;
+    let begin = flexible_i64(&body["offset"]).unwrap_or(0).max(0) as u32;
+    let count = flexible_i64(&body["count"]).unwrap_or(10).clamp(1, 50) as u32;
+    match resolve_token(&state, &app_id).await {
+        Ok(token) => {
+            match wechat_oa::api::comment_list(
+                &HTTP, &token, msg_data_id, index, comment_type, begin, count,
+            )
+            .await
+            {
+                Ok(v) => (StatusCode::OK, Json(v)),
+                Err(e) => wechat_error(e),
+            }
+        }
+        Err(resp) => resp,
+    }
+}
+
+/// POST /api/wechat-oa/{app_id}/comment/markelect — feature (精选) a comment.
+pub async fn comment_mark_elect(
+    State(state): State<Arc<AppState>>,
+    Path(app_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let (msg_data_id, index) = match comment_target(&body) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let Some(comment_id) = flexible_i64(&body["comment_id"]) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing comment_id"})),
+        );
+    };
+    match resolve_token(&state, &app_id).await {
+        Ok(token) => {
+            match wechat_oa::api::comment_mark_elect(&HTTP, &token, msg_data_id, index, comment_id)
+                .await
+            {
+                Ok(v) => (StatusCode::OK, Json(v)),
+                Err(e) => wechat_error(e),
+            }
+        }
+        Err(resp) => resp,
+    }
+}
+
+/// POST /api/wechat-oa/{app_id}/comment/unmarkelect — drop the featured mark.
+pub async fn comment_unmark_elect(
+    State(state): State<Arc<AppState>>,
+    Path(app_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let (msg_data_id, index) = match comment_target(&body) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let Some(comment_id) = flexible_i64(&body["comment_id"]) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing comment_id"})),
+        );
+    };
+    match resolve_token(&state, &app_id).await {
+        Ok(token) => {
+            match wechat_oa::api::comment_unmark_elect(
+                &HTTP, &token, msg_data_id, index, comment_id,
+            )
+            .await
+            {
+                Ok(v) => (StatusCode::OK, Json(v)),
+                Err(e) => wechat_error(e),
+            }
+        }
+        Err(resp) => resp,
+    }
+}
+
+/// POST /api/wechat-oa/{app_id}/comment/delete — delete a comment
+/// (irreversible).
+pub async fn comment_delete(
+    State(state): State<Arc<AppState>>,
+    Path(app_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let (msg_data_id, index) = match comment_target(&body) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let Some(comment_id) = flexible_i64(&body["comment_id"]) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing comment_id"})),
+        );
+    };
+    match resolve_token(&state, &app_id).await {
+        Ok(token) => {
+            match wechat_oa::api::comment_delete(&HTTP, &token, msg_data_id, index, comment_id)
+                .await
+            {
+                Ok(v) => (StatusCode::OK, Json(v)),
+                Err(e) => wechat_error(e),
+            }
+        }
+        Err(resp) => resp,
+    }
+}
+
+/// POST /api/wechat-oa/{app_id}/comment/reply — official reply to a comment.
+/// Body: `{msg_data_id, index?, comment_id, content}`.
+pub async fn comment_reply(
+    State(state): State<Arc<AppState>>,
+    Path(app_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let (msg_data_id, index) = match comment_target(&body) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let Some(comment_id) = flexible_i64(&body["comment_id"]) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing comment_id"})),
+        );
+    };
+    let Some(content) = body["content"].as_str().filter(|s| !s.trim().is_empty()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing content"})),
+        );
+    };
+    match resolve_token(&state, &app_id).await {
+        Ok(token) => {
+            match wechat_oa::api::comment_reply_add(
+                &HTTP, &token, msg_data_id, index, comment_id, content,
+            )
+            .await
+            {
+                Ok(v) => (StatusCode::OK, Json(v)),
+                Err(e) => wechat_error(e),
+            }
+        }
+        Err(resp) => resp,
+    }
+}
+
+/// POST /api/wechat-oa/{app_id}/comment/reply/delete — delete an official
+/// reply. Body: `{msg_data_id, index?, comment_id, reply_id}`.
+pub async fn comment_reply_delete(
+    State(state): State<Arc<AppState>>,
+    Path(app_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let (msg_data_id, index) = match comment_target(&body) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let Some(comment_id) = flexible_i64(&body["comment_id"]) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing comment_id"})),
+        );
+    };
+    let Some(reply_id) = flexible_i64(&body["reply_id"]) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "missing reply_id"})),
+        );
+    };
+    match resolve_token(&state, &app_id).await {
+        Ok(token) => {
+            match wechat_oa::api::comment_reply_delete(
+                &HTTP, &token, msg_data_id, index, comment_id, reply_id,
+            )
+            .await
+            {
+                Ok(v) => (StatusCode::OK, Json(v)),
+                Err(e) => wechat_error(e),
+            }
+        }
+        Err(resp) => resp,
+    }
+}
+
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing::{get, post};
@@ -228,5 +495,30 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route(
             "/api/wechat-oa/{app_id}/message/template/send",
             post(template_send),
+        )
+        // Comment (留言) family — ported from the retired wechat-oa-mcp server
+        // (2026-08-18); the reader-comment knowledge-base plan consumes these.
+        .route("/api/wechat-oa/{app_id}/comment/open", post(comment_open))
+        .route("/api/wechat-oa/{app_id}/comment/close", post(comment_close))
+        .route("/api/wechat-oa/{app_id}/comment/list", post(comment_list))
+        .route(
+            "/api/wechat-oa/{app_id}/comment/markelect",
+            post(comment_mark_elect),
+        )
+        .route(
+            "/api/wechat-oa/{app_id}/comment/unmarkelect",
+            post(comment_unmark_elect),
+        )
+        .route(
+            "/api/wechat-oa/{app_id}/comment/delete",
+            post(comment_delete),
+        )
+        .route(
+            "/api/wechat-oa/{app_id}/comment/reply",
+            post(comment_reply),
+        )
+        .route(
+            "/api/wechat-oa/{app_id}/comment/reply/delete",
+            post(comment_reply_delete),
         )
 }

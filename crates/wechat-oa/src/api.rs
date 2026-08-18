@@ -719,6 +719,203 @@ pub async fn get_all_private_template(
     Ok(v)
 }
 
+// ── Comment (留言) management ──────────────────────────────
+//
+// Ported from the retired wechat-oa-mcp server (2026-08-18 API-over-MCP
+// convergence): the comment family was that server's only real increment
+// over the core crate — the reader-comment knowledge-base plan depends on
+// it. Same wire shape for all eight endpoints, so they share one POST
+// spine and live behind the single token authority.
+
+/// Shared POST + errcode-check spine for the comment family.
+async fn comment_post(
+    http: &reqwest::Client,
+    access_token: &str,
+    path: &str,
+    body: serde_json::Value,
+) -> CarrierResult<serde_json::Value> {
+    let url = format!("{}/{path}?access_token={access_token}", WECHAT_API_BASE);
+    let resp = http
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| CarrierError::Network(format!("{path} request failed: {e}")))?;
+    let resp_text = resp
+        .text()
+        .await
+        .map_err(|e| CarrierError::Network(format!("{path} read body failed: {e}")))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text)
+        .map_err(|e| CarrierError::Serialization(format!("{path} parse failed: {e} (body: {resp_text})")))?;
+    let errcode = v["errcode"].as_i64().unwrap_or(0);
+    if errcode != 0 {
+        return Err(CarrierError::Network(format!(
+            "{path} WeChat error {}: {}",
+            errcode,
+            v["errmsg"].as_str().unwrap_or("?")
+        )));
+    }
+    Ok(v)
+}
+
+/// Open the comment section of a published article (`/cgi-bin/comment/open`).
+/// `msg_data_id` comes from the article's publish status; `index` is the
+/// article position in a multi-article post (0 = first).
+pub async fn comment_open(
+    http: &reqwest::Client,
+    access_token: &str,
+    msg_data_id: i64,
+    index: u32,
+) -> CarrierResult<serde_json::Value> {
+    comment_post(
+        http,
+        access_token,
+        "cgi-bin/comment/open",
+        serde_json::json!({ "msg_data_id": msg_data_id, "index": index }),
+    )
+    .await
+}
+
+/// Close the comment section (`/cgi-bin/comment/close`).
+pub async fn comment_close(
+    http: &reqwest::Client,
+    access_token: &str,
+    msg_data_id: i64,
+    index: u32,
+) -> CarrierResult<serde_json::Value> {
+    comment_post(
+        http,
+        access_token,
+        "cgi-bin/comment/close",
+        serde_json::json!({ "msg_data_id": msg_data_id, "index": index }),
+    )
+    .await
+}
+
+/// List reader comments (`/cgi-bin/comment/list`). `comment_type`: 0=all,
+/// 1=normal, 2=featured (精选). Raw passthrough (`comment_list` + `total`).
+pub async fn comment_list(
+    http: &reqwest::Client,
+    access_token: &str,
+    msg_data_id: i64,
+    index: u32,
+    comment_type: u32,
+    begin: u32,
+    count: u32,
+) -> CarrierResult<serde_json::Value> {
+    comment_post(
+        http,
+        access_token,
+        "cgi-bin/comment/list",
+        serde_json::json!({
+            "msg_data_id": msg_data_id,
+            "index": index,
+            "type": comment_type,
+            "begin": begin,
+            "count": count,
+        }),
+    )
+    .await
+}
+
+/// Mark a comment as featured/精选 (`/cgi-bin/comment/markelect`).
+pub async fn comment_mark_elect(
+    http: &reqwest::Client,
+    access_token: &str,
+    msg_data_id: i64,
+    index: u32,
+    comment_id: i64,
+) -> CarrierResult<serde_json::Value> {
+    comment_post(
+        http,
+        access_token,
+        "cgi-bin/comment/markelect",
+        serde_json::json!({ "msg_data_id": msg_data_id, "index": index, "comment_id": comment_id }),
+    )
+    .await
+}
+
+/// Remove the featured mark (`/cgi-bin/comment/unmarkelect`).
+pub async fn comment_unmark_elect(
+    http: &reqwest::Client,
+    access_token: &str,
+    msg_data_id: i64,
+    index: u32,
+    comment_id: i64,
+) -> CarrierResult<serde_json::Value> {
+    comment_post(
+        http,
+        access_token,
+        "cgi-bin/comment/unmarkelect",
+        serde_json::json!({ "msg_data_id": msg_data_id, "index": index, "comment_id": comment_id }),
+    )
+    .await
+}
+
+/// Delete a comment (`/cgi-bin/comment/delete`). Irreversible.
+pub async fn comment_delete(
+    http: &reqwest::Client,
+    access_token: &str,
+    msg_data_id: i64,
+    index: u32,
+    comment_id: i64,
+) -> CarrierResult<serde_json::Value> {
+    comment_post(
+        http,
+        access_token,
+        "cgi-bin/comment/delete",
+        serde_json::json!({ "msg_data_id": msg_data_id, "index": index, "comment_id": comment_id }),
+    )
+    .await
+}
+
+/// Reply to a comment (`/cgi-bin/comment/reply/add`). The reply appears as
+/// the account's official reply under the comment.
+pub async fn comment_reply_add(
+    http: &reqwest::Client,
+    access_token: &str,
+    msg_data_id: i64,
+    index: u32,
+    comment_id: i64,
+    content: &str,
+) -> CarrierResult<serde_json::Value> {
+    comment_post(
+        http,
+        access_token,
+        "cgi-bin/comment/reply/add",
+        serde_json::json!({
+            "msg_data_id": msg_data_id,
+            "index": index,
+            "comment_id": comment_id,
+            "content": content,
+        }),
+    )
+    .await
+}
+
+/// Delete an official reply (`/cgi-bin/comment/reply/delete`).
+pub async fn comment_reply_delete(
+    http: &reqwest::Client,
+    access_token: &str,
+    msg_data_id: i64,
+    index: u32,
+    comment_id: i64,
+    reply_id: i64,
+) -> CarrierResult<serde_json::Value> {
+    comment_post(
+        http,
+        access_token,
+        "cgi-bin/comment/reply/delete",
+        serde_json::json!({
+            "msg_data_id": msg_data_id,
+            "index": index,
+            "comment_id": comment_id,
+            "reply_id": reply_id,
+        }),
+    )
+    .await
+}
+
 /// Extract a WeChat errcode from one of this module's error strings —
 /// "WeChat API error 45015 (…)", "user/info errcode=40001",
 /// "get_access_token WeChat error 40001: invalid credential". Returns the

@@ -5290,23 +5290,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wechat-oa-mcp"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "base64",
- "mcp-common",
- "reqwest",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "wecom-mcp"
 version = "0.3.0"
 dependencies = [

@@ -222,7 +222,6 @@ opencarrier (14 crates, 282 source files, 1485 tests)
     ├── mcp-common/           MCP 公共库
     ├── wecom-mcp/            企微工具 (45 tools)
     ├── feishu-mcp/           飞书工具 (73 tools)
-    ├── wechat-oa-mcp/        公众号工具
     ├── browser-mcp/          浏览器工具
     ├── bilibili-mcp/         B站工具
     ├── xiaohongshu-mcp/      小红书工具
