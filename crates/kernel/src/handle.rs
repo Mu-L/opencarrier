@@ -434,6 +434,9 @@ impl KernelHandle for CarrierKernel {
             }
         };
 
+        // Captured before `job` consumes it: the chain progress hook below
+        // needs (chain_id, step) after add_job succeeds.
+        let chain_meta = chain.clone();
         let job = CronJob {
             id: CronJobId::new(),
             agent_id: aid,
@@ -451,6 +454,21 @@ impl KernelHandle for CarrierKernel {
         };
 
         let id = self.cron_scheduler.add_job(job, one_shot)?;
+
+        // Chain progress hook (断链自动接续): an agent/human scheduling a
+        // chained step is ground-truth chain progress — zero that
+        // (chain_id, step)'s auto-resume budget so retries start fresh.
+        // Daemon-issued resume jobs call `add_job` directly (not this trait
+        // method), so they bump instead of reset — disjoint by construction.
+        if let Some(c) = &chain_meta {
+            if let Err(e) = self.memory.chain_resume().reset(&c.chain_id, c.step) {
+                tracing::warn!(
+                    chain_id = %c.chain_id,
+                    step = c.step,
+                    "Chain resume-budget reset failed: {e}"
+                );
+            }
+        }
 
         if let Err(e) = self.cron_scheduler.persist() {
             tracing::warn!("Failed to persist cron jobs: {e}");

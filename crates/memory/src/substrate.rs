@@ -7,6 +7,7 @@ use crate::cron_delivery::CronDeliveryStore;
 use crate::cron_store::CronJobStore;
 use crate::follower_store::FollowerStore;
 use crate::automation_store::AutomationRuleStore;
+use crate::chain_resume_store::ChainResumeStore;
 use crate::flow_run::FlowRunStore;
 use crate::weixin_store::WeixinSessionStore;
 use crate::notify_store::NotifyRouteStore;
@@ -44,6 +45,7 @@ pub struct MemorySubstrate {
     notify_store: NotifyRouteStore,
     flow_runs: FlowRunStore,
     automation_rules: AutomationRuleStore,
+    chain_resume: ChainResumeStore,
     content_root: PathBuf,
     /// Append-only session event log (P1-A observational bypass — see
     /// [`crate::session_events`]).
@@ -82,6 +84,7 @@ impl MemorySubstrate {
             notify_store: NotifyRouteStore::new(Arc::clone(&shared)),
             flow_runs: FlowRunStore::new(Arc::clone(&shared)),
             automation_rules: AutomationRuleStore::new(Arc::clone(&shared)),
+            chain_resume: ChainResumeStore::new(Arc::clone(&shared)),
             content_root,
             session_events: crate::session_events::SessionEventLog::new(events_root),
         })
@@ -104,6 +107,7 @@ impl MemorySubstrate {
             notify_store: NotifyRouteStore::new(Arc::clone(&shared)),
             flow_runs: FlowRunStore::new(Arc::clone(&shared)),
             automation_rules: AutomationRuleStore::new(Arc::clone(&shared)),
+            chain_resume: ChainResumeStore::new(Arc::clone(&shared)),
             content_root: PathBuf::from("/tmp/opencarrier_tree_content"),
             // Tests share a per-process dir so cross-instance seq continuity
             // is exercised without touching the real db location.
@@ -144,6 +148,13 @@ impl MemorySubstrate {
     /// Get a reference to the automation rule store.
     pub fn automation_rules(&self) -> &AutomationRuleStore {
         &self.automation_rules
+    }
+
+    /// Get a reference to the chain-resume ledger (断链自动接续 attempt
+    /// budgets). Daemon-side sync access — same precedent as
+    /// [`Self::cron_delivery`].
+    pub fn chain_resume(&self) -> &ChainResumeStore {
+        &self.chain_resume
     }
 
     // -----------------------------------------------------------------

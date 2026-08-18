@@ -5,6 +5,7 @@
 
 pub mod acp_session;
 pub mod automation_store;
+pub mod chain_resume_store;
 pub mod cron_delivery;
 pub mod cron_store;
 pub mod flow_run;

@@ -224,6 +224,9 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                             "Cron turn produced no usable output — recording failure"
                         );
                         kernel.cron_scheduler.record_failure(job_id, msg);
+                        // Auto-resume the chain (silent under budget) before
+                        // the diagnostic admins push below.
+                        kernel.maybe_resume_chain(&job, job_id, "degenerate").await;
                         let agent_name = outbound_agent_key(kernel, agent_id);
                         let content = types::content::ContentDescriptor {
                             text: Some(format!(
@@ -269,24 +272,11 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                                     total_steps = chain.total_steps,
                                     "Broken chain: step completed but no successor scheduled"
                                 );
-                                let agent_name = outbound_agent_key(kernel, agent_id);
-                                let content = types::content::ContentDescriptor {
-                                    text: Some(format!(
-                                        "⛓️ 断链告警：流水线「{chain_id}」第 {step}/{total} 步\
-                                         （{job_name}，{agent_name}）已完成，但没有调度下一步——\
-                                         链在此中断，第 {next} 步永远不会触发。若是人工取消请忽略，\
-                                         否则需要从断点重建（参照该流水线的接续手法）。",
-                                        chain_id = chain.chain_id,
-                                        step = chain.step,
-                                        total = chain.total_steps,
-                                        job_name = job_name,
-                                        agent_name = agent_name,
-                                        next = chain.step + 1,
-                                    )),
-                                    ..Default::default()
-                                };
-                                let _ = kernel
-                                    .do_push_message("admins", &content, &agent_id.to_string(), "")
+                                // Auto-resume: re-fire this breakpoint step
+                                // (silent under budget, admins escalation at
+                                // cap — handled inside maybe_resume_chain).
+                                kernel
+                                    .maybe_resume_chain(&job, job_id, "no-successor")
                                     .await;
                             }
                         }
@@ -303,6 +293,22 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                     {
                         Ok(()) => {
                             tracing::info!(job = %job_name, "Cron job completed successfully");
+                            // Tail step succeeded — the chain is complete,
+                            // its resume budgets are never needed again.
+                            if let Some(c) = &job.chain {
+                                if c.is_tail() {
+                                    if let Err(e) = kernel
+                                        .memory
+                                        .chain_resume()
+                                        .clear_chain(&c.chain_id)
+                                    {
+                                        tracing::warn!(
+                                            chain_id = %c.chain_id,
+                                            "Chain ledger clear failed: {e}"
+                                        );
+                                    }
+                                }
+                            }
                             kernel.cron_scheduler.record_success(job_id);
                             Ok(())
                         }
@@ -335,6 +341,9 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                     {
                         tracing::warn!(job = %job_name, error = %de, "Failure-notice delivery failed");
                     }
+                    // Chained step: silently re-fire the breakpoint under
+                    // budget (resume, not just a notice).
+                    kernel.maybe_resume_chain(&job, job_id, "turn-failed").await;
                     failure
                 }
                 None => {
@@ -359,6 +368,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                     {
                         tracing::warn!(job = %job_name, error = %de, "Timeout-notice delivery failed");
                     }
+                    kernel.maybe_resume_chain(&job, job_id, "timeout").await;
                     Err(format!("timed out after {timeout_s}s"))
                 }
             }
@@ -1051,6 +1061,76 @@ fn cron_turn_degenerate(response: &str) -> bool {
         || t.contains("模型这次没有返回内容")
 }
 
+/// Max silent auto-resumes per `(chain_id, step)` before the daemon stops
+/// re-firing and escalates to workspace admins (decline-cap lesson from the
+/// Cumora stall pipeline: a converged failure won't change on the next
+/// re-wake — burn-stop at a small number). Note a daemon restart that kills
+/// a mid-fire turn consumes one attempt even though the step wasn't at
+/// fault; keep that in mind when tuning.
+const MAX_AUTO_RESUMES: u32 = 2;
+
+/// Build the self-heal re-fire job for a broken chained step (断链自动接续):
+/// a verbatim copy of the breakpoint job (agent/owner/sender/action/chain/
+/// delivery) with a fresh id, a `-r{n}` name suffix, an At(+2min) schedule,
+/// and a resume note appended to the turn message. The note matters for the
+/// "step finished its work but never scheduled the successor" case — the
+/// re-fired turn should verify-and-link, not redo the work.
+fn build_resume_job(
+    orig: &CronJob,
+    attempts: u32,
+    now: chrono::DateTime<chrono::Utc>,
+) -> CronJob {
+    let suffix = format!("-r{attempts}");
+    // validate() caps names at 128 chars — truncate the base, keep the
+    // attempt suffix intact (it is the forensic marker).
+    let max_base = 128usize.saturating_sub(suffix.chars().count());
+    let base: String = orig.name.chars().take(max_base).collect();
+    let mut action = orig.action.clone();
+    if let types::scheduler::CronAction::AgentTurn { message, .. } = &mut action {
+        message.push_str(&format!(
+            "\n\n[链自愈重试 第{attempts}次] 这是对上一次中断环节的自动接续。\
+             若本步产物已存在且通过校验，不要重做，直接完成「触发下一步」的 cron_create。"
+        ));
+    }
+    CronJob {
+        id: types::scheduler::CronJobId::new(),
+        agent_id: orig.agent_id,
+        owner_id: orig.owner_id.clone(),
+        sender_id: orig.sender_id.clone(),
+        name: format!("{base}{suffix}"),
+        enabled: true,
+        schedule: types::scheduler::CronSchedule::At {
+            at: now + chrono::Duration::minutes(2),
+        },
+        action,
+        delivery: orig.delivery.clone(),
+        chain: orig.chain.clone(),
+        created_at: now,
+        next_run: None,
+        last_run: None,
+    }
+}
+
+/// A chained one-shot whose fire STARTED but never recorded an outcome.
+/// `due_jobs` pre-advances a due At schedule to the +100y sentinel, and both
+/// `record_success`/`record_failure` remove one-shots — so a live job with a
+/// far-future sentinel `next_run` and no in-flight guard is a mid-fire
+/// crash/restart leftover (typically a deploy restart killing the turn).
+/// Without this predicate's sweep such a job never fires again and never
+/// alerts: the chain dies silently.
+fn is_stranded(
+    job: &CronJob,
+    one_shot: bool,
+    running: bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    one_shot
+        && !running
+        && job
+            .next_run
+            .is_some_and(|t| t > now + chrono::Duration::days(365 * 50))
+}
+
 /// Best-effort channel target for a cron publish *follow-up* notification.
 ///
 /// The publish draft itself is created via the kernel/WeChat API and needs no
@@ -1235,6 +1315,136 @@ impl CarrierKernel {
                     version = clone::CLONE_FORMAT_SPEC_VERSION,
                     "Reseeded format spec"
                 );
+            }
+        }
+    }
+
+    /// 断链自动接续 — unified resume decision for a broken chained one-shot
+    /// step. Under budget → silently re-fire the breakpoint step (the manual
+    /// "从断点步建 one-shot 接续" recovery, automated; re-running step N is
+    /// the only sound move because the recipe for step N+1 lives in flow
+    /// prose the daemon cannot read — the resume note tells an
+    /// already-completed step to verify-and-link instead of redoing work).
+    /// At budget → remove any leftover job, stop re-firing, escalate to
+    /// workspace admins. The alert fires exactly once: every caller has
+    /// already removed (or is about to remove) the triggering job, so no
+    /// detection path can re-trigger. Silent under budget — provider noise
+    /// stays out of the chat (absorb, don't leak).
+    async fn maybe_resume_chain(&self, job: &CronJob, job_id: types::scheduler::CronJobId, reason: &str) {
+        let Some(chain) = &job.chain else { return };
+        if !self.config.chain_resume_enabled {
+            return;
+        }
+        // Only LLM turns carry chain meta in practice, and only they have
+        // step work worth re-firing; the no-LLM actions are excluded by
+        // construction, this match is the belt to that suspender.
+        if !matches!(job.action, types::scheduler::CronAction::AgentTurn { .. }) {
+            return;
+        }
+        // Mirror the fire path's orphan guard: a deleted agent's chain
+        // cannot resume.
+        if self.registry.get(job.agent_id).is_none() {
+            tracing::warn!(
+                chain_id = %chain.chain_id,
+                "Chain resume skipped — agent no longer registered"
+            );
+            return;
+        }
+
+        let attempts = self
+            .memory
+            .chain_resume()
+            .get(&chain.chain_id, chain.step)
+            .unwrap_or(0);
+        if attempts >= MAX_AUTO_RESUMES {
+            // Circuit-break: same breakpoint, budget exhausted. Another
+            // re-fire will not change the outcome — hand it to the humans.
+            let _ = self.cron_scheduler.remove_job(job_id);
+            if let Err(e) = self.cron_scheduler.persist() {
+                warn!("Cron persist after chain-resume circuit-break failed: {e}");
+            }
+            let agent_name = outbound_agent_key(self, job.agent_id);
+            let content = types::content::ContentDescriptor {
+                text: Some(format!(
+                    "🧯 链自愈熔断：流水线「{chain_id}」第 {step}/{total} 步\
+                     （{job_name}，{agent_name}）已自动接续 {attempts} 次仍未推进，停止重试。\
+                     请人工检查该步失败原因，并参照该流水线的接续手法从断点重建。",
+                    chain_id = chain.chain_id,
+                    step = chain.step,
+                    total = chain.total_steps,
+                    job_name = job.name,
+                    agent_name = agent_name,
+                )),
+                ..Default::default()
+            };
+            if let Err(e) = self
+                .do_push_message("admins", &content, &job.agent_id.to_string(), "")
+                .await
+            {
+                warn!(
+                    chain_id = %chain.chain_id,
+                    "Chain-resume circuit-break alert delivery failed: {e}"
+                );
+            }
+            return;
+        }
+
+        let attempt = self
+            .memory
+            .chain_resume()
+            .bump(&chain.chain_id, chain.step)
+            .unwrap_or(attempts + 1);
+        let resume = build_resume_job(job, attempt, chrono::Utc::now());
+        tracing::warn!(
+            chain_id = %chain.chain_id,
+            step = chain.step,
+            attempt,
+            reason,
+            resume_job = %resume.name,
+            "Chain broken — auto-resuming breakpoint step"
+        );
+        match self.cron_scheduler.add_job(resume.clone(), true) {
+            Ok(_) => {
+                if let Err(e) = self.cron_scheduler.persist() {
+                    warn!("Cron persist after chain resume failed: {e}");
+                }
+                self.audit_log.record(
+                    job.agent_id.to_string(),
+                    runtime::audit::AuditAction::ChainResume,
+                    format!(
+                        "chain={} step={}/{} attempt={} reason={} resume_job={}",
+                        chain.chain_id, chain.step, chain.total_steps, attempt, reason, resume.name
+                    ),
+                    "ok",
+                );
+            }
+            Err(e) => {
+                warn!(chain_id = %chain.chain_id, "Chain resume add_job failed: {e}");
+            }
+        }
+    }
+
+    /// ~60s sweep for stranded chained one-shots (fires that started but
+    /// never recorded an outcome because the daemon died mid-turn —
+    /// typically a deploy restart). Also runs once at daemon startup so
+    /// restart-stranded jobs are caught immediately, before the first tick.
+    async fn reconcile_chains(&self) {
+        let now = chrono::Utc::now();
+        for job in self.cron_scheduler.list_all_jobs() {
+            if job.chain.is_none() {
+                continue;
+            }
+            let Some(meta) = self.cron_scheduler.get_meta(job.id) else {
+                continue;
+            };
+            if is_stranded(
+                &job,
+                meta.one_shot,
+                meta.running.load(std::sync::atomic::Ordering::Acquire),
+                now,
+            ) {
+                self.maybe_resume_chain(&job, job.id, "stranded-mid-fire")
+                    .await;
             }
         }
     }
@@ -1684,6 +1894,11 @@ impl CarrierKernel {
                 let mut persist_counter = 0u32;
                 let mut reconcile_counter = 0u32;
                 interval.tick().await;
+                // Catch restart-stranded chained one-shots immediately — a
+                // deploy restart that killed a mid-fire turn leaves a job
+                // whose +100y sentinel next_run would otherwise never fire
+                // and never alert.
+                kernel.reconcile_chains().await;
                 loop {
                     interval.tick().await;
                     if kernel.runtime.supervisor.is_shutting_down() {
@@ -1696,6 +1911,15 @@ impl CarrierKernel {
                         let job_id = job.id;
                         let job_name = job.name.clone();
                         let agent_id = job.agent_id;
+                        // Chain forensics in the audit trail: plain job name
+                        // alone can't tie a fire back to its pipeline step.
+                        let chain_note = job
+                            .chain
+                            .as_ref()
+                            .map(|c| {
+                                format!(" chain={} step={}/{}", c.chain_id, c.step, c.total_steps)
+                            })
+                            .unwrap_or_default();
                         let k = Arc::clone(&kernel);
                         // Detached spawn (no tick barrier): one slow job no
                         // longer stalls every other agent's crons. Re-entry
@@ -1710,8 +1934,10 @@ impl CarrierKernel {
                             let outcome = cron_fire_job(&k, job).await;
                             k.cron_scheduler.clear_running(job_id);
                             let (status, detail) = match &outcome {
-                                Ok(()) => ("ok", format!("job={job_name}")),
-                                Err(e) => ("error", format!("job={job_name} error={e}")),
+                                Ok(()) => ("ok", format!("job={job_name}{chain_note}")),
+                                Err(e) => {
+                                    ("error", format!("job={job_name}{chain_note} error={e}"))
+                                }
                             };
                             k.audit_log.record(
                                 agent_id.to_string(),
@@ -1734,6 +1960,16 @@ impl CarrierKernel {
                             Ok(n) => tracing::debug!(deleted = n, "Purged expired pending notifications"),
                             Err(e) => tracing::warn!("Purge expired notifications failed: {e}"),
                         }
+                        // Abandoned cap-circuited chains must not accumulate.
+                        let cutoff =
+                            (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+                        match kernel.memory.chain_resume().purge_stale(&cutoff) {
+                            Ok(0) => {}
+                            Ok(n) => {
+                                tracing::debug!(deleted = n, "Purged stale chain-resume ledger rows")
+                            }
+                            Err(e) => tracing::warn!("Chain-resume ledger purge failed: {e}"),
+                        }
                     }
 
                     // Reconcile self-growth crons every ~60s so config flips
@@ -1745,6 +1981,8 @@ impl CarrierKernel {
                         reconcile_counter = 0;
                         kernel.reconcile_self_growth();
                         kernel.reconcile_publish_poll();
+                        // Stranded chained one-shots (mid-fire crash/restart).
+                        kernel.reconcile_chains().await;
                     }
                 }
             });
@@ -1995,7 +2233,7 @@ impl CarrierKernel {
 
 #[cfg(test)]
 mod tests {
-    use super::{cron_turn_degenerate, slugify};
+    use super::{build_resume_job, cron_turn_degenerate, is_stranded, slugify, MAX_AUTO_RESUMES};
     use crate::registry::AgentRegistry;
     use chrono::Utc;
     use std::collections::HashMap;
@@ -2106,6 +2344,104 @@ mod tests {
         assert!(!cron_turn_degenerate(
             "(已执行操作,但这次没能生成回复文字。请稍后重试,或重新说一下你的需求。)"
         ));
+    }
+
+    fn chained_agent_turn_job(name: &str, message: &str) -> types::scheduler::CronJob {
+        types::scheduler::CronJob {
+            id: types::scheduler::CronJobId::new(),
+            agent_id: AgentId::new(),
+            owner_id: Some("o-owner".to_string()),
+            sender_id: Some("s-sender".to_string()),
+            name: name.to_string(),
+            enabled: true,
+            schedule: types::scheduler::CronSchedule::At {
+                at: Utc::now() + chrono::Duration::minutes(2),
+            },
+            action: types::scheduler::CronAction::AgentTurn {
+                message: message.to_string(),
+                model_override: None,
+                timeout_secs: Some(600),
+                active_flow: Some("outline-writer".to_string()),
+                session_label: Some("pipeline:test-chain".to_string()),
+            },
+            delivery: types::scheduler::CronDelivery::None,
+            chain: Some(types::scheduler::ChainMeta {
+                chain_id: "test-chain".to_string(),
+                step: 2,
+                total_steps: 5,
+            }),
+            created_at: Utc::now(),
+            last_run: None,
+            next_run: None,
+        }
+    }
+
+    /// The resume job is the manual "从断点步建 one-shot 接续" move, automated:
+    /// verbatim identity + attempt suffix + At(+2min) + self-heal note.
+    #[test]
+    fn build_resume_job_copies_breakpoint_with_note_and_suffix() {
+        let orig = chained_agent_turn_job("article-writer-test-chain", "写正文。流水线ID = test-chain");
+        let now = Utc::now();
+        let resume = build_resume_job(&orig, 1, now);
+
+        assert_ne!(resume.id, orig.id);
+        assert_eq!(resume.name, "article-writer-test-chain-r1");
+        assert!(resume.name.chars().count() <= 128);
+        // Identity and chain wiring copied verbatim.
+        assert_eq!(resume.agent_id, orig.agent_id);
+        assert_eq!(resume.owner_id, orig.owner_id);
+        assert_eq!(resume.sender_id, orig.sender_id);
+        assert_eq!(resume.delivery, orig.delivery);
+        assert_eq!(resume.chain, orig.chain);
+        // At schedule ~2 minutes out.
+        match resume.schedule {
+            types::scheduler::CronSchedule::At { at } => {
+                let delta = (at - now).num_seconds();
+                assert!((110..=130).contains(&delta), "At should be ~+2min, got {delta}s");
+            }
+            other => panic!("resume schedule must be At, got {other:?}"),
+        }
+        // Message = original + self-heal note (verify-and-link, don't redo).
+        match &resume.action {
+            types::scheduler::CronAction::AgentTurn { message, active_flow, session_label, .. } => {
+                assert!(message.starts_with("写正文。流水线ID = test-chain"));
+                assert!(message.contains("链自愈重试 第1次"));
+                assert!(message.contains("不要重做"));
+                assert_eq!(active_flow.as_deref(), Some("outline-writer"));
+                assert_eq!(session_label.as_deref(), Some("pipeline:test-chain"));
+            }
+            other => panic!("resume action must stay AgentTurn, got {other:?}"),
+        }
+    }
+
+    /// Long base names must truncate (never exceed 128) while keeping the
+    /// attempt suffix intact.
+    #[test]
+    fn build_resume_job_truncates_long_names() {
+        let long_name: String = "步".repeat(130);
+        let orig = chained_agent_turn_job(&long_name, "x");
+        let resume = build_resume_job(&orig, 2, Utc::now());
+        assert!(resume.name.chars().count() <= 128);
+        assert!(resume.name.ends_with("-r2"));
+    }
+
+    /// Stranded = one-shot + far-future sentinel next_run + not running.
+    /// Real schedules (even far-out At) and in-flight fires never match.
+    #[test]
+    fn is_stranded_matches_only_sentinel_one_shots() {
+        let now = Utc::now();
+        let sentinel = now + chrono::Duration::days(365 * 100);
+        let mut job = chained_agent_turn_job("j", "x");
+        job.next_run = Some(sentinel);
+        assert!(is_stranded(&job, true, false, now)); // the exact signature
+        assert!(!is_stranded(&job, true, true, now)); // still firing
+        assert!(!is_stranded(&job, false, false, now)); // recurring job
+        job.next_run = Some(now + chrono::Duration::minutes(2)); // real pending At
+        assert!(!is_stranded(&job, true, false, now));
+        job.next_run = None;
+        assert!(!is_stranded(&job, true, false, now));
+        // Cap sanity: the circuit-break budget the predicate feeds into.
+        assert_eq!(MAX_AUTO_RESUMES, 2);
     }
 
     #[test]

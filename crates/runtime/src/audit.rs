@@ -33,6 +33,7 @@ pub enum AuditAction {
     /// Recorded by the daemon fire wrapper on EVERY outcome — the audit-chain
     /// forensics for stuck/missed cron fires.
     CronFire,
+    ChainResume,
 }
 
 impl std::fmt::Display for AuditAction {
@@ -137,6 +138,7 @@ impl AuditLog {
                         "WireConnect" => AuditAction::WireConnect,
                         "ConfigChange" => AuditAction::ConfigChange,
                         "CronFire" => AuditAction::CronFire,
+                        "ChainResume" => AuditAction::ChainResume,
                         _ => AuditAction::ToolInvoke, // fallback
                     };
                     Ok(AuditEntry {

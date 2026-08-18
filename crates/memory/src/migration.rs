@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 
 /// Current schema version.
-const SCHEMA_VERSION: u32 = 30;
+const SCHEMA_VERSION: u32 = 32;
 
 /// Run all migrations to bring the database up to date.
 ///
@@ -47,6 +47,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
         (29, migrate_v29),
         (30, migrate_v30),
         (31, migrate_v31),
+        (32, migrate_v32),
     ];
 
     for (version, migrate_fn) in &migrations {
@@ -1286,6 +1287,29 @@ fn migrate_v31(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
         rusqlite::params![31, "Followers ledger: channel_followers table (automation Phase 2)"],
+    )?;
+    Ok(())
+}
+
+/// Version 32: chain-resume ledger (断链自动接续). Per-`(chain_id, step)`
+/// auto-resume attempt budget for chained one-shot cron pipelines. `bump`
+/// counts each daemon-issued self-heal re-fire; any agent/human-created job
+/// for the same `(chain_id, step)` resets the budget to zero (ground-truth
+/// progress). At `attempts >= MAX_AUTO_RESUMES` the daemon stops re-firing
+/// and alerts workspace admins instead.
+fn migrate_v32(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS chain_resume_state (
+            chain_id TEXT NOT NULL,
+            step INTEGER NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (chain_id, step)
+        );",
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO migrations (version, applied_at, description) VALUES (?1, datetime('now'), ?2)",
+        rusqlite::params![32, "Chain resume ledger: chain_resume_state table (stall auto-resume)"],
     )?;
     Ok(())
 }

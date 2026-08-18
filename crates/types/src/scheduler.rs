@@ -195,7 +195,7 @@ pub enum CronAction {
 // ---------------------------------------------------------------------------
 
 /// Where the job's output is delivered.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CronDelivery {
     /// No delivery — fire and forget.

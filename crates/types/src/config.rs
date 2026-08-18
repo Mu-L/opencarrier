@@ -641,6 +641,14 @@ pub struct KernelConfig {
     /// Cron scheduler max total jobs across all agents. Default: 500.
     #[serde(default = "default_max_cron_jobs")]
     pub max_cron_jobs: usize,
+    /// Master switch for chained-cron stall auto-resume (断链自动接续).
+    /// When true, a broken chained one-shot pipeline (step failed/timed out/
+    /// degenerate, completed without scheduling a successor, or stranded by
+    /// a mid-fire daemon restart) is silently re-fired from the breakpoint
+    /// step up to `MAX_AUTO_RESUMES` times, then escalated to workspace
+    /// admins. Default: true.
+    #[serde(default = "default_chain_resume_enabled")]
+    pub chain_resume_enabled: bool,
     /// Default timeout (seconds) for `user_input` flow steps without an explicit
     /// `timeout_hours`. A suspended flow past this deadline is reaped as
     /// `timed_out`. Default: 86400 (24h).
@@ -825,6 +833,10 @@ fn default_max_cron_jobs() -> usize {
     500
 }
 
+fn default_chain_resume_enabled() -> bool {
+    true
+}
+
 fn default_user_input_timeout_secs() -> u64 {
     86_400
 }
@@ -936,6 +948,7 @@ impl Default for KernelConfig {
             webhook_triggers: None,
             budget: BudgetConfig::default(),
             max_cron_jobs: default_max_cron_jobs(),
+            chain_resume_enabled: default_chain_resume_enabled(),
             user_input_timeout_secs: default_user_input_timeout_secs(),
             agent_turn_timeout_secs: default_agent_turn_timeout_secs(),
             include: Vec::new(),
@@ -1020,6 +1033,7 @@ impl std::fmt::Debug for KernelConfig {
                 &self.webhook_triggers.as_ref().map(|w| w.enabled),
             )
             .field("max_cron_jobs", &self.max_cron_jobs)
+            .field("chain_resume_enabled", &self.chain_resume_enabled)
             .field("include", &format!("{} file(s)", self.include.len()))
             .field("exec_policy", &self.exec_policy.mode)
             .field("bindings", &format!("{} binding(s)", self.bindings.len()))
