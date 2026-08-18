@@ -580,7 +580,220 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
             kernel.cron_scheduler.record_success(job_id);
             Ok(())
         }
+        // Reader-comment ingestion (2026-08-18, no LLM): pull NEW comments
+        // from every published article and append them into the bound
+        // clone's knowledge — reader voice becomes part of the agent's
+        // context via the lifecycle knowledge compiler. Standing job; a
+        // one-line digest goes to admins when anything new was ingested.
+        types::scheduler::CronAction::CommentPull { channel: _, bot_id } => {
+            tracing::info!(job = %job_name, "Cron: firing comment pull (no LLM)");
+            let home = kernel.config.home_dir.clone();
+            let Some(account) = wechat_oa::session::load_account(&home, bot_id) else {
+                let msg = format!(
+                    "comment pull: no senders session for {bot_id} (cannot resolve credentials)"
+                );
+                kernel.cron_scheduler.record_failure(job_id, &msg);
+                return Err(msg);
+            };
+            // Target workspace: the account's bound agent.
+            let Some(agent_name) = account.bind_agent.clone() else {
+                let msg = format!("comment pull: account {bot_id} has no bind_agent");
+                kernel.cron_scheduler.record_failure(job_id, &msg);
+                return Err(msg);
+            };
+            let Ok((agent_id, entry)) = kernel.registry.resolve(&agent_name) else {
+                let msg = format!("comment pull: agent {agent_name} not in registry");
+                kernel.cron_scheduler.record_failure(job_id, &msg);
+                return Err(msg);
+            };
+            let Some(workspace) = entry.manifest.workspace.clone() else {
+                let msg = format!("comment pull: agent {agent_name} has no workspace");
+                kernel.cron_scheduler.record_failure(job_id, &msg);
+                return Err(msg);
+            };
+
+            let http = reqwest::Client::new();
+            let token = match wechat_oa::token::get_token(
+                &http, &account.app_id, &account.app_secret,
+            )
+            .await
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    let msg = format!("comment pull token failed: {e}");
+                    kernel.cron_scheduler.record_failure(job_id, &msg);
+                    return Err(msg);
+                }
+            };
+
+            // Enumerate published articles (first page caps the blast radius;
+            // total_count is small in practice).
+            let articles = match wechat_oa::api::freepublish_batchget(
+                &http, &token, 0, 20, true,
+            )
+            .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    let msg = format!("comment pull freepublish_batchget failed: {e}");
+                    kernel.cron_scheduler.record_failure(job_id, &msg);
+                    return Err(msg);
+                }
+            };
+
+            let now_local = chrono::Local::now();
+            let mut sections: Vec<String> = Vec::new();
+            let mut total_new = 0usize;
+            for item in articles["item"].as_array().unwrap_or(&Vec::new()) {
+                let news = &item["content"]["news_item"][0];
+                let Some(url) = news["url"].as_str() else {
+                    continue;
+                };
+                let Some(mid) = wechat_oa::api::extract_mid_from_url(url) else {
+                    continue;
+                };
+                let title = truncate_chars(news["title"].as_str().unwrap_or("（无标题）"), 30);
+                let comments = match wechat_oa::api::comment_list(
+                    &http, &token, mid, 0, 0, 0, 50,
+                )
+                .await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        // Per-article soft-fail: e.g. articles whose comment
+                        // section was never opened error out — skip, not fail.
+                        tracing::debug!(job = %job_name, mid, error = %e,
+                            "CommentPull: comment_list failed (skipped article)");
+                        continue;
+                    }
+                };
+                let raw = comments["comment"].as_array().cloned().unwrap_or_default();
+                let all_ids: Vec<i64> = raw
+                    .iter()
+                    .filter_map(|c| c["user_comment_id"].as_i64())
+                    .collect();
+                let new_ids =
+                    wechat_oa::comment_state::filter_new(&home, bot_id, &mid.to_string(), &all_ids);
+                if new_ids.is_empty() {
+                    continue;
+                }
+                let ingested: Vec<(i64, i64, String, String, i64)> = raw
+                    .iter()
+                    .filter(|c| {
+                        c["user_comment_id"].as_i64().is_some_and(|id| new_ids.contains(&id))
+                    })
+                    .filter_map(|c| {
+                        Some((
+                            c["user_comment_id"].as_i64()?,
+                            c["comment_type"].as_i64().unwrap_or(1),
+                            c["content"].as_str()?.to_string(),
+                            c["openid"].as_str().unwrap_or("?").to_string(),
+                            c["create_time"].as_i64().unwrap_or_default(),
+                        ))
+                    })
+                    .collect();
+                if ingested.is_empty() {
+                    continue;
+                }
+                total_new += ingested.len();
+                sections.push(comment_section(&now_local, &title, &ingested));
+                if let Err(e) = wechat_oa::comment_state::mark_seen(
+                    &home,
+                    bot_id,
+                    &mid.to_string(),
+                    &new_ids,
+                ) {
+                    tracing::warn!(job = %job_name, mid, error = %e,
+                        "CommentPull: mark_seen failed (comments may re-ingest next run)");
+                }
+            }
+
+            if total_new > 0 {
+                let path = workspace.join(format!(
+                    "knowledge/读者留言-{}.md",
+                    now_local.format("%Y-%m")
+                ));
+                if let Err(e) = write_comment_ledger(&path, &sections) {
+                    let msg = format!("comment pull ledger write failed: {e}");
+                    kernel.cron_scheduler.record_failure(job_id, &msg);
+                    return Err(msg);
+                }
+                let text = format!(
+                    "💬 读者留言（{agent_name}）：新增 {total_new} 条，已入知识库「读者留言-{}」。",
+                    now_local.format("%Y-%m")
+                );
+                let content = types::content::ContentDescriptor {
+                    text: Some(text),
+                    ..Default::default()
+                };
+                if let Err(e) = kernel
+                    .do_push_message("admins", &content, &agent_id.to_string(), bot_id)
+                    .await
+                {
+                    let msg = format!("comment pull digest push failed: {e}");
+                    kernel.cron_scheduler.record_failure(job_id, &msg);
+                    return Err(msg);
+                }
+            }
+            kernel.cron_scheduler.record_success(job_id);
+            Ok(())
+        }
     }
+}
+
+/// Render one article's newly-ingested comments as a markdown section.
+/// Openids are reduced to their tail for privacy in knowledge text.
+fn comment_section(
+    now: &chrono::DateTime<chrono::Local>,
+    title: &str,
+    comments: &[(i64, i64, String, String, i64)],
+) -> String {
+    let mut out = format!("\n## {}《{}》\n", now.format("%m-%d %H:%M"), title);
+    for (_id, ctype, content, openid, ts) in comments {
+        let time = chrono::DateTime::from_timestamp(*ts, 0)
+            .map(|t| t.with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string())
+            .unwrap_or_default();
+        let who = if openid.len() >= 6 {
+            format!("…{}", &openid[openid.len() - 6..])
+        } else {
+            openid.clone()
+        };
+        let flag = if *ctype == 2 { " [精选]" } else { "" };
+        out.push_str(&format!("- {time} 读者({who}){flag}：{content}\n"));
+    }
+    out
+}
+
+/// Append sections to the monthly reader-comment ledger, creating it with
+/// knowledge frontmatter on first write (the lifecycle compiler ingests
+/// knowledge/*.md; frontmatter present means it won't rewrite our header).
+fn write_comment_ledger(path: &std::path::Path, sections: &[String]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let month = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.strip_prefix("读者留言-"))
+        .unwrap_or("feed");
+    let init = format!(
+        "---\nname: 读者留言\nsource: automation\ntype: knowledge\ndescription: 读者对已发布文章的留言自动抽取流（CommentPull cron，原文入册不加工）\n---\n\n# 读者留言（自动抽取 {month}）\n"
+    );
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let body = if existing.trim().is_empty() {
+        let mut s = init;
+        s.push_str(sections.join("").trim_start_matches('\n'));
+        s
+    } else {
+        format!("{existing}{}", sections.join(""))
+    };
+    let tmp = path.with_extension("md.tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(body.as_bytes())?;
+    }
+    std::fs::rename(&tmp, path)
 }
 
 /// Fetch the official follower total for a weixin-oa account (user/get first
@@ -1915,6 +2128,43 @@ mod tests {
         assert_eq!(slugify("a   b"), "a-b"); // spaces collapse
         assert_eq!(slugify("--weird--"), "weird"); // leading/trailing trimmed
         assert_eq!(slugify("   "), "job"); // all-hostile -> fallback
+    }
+
+    /// Reader-comment ledger: first write creates frontmatter, second write
+    /// appends without duplicating the header; sections carry time/openid
+    /// tail/featured flag.
+    #[test]
+    fn comment_ledger_init_then_append() {
+        use super::{comment_section, write_comment_ledger};
+        let dir = std::env::temp_dir().join("oc-comment-ledger");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("knowledge").join("读者留言-2026-08.md");
+        let now = chrono::Local::now();
+        let s1 = comment_section(
+            &now,
+            "新白广城际时刻表上线",
+            &[
+                (3, 1, "实际买票没有直达的".into(), "oOPNNv7AGbXMsG3kQ".into(), 1_785_460_120),
+                (4, 2, "终于等到了".into(), "oOPNNvabc123".into(), 1_785_460_200),
+            ],
+        );
+        write_comment_ledger(&path, &[s1]).unwrap();
+        let first = std::fs::read_to_string(&path).unwrap();
+        assert!(first.starts_with("---\n"), "frontmatter head: {first}");
+        assert!(first.contains("# 读者留言（自动抽取 2026-08）"), "{first}");
+        assert!(first.contains("《新白广城际时刻表上线》"), "{first}");
+        assert!(first.contains("读者(…MsG3kQ)：实际买票没有直达的"), "{first}");
+        assert!(first.contains("[精选]：终于等到了"), "{first}");
+        assert_eq!(first.matches("读者留言（自动抽取").count(), 1);
+
+        // Second run appends — no second frontmatter/header.
+        let s2 = comment_section(&now, "司机使用指南", &[(9, 1, "很实用".into(), "oXyz987".into(), 0)]);
+        write_comment_ledger(&path, &[s2]).unwrap();
+        let second = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(second.matches("---\nname: 读者留言").count(), 1, "header must not duplicate");
+        assert!(second.contains("《司机使用指南》"), "{second}");
+        assert!(second.len() > first.len());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

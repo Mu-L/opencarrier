@@ -175,6 +175,19 @@ pub enum CronAction {
         /// Bot id (app_id) whose publishes are polled.
         bot_id: String,
     },
+    /// Pull NEW reader comments from every published article of an account
+    /// and append them into the bound clone's knowledge (no LLM). The dedup
+    /// ledger (`~/.opencarrier/data/wechat_comment_seen.json`) keeps each run
+    /// incremental; new comments land in `knowledge/读者留言-YYYY-MM.md` of
+    /// the account's `bind_agent` workspace, where the lifecycle knowledge
+    /// compiler picks them up. A one-line digest goes to admins when anything
+    /// new was ingested. Standing job (never self-deletes).
+    CommentPull {
+        /// Channel of the account (`"weixin-oa"`).
+        channel: String,
+        /// Bot id (app_id) whose articles' comments are pulled.
+        bot_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -432,6 +445,13 @@ impl CronJob {
                     ));
                 }
             }
+            CronAction::CommentPull { channel, bot_id } => {
+                if channel.trim().is_empty() || bot_id.trim().is_empty() {
+                    return Err(CarrierError::InvalidInput(
+                        "comment_pull action requires non-empty channel and bot_id".into(),
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -610,6 +630,28 @@ mod tests {
         job.action = CronAction::PublishPoll {
             channel: "weixin-oa".into(),
             bot_id: "  ".into(),
+        };
+        assert!(job.validate(0).is_err());
+    }
+
+    /// comment_pull: standing comment-ingestion job — snake_case tag
+    /// round-trips and empty bot_id is rejected like its siblings.
+    #[test]
+    fn validate_comment_pull_action() {
+        let mut job = valid_job();
+        job.action = CronAction::CommentPull {
+            channel: "weixin-oa".into(),
+            bot_id: "wx123".into(),
+        };
+        assert!(job.validate(0).is_ok());
+        let json = serde_json::to_value(&job.action).unwrap();
+        assert_eq!(json["kind"], "comment_pull");
+        let back: CronAction = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, CronAction::CommentPull { ref bot_id, .. } if bot_id == "wx123"));
+
+        job.action = CronAction::CommentPull {
+            channel: "weixin-oa".into(),
+            bot_id: "".into(),
         };
         assert!(job.validate(0).is_err());
     }

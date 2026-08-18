@@ -11,11 +11,13 @@
 //!   - [`token`]: central stable_token cache with per-app single-flight
 //!   - [`session`]: senders/<app_id>/session.json schema + loader
 //!   - [`publish_tracker`]: pending freepublish ids polled by the daemon
+//!   - [`comment_state`]: ingested-comment dedup ledger for `CommentPull`
 //!
 //! Zero-LLM by construction: every consumer here is a deterministic path
 //! (cron arms, channel delivery, HTTP endpoints) — no agent tooling.
 
 pub mod api;
+pub mod comment_state;
 pub mod publish_tracker;
 pub mod session;
 pub mod token;

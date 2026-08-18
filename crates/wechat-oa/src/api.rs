@@ -916,6 +916,61 @@ pub async fn comment_reply_delete(
     .await
 }
 
+/// Published-article inventory (`/cgi-bin/freepublish/batchget`). Raw
+/// passthrough: `{total_count, item_count, item: [{article_id, content:
+/// {news_item: [{title, url, ...}]}}]}`. NOTE: items do NOT carry
+/// `msg_data_id` — the comment APIs need the `mid=` from each article's
+/// `url` (see [`extract_mid_from_url`]).
+pub async fn freepublish_batchget(
+    http: &reqwest::Client,
+    access_token: &str,
+    offset: u32,
+    count: u32,
+    no_content: bool,
+) -> CarrierResult<serde_json::Value> {
+    let url = format!(
+        "{}/cgi-bin/freepublish/batchget?access_token={}",
+        WECHAT_API_BASE, access_token
+    );
+    let body = serde_json::json!({
+        "offset": offset,
+        "count": count,
+        "no_content": if no_content { 1 } else { 0 },
+    });
+    let resp = http
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| CarrierError::Network(format!("freepublish_batchget request failed: {e}")))?;
+    let resp_text = resp
+        .text()
+        .await
+        .map_err(|e| CarrierError::Network(format!("freepublish_batchget read body failed: {e}")))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text)
+        .map_err(|e| CarrierError::Serialization(format!("freepublish_batchget parse failed: {e} (body: {resp_text})")))?;
+    let errcode = v["errcode"].as_i64().unwrap_or(0);
+    if errcode != 0 {
+        return Err(CarrierError::Network(format!(
+            "freepublish_batchget WeChat error {}: {}",
+            errcode,
+            v["errmsg"].as_str().unwrap_or("?")
+        )));
+    }
+    Ok(v)
+}
+
+/// Extract the comment-API `msg_data_id` from a published article's URL —
+/// freepublish/batchget does not return it directly, but the article `url`
+/// embeds it as the `mid=` query parameter (e.g. `...&mid=2247499040&idx=1`
+/// → 2247499040). Empirically verified against the live account 2026-08-18.
+pub fn extract_mid_from_url(url: &str) -> Option<i64> {
+    let start = url.find("mid=")? + "mid=".len();
+    let rest = &url[start..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
 /// Extract a WeChat errcode from one of this module's error strings —
 /// "WeChat API error 45015 (…)", "user/info errcode=40001",
 /// "get_access_token WeChat error 40001: invalid credential". Returns the
@@ -945,7 +1000,7 @@ pub fn extract_errcode(err: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_errcode;
+    use super::{extract_errcode, extract_mid_from_url};
 
     #[test]
     fn extract_errcode_covers_all_module_formats() {
@@ -970,5 +1025,18 @@ mod tests {
         // errcode=0 is success — keep scanning, then give up.
         assert_eq!(extract_errcode("user/info errcode=0"), None);
         assert_eq!(extract_errcode("plain transport failure"), None);
+    }
+
+    /// The comment APIs' msg_data_id hides in the article URL's mid= param —
+    /// freepublish/batchget items don't carry it (verified live 2026-08-18).
+    #[test]
+    fn extract_mid_from_article_url() {
+        let url = "http://mp.weixin.qq.com/s?__biz=MzIwOTU1Njc5Mg==&mid=2247499040&idx=1&sn=ace";
+        assert_eq!(extract_mid_from_url(url), Some(2247499040));
+        // mid at end of string, other query params before it.
+        assert_eq!(extract_mid_from_url("https://x/s?idx=1&mid=99"), Some(99));
+        // No mid param / non-numeric -> None.
+        assert_eq!(extract_mid_from_url("https://x/s?idx=1&sn=ab"), None);
+        assert_eq!(extract_mid_from_url("https://x/s?mid=abc"), None);
     }
 }
