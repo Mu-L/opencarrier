@@ -1405,6 +1405,14 @@ impl CarrierKernel {
         );
         match self.cron_scheduler.add_job(resume.clone(), true) {
             Ok(_) => {
+                // Remove the broken original AFTER the resume exists (never
+                // lose both). For the stranded sweep this is essential — a
+                // leftover sentinel job would re-trigger the sweep every 60s
+                // and burn the whole budget in minutes. For the post-fire
+                // sites it is a defensive no-op (record_failure already
+                // removed the one-shot; record_success right after finds
+                // nothing and no-ops).
+                let _ = self.cron_scheduler.remove_job(job_id);
                 if let Err(e) = self.cron_scheduler.persist() {
                     warn!("Cron persist after chain resume failed: {e}");
                 }
