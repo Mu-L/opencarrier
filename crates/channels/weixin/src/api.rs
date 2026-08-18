@@ -141,13 +141,22 @@ pub async fn get_updates(
 
 /// POST `/ilink/bot/sendmessage`
 ///
-/// Send a message to a WeChat user. Requires context_token from an inbound message.
+/// Send a message to a WeChat user via iLink.
+///
+/// `context_token` is OPTIONAL — verified against production 2026-08-19:
+/// bare sends (field omitted) deliver fine. What actually decides delivery
+/// is account-to-account reachability: the recipient account must be alive
+/// (dormant accounts fail at `prepare`), and the sender account must have a
+/// relationship with the recipient (it IS the recipient, or they chatted
+/// before — stranger sends return a message_id but are silently dropped).
+/// A STALE cached token makes sends fail upstream, so callers should prefer
+/// [`send_message_auto`], which retries bare on failure.
 pub async fn send_message(
     http: &Client,
     bot_token: &str,
     baseurl: &str,
     to_user_id: &str,
-    context_token: &str,
+    context_token: Option<&str>,
     client_id: &str,
     text: &str,
 ) -> CarrierResult<()> {
@@ -160,7 +169,7 @@ pub async fn send_message(
             client_id: client_id.to_string(),
             message_type: MSG_TYPE_BOT,
             message_state: MSG_STATE_FINISH,
-            context_token: Some(context_token.to_string()),
+            context_token: context_token.map(|t| t.to_string()),
             item_list: Some(vec![SendItem {
                 type_: ITEM_TYPE_TEXT,
                 text_item: Some(SendTextItem {
@@ -197,13 +206,38 @@ pub async fn send_message(
     Ok(())
 }
 
+/// Token policy wrapper around [`send_message`]: try with the cached
+/// context_token when present; if that fails (e.g. the token went stale
+/// upstream), retry once bare. Bare sends are the protocol's baseline —
+/// see [`send_message`] for the verified delivery model.
+pub async fn send_message_auto(
+    http: &Client,
+    bot_token: &str,
+    baseurl: &str,
+    to_user_id: &str,
+    context_token: Option<&str>,
+    client_id: &str,
+    text: &str,
+) -> CarrierResult<()> {
+    if let Some(tok) = context_token {
+        match send_message(http, bot_token, baseurl, to_user_id, Some(tok), client_id, text).await {
+            Ok(()) => return Ok(()),
+            Err(e) => tracing::warn!(to = %to_user_id, error = %e, "send with context_token failed, retrying bare"),
+        }
+    }
+    send_message(http, bot_token, baseurl, to_user_id, None, client_id, text).await
+}
+
 /// Send an image message to a WeChat user via iLink.
+///
+/// `context_token` is optional — see [`send_message`] for the verified
+/// delivery model; prefer [`send_image_auto`].
 pub async fn send_image(
     http: &Client,
     bot_token: &str,
     baseurl: &str,
     to_user_id: &str,
-    context_token: &str,
+    context_token: Option<&str>,
     client_id: &str,
     image_url: &str,
 ) -> CarrierResult<()> {
@@ -216,7 +250,7 @@ pub async fn send_image(
             client_id: client_id.to_string(),
             message_type: MSG_TYPE_BOT,
             message_state: MSG_STATE_FINISH,
-            context_token: Some(context_token.to_string()),
+            context_token: context_token.map(|t| t.to_string()),
             item_list: Some(vec![SendItem {
                 type_: ITEM_TYPE_IMAGE,
                 text_item: None,
@@ -252,15 +286,37 @@ pub async fn send_image(
     Ok(())
 }
 
+/// Token policy wrapper around [`send_image`] — see [`send_message_auto`].
+pub async fn send_image_auto(
+    http: &Client,
+    bot_token: &str,
+    baseurl: &str,
+    to_user_id: &str,
+    context_token: Option<&str>,
+    client_id: &str,
+    image_url: &str,
+) -> CarrierResult<()> {
+    if let Some(tok) = context_token {
+        match send_image(http, bot_token, baseurl, to_user_id, Some(tok), client_id, image_url).await {
+            Ok(()) => return Ok(()),
+            Err(e) => tracing::warn!(to = %to_user_id, error = %e, "send_image with context_token failed, retrying bare"),
+        }
+    }
+    send_image(http, bot_token, baseurl, to_user_id, None, client_id, image_url).await
+}
+
 /// POST `/ilink/bot/sendmessage` with ITEM_TYPE_VIDEO
 ///
 /// Send a video message to a WeChat user via iLink.
+///
+/// `context_token` is optional — see [`send_message`] for the verified
+/// delivery model; prefer [`send_video_auto`].
 pub async fn send_video(
     http: &Client,
     bot_token: &str,
     baseurl: &str,
     to_user_id: &str,
-    context_token: &str,
+    context_token: Option<&str>,
     client_id: &str,
     video_url: &str,
 ) -> CarrierResult<()> {
@@ -273,7 +329,7 @@ pub async fn send_video(
             client_id: client_id.to_string(),
             message_type: MSG_TYPE_BOT,
             message_state: MSG_STATE_FINISH,
-            context_token: Some(context_token.to_string()),
+            context_token: context_token.map(|t| t.to_string()),
             item_list: Some(vec![SendItem {
                 type_: ITEM_TYPE_VIDEO,
                 text_item: None,
@@ -307,5 +363,74 @@ pub async fn send_video(
         .map_err(|e| CarrierError::Network(format!("send_video read body error: {e}")))?;
 
     Ok(())
+}
+
+/// Token policy wrapper around [`send_video`] — see [`send_message_auto`].
+pub async fn send_video_auto(
+    http: &Client,
+    bot_token: &str,
+    baseurl: &str,
+    to_user_id: &str,
+    context_token: Option<&str>,
+    client_id: &str,
+    video_url: &str,
+) -> CarrierResult<()> {
+    if let Some(tok) = context_token {
+        match send_video(http, bot_token, baseurl, to_user_id, Some(tok), client_id, video_url).await {
+            Ok(()) => return Ok(()),
+            Err(e) => tracing::warn!(to = %to_user_id, error = %e, "send_video with context_token failed, retrying bare"),
+        }
+    }
+    send_video(http, bot_token, baseurl, to_user_id, None, client_id, video_url).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn send_request_omits_context_token_when_none() {
+        // The protocol tests (2026-08-19) sent exactly this shape: no
+        // context_token key at all. `skip_serializing_if` must hold.
+        let req = SendMessageRequest {
+            msg: SendMessageMsg {
+                from_user_id: String::new(),
+                to_user_id: "peer@im.wechat".to_string(),
+                client_id: "c".to_string(),
+                message_type: MSG_TYPE_BOT,
+                message_state: MSG_STATE_FINISH,
+                context_token: None,
+                item_list: Some(vec![SendItem {
+                    type_: ITEM_TYPE_TEXT,
+                    text_item: Some(SendTextItem { text: "hi".to_string() }),
+                    image_item: None,
+                    video_item: None,
+                }]),
+            },
+            base_info: BaseInfo::default(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(!json.contains("context_token"), "bare send must omit the field: {json}");
+        assert!(json.contains("peer@im.wechat"));
+    }
+
+    #[test]
+    fn send_request_includes_context_token_when_some() {
+        let req = SendMessageRequest {
+            msg: SendMessageMsg {
+                from_user_id: String::new(),
+                to_user_id: "peer@im.wechat".to_string(),
+                client_id: "c".to_string(),
+                message_type: MSG_TYPE_BOT,
+                message_state: MSG_STATE_FINISH,
+                context_token: Some("tok".to_string()),
+                item_list: None,
+            },
+            base_info: BaseInfo::default(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("context_token"));
+        assert!(json.contains("\"tok\""));
+    }
 }
 

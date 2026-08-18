@@ -51,7 +51,7 @@ impl ToolProvider for WeixinSendMessageTool {
     fn definition(&self) -> PluginToolDef {
         PluginToolDef {
             name: "weixin_send_message".to_string(),
-            description: "Send a text message to a WeChat user via iLink. Requires an active QR-logged-in session. You can only reply to users who have already sent a message (context_token required).".to_string(),
+            description: "Send a text message to a WeChat user via iLink. Requires an active QR-logged-in session. Delivery needs a relationship: the recipient is itself a logged-in account, or has chatted with one before. context_token is optional and auto-managed.".to_string(),
             parameters_json: r#"{"type":"object","properties":{"bot_id":{"type":"string","description":"Bot ID (WeChat account)"},"user_id":{"type":"string","description":"iLink user ID to send to"},"text":{"type":"string","description":"Message text"}},"required":["bot_id","user_id","text"]}"#.to_string(),
         }
     }
@@ -75,11 +75,10 @@ impl ToolProvider for WeixinSendMessageTool {
             return Err(PluginToolError::tool("Token expired, please re-scan QR code"));
         }
 
-        let context_token = state.get_context_token(user_id).ok_or_else(|| {
-            PluginToolError::tool(format!(
-                "No context_token for user {user_id} — can only reply to received messages"
-            ))
-        })?;
+        // context_token optional (verified 2026-08-19): bare sends deliver
+        // when a relationship exists; stale tokens are retried bare inside
+        // send_*_auto.
+        let context_token = state.get_context_token(user_id);
 
         let bot_token = state.bot_token.clone();
         let baseurl = state.baseurl.clone();
@@ -92,12 +91,12 @@ impl ToolProvider for WeixinSendMessageTool {
             .map_err(|e| PluginToolError::tool(format!("Runtime error: {e}")))?;
 
         rt.block_on(async {
-            crate::api::send_message(
+            crate::api::send_message_auto(
                 &http,
                 &bot_token,
                 &baseurl,
                 user_id,
-                &context_token,
+                context_token.as_deref(),
                 &client_id,
                 text,
             )
@@ -119,7 +118,7 @@ impl ToolProvider for WeixinSendImageTool {
     fn definition(&self) -> PluginToolDef {
         PluginToolDef {
             name: "weixin_send_image".to_string(),
-            description: "Send an image to a WeChat user via iLink. Provide the image URL. Requires an active QR-logged-in session. You can only reply to users who have already sent a message.".to_string(),
+            description: "Send an image to a WeChat user via iLink. Provide the image URL. Requires an active QR-logged-in session. Delivery needs a relationship: the recipient is itself a logged-in account, or has chatted with one before.".to_string(),
             parameters_json: r#"{"type":"object","properties":{"bot_id":{"type":"string","description":"Bot ID (WeChat account)"},"user_id":{"type":"string","description":"iLink user ID to send to"},"image_url":{"type":"string","description":"URL of the image to send"}},"required":["bot_id","user_id","image_url"]}"#.to_string(),
         }
     }
@@ -143,11 +142,8 @@ impl ToolProvider for WeixinSendImageTool {
             return Err(PluginToolError::tool("Token expired, please re-scan QR code"));
         }
 
-        let context_token = state.get_context_token(user_id).ok_or_else(|| {
-            PluginToolError::tool(format!(
-                "No context_token for user {user_id} — can only reply to received messages"
-            ))
-        })?;
+        // context_token optional — see send_message tool note.
+        let context_token = state.get_context_token(user_id);
 
         let bot_token = state.bot_token.clone();
         let baseurl = state.baseurl.clone();
@@ -160,12 +156,12 @@ impl ToolProvider for WeixinSendImageTool {
             .map_err(|e| PluginToolError::tool(format!("Runtime error: {e}")))?;
 
         rt.block_on(async {
-            crate::api::send_image(
+            crate::api::send_image_auto(
                 &http,
                 &bot_token,
                 &baseurl,
                 user_id,
-                &context_token,
+                context_token.as_deref(),
                 &client_id,
                 image_url,
             )
@@ -187,7 +183,7 @@ impl ToolProvider for WeixinSendVideoTool {
     fn definition(&self) -> PluginToolDef {
         PluginToolDef {
             name: "weixin_send_video".to_string(),
-            description: "Send a video to a WeChat user via iLink. Provide the video URL (e.g. from video_generate). Requires an active QR-logged-in session. You can only reply to users who have already sent a message.".to_string(),
+            description: "Send a video to a WeChat user via iLink. Provide the video URL (e.g. from video_generate). Requires an active QR-logged-in session. Delivery needs a relationship: the recipient is itself a logged-in account, or has chatted with one before.".to_string(),
             parameters_json: r#"{"type":"object","properties":{"bot_id":{"type":"string","description":"Bot ID (WeChat account)"},"user_id":{"type":"string","description":"iLink user ID to send to"},"video_url":{"type":"string","description":"URL of the video to send"}},"required":["bot_id","user_id","video_url"]}"#.to_string(),
         }
     }
@@ -211,11 +207,8 @@ impl ToolProvider for WeixinSendVideoTool {
             return Err(PluginToolError::tool("Token expired, please re-scan QR code"));
         }
 
-        let context_token = state.get_context_token(user_id).ok_or_else(|| {
-            PluginToolError::tool(format!(
-                "No context_token for user {user_id} — can only reply to received messages"
-            ))
-        })?;
+        // context_token optional — see send_message tool note.
+        let context_token = state.get_context_token(user_id);
 
         let bot_token = state.bot_token.clone();
         let baseurl = state.baseurl.clone();
@@ -228,12 +221,12 @@ impl ToolProvider for WeixinSendVideoTool {
             .map_err(|e| PluginToolError::tool(format!("Runtime error: {e}")))?;
 
         rt.block_on(async {
-            crate::api::send_video(
+            crate::api::send_video_auto(
                 &http,
                 &bot_token,
                 &baseurl,
                 user_id,
-                &context_token,
+                context_token.as_deref(),
                 &client_id,
                 video_url,
             )

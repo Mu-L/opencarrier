@@ -328,22 +328,22 @@ impl WeixinState {
 
     /// Find a bot session for sending a message to `user_id`.
     ///
+    /// Routing model (verified in production 2026-08-19): iLink delivery is
+    /// account-to-account and clone-agnostic — any clone can push to any
+    /// recipient, provided the SENDING account has a relationship with the
+    /// recipient. context_tokens doubles as the relationship ledger.
     /// Three paths, in order:
-    /// 1. **Direct**: `user_id` IS a scanner id (one of the logged-in WeChat
-    ///    accounts). Serves admin entries whose id is a scanner account —
-    ///    those sessions hold a self-keyed context_token (from the account's
-    ///    own outgoing sync) and deliver reliably at any hour.
-    /// 2. **Token-holder scan**: a peer talked to one specific WeChat account
-    ///    before — its context_token lives in THAT account's session. iLink
-    ///    peer ids are per-account namespaces, so at most one session can
-    ///    hold a given peer id; no ambiguity. Without this path the bot_id
-    ///    fallback below matched every session (all are "default" in
-    ///    practice) and returned an arbitrary one whose token map lacks the
-    ///    peer — a deterministic "No context_token" failure regardless of
-    ///    time of day (observed: scheduled admin pushes failing 9×/2 days).
-    /// 3. **Legacy bot_id fallback**: kept for the no-token-anywhere case so
-    ///    the error surfaced to callers stays "No context_token" (sessions
-    ///    exist; the peer just never talked to any of them).
+    /// 1. **Direct**: `user_id` IS a logged-in account (the 号池). Deliver
+    ///    via its own session — effectively self-chat. Works for every pool
+    ///    account (admin alerts ride this path); bare send, no token needed.
+    /// 2. **Relationship scan**: the peer chatted with exactly one of our
+    ///    accounts before — its token lives in THAT account's session. iLink
+    ///    peer ids are per-account namespaces, so at most one holder; no
+    ///    ambiguity.
+    /// 3. **Legacy bot_id fallback**: caller-asserted explicit route. CAVEAT:
+    ///    sends to peers with NO relationship upstream (never chatted, not
+    ///    in the pool) are silently dropped by iLink — HTTP still returns a
+    ///    message_id, so success here is best-effort, never a receipt.
     pub fn get_session_for_send(
         &self,
         _bot_id: &str,

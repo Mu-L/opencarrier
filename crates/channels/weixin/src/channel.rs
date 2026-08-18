@@ -515,16 +515,17 @@ impl Channel for SessionWatcher {
             return Err(CarrierError::Network(format!("Token expired for bot {bot_id}")));
         }
 
-        let context_token = state.get_context_token(user_id).ok_or_else(|| {
-            CarrierError::InvalidInput(format!("No context_token for user {user_id} — can only reply to received messages"))
-        })?;
+        // context_token is optional in the iLink protocol (verified
+        // 2026-08-19): bare sends deliver when the sender account has a
+        // relationship with the recipient. Keep a cached token when we have
+        // one, but never block the send on its absence.
+        let context_token = state.get_context_token(user_id);
 
         let client_id = format!("openclaw-weixin-{}", Uuid::new_v4().as_simple());
         let bot_token = state.bot_token.clone();
         let baseurl = state.baseurl.clone();
         let http = state.http.clone();
         let user_id = user_id.to_string();
-        let context_token = context_token.to_string();
         let text = text.to_string();
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -540,12 +541,12 @@ impl Channel for SessionWatcher {
                 }
             };
             let result = rt.block_on(async {
-                api::send_message(
+                api::send_message_auto(
                     &http,
                     &bot_token,
                     &baseurl,
                     &user_id,
-                    &context_token,
+                    context_token.as_deref(),
                     &client_id,
                     &text,
                 )
@@ -573,9 +574,8 @@ impl Channel for SessionWatcher {
             return Err(CarrierError::Network(format!("Token expired for bot {bot_id}")));
         }
 
-        let context_token = state.get_context_token(user_id).ok_or_else(|| {
-            CarrierError::InvalidInput(format!("No context_token for user {user_id} - can only reply to received messages"))
-        })?;
+        // context_token optional — see send() for the verified protocol model.
+        let context_token = state.get_context_token(user_id);
 
         // iLink supports video_url, image_url and text only. Pick the best
         // representation that has a public URL (link is not a native iLink card).
@@ -608,17 +608,16 @@ impl Channel for SessionWatcher {
         let baseurl = state.baseurl.clone();
         let http = state.http.clone();
         let user_id = user_id.to_string();
-        let context_token = context_token.to_string();
 
         types::channel::block_on_detached(async move {
             match send_kind {
-                "video" => api::send_video(
-                    &http, &bot_token, &baseurl, &user_id, &context_token, &client_id, &payload,
+                "video" => api::send_video_auto(
+                    &http, &bot_token, &baseurl, &user_id, context_token.as_deref(), &client_id, &payload,
                 )
                 .await
                 .map_err(|e| CarrierError::Network(e.to_string())),
-                "image" => api::send_image(
-                    &http, &bot_token, &baseurl, &user_id, &context_token, &client_id, &payload,
+                "image" => api::send_image_auto(
+                    &http, &bot_token, &baseurl, &user_id, context_token.as_deref(), &client_id, &payload,
                 )
                 .await
                 .map_err(|e| CarrierError::Network(e.to_string())),
