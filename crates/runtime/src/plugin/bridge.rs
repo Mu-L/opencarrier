@@ -412,6 +412,18 @@ impl PluginBridgeManager {
             return;
         }
 
+        // Automation rules (weixin iLink): fixed keyword replies, zero LLM.
+        // Mirrors the weixin-oa webhook gate — rules scoped (channel "weixin",
+        // app_id = bot_id) matched on text deliver a fixed reply and SKIP the
+        // agent turn. Runs after the system interactions (naming / rename /
+        // @name / /list / admin request) so those keep their meaning even when
+        // a keyword rule would also match the same text.
+        if msg.channel_type == "weixin"
+            && self.weixin_automation_gate(&msg, &agent_id, &text).await
+        {
+            return;
+        }
+
         // Save media data (files and images) to the agent's workspace input/ directory
         let saved_filename = self.save_media_to_input(&msg, &agent_id, &rk).await;
 
@@ -463,6 +475,149 @@ impl PluginBridgeManager {
                 self.send_response(&msg, "抱歉，处理消息时遇到了问题，请稍后再试。").await;
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Automation rules (weixin iLink) — fixed keyword replies, zero LLM
+    // -----------------------------------------------------------------------
+
+    /// iLink automation gate: deliver fixed replies for matching keyword
+    /// rules WITHOUT the agent LLM. Returns true when the inbound was fully
+    /// handled (at least one reply delivered, none failed) and the agent
+    /// turn should be skipped. Bypass tasks (`Push` to a target other than
+    /// `"current"`) are delivered but do NOT skip the agent — same
+    /// semantics as the weixin-oa webhook gate.
+    async fn weixin_automation_gate(
+        &self,
+        msg: &PluginMessage,
+        agent_id: &str,
+        text: &str,
+    ) -> bool {
+        let rules = match self.kernel.automation_rule_list("weixin", &msg.bot_id).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(bot = %msg.bot_id, error = %e, "weixin: automation_rule_list failed");
+                return false;
+            }
+        };
+        if rules.is_empty() || text.trim().is_empty() {
+            return false;
+        }
+
+        let mut delivered = 0usize;
+        let mut failures = 0usize;
+        for rule in &rules {
+            if !weixin_keyword_rule_hit(rule, text) {
+                continue;
+            }
+            match rule.task_kind {
+                // Bypass push (target ≠ current): deliver, agent still runs.
+                types::automation::TaskKind::Push
+                    if rule.target != "current" && !rule.target.is_empty() =>
+                {
+                    match serde_json::from_value::<types::content::ContentDescriptor>(
+                        rule.task_payload.clone(),
+                    ) {
+                        Ok(content) => {
+                            if let Err(e) = self
+                                .kernel
+                                .push_message(
+                                    rule.target.clone(),
+                                    content,
+                                    agent_id.to_string(),
+                                    msg.bot_id.clone(),
+                                )
+                                .await
+                            {
+                                warn!(
+                                    bot = %msg.bot_id, rule_id = %rule.id,
+                                    target = %rule.target, error = %e,
+                                    "weixin: automation bypass push failed"
+                                );
+                            }
+                        }
+                        Err(e) => warn!(
+                            rule_id = %rule.id, error = %e,
+                            "weixin: Push rule has bad task_payload"
+                        ),
+                    }
+                }
+                // Reply to the triggering user; counts toward the agent skip.
+                types::automation::TaskKind::PushText
+                | types::automation::TaskKind::Push
+                | types::automation::TaskKind::PushMiniprogram => {
+                    match self.weixin_deliver_rule_reply(msg, agent_id, rule).await {
+                        Ok(()) => delivered += 1,
+                        Err(e) => {
+                            warn!(
+                                bot = %msg.bot_id, rule_id = %rule.id, error = %e,
+                                "weixin: automation reply failed (agent will run)"
+                            );
+                            failures += 1;
+                        }
+                    }
+                }
+                // Needs kernel.notify_admins (not on KernelHandle); the upsert
+                // tool rejects notify_admin for channel "weixin". Never fires.
+                types::automation::TaskKind::NotifyAdmin => {
+                    warn!(
+                        rule_id = %rule.id,
+                        "weixin: notify_admin rule matched but is not supported on iLink"
+                    );
+                }
+            }
+        }
+        if delivered > 0 && failures == 0 {
+            info!(
+                bot = %msg.bot_id,
+                sender = %msg.sender_id,
+                delivered,
+                "weixin: automation rule matched, fixed reply delivered (agent skipped)"
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Deliver one rule's reply to the triggering user. Text payloads go
+    /// through `send_response` (same path as agent replies: WeChat sanitize
+    /// and notify markers); rich payloads (image/video URL) go through
+    /// `push_message`, which routes via the sender's recorded channel.
+    async fn weixin_deliver_rule_reply(
+        &self,
+        msg: &PluginMessage,
+        agent_id: &str,
+        rule: &types::automation::AutomationRule,
+    ) -> types::error::CarrierResult<()> {
+        // PushText and plain-text Push both carry {"text": "..."}.
+        if let Some(text) = rule.task_payload.get("text").and_then(|v| v.as_str()) {
+            if !text.is_empty() {
+                self.send_response(msg, text).await;
+                return Ok(());
+            }
+        }
+        let content: types::content::ContentDescriptor =
+            serde_json::from_value(rule.task_payload.clone()).map_err(|e| {
+                CarrierError::Serialization(format!(
+                    "rule task_payload is neither {{text}} nor a ContentDescriptor: {e}"
+                ))
+            })?;
+        if content.image.is_none() && content.video.is_none() {
+            // Text-only descriptors were handled above; a miniprogram-only
+            // payload has no iLink representation — fail so the agent runs.
+            return Err(CarrierError::InvalidInput(
+                "iLink cannot deliver this payload (miniprogram cards unsupported)".into(),
+            ));
+        }
+        self.kernel
+            .push_message(
+                msg.sender_id.clone(),
+                content,
+                agent_id.to_string(),
+                msg.bot_id.clone(),
+            )
+            .await
     }
 
     // -----------------------------------------------------------------------
@@ -896,6 +1051,87 @@ impl PluginBridgeManager {
                 "No channel send function set, cannot send response"
             );
         }
+    }
+}
+
+/// Does this rule fire on an inbound iLink text message? iLink has no
+/// subscribe/menu/scan event surface — keyword (substring on text) is the
+/// only trigger that can ever match here.
+fn weixin_keyword_rule_hit(rule: &types::automation::AutomationRule, text: &str) -> bool {
+    rule.enabled
+        && rule.trigger_kind == types::automation::TriggerKind::Keyword
+        && !rule.trigger_data.is_empty()
+        && text.trim().contains(rule.trigger_data.trim())
+}
+
+#[cfg(test)]
+mod automation_gate_tests {
+    use super::*;
+    use types::automation::{AutomationRule, TaskKind, TriggerKind};
+
+    fn rule(trigger: TriggerKind, data: &str, enabled: bool) -> AutomationRule {
+        AutomationRule {
+            id: "r1".into(),
+            app_id: "bot".into(),
+            channel: "weixin".into(),
+            name: "t".into(),
+            enabled,
+            priority: 0,
+            trigger_kind: trigger,
+            trigger_data: data.into(),
+            task_kind: TaskKind::PushText,
+            task_payload: serde_json::json!({ "text": "hi" }),
+            target: "current".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn weixin_keyword_hit_rules() {
+        let text = "请问月卡多少钱";
+        assert!(weixin_keyword_rule_hit(
+            &rule(TriggerKind::Keyword, "月卡", true),
+            text
+        ));
+        // trigger_data trimmed on both sides
+        assert!(weixin_keyword_rule_hit(
+            &rule(TriggerKind::Keyword, " 月卡 ", true),
+            text
+        ));
+        // not contained
+        assert!(!weixin_keyword_rule_hit(
+            &rule(TriggerKind::Keyword, "季卡", true),
+            text
+        ));
+        // empty trigger never matches (would otherwise match everything)
+        assert!(!weixin_keyword_rule_hit(
+            &rule(TriggerKind::Keyword, "", true),
+            text
+        ));
+        // disabled never matches
+        assert!(!weixin_keyword_rule_hit(
+            &rule(TriggerKind::Keyword, "月卡", false),
+            text
+        ));
+        // iLink has no event surface — these triggers can never match
+        assert!(!weixin_keyword_rule_hit(
+            &rule(TriggerKind::Subscribe, "", true),
+            "subscribe"
+        ));
+        assert!(!weixin_keyword_rule_hit(
+            &rule(TriggerKind::MenuClick, "x", true),
+            "x"
+        ));
+        assert!(!weixin_keyword_rule_hit(
+            &rule(TriggerKind::Scan, "x", true),
+            "x"
+        ));
+        // blank text never matches (media placeholders fall through to the agent)
+        assert!(!weixin_keyword_rule_hit(
+            &rule(TriggerKind::Keyword, "月卡", true),
+            "  "
+        ));
     }
 }
 

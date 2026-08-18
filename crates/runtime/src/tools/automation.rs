@@ -1,7 +1,8 @@
 //! Automation-rule tools (admin-gated): list/upsert/delete per-app
-//! "trigger -> fixed action" rules stored in `automation_rules`. The channel
-//! layer matches these on inbound events (subscribe/keyword) and delivers the
-//! fixed reply WITHOUT routing to the agent LLM.
+//! "trigger -> fixed action" rules stored in `automation_rules`. Matched on
+//! inbound at two gates, both WITHOUT routing to the agent LLM: the
+//! weixin-oa webhook (subscribe/keyword/menu_click/scan) and the plugin
+//! bridge's weixin iLink gate (keyword only — iLink has no event surface).
 //!
 //! Admin gate uses the 86bus `wechat_identity` role (`"admin"`), distinct from
 //! the clone-admin (`is_admin_gated`) concept - do not mix them.
@@ -39,7 +40,7 @@ impl ToolModule for AutomationRulesTools {
         vec![
             ToolDefinition {
                 name: "automation_rule_list".to_string(),
-                description: "List automation rules for a weixin-oa app_id (admin only). Rules fire fixed replies on subscribe/keyword events without invoking the agent.".to_string(),
+                description: "List automation rules for a channel scope (admin only): weixin-oa app_id (default channel), or weixin (iLink) bot_id with channel='weixin'. Rules fire fixed replies on matching inbound without invoking the agent.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -51,7 +52,7 @@ impl ToolModule for AutomationRulesTools {
             },
             ToolDefinition {
                 name: "automation_rule_upsert".to_string(),
-                description: "Create or update an automation rule (admin only). On a matching inbound event: push_text/push_miniprogram deliver a fixed reply and skip the agent; notify_admin pushes to admins (notify_type→notify_routes) as a bypass while the agent still replies to the user. trigger: subscribe|keyword|menu_click|scan (menu_click matches the menu EventKey substring; scan matches the QR scene substring on SCAN and on qrscene_ subscribes).".to_string(),
+                description: "Create or update an automation rule (admin only). On a matching inbound event: push_text/push_miniprogram deliver a fixed reply and skip the agent; notify_admin pushes to admins (notify_type→notify_routes) as a bypass while the agent still replies to the user. trigger: subscribe|keyword|menu_click|scan (menu_click matches the menu EventKey substring; scan matches the QR scene substring on SCAN and on qrscene_ subscribes). channel='weixin' (iLink): app_id is the bot name, trigger must be keyword, task push_text/push only (iLink has no events and no miniprogram cards).".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -194,6 +195,8 @@ async fn tool_rule_upsert(
         }
     };
 
+    validate_weixin_scope(&channel, trigger_kind, task_kind)?;
+
     let trigger_data = match trigger_kind {
         TriggerKind::Keyword => input["keyword"]
             .as_str()
@@ -327,6 +330,31 @@ async fn tool_rule_delete(
     Ok(format!("Automation rule deleted: {id}"))
 }
 
+/// iLink (channel `"weixin"`) scope constraints: iLink has no event surface
+/// (only text messages arrive), cannot deliver miniprogram cards, and the
+/// bridge gate implements keyword → push_text/push only. Reject at write time
+/// so misconfigured rules never silently no-op in production.
+fn validate_weixin_scope(
+    channel: &str,
+    trigger: TriggerKind,
+    task: TaskKind,
+) -> CarrierResult<()> {
+    if channel != "weixin" {
+        return Ok(());
+    }
+    if trigger != TriggerKind::Keyword {
+        return Err(CarrierError::InvalidInput(
+            "channel 'weixin' (iLink) only supports trigger=keyword — iLink has no subscribe/menu/scan events".into(),
+        ));
+    }
+    if !matches!(task, TaskKind::PushText | TaskKind::Push) {
+        return Err(CarrierError::InvalidInput(
+            "channel 'weixin' (iLink) only supports task=push_text/push — no miniprogram cards, no notify_admin on iLink".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Build a `ContentDescriptor` from tool input fields (text or miniprogram).
 fn build_content_descriptor(
     input: &Value,
@@ -407,5 +435,22 @@ mod tests {
         assert!(require_admin(None).is_err()); // no sender_id
         crate::wechat_identity::set("sid_empty", "");
         assert!(require_admin(Some("sid_empty")).is_err()); // empty role != admin
+    }
+
+    #[test]
+    fn weixin_scope_validation() {
+        // Allowed: keyword + push_text / push.
+        assert!(validate_weixin_scope("weixin", TriggerKind::Keyword, TaskKind::PushText).is_ok());
+        assert!(validate_weixin_scope("weixin", TriggerKind::Keyword, TaskKind::Push).is_ok());
+        // Rejected triggers: iLink has no event surface.
+        assert!(validate_weixin_scope("weixin", TriggerKind::Subscribe, TaskKind::PushText).is_err());
+        assert!(validate_weixin_scope("weixin", TriggerKind::MenuClick, TaskKind::PushText).is_err());
+        assert!(validate_weixin_scope("weixin", TriggerKind::Scan, TaskKind::PushText).is_err());
+        // Rejected tasks: no miniprogram cards, no notify_admin on iLink.
+        assert!(validate_weixin_scope("weixin", TriggerKind::Keyword, TaskKind::PushMiniprogram).is_err());
+        assert!(validate_weixin_scope("weixin", TriggerKind::Keyword, TaskKind::NotifyAdmin).is_err());
+        // Other channels unrestricted.
+        assert!(validate_weixin_scope("weixin-oa", TriggerKind::Subscribe, TaskKind::NotifyAdmin).is_ok());
+        assert!(validate_weixin_scope("wecom", TriggerKind::Scan, TaskKind::PushMiniprogram).is_ok());
     }
 }
