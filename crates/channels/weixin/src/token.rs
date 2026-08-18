@@ -326,18 +326,52 @@ impl WeixinState {
         self.bots.get(user_id)
     }
 
-    /// Find a bot session for sending a message. Simple direct lookup by
-    /// user_id — the bot's own session with its own credentials.
+    /// Find a bot session for sending a message to `user_id`.
+    ///
+    /// Three paths, in order:
+    /// 1. **Direct**: `user_id` IS a scanner id (one of the logged-in WeChat
+    ///    accounts). Serves admin entries whose id is a scanner account —
+    ///    those sessions hold a self-keyed context_token (from the account's
+    ///    own outgoing sync) and deliver reliably at any hour.
+    /// 2. **Token-holder scan**: a peer talked to one specific WeChat account
+    ///    before — its context_token lives in THAT account's session. iLink
+    ///    peer ids are per-account namespaces, so at most one session can
+    ///    hold a given peer id; no ambiguity. Without this path the bot_id
+    ///    fallback below matched every session (all are "default" in
+    ///    practice) and returned an arbitrary one whose token map lacks the
+    ///    peer — a deterministic "No context_token" failure regardless of
+    ///    time of day (observed: scheduled admin pushes failing 9×/2 days).
+    /// 3. **Legacy bot_id fallback**: kept for the no-token-anywhere case so
+    ///    the error surfaced to callers stays "No context_token" (sessions
+    ///    exist; the peer just never talked to any of them).
     pub fn get_session_for_send(
         &self,
         _bot_id: &str,
         user_id: &str,
     ) -> Option<dashmap::mapref::one::Ref<'_, String, BotSession>> {
-        // Direct lookup by user_id (most common path)
+        // 1. Direct lookup by user_id — the target is itself a scanned account.
         if let Some(state) = self.bots.get(user_id) {
             return Some(state);
         }
-        // Fallback: find the key for a session with matching bot_id
+        // 2. The one session whose account actually holds this peer's token.
+        //    Mutex pairs only with read refs elsewhere (store/get/save), so
+        //    locking inside the shard-read iteration cannot deadlock.
+        let holder = self
+            .bots
+            .iter()
+            .find(|entry| {
+                entry
+                    .value()
+                    .context_tokens
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains_key(user_id)
+            })
+            .map(|entry| entry.key().clone());
+        if let Some(key) = holder {
+            return self.bots.get(&key);
+        }
+        // 3. Legacy fallback: first session with a matching bot_id.
         let found_key = self
             .bots
             .iter()
@@ -465,3 +499,69 @@ impl WeixinState {
 /// Global singleton for iLink state management.
 pub static WEIXIN_STATE: std::sync::LazyLock<WeixinState> =
     std::sync::LazyLock::new(WeixinState::new);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Register a fresh scanner account (never expired: register_from_qr
+    /// stamps now + SESSION_DURATION_SECS).
+    fn register(state: &WeixinState, scanner: &str) {
+        state.register_from_qr(
+            "default",
+            "tok",
+            "https://example.invalid",
+            "bot@im.bot",
+            Some(scanner),
+            Some(&format!("agent-{scanner}")),
+        );
+    }
+
+    /// Path 2: a peer's context_token lives in the ONE session whose account
+    /// talked to them — a send must resolve to that session, not to an
+    /// arbitrary "default"-bot_id session (all sessions share bot_id
+    /// "default" in production, so the legacy fallback is a coin flip).
+    #[test]
+    fn get_session_for_send_resolves_the_token_holder() {
+        let state = WeixinState::new();
+        register(&state, "scanner-a");
+        register(&state, "scanner-b");
+        // peer-p only ever talked to scanner-b.
+        state
+            .bots
+            .get("scanner-b")
+            .unwrap()
+            .store_context_token("peer-p", "ctx");
+        let resolved = state.get_session_for_send("default", "peer-p").unwrap();
+        assert_eq!(resolved.key(), "scanner-b");
+        assert_eq!(resolved.get_context_token("peer-p").as_deref(), Some("ctx"));
+    }
+
+    /// Path 1 unchanged: an admin entry whose id IS a scanner account
+    /// resolves directly (the self-keyed-token pattern that makes the
+    /// daily admin brief deliver for scanner-id admins).
+    #[test]
+    fn get_session_for_send_direct_hit_for_scanner_id() {
+        let state = WeixinState::new();
+        register(&state, "scanner-a");
+        state
+            .bots
+            .get("scanner-a")
+            .unwrap()
+            .store_context_token("scanner-a", "self-ctx");
+        let resolved = state.get_session_for_send("default", "scanner-a").unwrap();
+        assert_eq!(resolved.key(), "scanner-a");
+    }
+
+    /// Path 3 unchanged: a peer with no token anywhere still yields SOME
+    /// session via the bot_id fallback, so callers surface the accurate
+    /// "No context_token" error rather than "No session".
+    #[test]
+    fn get_session_for_send_unknown_peer_falls_back_to_bot_id() {
+        let state = WeixinState::new();
+        register(&state, "scanner-a");
+        let resolved = state.get_session_for_send("default", "stranger").unwrap();
+        assert_eq!(resolved.key(), "scanner-a");
+        assert!(resolved.get_context_token("stranger").is_none());
+    }
+}
