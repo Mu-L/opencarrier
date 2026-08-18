@@ -388,13 +388,12 @@ pub struct AgentManifest {
     /// call per message; sessions never auto-rotate).
     #[serde(default)]
     pub intent_classifier_enabled: Option<bool>,
-    /// Optional fallback flow loaded when the intent classifier returns NO
-    /// match — closes the bare-turn gap that previously skipped
-    /// deny_tools/elevation. When set, the named flow is loaded exactly like
-    /// an explicit active_flow match, so apply_flow_elevation runs and the
-    /// flow's tools:/deny_tools apply. Priority: resume > active_flow >
-    /// classify > default_flow — never bypasses classify, only catches its
-    /// no-match outcome.
+    /// INERT since 2026-08-18 (operator ruling: no silent fallbacks): the
+    /// classifier-miss default_flow fallback was removed from turn
+    /// resolution — a no-match now runs a bare turn and the gap is visible.
+    /// The field stays in the schema for agent.toml/template.json parse
+    /// compatibility; nothing consumes it at resolution time. Pin a flow
+    /// explicitly with active_flow instead.
     #[serde(default)]
     pub default_flow: Option<String>,
     /// Custom metadata.

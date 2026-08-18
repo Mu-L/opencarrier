@@ -406,14 +406,11 @@ impl CarrierKernel {
 
         // Flow resolution priority: resume > explicit active_flow > LLM classify.
         // resume and active_flow both load a named flow directly (skipping the
-        // non-deterministic classifier); classify is the fallback. A silent
-        // classify-None previously left the agent with no flow prompt AND no
-        // max_iterations override (ad-occ3 root cause) — now logged.
-        // `default_flow_fallback` marks a classifier-miss guess: the turn still
-        // gets the flow's cage (deny_tools + hard sandbox below) but is denied
-        // authority grants (elevation/shell_allow/report gate) — see
-        // apply_flow_elevation.
-        let (auto_matched_flow, flow_max_iterations, matched_flow, default_flow_fallback) = self
+        // non-deterministic classifier); classify is the fallback. A classify
+        // miss runs a BARE turn — no default_flow fallback (operator ruling
+        // 2026-08-18: silent fallbacks hide configuration problems; an
+        // explicit active_flow is the sanctioned way to pin a flow).
+        let (auto_matched_flow, flow_max_iterations, matched_flow) = self
             .resolve_matched_flow(entry, message, &mut tools, &brain_ref, resume_flow, active_flow, &session)
             .await;
 
@@ -435,17 +432,10 @@ impl CarrierKernel {
         // Flow turn elevation (shared system OR private skill with shell_allow):
         // raise max_tool_level and stamp elevated tool names + shell_allow for tool_runner.
         // Also enforce deny_tools: strip from LLM tool list for this turn.
-        // `!default_flow_fallback` = grant_authority: explicit/classified flows
-        // get full application; a classifier-miss default_flow guess only gets
-        // the cage (deny + sandbox).
+        // Every flow reaching here carries intent (resume/active_flow/classify
+        // hit) — full authority, no cage mode since the fallback removal.
         if let Some(ref flow) = matched_flow {
-            Self::apply_flow_elevation(
-                &mut tools,
-                &mut manifest,
-                flow,
-                &entry.name,
-                !default_flow_fallback,
-            );
+            Self::apply_flow_elevation(&mut tools, &mut manifest, flow, &entry.name);
         }
 
         // Apply flow's then subagent's max_iterations override (subagent wins).
@@ -625,13 +615,10 @@ impl CarrierKernel {
     /// fallback. A silent classify-None previously left the agent with no flow
     /// prompt AND no max_iterations override (ad-occ3 root cause) — now logged.
     /// Mutates `tools` to inject the matched flow's declared tools.
-    /// Returns (flow_prompt, max_iterations, matched_flow, default_flow_fallback).
-    /// The 4th element is true ONLY when the flow came from the classifier-miss
-    /// default_flow fallback — the call site passes `!default_flow_fallback` as
-    /// `grant_authority` to apply_flow_elevation: a guessed flow may cage a turn
-    /// (deny_tools + hard sandbox) but never grants authority (max_tool_level
-    /// elevation, shell_allow, output:report gate). Authority requires intent —
-    /// an explicit resume/active_flow or a real classifier hit.
+    /// Returns (flow_prompt, max_iterations, matched_flow). A classifier miss
+    /// returns NO flow — there is no default_flow fallback (operator ruling
+    /// 2026-08-18: a silent guessed flow hides configuration problems behind
+    /// a caged, half-empowered turn; run bare and let the gap be visible).
     #[allow(clippy::too_many_arguments)]
     async fn resolve_matched_flow(
         &self,
@@ -646,7 +633,6 @@ impl CarrierKernel {
         Option<String>,
         Option<u32>,
         Option<crate::prompt_sources::FlowMatch>,
-        bool,
     ) {
         let from_resume = if let Some(rf) = resume_flow {
             // Resume: load by name WITHOUT an LLM classify call -- the user's
@@ -694,7 +680,7 @@ impl CarrierKernel {
         };
 
         if let Some((prompt, max_iter, flow)) = from_resume.or(from_active) {
-            (Some(prompt), max_iter, Some(flow), false)
+            (Some(prompt), max_iter, Some(flow))
         } else if let (Some(ws), Some(brain)) =
             (entry.manifest.workspace.as_ref(), brain_ref.as_ref())
         {
@@ -744,64 +730,23 @@ impl CarrierKernel {
                     // (run_flow) receives this base prompt and adds per-step
                     // directives on top; the streaming path falls back to
                     // guided single-step execution if run_flow isn't wired there.
-                    (
-                        Some(flow_prompt),
-                        flow_max_iter,
-                        Some(flow),
-                        false,
-                    )
+                    (Some(flow_prompt), flow_max_iter, Some(flow))
                 }
                 None => {
-                    // Classifier-miss fallback: closes the bare-turn gap. Without
-                    // this, a no-match left the agent in a bare turn where
-                    // apply_flow_elevation/deny_tools never ran (task_plan usable,
-                    // no elevation, no flow prompt — ai-writer 16:29 deadlock).
-                    // load_named_flow_for_turn calls inject_flow_tools internally
-                    // (via apply_flow_to_turn), so the flow's tools apply and
-                    // apply_flow_elevation (below) runs. Priority BELOW classify
-                    // — only fires on a classifier miss, never bypasses it.
-                    //
-                    // CAGE-ONLY (2026-08-16): the fallback returns
-                    // default_flow_fallback=true, so the call site applies
-                    // deny_tools + hard sandbox but SKIPS authority grants
-                    // (max_tool_level elevation, shell_allow, output:report
-                    // gate). A guessed flow may cage a turn, never unlock it —
-                    // 86bus chat misses used to load article-formatter and get
-                    // elevated Write→Dangerous by accident.
-                    //
-                    // Source: manifest.default_flow (runtime agent.toml override) wins;
-                    // if unset, fall back to the DEFINITION layer — workspace
-                    // template.json's default_flow. dup push writes template.json
-                    // straight into the workspace, so the definition-layer value takes
-                    // effect immediately (no reinstall needed to stamp agent.toml).
-                    let default_flow = entry
-                        .manifest
-                        .default_flow
-                        .clone()
-                        .or_else(|| Self::read_template_default_flow(entry));
-                    if let Some(name) = default_flow.as_deref() {
-                        match self.load_named_flow_for_turn(entry, tools, name) {
-                            Some((prompt, max_iter, flow)) => {
-                                info!(
-                                    agent = %entry.name,
-                                    flow = %name,
-                                    "Flow loaded by default_flow (cage-only fallback: deny+sandbox, no elevation/report gate)"
-                                );
-                                (Some(prompt), max_iter, Some(flow), true)
-                            }
-                            None => {
-                                warn!(
-                                    agent = %entry.name,
-                                    flow = %name,
-                                    "default_flow set but flow def not found — proceeding without flow prompt"
-                                );
-                                (None, None, None, false)
-                            }
-                        }
-                    } else {
-                        warn!(agent = %entry.name, "Flow classifier returned no match — proceeding without flow prompt");
-                        (None, None, None, false)
-                    }
+                    // Classifier miss — BARE turn, deliberately (operator
+                    // ruling 2026-08-18, reversing the 2026-08-16 cage): the
+                    // old default_flow fallback loaded a guessed flow with
+                    // withheld authority, which silently degraded turns (e.g.
+                    // validators dying on skipped shell_allow) instead of
+                    // exposing that no flow was selected. Pin a flow with an
+                    // explicit active_flow (API/cron) or let the classifier
+                    // match it — anything else runs with the agent's base
+                    // tools, visibly.
+                    warn!(
+                        agent = %entry.name,
+                        "Flow classifier returned no match — bare turn (no default_flow fallback; pass active_flow to pin a flow)"
+                    );
+                    (None, None, None)
                 }
             }
         } else {
@@ -813,37 +758,7 @@ impl CarrierKernel {
                 (Some(_), None) => warn!(agent = %entry.name, "Flow classification skipped — no brain configured"),
                 _ => {}
             }
-            (None, None, None, false)
-        }
-    }
-
-    /// Read the definition-layer `default_flow` from the clone's workspace
-    /// `template.json`. Returns None when the workspace/template is missing or
-    /// the field is absent/empty. This is the dup-synced definition-layer source
-    /// of truth for the classifier-miss fallback — see resolve_matched_flow.
-    ///
-    /// Parses ONLY the one field via serde_json::Value instead of the full
-    /// TemplateManifest: real-world template.json files drift from that struct
-    /// (e.g. mcp_servers as objects `[{name, required}]` where the struct wants
-    /// `Vec<String>`), and a whole-file parse failure would silently disable
-    /// the fallback — exactly the bug this must not have.
-    fn read_template_default_flow(entry: &AgentEntry) -> Option<String> {
-        let ws = entry.manifest.workspace.as_ref()?;
-        let content = std::fs::read_to_string(ws.join("template.json")).ok()?;
-        match serde_json::from_str::<serde_json::Value>(&content) {
-            Ok(v) => v
-                .get("default_flow")?
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .map(str::to_string),
-            Err(e) => {
-                warn!(
-                    agent = %entry.name,
-                    error = %e,
-                    "template.json parse failed — default_flow fallback disabled"
-                );
-                None
-            }
+            (None, None, None)
         }
     }
 
@@ -890,18 +805,14 @@ impl CarrierKernel {
     /// Apply flow turn elevation: enforce deny_tools (strip from the LLM tool
     /// list for this turn), and for elevating flows raise max_tool_level and
     /// stamp elevated tool names + shell_allow into manifest metadata.
-    ///
-    /// `grant_authority` — false ONLY for the classifier-miss default_flow
-    /// fallback: the guessed flow still cages the turn (deny_tools + hard
-    /// sandbox always apply) but grants no authority (no max_tool_level
-    /// elevation, no shell_allow, no output:report gate). Authority requires
-    /// intent: an explicit resume/active_flow or a real classifier hit.
+    /// Full authority: every flow reaching here was selected with intent
+    /// (resume / explicit active_flow / classifier hit) — the caged
+    /// default_flow fallback mode was removed 2026-08-18.
     fn apply_flow_elevation(
         tools: &mut Vec<types::tool::ToolDefinition>,
         manifest: &mut AgentManifest,
         flow: &crate::prompt_sources::FlowMatch,
         agent_name: &str,
-        grant_authority: bool,
     ) {
         if !flow.flow_def.deny_tools.is_empty() {
             let before = tools.len();
@@ -948,11 +859,11 @@ impl CarrierKernel {
         // valid Ralph report (types::flow::validate_step_report). end_turn
         // enforces it as a hard gate — chained pipeline steps (writing chain)
         // can no longer end on free-form prose with no quality assertion.
-        // Skipped on the default_flow fallback: a classifier-miss chat turn
-        // (e.g. a casual question) must not be forced into report format by a
-        // flow it never asked for.
-        if grant_authority
-            && flow
+        // Only intentionally-selected flows reach here (the classifier-miss
+        // default_flow fallback that had to skip this gate is gone), so a
+        // casual chat turn only sees the gate if the classifier matched a
+        // report flow for it.
+        if flow
                 .flow_def
                 .output
                 .as_deref()
@@ -967,19 +878,6 @@ impl CarrierKernel {
                 flow = %flow.name,
                 "Flow output:report gate stamped for this turn"
             );
-        }
-        // Authority gate: elevation/shell_allow below only for flows loaded
-        // with intent (explicit resume/active_flow or a classifier hit). A
-        // default_flow fallback guess cages but never unlocks — 86bus chat
-        // misses used to load article-formatter and get elevated
-        // Write→Dangerous by accident.
-        if !grant_authority {
-            info!(
-                agent = %agent_name,
-                flow = %flow.name,
-                "Flow authority withheld (default_flow fallback cage) — elevation/shell_allow/report gate skipped"
-            );
-            return;
         }
         if flow.elevates() {
             let required = flow.flow_def.required_max_tool_level();
@@ -2313,9 +2211,6 @@ impl CarrierKernel {
                                     &mut manifest_clone,
                                     flow,
                                     &agent_name,
-                                    // Plan step names its flow explicitly — full
-                                    // authority (elevation/shell_allow/report gate).
-                                    true,
                                 );
                                 Self::apply_manifest_overrides(
                                     &mut manifest_clone,
@@ -2554,14 +2449,6 @@ mod tests {
         }
     }
 
-    fn temp_ws() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "messaging-default-flow-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     /// Rollover sizing: empty session is 0; messages count toward the
     /// threshold; a realistic bloated chain session (the jiakao failure mode)
@@ -2638,63 +2525,15 @@ mod tests {
         );
     }
 
-    /// Real-world template.json shape: mcp_servers as OBJECTS ([{name,
-    /// required}]), exported_at as a string number — this drifts from
-    /// clone::TemplateManifest (Vec<String> mcp_servers) and must NOT defeat
-    /// the default_flow fallback (regression: ai-writer fallback silently
-    /// disabled because whole-struct parse failed).
+    /// Every flow that reaches apply_flow_elevation
+    /// (deny + sandbox + elevation + shell_allow + report gate): the caged
+    /// default_flow fallback mode was removed 2026-08-18 — a classifier miss
+    /// now runs a bare turn instead of loading a guessed half-empowered flow.
+    /// Regression guard: 86bus chat misses once loaded article-formatter and
+    /// were elevated Write→Dangerous by accident (that is now prevented one
+    /// level up, by not loading the flow at all).
     #[test]
-    fn default_flow_reads_real_world_template_shape() {
-        let ws = temp_ws();
-        std::fs::write(
-            ws.join("template.json"),
-            r#"{
-                "version": "2",
-                "name": "ai-writer",
-                "exported_at": "1745395200",
-                "knowledge_version": 3,
-                "mcp_servers": [{"name": "searxng", "required": true}],
-                "default_flow": "topic-researcher"
-            }"#,
-        )
-        .unwrap();
-        let entry = entry_with_workspace(&ws);
-        assert_eq!(
-            CarrierKernel::read_template_default_flow(&entry).as_deref(),
-            Some("topic-researcher")
-        );
-        std::fs::remove_dir_all(&ws).ok();
-    }
-
-    #[test]
-    fn default_flow_absent_or_empty_is_none() {
-        let ws = temp_ws();
-        std::fs::write(ws.join("template.json"), r#"{"name": "x"}"#).unwrap();
-        let entry = entry_with_workspace(&ws);
-        assert_eq!(CarrierKernel::read_template_default_flow(&entry), None);
-
-        std::fs::write(ws.join("template.json"), r#"{"default_flow": ""}"#).unwrap();
-        assert_eq!(CarrierKernel::read_template_default_flow(&entry), None);
-        std::fs::remove_dir_all(&ws).ok();
-    }
-
-    #[test]
-    fn default_flow_broken_json_is_none_not_panic() {
-        let ws = temp_ws();
-        std::fs::write(ws.join("template.json"), "{not json").unwrap();
-        let entry = entry_with_workspace(&ws);
-        assert_eq!(CarrierKernel::read_template_default_flow(&entry), None);
-        std::fs::remove_dir_all(&ws).ok();
-    }
-
-    /// The classifier-miss default_flow fallback cages but never unlocks:
-    /// deny_tools + hard sandbox apply, while max_tool_level elevation,
-    /// shell_allow and the output:report gate are withheld (authority
-    /// requires intent — explicit resume/active_flow or a classifier hit).
-    /// Regression: 86bus chat misses loaded article-formatter and were
-    /// elevated Write→Dangerous by accident (2026-08-16).
-    #[test]
-    fn fallback_flow_cages_but_never_grants_authority() {
+    fn matched_flow_gets_full_authority() {
         let flow = crate::prompt_sources::FlowMatch {
             name: "article-formatter".to_string(),
             body: "…".to_string(),
@@ -2723,27 +2562,17 @@ mod tests {
             input_schema: serde_json::json!({}),
         };
 
-        // Cage-only (default_flow fallback): deny + sandbox, no authority.
         let mut tools = vec![tool("task_plan"), tool("file_read"), tool("shell_exec")];
         let mut manifest = entry_with_workspace(std::path::Path::new("/tmp")).manifest;
-        CarrierKernel::apply_flow_elevation(&mut tools, &mut manifest, &flow, "a", false);
-        assert!(!tools.iter().any(|t| t.name == "task_plan"), "deny_tools still applies on fallback");
+        CarrierKernel::apply_flow_elevation(&mut tools, &mut manifest, &flow, "a");
+        assert!(!tools.iter().any(|t| t.name == "task_plan"), "deny_tools applies");
         assert!(
             manifest.metadata.contains_key(types::flow::META_FLOW_ALLOWED_TOOLS),
-            "hard sandbox still applies on fallback"
+            "hard sandbox applies"
         );
-        assert_eq!(manifest.max_tool_level, types::tool::PermissionLevel::Write, "no elevation on fallback");
-        assert!(!manifest.metadata.contains_key(types::flow::META_OUTPUT_REPORT), "no report gate on fallback");
-        assert!(!manifest.metadata.contains_key(types::flow::META_FLOW_SHELL_ALLOW), "no shell_allow on fallback");
-        assert!(!manifest.metadata.contains_key(types::flow::META_FLOW_ELEVATED_TOOLS), "no elevated tools on fallback");
-
-        // Explicit flow (resume/active_flow/classify hit): full authority.
-        let mut tools = vec![tool("task_plan"), tool("file_read"), tool("shell_exec")];
-        let mut manifest = entry_with_workspace(std::path::Path::new("/tmp")).manifest;
-        CarrierKernel::apply_flow_elevation(&mut tools, &mut manifest, &flow, "a", true);
-        assert!(!tools.iter().any(|t| t.name == "task_plan"));
-        assert!(manifest.max_tool_level > types::tool::PermissionLevel::Write, "explicit flow elevates");
-        assert!(manifest.metadata.contains_key(types::flow::META_OUTPUT_REPORT), "report gate stamps for explicit flow");
-        assert!(manifest.metadata.contains_key(types::flow::META_FLOW_SHELL_ALLOW), "shell_allow stamps for explicit flow");
+        assert!(manifest.max_tool_level > types::tool::PermissionLevel::Write, "elevates");
+        assert!(manifest.metadata.contains_key(types::flow::META_OUTPUT_REPORT), "report gate stamps");
+        assert!(manifest.metadata.contains_key(types::flow::META_FLOW_SHELL_ALLOW), "shell_allow stamps");
+        assert!(manifest.metadata.contains_key(types::flow::META_FLOW_ELEVATED_TOOLS), "elevated tools stamp");
     }
 }
