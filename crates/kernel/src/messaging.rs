@@ -2532,6 +2532,281 @@ mod tests {
     /// Regression guard: 86bus chat misses once loaded article-formatter and
     /// were elevated Write→Dangerous by accident (that is now prevented one
     /// level up, by not loading the flow at all).
+/// Boot a kernel on a fresh tempdir (offline brain pointing at a refused port).
+/// Same pattern as `kv_memory_recall_uses_sender_partition`.
+fn boot_test_kernel() -> (tempfile::TempDir, CarrierKernel) {
+    let tmp = tempfile::tempdir().unwrap();
+    let brain = serde_json::json!({
+        "base_url": "http://127.0.0.1:1/v1/chat/completions",
+        "api_key_env": "",
+        "default_modality": "chat",
+        "modalities": { "chat": { "description": "test" } }
+    });
+    std::fs::write(tmp.path().join("brain.json"), brain.to_string()).unwrap();
+    let config = types::config::KernelConfig {
+        home_dir: tmp.path().to_path_buf(),
+        data_dir: tmp.path().join("data"),
+        ..types::config::KernelConfig::default()
+    };
+    let kernel = CarrierKernel::boot_with_config(config).expect("kernel should boot");
+    (tmp, kernel)
+}
+
+/// Driver that records the model-visible surface of every LLM request it
+/// serves (advertised tool names, system prompt, message roles) and then
+/// answers with a plain EndTurn. The deepseek-harness `model-visible.json`
+/// technique: pin what the model actually sees, not what assembly intended.
+struct RecordingDriver {
+    requests: std::sync::Mutex<Vec<RecordedRequest>>,
+}
+
+#[derive(Default)]
+struct RecordedRequest {
+    tool_names: Vec<String>,
+    system: String,
+    message_roles: Vec<&'static str>,
+}
+
+#[async_trait::async_trait]
+impl runtime::llm_driver::LlmDriver for RecordingDriver {
+    async fn complete(
+        &self,
+        request: runtime::llm_driver::CompletionRequest,
+    ) -> Result<runtime::llm_driver::CompletionResponse, runtime::llm_driver::LlmError> {
+        self.requests.lock().unwrap().push(RecordedRequest {
+            tool_names: request.tools.iter().map(|t| t.name.clone()).collect(),
+            system: request.system.clone().unwrap_or_default(),
+            message_roles: request
+                .messages
+                .iter()
+                .map(|m| match m.role {
+                    types::message::Role::System => "system",
+                    types::message::Role::User => "user",
+                    types::message::Role::Assistant => "assistant",
+                })
+                .collect(),
+        });
+        Ok(runtime::llm_driver::CompletionResponse {
+            content: vec![types::message::ContentBlock::Text {
+                text: "done".to_string(),
+                provider_metadata: None,
+            }],
+            stop_reason: types::message::StopReason::EndTurn,
+            tool_calls: vec![],
+            usage: Default::default(),
+            media: None,
+        })
+    }
+}
+
+impl RecordingDriver {
+    fn new() -> Self {
+        Self {
+            requests: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+/// Tool names contributed by machine config — api_tools.toml on the global
+/// home plus process-global dynamic registrations (the two extra sources
+/// `resolve_tools` reads beyond CORE_TOOL_NAMES). Goldens pin the
+/// code-defined surface only, so these are subtracted before comparing.
+fn machine_config_tool_names(entry: &AgentEntry) -> std::collections::HashSet<String> {
+    let home = types::config::home_dir();
+    runtime::api_tools::loader::load_all_api_tools(&home, entry.manifest.workspace.as_deref())
+        .into_iter()
+        .map(|t| t.name)
+        .chain(
+            runtime::api_tools::register::dynamic_tools()
+                .into_iter()
+                .map(|t| t.name),
+        )
+        .collect()
+}
+
+/// Core tool surface golden — the bootstrap set every agent's turn starts
+/// from (`resolve_tools`: CORE_TOOL_NAMES ∩ builtin catalog). An independent
+/// pinned snapshot: editing CORE_TOOL_NAMES OR dropping/renaming a builtin
+/// definition must show up here in review, never only in production.
+/// Machine-config extras (api_tools.toml from the global home) are filtered
+/// out — they are config, not code, and vary per host.
+#[test]
+fn core_tool_surface_is_pinned() {
+    let (_tmp, kernel) = boot_test_kernel();
+    let entry = entry_with_workspace(std::path::Path::new("/tmp/nonexistent-ws"));
+    let machine = machine_config_tool_names(&entry);
+    let names: Vec<String> = {
+        let mut v: Vec<String> = kernel
+            .resolve_tools(&entry)
+            .into_iter()
+            .filter(|t| !machine.contains(&t.name))
+            .map(|t| t.name)
+            .collect();
+        v.sort();
+        v
+    };
+    let golden: Vec<&str> = vec![
+        "api_tool_register", "cron_cancel", "cron_create", "cron_list",
+        "document_generate", "file_list", "file_read", "flow_create",
+        "flow_load", "flow_update", "image_generate", "knowledge_add",
+        "knowledge_list", "knowledge_read", "kv_get", "kv_list", "kv_set",
+        "session_summarize", "task_plan", "tool_search", "user_profile",
+        "web_fetch", "web_search",
+    ];
+    assert_eq!(
+        names,
+        golden.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        "core model-visible tool surface drifted — if intentional, update the golden deliberately"
+    );
+}
+
+/// Flow turn assembly golden: a real flow.md parsed from disk through
+/// tool injection, deny_tools, elevation, and prompt assembly, then one
+/// turn through the real agent loop. Pins three invariants the historical
+/// "tool silently vanished from the model's view" bugs broke:
+///   1. advertised tools = core ∪ flow tools − deny_tools (exactly)
+///   2. advertised tools = META_FLOW_ALLOWED_TOOLS (dispatch sandbox matches
+///      what the model was promised — the cage-era mismatch)
+///   3. no "Flow Tool Warnings" (declared-but-unresolvable tools vanish
+///      silently — the clone-generate description-empty bug class)
+#[tokio::test(flavor = "multi_thread")]
+async fn model_visible_surface_flow_assembly_golden() {
+    let (tmp, kernel) = boot_test_kernel();
+    let ws = tmp.path().join("workspaces").join("golden-agent");
+    std::fs::create_dir_all(ws.join("flows").join("fixture-writer")).unwrap();
+    std::fs::write(
+        ws.join("flows").join("fixture-writer").join("flow.md"),
+        "---\n\
+         name: fixture-writer\n\
+         description: golden fixture flow for the model-visible surface test\n\
+         version: 1\n\
+         tools:\n  - file_read\n  - file_write\n  - shell_exec\n\
+         deny_tools:\n  - task_plan\n\
+         shell_allow:\n  - python3 flows/fixture-writer/scripts/*\n\
+         ---\n\nWrite the report.\n",
+    )
+    .unwrap();
+
+    let entry = entry_with_workspace(&ws);
+    let mut tools = kernel.resolve_tools(&entry);
+    let mut manifest = entry.manifest.clone();
+
+    // The explicit active_flow path, exactly as prepare_agent_context runs it.
+    let flow = kernel
+        .load_flow_match(&entry, "fixture-writer")
+        .expect("fixture flow parses from disk");
+    let (flow_prompt, _max_iter) = kernel.apply_flow_to_turn(&flow, &mut tools, &entry);
+    assert!(
+        !flow_prompt.contains("Flow Tool Warnings"),
+        "flow tool injection failed — declared tools vanished: {flow_prompt}"
+    );
+    CarrierKernel::apply_flow_elevation(&mut tools, &mut manifest, &flow, &entry.name);
+    kernel.build_and_apply_prompt(
+        &mut manifest,
+        &tools,
+        &Some("user:golden".to_string()),
+        Some("Golden User".to_string()),
+        &None,
+        Some(flow_prompt),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        None,
+    );
+
+    // Loop-observed surface.
+    let mut session = memory::session::Session {
+        id: SessionId::new(),
+        agent_name: manifest.name.clone(),
+        messages: Vec::new(),
+        context_window_tokens: 0,
+        turn_summaries: Vec::new(),
+        label: None,
+    };
+    let recorder = std::sync::Arc::new(RecordingDriver::new());
+    let peek: std::sync::Arc<RecordingDriver> = recorder.clone();
+    let driver: std::sync::Arc<dyn runtime::llm_driver::LlmDriver> = recorder;
+    let _result = runtime::agent_loop::run_agent_loop(
+        &manifest, "write it", &mut session, &kernel.memory, driver, &tools,
+        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+    )
+    .await
+    .expect("loop runs");
+
+    let recorded = peek.requests.lock().unwrap();
+    assert_eq!(recorded.len(), 1, "one EndTurn iteration = one request");
+    let req = &recorded[0];
+
+    // Filter machine-config extras (api_tools.toml on the global home):
+    // golden pins the code-defined surface only.
+    let machine = machine_config_tool_names(&entry);
+    let mut advertised: Vec<String> = req
+        .tool_names
+        .iter()
+        .filter(|n| !machine.contains(*n))
+        .cloned()
+        .collect();
+    advertised.sort();
+    let mut expected: Vec<String> = vec![
+        "api_tool_register", "cron_cancel", "cron_create", "cron_list",
+        "document_generate", "file_list", "file_read", "file_write",
+        "flow_create", "flow_load", "flow_update", "image_generate",
+        "knowledge_add", "knowledge_list", "knowledge_read", "kv_get",
+        "kv_list", "kv_set", "session_summarize", "shell_exec",
+        "tool_search", "user_profile", "web_fetch", "web_search",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    expected.sort();
+    assert_eq!(
+        advertised, expected,
+        "flow-turn advertised tool surface drifted (core ∪ flow.tools − deny_tools)"
+    );
+    assert!(
+        !req.tool_names.contains(&"task_plan".to_string()),
+        "deny_tools must remove task_plan from the model's view"
+    );
+
+    // Advertised ⟺ enforced: the sandbox allow-list the dispatcher will check
+    // must be exactly the set the model was shown (full sets, machine-config
+    // extras cancel out on both sides).
+    let advertised_full: Vec<String> = {
+        let mut v = req.tool_names.clone();
+        v.sort();
+        v
+    };
+    let allowed: Vec<String> = {
+        let mut v: Vec<String> = manifest
+            .metadata
+            .get(types::flow::META_FLOW_ALLOWED_TOOLS)
+            .and_then(|v| v.as_array())
+            .expect("sandbox stamp present")
+            .iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(allowed, advertised_full, "advertised tools must equal the dispatch sandbox allow-list");
+
+    assert!(
+        req.system.contains("## Active Flow (auto-matched)"),
+        "flow prompt must reach the system prompt"
+    );
+    assert!(
+        req.system.contains("**fixture-writer**"),
+        "flow header must be visible"
+    );
+    // First-request message shape: the user turn + the loop's injected
+    // turn-status system line (build_status_message "📊 Turn…") — pinning the
+    // position keeps future injections (which shift what the model sees) visible.
+    assert_eq!(
+        req.message_roles, vec!["user", "system"],
+        "first request sees the user turn plus the loop status system message"
+    );
+}
+
     #[test]
     fn matched_flow_gets_full_authority() {
         let flow = crate::prompt_sources::FlowMatch {
