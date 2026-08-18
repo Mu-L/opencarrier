@@ -36,6 +36,20 @@ fn outbound_agent_key(kernel: &CarrierKernel, agent_id: AgentId) -> String {
     }
 }
 
+/// The weixin-oa app_id bound to `agent_name` (its senders/<app_id>
+/// session's `bind_agent`), or "" when the agent has no OA binding. Used as
+/// the source-bot fallback for senderless cron `Admins` deliveries.
+fn oa_bot_for_agent(home_dir: &std::path::Path, agent_name: &str) -> String {
+    types::config::scan_sender_sessions(home_dir)
+        .into_iter()
+        .find(|(_, json)| {
+            json.get("channel").and_then(|v| v.as_str()) == Some("weixin-oa")
+                && json.get("bind_agent").and_then(|v| v.as_str()) == Some(agent_name)
+        })
+        .map(|(app_id, _)| app_id)
+        .unwrap_or_default()
+}
+
 /// Turn a free-form cron job name into a path/key-safe slug.
 ///
 /// `job.name` may contain CJK, punctuation, spaces, etc. (validate only rejects
@@ -982,8 +996,20 @@ pub(super) async fn cron_deliver_response(
                 text: Some(response.to_string()),
                 ..Default::default()
             };
+            // `pbot` comes from the job sender's last-channel history and is
+            // EMPTY for senderless jobs (no owner_id/sender_id) — OA-bound
+            // admins then route to channel `weixin-oa` with an empty bot_id
+            // and the send fails with a bare "Invalid input:". Fall back to
+            // the agent's own OA binding (senders/<app_id> bind_agent) so
+            // OA admins receive cron digests too (2026-08-18 fix; this was
+            // the hidden half of the old "3/6 delivered" partial failures).
+            let bot = if pbot.is_empty() {
+                oa_bot_for_agent(&kernel.config.home_dir, &agent_name)
+            } else {
+                pbot.clone()
+            };
             kernel
-                .do_push_message("admins", &content, &agent_id.to_string(), &pbot)
+                .do_push_message("admins", &content, &agent_id.to_string(), &bot)
                 .await
         }
         CronDelivery::Webhook { url } => {
@@ -2165,6 +2191,33 @@ mod tests {
         assert!(second.contains("《司机使用指南》"), "{second}");
         assert!(second.len() > first.len());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Senderless cron Admins delivery falls back to the agent's OA binding
+    /// for the source bot — OA-bound admins must receive cron digests too.
+    #[test]
+    fn oa_bot_for_agent_resolves_binding() {
+        use super::oa_bot_for_agent;
+        let home = std::env::temp_dir().join("oc-oa-bot-fallback");
+        let _ = std::fs::remove_dir_all(&home);
+        let senders = home.join("senders/wxBOUND");
+        std::fs::create_dir_all(&senders).unwrap();
+        std::fs::write(
+            senders.join("session.json"),
+            r#"{"channel":"weixin-oa","app_id":"wxBOUND","bind_agent":"86bus-assistant"}"#,
+        )
+        .unwrap();
+        // Other channel / other agent must not match.
+        let other = home.join("senders/wxOTHER");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(
+            other.join("session.json"),
+            r#"{"channel":"weixin-oa","app_id":"wxOTHER","bind_agent":"someone-else"}"#,
+        )
+        .unwrap();
+        assert_eq!(oa_bot_for_agent(&home, "86bus-assistant"), "wxBOUND");
+        assert_eq!(oa_bot_for_agent(&home, "unknown-agent"), "");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
