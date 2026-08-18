@@ -467,10 +467,17 @@ async fn deliver_oa(
         .await;
         return match result {
             Ok(()) => Ok(()),
-            // 48h customer-service window closed. If the account configured a
-            // fallback template, retry as a template message (no window limit)
-            // — the 86bus-era 45015 failure mode (~49/day) lands here.
-            Err(e) if wechat_oa::api::extract_errcode(&e.to_string()) == Some(45015) => {
+            // 48h customer-service window closed (45015) or per-user reply
+            // quota exhausted (45047) — both mean the customer-service path
+            // is unavailable. If the account configured a fallback template,
+            // retry as a template message (no window/quota limit) — the
+            // 86bus-era failure mode (~49/day) lands here.
+            Err(e)
+                if matches!(
+                    wechat_oa::api::extract_errcode(&e.to_string()),
+                    Some(45015) | Some(45047)
+                ) =>
+            {
                 template_fallback(account, openid, &text, e).await
             }
             Err(e) => Err(e),
