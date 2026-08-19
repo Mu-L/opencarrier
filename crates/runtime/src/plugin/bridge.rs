@@ -226,8 +226,14 @@ impl PluginBridgeManager {
         );
 
         // Record the channel this sender last used (for cron delivery routing).
+        // Keyed by the USER identity (msg.sender_id), not the route_key: the
+        // push path (do_push_message gate / deliver_via_last_channel) addresses
+        // users, and for weixin-oa/wecom the route_key is the app/bot id —
+        // keying by rk left those users without a sender_channels row and
+        // stranded their buffered notifications (buffer side already keys by
+        // user id, so drain must match).
         if let Some(ref cron_delivery) = self.cron_delivery {
-            if let Err(e) = cron_delivery.touch_sender_channel(&rk, &msg.channel_type, &msg.bot_id) {
+            if let Err(e) = cron_delivery.touch_sender_channel(&msg.sender_id, &msg.channel_type, &msg.bot_id) {
                 tracing::warn!(error = %e, "Failed to touch sender channel");
             }
         }
@@ -236,7 +242,7 @@ impl PluginBridgeManager {
         // processing the actual message. We use msg's context so the reply
         // can use the active context_token / response_url.
         if let Some(ref cron_delivery) = self.cron_delivery {
-            match cron_delivery.drain_pending(&rk) {
+            match cron_delivery.drain_pending(&msg.sender_id) {
                 Ok(notifications) if !notifications.is_empty() => {
                     for n in notifications {
                         self.send_response(&msg, &n.message).await;
