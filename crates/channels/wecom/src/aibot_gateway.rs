@@ -73,6 +73,10 @@ static TOKENS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 /// 与 sessions list / whoami 同域）。跨企业用户两域恰好一致（外部联系人
 /// 的 ws userid 就是全局 id），同企业用户必须靠入站时刻的 sessions
 /// last_msg_time 秒级对齐来学习映射。
+///
+/// 映射持久化在 `senders/<bot_id>/chat_ids.json`（id 稳定，学到即长期
+/// 有效）；内存缓存只是热路径。重启不丢——cron 推送在任务创建与触发
+/// 之间常隔着部署重启。
 static CHAT_IDS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
 /// 学习映射用的共享 HTTP 客户端（smartbot WS 回调路径无 BotEntry.http）。
@@ -304,8 +308,9 @@ pub async fn list_sessions(
 
 /// 在最近会话中按 user_id 定位单聊 chat_id（关系路由；找不到即无关系）。
 ///
-/// 解析顺序：① 学习缓存（入站时刻对齐所得，同企业成员）；② 单聊
-/// `chat_id == user_id` 精确匹配（跨企业用户两域一致）；③ 失败。
+/// 解析顺序：① 内存缓存；② `senders/<bot_id>/chat_ids.json` 持久映射
+/// （入站时刻对齐所学，同企业成员）；③ 单聊 `chat_id == user_id` 精确
+/// 匹配（跨企业用户两域一致）；④ 失败。
 pub async fn resolve_single_chat(
     http: &Client,
     bot_id: &str,
@@ -322,6 +327,14 @@ pub async fn resolve_single_chat(
     {
         return Ok(chat_id);
     }
+    if let Some(chat_id) = load_persisted_chat_id(bot_id, user_id) {
+        CHAT_IDS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, chat_id.clone());
+        return Ok(chat_id);
+    }
     let sessions = list_sessions(http, bot_id, secret).await?;
     sessions
         .iter()
@@ -335,6 +348,39 @@ pub async fn resolve_single_chat(
                  relationship-gated, best-effort)"
             ))
         })
+}
+
+/// `senders/<bot_id>/chat_ids.json` 路径。
+fn chat_id_map_path(bot_id: &str) -> std::path::PathBuf {
+    types::config::home_dir()
+        .join("senders")
+        .join(bot_id)
+        .join("chat_ids.json")
+}
+
+/// 读取持久化的 ws_userid → chat_id 映射（缺失/损坏返回 None，不报错）。
+fn load_persisted_chat_id(bot_id: &str, user_id: &str) -> Option<String> {
+    let map: HashMap<String, String> =
+        serde_json::from_str(&std::fs::read_to_string(chat_id_map_path(bot_id)).ok()?).ok()?;
+    map.get(user_id).cloned()
+}
+
+/// 追加写持久映射（load-modify-write；调用方已按 bot 串行化）。
+fn persist_chat_id(bot_id: &str, user_id: &str, chat_id: &str) {
+    let path = chat_id_map_path(bot_id);
+    let mut map: HashMap<String, String> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    map.insert(user_id.to_string(), chat_id.to_string());
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&map) {
+        if let Err(e) = std::fs::write(&path, json) {
+            warn!(bot_id, user_id, error = %e, "chat_id map persist failed");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +455,7 @@ pub async fn learn_chat_id(http: &Client, bot_id: &str, secret: &str, user_id: &
         map.lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(key, only.chat_id.clone());
+        persist_chat_id(bot_id, user_id, &only.chat_id);
         debug!(bot_id, user_id, chat_id = %only.chat_id, "learned gateway chat_id");
     }
 }
