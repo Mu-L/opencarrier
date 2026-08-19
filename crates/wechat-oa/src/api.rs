@@ -727,8 +727,8 @@ pub async fn get_all_private_template(
 // it. Same wire shape for all eight endpoints, so they share one POST
 // spine and live behind the single token authority.
 
-/// Shared POST + errcode-check spine for the comment family.
-async fn comment_post(
+/// Shared POST + errcode-check spine (comment family, datacube, …) —
+async fn wx_json_post(
     http: &reqwest::Client,
     access_token: &str,
     path: &str,
@@ -767,7 +767,7 @@ pub async fn comment_open(
     msg_data_id: i64,
     index: u32,
 ) -> CarrierResult<serde_json::Value> {
-    comment_post(
+    wx_json_post(
         http,
         access_token,
         "cgi-bin/comment/open",
@@ -783,7 +783,7 @@ pub async fn comment_close(
     msg_data_id: i64,
     index: u32,
 ) -> CarrierResult<serde_json::Value> {
-    comment_post(
+    wx_json_post(
         http,
         access_token,
         "cgi-bin/comment/close",
@@ -803,7 +803,7 @@ pub async fn comment_list(
     begin: u32,
     count: u32,
 ) -> CarrierResult<serde_json::Value> {
-    comment_post(
+    wx_json_post(
         http,
         access_token,
         "cgi-bin/comment/list",
@@ -826,7 +826,7 @@ pub async fn comment_mark_elect(
     index: u32,
     comment_id: i64,
 ) -> CarrierResult<serde_json::Value> {
-    comment_post(
+    wx_json_post(
         http,
         access_token,
         "cgi-bin/comment/markelect",
@@ -843,7 +843,7 @@ pub async fn comment_unmark_elect(
     index: u32,
     comment_id: i64,
 ) -> CarrierResult<serde_json::Value> {
-    comment_post(
+    wx_json_post(
         http,
         access_token,
         "cgi-bin/comment/unmarkelect",
@@ -860,7 +860,7 @@ pub async fn comment_delete(
     index: u32,
     comment_id: i64,
 ) -> CarrierResult<serde_json::Value> {
-    comment_post(
+    wx_json_post(
         http,
         access_token,
         "cgi-bin/comment/delete",
@@ -879,7 +879,7 @@ pub async fn comment_reply_add(
     comment_id: i64,
     content: &str,
 ) -> CarrierResult<serde_json::Value> {
-    comment_post(
+    wx_json_post(
         http,
         access_token,
         "cgi-bin/comment/reply/add",
@@ -902,7 +902,7 @@ pub async fn comment_reply_delete(
     comment_id: i64,
     reply_id: i64,
 ) -> CarrierResult<serde_json::Value> {
-    comment_post(
+    wx_json_post(
         http,
         access_token,
         "cgi-bin/comment/reply/delete",
@@ -969,6 +969,35 @@ pub fn extract_mid_from_url(url: &str) -> Option<i64> {
     let rest = &url[start..];
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     digits.parse().ok()
+}
+
+// ── Datacube (数据统计) ────────────────────────────────────
+//
+// Read/share statistics for mass-sent articles. WeChat's datacube is T+1
+// (yesterday or older) and single-day per call for getarticletotal; live
+// per-article read counts do not exist as a server API — only the article
+// page's embedded counters show real-time numbers.
+
+/// Fetch per-article read statistics (`POST /datacube/getarticletotal`).
+///
+/// `date` = `YYYY-MM-DD`, a single day (begin==end), yesterday or older.
+/// Raw passthrough: `{"list": [{msg_data_id, title, details: [{stat_date,
+/// int_page_read_count, int_page_read_user, ori_page_read_count,
+/// share_count, ...}]}]}` — join against article URLs via
+/// [`extract_mid_from_url`] (the `mid` and datacube `msg_data_id` share one
+/// id space).
+pub async fn article_total(
+    http: &reqwest::Client,
+    access_token: &str,
+    date: &str,
+) -> CarrierResult<serde_json::Value> {
+    wx_json_post(
+        http,
+        access_token,
+        "datacube/getarticletotal",
+        serde_json::json!({ "begin_date": date, "end_date": date }),
+    )
+    .await
 }
 
 /// Extract a WeChat errcode from one of this module's error strings —

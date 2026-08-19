@@ -120,7 +120,8 @@ Server → Client: {"type":"error","content":"..."}
 admin key（现 OC_API_KEY）→ 管理面：clones dup/compile/rollback、config、providers、shutdown、
                             全部 agents 管理端点 —— 仅供运维/dup CLI/dashboard
                             WeChat OA 数据面 /api/wechat-oa/{app_id}/*（user/get、draft 盘点、
-                            freepublish/get、template/list+send、comment 留言八件套，2026-08-18；
+                            freepublish/get、template/list+send、comment 留言八件套（2026-08-18）、datacube/article
+                            图文阅读统计（T+1 单日，2026-08-19）；
                             凭证服务端解析不回显。同日下线 wechat-oa-mcp——微信能力唯一接口形态
                             即此 API，agent 需要数据走���常轮次或确定性 cron）
 user token（🔧 Phase 2）  → 用户面：登录、我的分身、发消息、读自己的会话、hub 安装/发布
@@ -131,7 +132,8 @@ user token（🔧 Phase 2）  → 用户面：登录、我的分身、发消息�
   `/api/wechat-oa/` 与公开 webhook 前缀 `/api/weixin-oa/` 刻意区分，不落 is_public 白名单。
   留言端点 `/comment/{open,close,list,markelect,unmarkelect,delete,reply,reply/delete}`
   （POST，body 带 `msg_data_id`，`index` 可选默认 0；`comment/list` 另有 `comment_type`
-  0=全部/1=普通/2=精选、`offset`、`count`≤50）。
+  0=全部/1=普通/2=精选、`offset`、`count`≤50）。datacube 端点 `/datacube/article`（POST，body `{date:YYYY-MM-DD}`，
+  单日 T+1——只能查昨天及更早；返回 `list[]` 按 `msg_data_id` 对齐文章 URL 的 `mid=`）。
 
 - user token 绑定 `user_id`，消息管线复用现有 `sender_id → user:<sender_id>` session 隔离与
   user_id 记忆隔离——**token 即身份，不新增隔离机制**。

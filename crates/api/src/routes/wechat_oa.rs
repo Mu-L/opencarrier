@@ -483,6 +483,38 @@ pub async fn comment_reply_delete(
     }
 }
 
+/// POST /api/wechat-oa/{app_id}/datacube/article — per-article read stats
+/// for a single day (`POST /datacube/getarticletotal`, T+1). Body:
+/// `{date: "YYYY-MM-DD"}` (yesterday or older; begin==end). Raw passthrough:
+/// `{"list":[{msg_data_id,title,details:[{stat_date,int_page_read_count,
+/// int_page_read_user,share_count,...}]}]}` — join against article URLs via
+/// the URL's `mid=` parameter (same id space as `msg_data_id`).
+pub async fn datacube_article(
+    State(state): State<Arc<AppState>>,
+    Path(app_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let Some(date) = body["date"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| s.len() == 10 && s.as_bytes().get(4) == Some(&b'-') && s.as_bytes().get(7) == Some(&b'-'))
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "missing/invalid date (expect YYYY-MM-DD, single day, yesterday or older)"
+            })),
+        );
+    };
+    match resolve_token(&state, &app_id).await {
+        Ok(token) => match wechat_oa::api::article_total(&HTTP, &token, date).await {
+            Ok(v) => (StatusCode::OK, Json(v)),
+            Err(e) => wechat_error(e),
+        },
+        Err(resp) => resp,
+    }
+}
+
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing::{get, post};
@@ -495,6 +527,10 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route(
             "/api/wechat-oa/{app_id}/message/template/send",
             post(template_send),
+        )
+        .route(
+            "/api/wechat-oa/{app_id}/datacube/article",
+            post(datacube_article),
         )
         // Comment (留言) family — ported from the retired wechat-oa-mcp server
         // (2026-08-18); the reader-comment knowledge-base plan consumes these.
