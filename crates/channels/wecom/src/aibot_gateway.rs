@@ -66,6 +66,18 @@ impl From<GatewayError> for CarrierError {
 /// Bearer token 缓存（bot_id → token）。失效不主动过期，靠 853004 换新。
 static TOKENS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
+/// (bot_id, ws_userid) → 网关 chat_id 的学习缓存。
+///
+/// SmartBot 的双 id 空间：WS 回调的 `from.userid` 是同企业成员 userid
+/// （如 `XiaTianTian`），网关 send 的 `chat_id` 是全局成员 id（`wo…`，
+/// 与 sessions list / whoami 同域）。跨企业用户两域恰好一致（外部联系人
+/// 的 ws userid 就是全局 id），同企业用户必须靠入站时刻的 sessions
+/// last_msg_time 秒级对齐来学习映射。
+static CHAT_IDS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+/// 学习映射用的共享 HTTP 客户端（smartbot WS 回调路径无 BotEntry.http）。
+static LEARN_HTTP: std::sync::LazyLock<Client> = std::sync::LazyLock::new(Client::new);
+
 /// nonce 计数器——网关只要求 nonce 唯一，不要求密码学随机。
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -292,14 +304,24 @@ pub async fn list_sessions(
 
 /// 在最近会话中按 user_id 定位单聊 chat_id（关系路由；找不到即无关系）。
 ///
-/// 单聊的 `chat_id` 实证等于成员 userid，但以当次 `sessions/list` 返回的
-/// 值为准（框架加密语义，不自行构造）。
+/// 解析顺序：① 学习缓存（入站时刻对齐所得，同企业成员）；② 单聊
+/// `chat_id == user_id` 精确匹配（跨企业用户两域一致）；③ 失败。
 pub async fn resolve_single_chat(
     http: &Client,
     bot_id: &str,
     secret: &str,
     user_id: &str,
 ) -> CarrierResult<String> {
+    let key = format!("{bot_id}:{user_id}");
+    if let Some(chat_id) = CHAT_IDS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .cloned()
+    {
+        return Ok(chat_id);
+    }
     let sessions = list_sessions(http, bot_id, secret).await?;
     sessions
         .iter()
@@ -307,10 +329,93 @@ pub async fn resolve_single_chat(
         .map(|s| s.chat_id.clone())
         .ok_or_else(|| {
             CarrierError::InvalidInput(format!(
-                "recipient {user_id} not in bot {bot_id}'s recent sessions \
-                 (relationship required; SmartBot push is best-effort)"
+                "recipient {user_id} not resolvable on bot {bot_id}: no learned chat_id \
+                 mapping and no exact single-chat match (same-corp member ids need an \
+                 inbound message to learn the gateway chat_id; SmartBot push is \
+                 relationship-gated, best-effort)"
             ))
         })
+}
+
+// ---------------------------------------------------------------------------
+// 双 id 空间桥接：入站即学习 (bot, ws_userid) → 网关 chat_id
+// ---------------------------------------------------------------------------
+
+/// 公历 → 天数（days_from_civil；锚点 1970-01-01 = 0）。
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let mp = if m > 2 { m - 3 } else { m + 9 } as u64;
+    let doy = (153 * mp + 2) / 5 + d as u64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe as i64 - 719_468
+}
+
+/// 解析网关时间串 `YYYY-MM-DD HH:MM:SS`（中国标准时间）为「CST 视作
+/// UTC 的朴素纪元秒」，与 [`now_cst_unix`] 同基准，仅用于容差比较。
+fn parse_cst_time(s: &str) -> Option<i64> {
+    let mut it = s.split(|c: char| !c.is_ascii_digit());
+    let y = it.next()?.parse::<i64>().ok()?;
+    let mo = it.next()?.parse::<u32>().ok()?;
+    let d = it.next()?.parse::<u32>().ok()?;
+    let h = it.next().unwrap_or("0").parse::<i64>().ok()?;
+    let mi = it.next().unwrap_or("0").parse::<i64>().ok()?;
+    let sec = it.next().unwrap_or("0").parse::<i64>().ok()?;
+    Some(days_from_civil(y, mo, d) * 86_400 + h * 3600 + mi * 60 + sec)
+}
+
+/// 当前中国标准时间的「CST 视作 UTC 的朴素纪元秒」（UTC+8 无夏令时）。
+fn now_cst_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+        + 8 * 3600
+}
+
+/// 入站时刻学习映射：以刚到达的消息为准，在 sessions list 中找
+/// `last_msg_time` 与当前时刻秒级对齐的单聊。唯一命中才缓存——
+/// 零命中或歧义（多用户同秒并发）都跳过，下次入站重试。
+pub async fn learn_chat_id(http: &Client, bot_id: &str, secret: &str, user_id: &str) {
+    let key = format!("{bot_id}:{user_id}");
+    let map = CHAT_IDS.get_or_init(|| Mutex::new(HashMap::new()));
+    if map
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains_key(&key)
+    {
+        return;
+    }
+    let sessions = match list_sessions(http, bot_id, secret).await {
+        Ok(s) => s,
+        Err(e) => {
+            debug!(bot_id, user_id, error = %e, "chat_id learn: sessions list failed");
+            return;
+        }
+    };
+    let now = now_cst_unix();
+    let tol = 3i64;
+    let hits: Vec<&AibotSession> = sessions
+        .iter()
+        .filter(|s| {
+            s.chat_type == "single"
+                && parse_cst_time(&s.last_msg_time)
+                    .map(|t| (t - now).abs() <= tol)
+                    .unwrap_or(false)
+        })
+        .collect();
+    if let [only] = hits.as_slice() {
+        map.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key, only.chat_id.clone());
+        debug!(bot_id, user_id, chat_id = %only.chat_id, "learned gateway chat_id");
+    }
+}
+
+/// 学习入口的便捷包装（用模块级 HTTP 客户端，供 WS 回调路径调用）。
+pub async fn learn_chat_id_shared(bot_id: &str, secret: &str, user_id: &str) {
+    learn_chat_id(&LEARN_HTTP, bot_id, secret, user_id).await;
 }
 
 /// 以机器人身份向会话发送 markdown（普通文本也走 markdown，同官方 skill 约定）。
@@ -400,5 +505,37 @@ mod tests {
         let v = unwrap_gateway_value(outer).expect("unwrap ok");
         assert_eq!(v["token"], serde_json::json!("tok"));
         assert!(v.get("errcode").is_none());
+    }
+
+    /// days_from_civil 锚点：1970-01-01 = 0（Unix 纪元）。
+    #[test]
+    fn days_from_civil_epoch_anchor() {
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(1970, 1, 2), 1);
+        assert_eq!(days_from_civil(1969, 12, 31), -1);
+        // 2026-08-19 = 20684（与 python datetime.date(2026,8,19).toordinal()
+        // - date(1970,1,1).toordinal() 一致）
+        assert_eq!(days_from_civil(2026, 8, 19), 20684);
+    }
+
+    /// CST 时间串解析与 now_cst_unix 同基准（朴素纪元）。
+    #[test]
+    fn parse_cst_time_matches_now_basis() {
+        // Unix 0 = 1970-01-01 08:00:00 CST → 朴素基准 28800
+        assert_eq!(parse_cst_time("1970-01-01 08:00:00"), Some(28_800));
+        assert_eq!(parse_cst_time("1970-01-01 00:00:00"), Some(0));
+        assert_eq!(parse_cst_time("2026-08-19 20:54:49"), Some(20_684 * 86_400 + 20 * 3600 + 54 * 60 + 49));
+        assert_eq!(parse_cst_time("garbage"), None);
+    }
+
+    /// 容差匹配语义：±3 秒内算命中（由 learn_chat_id 的调用方语义保证）。
+    #[test]
+    fn tolerance_window_semantics() {
+        let tol = 3i64;
+        let now = parse_cst_time("2026-08-19 20:54:49").unwrap();
+        let in_range = parse_cst_time("2026-08-19 20:54:52").unwrap();
+        let out_of_range = parse_cst_time("2026-08-19 20:54:53").unwrap();
+        assert!((now - in_range).abs() <= tol);
+        assert!((now - out_of_range).abs() > tol);
     }
 }

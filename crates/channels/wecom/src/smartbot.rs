@@ -346,7 +346,7 @@ async fn connect_and_handle(
                     _ => continue,
                 };
 
-                if let Err(e) = handle_ws_message(&text, bot_id, sender, response_urls).await {
+                if let Err(e) = handle_ws_message(&text, bot_id, secret, sender, response_urls).await {
                     warn!("SmartBot message handling error: {}", e);
                 }
             }
@@ -357,6 +357,7 @@ async fn connect_and_handle(
 async fn handle_ws_message(
     raw: &str,
     bot_id: &str,
+    secret: &str,
     sender: &tokio::sync::mpsc::Sender<PluginMessage>,
     response_urls: &ResponseUrlStore,
 ) -> CarrierResult<()> {
@@ -490,6 +491,12 @@ async fn handle_ws_message(
 
             let _ = sender.send(message).await;
             info!("SmartBot forwarded message from {}", user_id);
+
+            // Learn the gateway-side chat_id for this (bot, user) on first
+            // sight — the WS `from.userid` and the gateway `chat_id` live in
+            // different id spaces for same-corp members. Skip-and-retry on
+            // ambiguity (see aibot_gateway::learn_chat_id).
+            crate::aibot_gateway::learn_chat_id_shared(bot_id, secret, user_id).await;
         }
 
         "aibot_event_callback" => {
