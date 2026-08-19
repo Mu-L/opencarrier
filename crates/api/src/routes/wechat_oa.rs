@@ -518,6 +518,43 @@ pub async fn datacube_article(
     }
 }
 
+/// POST /api/wechat-oa/{app_id}/datacube/summary — account-level daily
+/// summary (`POST /datacube/getbizsummary`, the daily-brief data source).
+/// Body: `{date: "YYYY-MM-DD"}` for one day, or `{begin_date, end_date}`
+/// for a range (inclusive, ≤30 days, end ≤ yesterday, T+1). Returns one
+/// `list` entry per day with `detail` (read_user, share_user,
+/// comment_count, collection_user, read_subscribe_user, ...). Retention
+/// starts 2025-11-01; certified accounts only. Success has no `errcode`.
+pub async fn datacube_summary(
+    State(state): State<Arc<AppState>>,
+    Path(app_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let date = body["date"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let begin = body["begin_date"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let end = body["end_date"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    // date == single-day shorthand; begin/end == explicit range.
+    let (begin, end) = match (date, begin, end) {
+        (Some(d), _, _) => (d.to_string(), d.to_string()),
+        (None, Some(b), Some(e)) => (b.to_string(), e.to_string()),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "expect {date} or {begin_date, end_date} (YYYY-MM-DD, end <= yesterday)"
+                })),
+            )
+        }
+    };
+    match resolve_token(&state, &app_id).await {
+        Ok(token) => match wechat_oa::api::biz_summary(&HTTP, &token, &begin, &end).await {
+            Ok(v) => (StatusCode::OK, Json(v)),
+            Err(e) => wechat_error(e),
+        },
+        Err(resp) => resp,
+    }
+}
+
 /// Build a router with all routes for this module.
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing::{get, post};
@@ -534,6 +571,10 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route(
             "/api/wechat-oa/{app_id}/datacube/article",
             post(datacube_article),
+        )
+        .route(
+            "/api/wechat-oa/{app_id}/datacube/summary",
+            post(datacube_summary),
         )
         // Comment (留言) family — ported from the retired wechat-oa-mcp server
         // (2026-08-18); the reader-comment knowledge-base plan consumes these.

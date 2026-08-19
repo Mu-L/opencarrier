@@ -960,6 +960,29 @@ pub async fn freepublish_batchget(
     Ok(v)
 }
 
+/// Fetch account-level daily summary (`POST /datacube/getbizsummary`).
+///
+/// `begin`/`end` = `YYYY-MM-DD` inclusive range, max 30 days, `end` at most
+/// yesterday (T+1). One `list` entry per day in range with `detail`:
+/// read_user 阅读人数 (+ read_user_source by scene), share_user, comment_count,
+/// zaikan/like, collection_user, read_subscribe_user (阅读后关注),
+/// send_page_count. Retention starts 2025-11-01; certified accounts only.
+/// Same new-API family as [`article_total`].
+pub async fn biz_summary(
+    http: &reqwest::Client,
+    access_token: &str,
+    begin: &str,
+    end: &str,
+) -> CarrierResult<serde_json::Value> {
+    wx_json_post(
+        http,
+        access_token,
+        "datacube/getbizsummary",
+        serde_json::json!({ "begin_date": begin, "end_date": end }),
+    )
+    .await
+}
+
 /// Extract the comment-API `msg_data_id` from a published article's URL —
 /// freepublish/batchget does not return it directly, but the article `url`
 /// embeds it as the `mid=` query parameter (e.g. `...&mid=2247499040&idx=1`
