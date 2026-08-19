@@ -483,12 +483,15 @@ pub async fn comment_reply_delete(
     }
 }
 
-/// POST /api/wechat-oa/{app_id}/datacube/article — per-article read stats
-/// for a single day (`POST /datacube/getarticletotal`, T+1). Body:
-/// `{date: "YYYY-MM-DD"}` (yesterday or older; begin==end). Raw passthrough:
-/// `{"list":[{msg_data_id,title,details:[{stat_date,int_page_read_count,
-/// int_page_read_user,share_count,...}]}]}` — join against article URLs via
-/// the URL's `mid=` parameter (same id space as `msg_data_id`).
+/// POST /api/wechat-oa/{app_id}/datacube/article — per-article cumulative
+/// stats (`POST /datacube/getarticletotaldetail`, the official replacement
+/// of the retired getarticletotal). Body: `{date: "YYYY-MM-DD"}` (single
+/// day, yesterday or older). Returns articles **published on that date**,
+/// each with `detail_list` whose LAST entry is the running total (read_user
+/// 阅读人数, share_user, comment_count, finish rate, ...). Retention starts
+/// 2025-11-01; each article stats its first 30 days only; certified
+/// accounts only. Join against URLs via the `mid=` parameter (same id
+/// space as `msg_data_id`).
 pub async fn datacube_article(
     State(state): State<Arc<AppState>>,
     Path(app_id): Path<String>,

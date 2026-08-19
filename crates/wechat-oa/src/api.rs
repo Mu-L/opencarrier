@@ -978,14 +978,19 @@ pub fn extract_mid_from_url(url: &str) -> Option<i64> {
 // per-article read counts do not exist as a server API — only the article
 // page's embedded counters show real-time numbers.
 
-/// Fetch per-article read statistics (`POST /datacube/getarticletotal`).
+/// Fetch per-article cumulative statistics (`POST /datacube/getarticletotaldetail`).
 ///
 /// `date` = `YYYY-MM-DD`, a single day (begin==end), yesterday or older.
-/// Raw passthrough: `{"list": [{msg_data_id, title, details: [{stat_date,
-/// int_page_read_count, int_page_read_user, ori_page_read_count,
-/// share_count, ...}]}]}` — join against article URLs via
-/// [`extract_mid_from_url`] (the `mid` and datacube `msg_data_id` share one
-/// id space).
+/// Returns the articles **published on that date** (`ref_date`), each with a
+/// `detail_list` of cumulative snapshots — the LAST entry is the running
+/// total (read_user 阅读人数, share_user, comment_count, like/zaikan,
+/// collection_user, read_subscribe_user, read_finish_rate,
+/// read_avg_activetime, praise_money, read_jump_position). Constraints:
+/// data retention starts 2025-11-01 (older publishes have no data), each
+/// article only stats its first 30 days, and certified accounts only. The
+/// legacy `getarticletotal` was taken offline by WeChat (errcode 47009,
+/// 2026-08-19) — this is its official replacement. Join against article
+/// URLs via [`extract_mid_from_url`] (`msg_data_id_index` → `mid=`).
 pub async fn article_total(
     http: &reqwest::Client,
     access_token: &str,
@@ -994,7 +999,7 @@ pub async fn article_total(
     wx_json_post(
         http,
         access_token,
-        "datacube/getarticletotal",
+        "datacube/getarticletotaldetail",
         serde_json::json!({ "begin_date": date, "end_date": date }),
     )
     .await

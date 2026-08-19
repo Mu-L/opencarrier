@@ -132,8 +132,10 @@ user token（🔧 Phase 2）  → 用户面：登录、我的分身、发消息�
   `/api/wechat-oa/` 与公开 webhook 前缀 `/api/weixin-oa/` 刻意区分，不落 is_public 白名单。
   留言端点 `/comment/{open,close,list,markelect,unmarkelect,delete,reply,reply/delete}`
   （POST，body 带 `msg_data_id`，`index` 可选默认 0；`comment/list` 另有 `comment_type`
-  0=全部/1=普通/2=精选、`offset`、`count`≤50）。datacube 端点 `/datacube/article`（POST，body `{date:YYYY-MM-DD}`，
-  单日 T+1——只能查昨天及更早；返回 `list[]` 按 `msg_data_id` 对齐文章 URL 的 `mid=`）。
+  0=全部/1=普通/2=精选、`offset`、`count`≤50）。datacube 端点 `/datacube/article`（POST，body `{date:"YYYY-MM-DD"}`，单日 T+1；
+  返回**该日期发表的文章**及其累计指标（detail_list 末项=read_user 阅读人数/share_user/
+  comment_count/完读率等）；存量起点 2025-11-01、每篇只统计发表起 30 天、仅认证账号
+  （老 getarticletotal 已被微信下线 47009，2026-08-19 换官方替代 getarticletotaldetail））。
 
 - user token 绑定 `user_id`，消息管线复用现有 `sender_id → user:<sender_id>` session 隔离与
   user_id 记忆隔离——**token 即身份，不新增隔离机制**。
