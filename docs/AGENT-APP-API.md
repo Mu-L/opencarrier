@@ -56,6 +56,12 @@ opencarrier daemon（状态权威：agents/sessions/crons/memory/channels）
 - **代码事实**（f4186f7 起）：send 路径 context_token 全部可选化（None 省略字段）+ 过期
   token 自动裸发重试；`No context_token` 失败类别已整体消失，不再是产品缺陷 vocabulary。
 
+**同构渠道：企微 SmartBot 推送（2026-08-19 落地）**——与 iLink 同一教义，另一条腿：
+`senders/` 扫码 bot 凭证 → aibot 网关签名换 token → `sessions/list`（最近≤20 会话，关系
+门控）→ `send` markdown。差异点：**per-service 授权**（bot 创建者须在企微给机器人授权
+「消息」服务，未授权=850002，错误体带专属授权链接——自愈种子：把链接回发用户即可解锁）；
+回信优先走 callback 上下文的 `response_url`（单次有效），网关推送是无 callback 时的兜底。
+
 ## 2. 产品形态：分身 = 聊天对象
 
 app 主界面是微信式会话列表：每个分身一个会话项（头像/名字/最近消息），点开是聊天窗。

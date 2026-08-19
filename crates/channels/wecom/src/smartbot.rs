@@ -127,8 +127,9 @@ impl Channel for SmartBotChannel {
     }
 
     fn supports_proactive_push(&self) -> bool {
-        // SmartBot replies require a response_url from a recent inbound callback.
-        false
+        // Proactive push via the aibot gateway (2026-08-19); response_url
+        // reply remains the preferred path inside callback context.
+        true
     }
 
     fn name(&self) -> &str {
@@ -179,27 +180,42 @@ impl Channel for SmartBotChannel {
         let key = format!("{}:{}", bot_id, user_id);
         let response_url = RESPONSE_URLS
             .get()
-            .expect("RESPONSE_URLS not initialized")
-            .lock()
-            .unwrap()
-            .remove(&key)
-            .ok_or_else(|| {
-                CarrierError::InvalidInput("No response_url available for this user. SmartBot can only reply within callback context.".to_string())
-            })?;
+            .and_then(|urls| urls.lock().map(|mut m| m.remove(&key)).ok())
+            .flatten();
 
         let bot = crate::token::WECOM_STATE
             .get_session_for_send(bot_id)
             .ok_or_else(|| CarrierError::InvalidInput(bot_id.to_string()))?;
+        let (sb_id, secret) = match &bot.entry.mode {
+            crate::token::WecomMode::SmartBot { bot_id, secret } => {
+                (bot_id.clone(), secret.clone())
+            }
+            _ => return Err(CarrierError::InvalidInput(format!(
+                "sender {bot_id} is not a smartbot session"
+            ))),
+        };
+        let http = bot.entry.http.clone();
+        let user_id = user_id.to_string();
+        let text = text.to_string();
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| CarrierError::Internal(format!("Runtime creation failed: {e}")))?;
-        rt.block_on(token::send_smartbot_response_async(
-            &bot.entry.http,
-            &response_url,
-            text,
-        ))
+        rt.block_on(async move {
+            if let Some(url) = response_url {
+                match token::send_smartbot_response_async(&http, &url, &text).await {
+                    Ok(()) => return Ok(()),
+                    Err(e) => warn!(
+                        error = %e,
+                        "smartbot response_url send failed, falling back to aibot gateway"
+                    ),
+                }
+            }
+            let chat_id =
+                crate::aibot_gateway::resolve_single_chat(&http, &sb_id, &secret, &user_id).await?;
+            crate::aibot_gateway::send_markdown(&http, &sb_id, &secret, &chat_id, &text).await
+        })
         .map_err(|e| CarrierError::Network(e.to_string()))
     }
 

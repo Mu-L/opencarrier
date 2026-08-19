@@ -13,6 +13,7 @@ use types::plugin::PluginMessage;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+pub mod aibot_gateway;
 pub mod channel;
 pub mod crypto;
 pub mod smartbot;
@@ -207,9 +208,10 @@ impl Channel for SessionWatcher {
     }
 
     fn supports_proactive_push(&self) -> bool {
-        // WeCom App and Kf modes support proactive push; SmartBot mode does not.
-        // SessionWatcher mixes all modes — return true and rely on send() to
-        // fall back to buffering when a SmartBot bot's send fails.
+        // All WeCom modes support proactive push (SmartBot via the aibot
+        // gateway since 2026-08-19, relationship-gated). SessionWatcher mixes
+        // all modes — return true and rely on send() to error when a
+        // recipient is outside the bot's recent sessions.
         true
     }
 
@@ -251,29 +253,43 @@ impl Channel for SessionWatcher {
             token::WecomMode::Kf { .. } => {
                 token::send_kf_message(&session.entry, user_id, text)?;
             }
-            token::WecomMode::SmartBot { .. } => {
-                // SmartBot uses response_url mechanism
+            token::WecomMode::SmartBot { bot_id: sb_id, secret } => {
+                // SmartBot: reply via response_url inside callback context;
+                // otherwise proactive push through the aibot gateway
+                // (relationship-gated, best-effort — same doctrine as iLink).
                 let key = format!("{}:{}", bot_id, user_id);
                 let response_url = smartbot::RESPONSE_URLS
                     .get()
-                    .ok_or_else(|| CarrierError::Config("RESPONSE_URLS not initialized".to_string()))?
-                    .lock()
-                    .unwrap()
-                    .remove(&key)
-                    .ok_or_else(|| {
-                        CarrierError::InvalidInput("No response_url available. SmartBot can only reply within callback context.".to_string())
-                    })?;
+                    .and_then(|urls| urls.lock().map(|mut m| m.remove(&key)).ok())
+                    .flatten();
 
                 let http = session.entry.http.clone();
                 let text = text.to_string();
+                let user_id = user_id.to_string();
+                let sb_id = sb_id.clone();
+                let secret = secret.clone();
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build();
                     let result = match rt {
-                        Ok(rt) => rt.block_on(token::send_smartbot_response_async(&http, &response_url, &text))
-                            .map_err(|e| CarrierError::Network(e.to_string())),
+                        Ok(rt) => rt.block_on(async move {
+                            if let Some(url) = response_url {
+                                match token::send_smartbot_response_async(&http, &url, &text).await {
+                                    Ok(()) => return Ok(()),
+                                    Err(e) => warn!(
+                                        error = %e,
+                                        "smartbot response_url send failed, falling back to aibot gateway"
+                                    ),
+                                }
+                            }
+                            let chat_id =
+                                aibot_gateway::resolve_single_chat(&http, &sb_id, &secret, &user_id)
+                                    .await?;
+                            aibot_gateway::send_markdown(&http, &sb_id, &secret, &chat_id, &text)
+                                .await
+                        }),
                         Err(e) => Err(CarrierError::Internal(format!("Runtime creation failed: {e}"))),
                     };
                     let _ = tx.send(result);
