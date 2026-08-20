@@ -13,8 +13,8 @@ use std::sync::Arc;
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
 use deadpool_postgres::Pool;
 use memory::tree::content_store::ContentStore;
-use memory::tree::summariser::{Summariser, SummaryContext, SummaryInput};
 use memory::tree::summariser::inert::InertSummariser;
+use memory::tree::summariser::{Summariser, SummaryContext, SummaryInput};
 use memory::tree::tree_global::{GLOBAL_SCOPE, GLOBAL_TOKEN_BUDGET, WEEKLY_SEAL_THRESHOLD};
 use memory::tree::types::{SummaryNode, Tree};
 use types::error::CarrierResult;
@@ -86,7 +86,10 @@ pub fn is_daily_for_date(node: &SummaryNode, date: NaiveDate) -> bool {
 #[derive(Debug, Clone)]
 pub enum DigestOutcome {
     /// Emitted one L0 daily node and possibly cascaded into higher-level seals.
-    Emitted { daily_id: String, source_count: usize },
+    Emitted {
+        daily_id: String,
+        source_count: usize,
+    },
     /// No source tree had material for the target day.
     EmptyDay,
     /// An L0 daily node already exists for this day.
@@ -115,9 +118,7 @@ pub async fn end_of_day_digest(
     let (day_start_ms, day_end_ms) = day_bounds_ms(date);
 
     // Idempotent per (owner, date): one L0 daily node per UTC day.
-    if let Some(existing) =
-        find_existing_daily(&tree_store, owner_id, &global.id, date).await?
-    {
+    if let Some(existing) = find_existing_daily(&tree_store, owner_id, &global.id, date).await? {
         return Ok(DigestOutcome::Skipped {
             existing_id: existing,
         });
@@ -214,7 +215,14 @@ pub async fn end_of_day_digest(
         Arc::new(InertSummariser),
     );
     seal_engine
-        .append_to_buffer(owner_id, &global.id, 0, &daily_id, daily.token_count as i64, now_ms)
+        .append_to_buffer(
+            owner_id,
+            &global.id,
+            0,
+            &daily_id,
+            daily.token_count as i64,
+            now_ms,
+        )
         .await?;
 
     // Check if weekly seal should trigger
@@ -222,7 +230,9 @@ pub async fn end_of_day_digest(
         .get_or_create_buffer(owner_id, &global.id, 0)
         .await?;
     if buf.item_ids.len() >= WEEKLY_SEAL_THRESHOLD {
-        seal_engine.cascade_seals(owner_id, &global, 0, true).await?;
+        seal_engine
+            .cascade_seals(owner_id, &global, 0, true)
+            .await?;
     }
 
     Ok(DigestOutcome::Emitted {
@@ -285,13 +295,20 @@ mod tests {
 
     async fn setup() -> Option<(Pool, std::path::PathBuf, TempDir)> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         let dir = TempDir::new().ok()?;
         Some((pool, dir.path().to_path_buf(), dir))
     }
@@ -348,7 +365,10 @@ mod tests {
             deleted: false,
             embedding: None,
         };
-        tree_store.insert_summary("owner_1", &summary).await.unwrap();
+        tree_store
+            .insert_summary("owner_1", &summary)
+            .await
+            .unwrap();
         tree_store
             .update_tree_after_seal("owner_1", &source_tree.id, 1, 1_700_000_120_000)
             .await
@@ -357,13 +377,15 @@ mod tests {
         let content_store = ContentStore::new(content_root.to_path_buf());
         content_store.ensure_dirs("owner_1").unwrap();
         let date = NaiveDate::from_ymd_opt(2026, 5, 16).expect("valid date");
-        let result =
-            end_of_day_digest(&pool, &content_root, "owner_1", date, &InertSummariser)
-                .await
-                .unwrap();
+        let result = end_of_day_digest(&pool, &content_root, "owner_1", date, &InertSummariser)
+            .await
+            .unwrap();
 
         let first_id = match result {
-            DigestOutcome::Emitted { source_count, daily_id } => {
+            DigestOutcome::Emitted {
+                source_count,
+                daily_id,
+            } => {
                 assert!(source_count >= 1);
                 daily_id
             }
@@ -385,10 +407,9 @@ mod tests {
         assert!(dailies[0].topics.contains(&digest_topic(date)));
 
         // Same date is idempotent.
-        let again =
-            end_of_day_digest(&pool, &content_root, "owner_1", date, &InertSummariser)
-                .await
-                .unwrap();
+        let again = end_of_day_digest(&pool, &content_root, "owner_1", date, &InertSummariser)
+            .await
+            .unwrap();
         match again {
             DigestOutcome::Skipped { existing_id } => assert_eq!(existing_id, first_id),
             other => panic!("expected Skipped, got {other:?}"),
@@ -396,10 +417,9 @@ mod tests {
 
         // A different date emits a second L0 (the leftover day does not block).
         let next_date = NaiveDate::from_ymd_opt(2026, 5, 17).expect("valid date");
-        let next =
-            end_of_day_digest(&pool, &content_root, "owner_1", next_date, &InertSummariser)
-                .await
-                .unwrap();
+        let next = end_of_day_digest(&pool, &content_root, "owner_1", next_date, &InertSummariser)
+            .await
+            .unwrap();
         assert!(matches!(next, DigestOutcome::Emitted { .. }));
         let dailies = tree_store
             .list_summaries("owner_1", None, &global.id, Some(0), 10)

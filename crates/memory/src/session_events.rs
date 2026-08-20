@@ -299,9 +299,7 @@ pub fn rebuild_turn_summaries(events: &[SessionEvent]) -> Vec<types::message::Tu
     // (and everything older). Summaries generated before that point are
     // stale by the same rule the live path applies.
     let compaction = events.iter().rev().find_map(|ev| match &ev.kind {
-        SessionEventKind::CompactionSummary { shadowed_msgs, .. } => {
-            Some((ev.seq, *shadowed_msgs))
-        }
+        SessionEventKind::CompactionSummary { shadowed_msgs, .. } => Some((ev.seq, *shadowed_msgs)),
         _ => None,
     });
     let mut cutoff_seq = 0u64;
@@ -393,10 +391,7 @@ pub fn fold_surface(events: &[SessionEvent]) -> Vec<Message> {
                 continue; // shadowed by the compaction summary
             }
         }
-        msgs.push(Message {
-            role,
-            content,
-        });
+        msgs.push(Message { role, content });
     }
 
     let rendered = crate::session::strip_tool_history(&msgs);
@@ -437,7 +432,13 @@ fn last_seq_in_file(path: &std::path::Path) -> Option<u64> {
 /// by construction; this is defense in depth.
 fn sanitize_component(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -511,7 +512,10 @@ mod tests {
         let events = message_events(&msgs);
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], SessionEventKind::UserMessage { .. }));
-        assert!(matches!(events[1], SessionEventKind::AssistantMessage { .. }));
+        assert!(matches!(
+            events[1],
+            SessionEventKind::AssistantMessage { .. }
+        ));
     }
 
     #[test]
@@ -611,7 +615,10 @@ mod tests {
         let folded = fold_surface(&events);
         assert_eq!(folded.len(), 2);
         let serialized = serde_json::to_string(&folded[1].content).unwrap();
-        assert!(serialized.contains("[Called file_read]"), "tool_use renders as placeholder: {serialized}");
+        assert!(
+            serialized.contains("[Called file_read]"),
+            "tool_use renders as placeholder: {serialized}"
+        );
     }
 
     #[test]
@@ -671,10 +678,13 @@ mod tests {
     #[test]
     fn rebuild_turn_summaries_replays_and_honors_compaction() {
         let mut kinds = vec![SessionEventKind::TurnStart];
-        kinds.extend(message_events(&[text_msg("m1"), Message {
-            role: Role::Assistant,
-            content: MessageContent::Text("a1".into()),
-        }]));
+        kinds.extend(message_events(&[
+            text_msg("m1"),
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Text("a1".into()),
+            },
+        ]));
         kinds.push(SessionEventKind::TurnSummaryGenerated {
             turn_number: 1,
             user_intent: "查月票".into(),
@@ -687,10 +697,13 @@ mod tests {
             shadowed_msgs: 2,
             shadowed_tokens_est: 64,
         });
-        kinds.extend(message_events(&[text_msg("m2"), Message {
-            role: Role::Assistant,
-            content: MessageContent::Text("a2".into()),
-        }]));
+        kinds.extend(message_events(&[
+            text_msg("m2"),
+            Message {
+                role: Role::Assistant,
+                content: MessageContent::Text("a2".into()),
+            },
+        ]));
         kinds.push(SessionEventKind::TurnSummaryGenerated {
             turn_number: 2,
             user_intent: "问时刻表".into(),
@@ -705,6 +718,9 @@ mod tests {
         assert_eq!(rebuilt.len(), 1);
         assert_eq!(rebuilt[0].turn_number, 2);
         assert_eq!(rebuilt[0].user_intent, "问时刻表");
-        assert!(rebuilt[0].tools_used.is_empty(), "replay never fabricates tools_used");
+        assert!(
+            rebuilt[0].tools_used.is_empty(),
+            "replay never fabricates tools_used"
+        );
     }
 }

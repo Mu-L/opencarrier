@@ -5,15 +5,15 @@
 //!
 //! Run: cargo test -p carrier-api --test load_test -- --nocapture
 
-use axum::Router;
 use api::middleware;
 use api::routes::{self, AppState};
+use axum::Router;
 use kernel::CarrierKernel;
-use types::config::{DefaultModelConfig, KernelConfig};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
+use types::config::{DefaultModelConfig, KernelConfig};
 
 // ---------------------------------------------------------------------------
 // Test infrastructure (mirrors api_integration_test.rs)

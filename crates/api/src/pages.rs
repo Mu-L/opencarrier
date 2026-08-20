@@ -278,7 +278,9 @@ async fn render_clone_detail(
     entry: &types::agent::AgentEntry,
 ) -> Result<Html<String>, Html<String>> {
     let ready = matches!(entry.state, types::agent::AgentState::Running);
-    let (_, model) = state.kernel.resolve_model_label(&entry.manifest.model.modality);
+    let (_, model) = state
+        .kernel
+        .resolve_model_label(&entry.manifest.model.modality);
 
     // Install count (default + clones across all senders)
     let install_count: usize = if let Some(ref pm_arc) = state.channel_manager {
@@ -315,18 +317,27 @@ async fn render_clone_detail(
     // Pre-serialize user list for JS pagination
     let pm_alias = state.channel_manager.clone();
     let agent_name_for_alias = entry.name.clone();
-    let users_json = serde_json::to_string(&users_raw.iter().map(|u| {
-        let sid = u["sender_id"].as_str().unwrap_or("");
-        let alias = pm_alias.as_ref().and_then(|pm_arc| {
-            pm_arc.try_lock().ok().and_then(|pm| pm.get_sender_alias(sid, &agent_name_for_alias))
-        });
-        serde_json::json!({
-            "sender_id": sid,
-            "session_count": u["session_count"].as_i64().unwrap_or(0),
-            "last_active_ago": format_time_ago(u["last_active"].as_str().unwrap_or("")),
-            "alias": alias,
-        })
-    }).collect::<Vec<_>>()).unwrap_or_default();
+    let users_json = serde_json::to_string(
+        &users_raw
+            .iter()
+            .map(|u| {
+                let sid = u["sender_id"].as_str().unwrap_or("");
+                let alias = pm_alias.as_ref().and_then(|pm_arc| {
+                    pm_arc
+                        .try_lock()
+                        .ok()
+                        .and_then(|pm| pm.get_sender_alias(sid, &agent_name_for_alias))
+                });
+                serde_json::json!({
+                    "sender_id": sid,
+                    "session_count": u["session_count"].as_i64().unwrap_or(0),
+                    "last_active_ago": format_time_ago(u["last_active"].as_str().unwrap_or("")),
+                    "alias": alias,
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .unwrap_or_default();
 
     // Admin data
     let admins_data = if let Some(ref ws) = entry.manifest.workspace {

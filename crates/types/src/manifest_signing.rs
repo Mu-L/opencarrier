@@ -83,20 +83,16 @@ impl SignedManifest {
         }
 
         // Reconstruct the signature.
-        let sig_bytes: [u8; 64] = self
-            .signature
-            .as_slice()
-            .try_into()
-            .map_err(|_| {
-                CarrierError::ManifestParse(
-                    "invalid signature length (expected 64 bytes)".to_string(),
-                )
-            })?;
+        let sig_bytes: [u8; 64] = self.signature.as_slice().try_into().map_err(|_| {
+            CarrierError::ManifestParse("invalid signature length (expected 64 bytes)".to_string())
+        })?;
         let signature = Signature::from_bytes(&sig_bytes);
 
         // Verify against the provided key.
         key.verify(self.content_hash.as_bytes(), &signature)
-            .map_err(|e| CarrierError::ManifestParse(format!("signature verification failed: {}", e)))
+            .map_err(|e| {
+                CarrierError::ManifestParse(format!("signature verification failed: {}", e))
+            })
     }
 
     /// Verify the manifest signature against a set of trusted public keys.
@@ -112,9 +108,8 @@ impl SignedManifest {
                 Err(e) => last_err = Some(e),
             }
         }
-        Err(last_err.unwrap_or_else(|| {
-            CarrierError::Config("No trusted keys provided".to_string())
-        }))
+        Err(last_err
+            .unwrap_or_else(|| CarrierError::Config("No trusted keys provided".to_string())))
     }
 
     /// Verifies the integrity and authenticity of this signed manifest.
@@ -140,34 +135,24 @@ impl SignedManifest {
         }
 
         // Reconstruct the public key.
-        let pk_bytes: [u8; 32] = self
-            .signer_public_key
-            .as_slice()
-            .try_into()
-            .map_err(|_| {
-                CarrierError::ManifestParse(
-                    "invalid public key length (expected 32 bytes)".to_string(),
-                )
-            })?;
+        let pk_bytes: [u8; 32] = self.signer_public_key.as_slice().try_into().map_err(|_| {
+            CarrierError::ManifestParse("invalid public key length (expected 32 bytes)".to_string())
+        })?;
         let verifying_key = VerifyingKey::from_bytes(&pk_bytes)
             .map_err(|e| CarrierError::ManifestParse(format!("invalid public key: {}", e)))?;
 
         // Reconstruct the signature.
-        let sig_bytes: [u8; 64] = self
-            .signature
-            .as_slice()
-            .try_into()
-            .map_err(|_| {
-                CarrierError::ManifestParse(
-                    "invalid signature length (expected 64 bytes)".to_string(),
-                )
-            })?;
+        let sig_bytes: [u8; 64] = self.signature.as_slice().try_into().map_err(|_| {
+            CarrierError::ManifestParse("invalid signature length (expected 64 bytes)".to_string())
+        })?;
         let signature = Signature::from_bytes(&sig_bytes);
 
         // Verify.
         verifying_key
             .verify(self.content_hash.as_bytes(), &signature)
-            .map_err(|e| CarrierError::ManifestParse(format!("signature verification failed: {}", e)))
+            .map_err(|e| {
+                CarrierError::ManifestParse(format!("signature verification failed: {}", e))
+            })
     }
 }
 
@@ -207,7 +192,10 @@ network = false
 
         let result = signed.verify();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("content hash mismatch"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("content hash mismatch"));
     }
 
     #[test]

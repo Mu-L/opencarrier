@@ -1,11 +1,11 @@
 //! Usage tracking store — records LLM usage events for token monitoring.
 
-use types::agent::AgentId;
-use types::error::{CarrierError, CarrierResult};
 use chrono::Utc;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use types::agent::AgentId;
+use types::error::{CarrierError, CarrierResult};
 
 /// A single usage event recording an LLM call.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -194,7 +194,6 @@ impl Default for WebhookTriggerConfig {
     }
 }
 
-
 /// Text-to-speech configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -1071,10 +1070,19 @@ pub fn home_dir() -> PathBuf {
 ///   from `owner_id`, the path becomes `workspaces/{agent_name}/senders/{owner_id}/users/{user_id}/`
 ///   (group users under a bot). When `None` or equal to `owner_id`, the path is
 ///   `workspaces/{agent_name}/senders/{owner_id}/` (the owner's own data).
-pub fn sender_data_dir(home_dir: &std::path::Path, owner_id: &str, agent_name: &str, user_id: Option<&str>) -> PathBuf {
+pub fn sender_data_dir(
+    home_dir: &std::path::Path,
+    owner_id: &str,
+    agent_name: &str,
+    user_id: Option<&str>,
+) -> PathBuf {
     let safe_owner = sanitize_path_component(owner_id);
     let safe_agent = sanitize_path_component(agent_name);
-    let base = home_dir.join("workspaces").join(safe_agent).join("senders").join(safe_owner);
+    let base = home_dir
+        .join("workspaces")
+        .join(safe_agent)
+        .join("senders")
+        .join(safe_owner);
     match user_id {
         Some(uid) if uid != owner_id => base.join("users").join(sanitize_path_component(uid)),
         _ => base,
@@ -1112,12 +1120,19 @@ pub fn resolve_turn_cwd(
 ///
 /// Returns a string like `workspaces/{agent_name}/senders/{owner_id}/{subdir}` or
 /// `workspaces/{agent_name}/senders/{owner_id}/users/{user_id}/{subdir}` when user_id differs from owner_id.
-pub fn sender_relative_path(owner_id: &str, agent_name: &str, user_id: Option<&str>, subdir: &str) -> String {
+pub fn sender_relative_path(
+    owner_id: &str,
+    agent_name: &str,
+    user_id: Option<&str>,
+    subdir: &str,
+) -> String {
     let safe_owner = sanitize_path_component(owner_id);
     let safe_agent = sanitize_path_component(agent_name);
     let base = format!("workspaces/{}/senders/{}", safe_agent, safe_owner);
     match user_id {
-        Some(uid) if uid != owner_id => format!("{}/users/{}/{}", base, sanitize_path_component(uid), subdir),
+        Some(uid) if uid != owner_id => {
+            format!("{}/users/{}/{}", base, sanitize_path_component(uid), subdir)
+        }
         _ => format!("{}/{}", base, subdir),
     }
 }
@@ -1136,7 +1151,10 @@ pub fn sanitize_path_component(s: &str) -> &str {
 ///
 /// Returns `~/.opencarrier/senders/{sender_id}/session.json`.
 pub fn sender_session_path(home_dir: &std::path::Path, sender_id: &str) -> PathBuf {
-    home_dir.join("senders").join(sender_id).join("session.json")
+    home_dir
+        .join("senders")
+        .join(sender_id)
+        .join("session.json")
 }
 
 /// Scan all senders/*/session.json files and return (sender_id, raw_json) pairs.
@@ -1290,14 +1308,30 @@ pub struct TreeMemoryConfig {
     pub topic_hotness_threshold: f32,
 }
 
-fn default_tree_worker_count() -> usize { 4 }
-fn default_tree_poll_interval() -> u64 { 5 }
-fn default_tree_input_token_budget() -> u32 { 50_000 }
-fn default_tree_summary_fanout() -> u32 { 10 }
-fn default_tree_flush_age() -> i64 { 604_800 }
-fn default_tree_drop_threshold() -> f32 { 0.3 }
-fn default_tree_chunk_max_tokens() -> u32 { 3_000 }
-fn default_tree_topic_hotness() -> f32 { 3.0 }
+fn default_tree_worker_count() -> usize {
+    4
+}
+fn default_tree_poll_interval() -> u64 {
+    5
+}
+fn default_tree_input_token_budget() -> u32 {
+    50_000
+}
+fn default_tree_summary_fanout() -> u32 {
+    10
+}
+fn default_tree_flush_age() -> i64 {
+    604_800
+}
+fn default_tree_drop_threshold() -> f32 {
+    0.3
+}
+fn default_tree_chunk_max_tokens() -> u32 {
+    3_000
+}
+fn default_tree_topic_hotness() -> f32 {
+    3.0
+}
 
 impl Default for TreeMemoryConfig {
     fn default() -> Self {
@@ -1392,15 +1426,24 @@ impl KernelConfig {
 
         // API listen address
         if !self.api_listen.is_empty() && !self.api_listen.contains(':') {
-            warnings.push(format!("api_listen '{}' may be missing a port", self.api_listen));
+            warnings.push(format!(
+                "api_listen '{}' may be missing a port",
+                self.api_listen
+            ));
         }
 
         // Auth config: if enabled, password_hash should be non-empty
         if self.auth.enabled {
             if self.auth.password_hash.is_empty() {
-                warnings.push("auth.enabled=true but password_hash is empty — dashboard login will not work".to_string());
+                warnings.push(
+                    "auth.enabled=true but password_hash is empty — dashboard login will not work"
+                        .to_string(),
+                );
             } else if !self.auth.password_hash.starts_with("$argon2") {
-                warnings.push("password_hash is not Argon2id — consider upgrading for better security".to_string());
+                warnings.push(
+                    "password_hash is not Argon2id — consider upgrading for better security"
+                        .to_string(),
+                );
             }
         }
 
@@ -1412,7 +1455,10 @@ impl KernelConfig {
             warnings.push("llm_concurrency is 0 — no LLM requests will be allowed".to_string());
         }
         if self.max_cron_jobs > 10000 {
-            warnings.push(format!("max_cron_jobs={} is very high — may impact performance", self.max_cron_jobs));
+            warnings.push(format!(
+                "max_cron_jobs={} is very high — may impact performance",
+                self.max_cron_jobs
+            ));
         }
 
         // Hub URL

@@ -68,15 +68,11 @@ mod tests {
     #[test]
     fn spike_of_mentions_pushes_over_creation_threshold() {
         let now_ms = 1_700_000_000_000;
-        let h = hotness(
-            100,
-            5,
-            Some(now_ms - DAY_MS / 2),
-            3,
-            None,
-            now_ms,
+        let h = hotness(100, 5, Some(now_ms - DAY_MS / 2), 3, None, now_ms);
+        assert!(
+            h > TOPIC_CREATION_THRESHOLD,
+            "expected hot entity > {TOPIC_CREATION_THRESHOLD}, got {h}"
         );
-        assert!(h > TOPIC_CREATION_THRESHOLD, "expected hot entity > {TOPIC_CREATION_THRESHOLD}, got {h}");
     }
 
     #[test]

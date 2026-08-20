@@ -10,15 +10,15 @@ mod setup;
 mod ui;
 
 use api::server::read_daemon_info;
-use kernel::CarrierKernel;
-use types::agent::{AgentId, AgentManifest};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use kernel::CarrierKernel;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 #[cfg(windows)]
 use std::sync::atomic::Ordering;
+use types::agent::{AgentId, AgentManifest};
 
 /// Global flag set by the Ctrl+C handler.
 static CTRLC_PRESSED: AtomicBool = AtomicBool::new(false);
@@ -735,7 +735,10 @@ pub(crate) fn daemon_json(
             if status.is_server_error() {
                 ui::error_with_fix(
                     &format!("Daemon returned error ({})", status),
-                    &format!("Check daemon logs: {}", cli_carrier_home().join("opencarrier.log").display()),
+                    &format!(
+                        "Check daemon logs: {}",
+                        cli_carrier_home().join("opencarrier.log").display()
+                    ),
                 );
             }
             body
@@ -766,8 +769,6 @@ pub(crate) fn daemon_json(
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
-
-
 
 /// Auto-detect the best available provider.
 fn detect_best_provider() -> (&'static str, &'static str, &'static str) {
@@ -1402,10 +1403,15 @@ fn cmd_agent_restart(_config: Option<PathBuf>, name_or_id: &str) {
 
     // 2. Kill
     let kill_body = daemon_json(
-        client.delete(format!("{base}/api/agents/{agent_id}")).send(),
+        client
+            .delete(format!("{base}/api/agents/{agent_id}"))
+            .send(),
     );
     if kill_body.get("status").is_none() {
-        eprintln!("Kill 失败: {}", kill_body["error"].as_str().unwrap_or("Unknown error"));
+        eprintln!(
+            "Kill 失败: {}",
+            kill_body["error"].as_str().unwrap_or("Unknown error")
+        );
         std::process::exit(1);
     }
     println!("Agent {agent_id} killed.");
@@ -1426,7 +1432,10 @@ fn cmd_agent_restart(_config: Option<PathBuf>, name_or_id: &str) {
         println!("  ID:   {}", spawn_body["agent_id"].as_str().unwrap_or("?"));
         println!("  Name: {}", spawn_body["name"].as_str().unwrap_or("?"));
     } else {
-        eprintln!("Spawn 失败: {}", spawn_body["error"].as_str().unwrap_or("Unknown error"));
+        eprintln!(
+            "Spawn 失败: {}",
+            spawn_body["error"].as_str().unwrap_or("Unknown error")
+        );
         std::process::exit(1);
     }
 }
@@ -1791,7 +1800,6 @@ fn cmd_doctor(json: bool, repair: bool) {
                 }
             }
         }
-
     } else {
         if !json {
             ui::check_fail("Could not determine home directory");
@@ -1941,9 +1949,7 @@ fn cmd_doctor(json: bool, repair: bool) {
                         for server in &cfg.mcp_servers {
                             // Validate transport config
                             match &server.transport {
-                                types::config::McpTransportEntry::Stdio {
-                                    command, ..
-                                } => {
+                                types::config::McpTransportEntry::Stdio { command, .. } => {
                                     if command.is_empty() {
                                         if !json {
                                             ui::check_warn(&format!(
@@ -2474,8 +2480,8 @@ fn cmd_providers() {
         std::process::exit(1);
     });
 
-    let brain: types::brain::BrainConfig = serde_json::from_str(&brain_content)
-        .unwrap_or_else(|e| {
+    let brain: types::brain::BrainConfig =
+        serde_json::from_str(&brain_content).unwrap_or_else(|e| {
             ui::error(&format!("Failed to parse brain.json: {e}"));
             std::process::exit(1);
         });
@@ -3431,12 +3437,18 @@ async fn cmd_hub(cmd: HubCommands) {
                 Err(e) => eprintln!("搜索失败: {e}"),
             }
         }
-        HubCommands::Install { name, version, update } => {
+        HubCommands::Install {
+            name,
+            version,
+            update,
+        } => {
             let workspace_dir = config.effective_workspaces_dir().join(&name);
             if workspace_dir.exists() && update {
                 // Definition-layer upgrade was removed. Sync via the dup flow instead:
                 // dup pull -> edit -> dup push (remote = source of truth).
-                eprintln!("upgrade 已移除：分身定义层更新请走 dup 工作流（dup pull → 修改 → dup push）");
+                eprintln!(
+                    "upgrade 已移除：分身定义层更新请走 dup 工作流（dup pull → 修改 → dup push）"
+                );
                 std::process::exit(1);
             }
             if workspace_dir.exists() && !update {

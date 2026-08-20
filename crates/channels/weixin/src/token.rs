@@ -92,7 +92,11 @@ impl BotSession {
 
     /// Get the cached context_token for a user.
     pub fn get_context_token(&self, user_id: &str) -> Option<String> {
-        self.context_tokens.lock().unwrap_or_else(|e| e.into_inner()).get(user_id).cloned()
+        self.context_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(user_id)
+            .cloned()
     }
 }
 
@@ -123,11 +127,7 @@ impl WeixinState {
     }
 
     /// Set DB-backed persistence callbacks. Called once at startup from server.rs.
-    pub fn set_persist_fns(
-        &self,
-        persist: SessionPersistFn,
-        load: SessionsLoadFn,
-    ) {
+    pub fn set_persist_fns(&self, persist: SessionPersistFn, load: SessionsLoadFn) {
         *self.session_persist.lock().unwrap() = Some(persist);
         *self.sessions_load.lock().unwrap() = Some(load);
     }
@@ -239,7 +239,11 @@ impl WeixinState {
         let key = user_id.unwrap_or(bot_id);
         if let Some(mut existing) = self.bots.get_mut(key) {
             // Preserve cursor from existing session if possible
-            let old_cursor = existing.cursor.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let old_cursor = existing
+                .cursor
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             *state.cursor.lock().unwrap_or_else(|e| e.into_inner()) = old_cursor;
             *existing = state;
         } else {
@@ -252,7 +256,11 @@ impl WeixinState {
     /// Save a bot session's state. Uses DB if persistence callback is set,
     /// otherwise falls back to JSON file.
     pub fn save_session(&self, state: &BotSession) {
-        let merged_ctx = state.context_tokens.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let merged_ctx = state
+            .context_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
 
         let tf = BotTokenFile {
             channel: "weixin".to_string(),
@@ -289,7 +297,8 @@ impl WeixinState {
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+                        let _ =
+                            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
                     }
                 }
             }
@@ -445,7 +454,10 @@ impl WeixinState {
                     self.save_session(&existing);
                 }
                 {
-                    let mut ctx = existing.context_tokens.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut ctx = existing
+                        .context_tokens
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
                     for (uid, tok) in &tf.context_tokens {
                         ctx.entry(uid.clone()).or_insert_with(|| tok.clone());
                     }

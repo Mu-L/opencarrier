@@ -3,11 +3,11 @@
 //! Supports config includes: the `include` field specifies additional TOML files
 //! to load and deep-merge before the root config (root overrides includes).
 
-use types::config::KernelConfig;
-use types::error::{CarrierError, CarrierResult};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::info;
+use types::config::KernelConfig;
+use types::error::{CarrierError, CarrierResult};
 
 /// Maximum include nesting depth.
 const MAX_INCLUDE_DEPTH: u32 = 10;
@@ -173,8 +173,9 @@ fn resolve_config_includes(
                 include_path_str
             ))
         })?;
-        let canonical_dir = std::fs::canonicalize(config_dir)
-            .map_err(|e| CarrierError::Internal(format!("Config dir cannot be canonicalized: {e}")))?;
+        let canonical_dir = std::fs::canonicalize(config_dir).map_err(|e| {
+            CarrierError::Internal(format!("Config dir cannot be canonicalized: {e}"))
+        })?;
         if !canonical.starts_with(&canonical_dir) {
             return Err(CarrierError::Internal(format!(
                 "Config include '{}' escapes config directory",
@@ -191,10 +192,18 @@ fn resolve_config_includes(
 
         info!(include = %include_path_str, "Loading config include");
 
-        let contents = std::fs::read_to_string(&canonical)
-            .map_err(|e| CarrierError::Internal(format!("Failed to read config include '{}': {e}", include_path_str)))?;
-        let mut include_value: toml::Value = toml::from_str(&contents)
-            .map_err(|e| CarrierError::Internal(format!("Failed to parse config include '{}': {e}", include_path_str)))?;
+        let contents = std::fs::read_to_string(&canonical).map_err(|e| {
+            CarrierError::Internal(format!(
+                "Failed to read config include '{}': {e}",
+                include_path_str
+            ))
+        })?;
+        let mut include_value: toml::Value = toml::from_str(&contents).map_err(|e| {
+            CarrierError::Internal(format!(
+                "Failed to parse config include '{}': {e}",
+                include_path_str
+            ))
+        })?;
 
         // Recursively resolve includes in the included file
         let include_dir = canonical.parent().unwrap_or(config_dir).to_path_buf();

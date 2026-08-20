@@ -5,8 +5,8 @@ pub mod agents;
 pub mod auth;
 pub mod bots;
 pub mod brain;
-pub mod clones;
 pub mod clone_admins;
+pub mod clones;
 pub mod common;
 pub mod comms;
 pub mod config;
@@ -23,9 +23,9 @@ pub mod sessions;
 pub mod state;
 pub mod tools_skills;
 pub mod webhooks;
+pub mod wechat_oa;
 pub mod weixin;
 pub mod weixin_oa;
-pub mod wechat_oa;
 
 pub use common::*;
 pub use messaging::{inject_attachments_into_session, resolve_attachments};
@@ -133,4 +133,3 @@ pub async fn list_commands(State(_state): State<Arc<AppState>>) -> impl IntoResp
 
     Json(serde_json::json!({"commands": commands}))
 }
-

@@ -5,13 +5,13 @@
 use crate::api;
 use crate::token::AccessTokenCache;
 use crate::ws::DingTalkWsClient;
-use types::channel::Channel;
-use types::error::{CarrierError, CarrierResult};
-use types::plugin::PluginMessage;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
+use types::channel::Channel;
+use types::error::{CarrierError, CarrierResult};
+use types::plugin::PluginMessage;
 
 pub struct DingTalkChannel {
     bot_name: String,
@@ -75,7 +75,9 @@ impl Channel for DingTalkChannel {
                 rt.block_on(client.run(&sender));
                 info!(tenant = %bot_name, "DingTalk WS client exited");
             })
-            .map_err(|e| CarrierError::Internal(format!("Failed to spawn DingTalk channel thread: {e}")))?;
+            .map_err(|e| {
+                CarrierError::Internal(format!("Failed to spawn DingTalk channel thread: {e}"))
+            })?;
 
         self.thread_handle = Some(handle);
         info!(tenant = %log_name, "DingTalkChannel started");

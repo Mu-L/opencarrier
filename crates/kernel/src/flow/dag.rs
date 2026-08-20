@@ -2,7 +2,6 @@
 
 use types::flow::StepDef;
 
-
 /// Partition flow steps into topological execution layers. Returns an error on
 /// cycles or references to unknown step ids.
 pub(crate) fn partition_flow_steps(steps: &[StepDef]) -> Result<Vec<Vec<&StepDef>>, String> {
@@ -23,7 +22,10 @@ pub(crate) fn partition_flow_steps(steps: &[StepDef]) -> Result<Vec<Vec<&StepDef
     let mut visited: HashSet<String> = HashSet::new();
     for s in steps {
         if has_cycle(&s.id, &map, &mut HashSet::new(), &mut visited) {
-            return Err(format!("dependency cycle detected involving step '{}'", s.id));
+            return Err(format!(
+                "dependency cycle detected involving step '{}'",
+                s.id
+            ));
         }
     }
 
@@ -87,4 +89,3 @@ fn has_cycle(
     let _ = HashSet::<String>::new();
     false
 }
-

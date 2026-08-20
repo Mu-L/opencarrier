@@ -7,17 +7,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use tokio::sync::mpsc;
+use tracing::{error, info};
 use types::channel::Channel;
 use types::error::{CarrierError, CarrierResult};
 use types::plugin::{PluginMessage, PluginStatus};
 use types::tool::ToolDefinition;
-use tokio::sync::mpsc;
-use tracing::{error, info};
 
+use crate::kernel_handle::KernelHandle;
 use crate::plugin::bridge::{ChannelDeliverFn, ChannelSendFn, PluginBridgeManager};
 use crate::plugin::router::SenderRouter;
 use crate::plugin::tool_dispatch::PluginToolDispatcher;
-use crate::kernel_handle::KernelHandle;
 
 /// Manages the lifecycle of all registered channel adapters.
 pub struct ChannelManager {
@@ -142,10 +142,11 @@ impl ChannelManager {
         // (`[DELIVER:key]` markers). Dispatches by channel_type to Channel::deliver,
         // which each channel overrides to pick its best-supported form.
         let channels_for_deliver = self.channels.clone();
-        let deliver_fn: ChannelDeliverFn = Arc::new(
-            move |channel_type, bot_id, user_id, content| {
-                let channels =
-                    channels_for_deliver.lock().unwrap_or_else(|e| e.into_inner());
+        let deliver_fn: ChannelDeliverFn =
+            Arc::new(move |channel_type, bot_id, user_id, content| {
+                let channels = channels_for_deliver
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 for channel in channels.values() {
                     if channel.channel_type() == channel_type {
                         return channel.deliver(content, bot_id, user_id);
@@ -155,8 +156,7 @@ impl ChannelManager {
                     "Channel not found for type: {}, bot: {}",
                     channel_type, bot_id
                 )))
-            },
-        );
+            });
         bridge.set_channel_deliver_fn(deliver_fn);
 
         // Set up routing-mode probe so the bridge can branch on DirectBind vs SenderBased
@@ -225,7 +225,11 @@ impl ChannelManager {
             };
 
             if !routes.is_empty() {
-                info!(route_count = routes.len(), from = loaded_from, "Loaded notify routes");
+                info!(
+                    route_count = routes.len(),
+                    from = loaded_from,
+                    "Loaded notify routes"
+                );
                 bridge.set_notify_routes(Arc::new(routes));
             }
         }
@@ -237,7 +241,11 @@ impl ChannelManager {
             });
         }
 
-        let count = self.channels.lock().unwrap_or_else(|e| e.into_inner()).len();
+        let count = self
+            .channels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len();
         info!(channels = count, "Channel manager started");
     }
 
@@ -377,7 +385,10 @@ impl ChannelManager {
                 Err(_) => continue,
             }
         }
-        Err(CarrierError::InvalidInput(format!("No channel found for bot: {}", bot_id)))
+        Err(CarrierError::InvalidInput(format!(
+            "No channel found for bot: {}",
+            bot_id
+        )))
     }
 
     /// Set a sender route (route_key → agent_id).

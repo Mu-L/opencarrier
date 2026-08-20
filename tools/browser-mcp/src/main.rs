@@ -165,7 +165,10 @@ impl CdpConnection {
         });
 
         // Wait briefly for obscura's __init message (Chromium won't send one)
-        let backend = if tokio::time::timeout(Duration::from_millis(200), init_rx).await.is_ok() {
+        let backend = if tokio::time::timeout(Duration::from_millis(200), init_rx)
+            .await
+            .is_ok()
+        {
             BackendType::Obscura
         } else {
             BackendType::Chromium
@@ -286,7 +289,10 @@ impl BrowserSession {
                     }
                 }
             } else if config.backend == BrowserBackend::Obscura {
-                return Err("Obscura not found. Install it to ~/.opencarrier/bin/ or add to PATH.".to_string());
+                return Err(
+                    "Obscura not found. Install it to ~/.opencarrier/bin/ or add to PATH."
+                        .to_string(),
+                );
             }
         }
 
@@ -318,14 +324,20 @@ impl BrowserSession {
             "--window-size={},{}",
             config.viewport_width, config.viewport_height
         ))
-        .arg(format!("--user-data-dir=/tmp/opencarrier-browser-{agent_id}"))
+        .arg(format!(
+            "--user-data-dir=/tmp/opencarrier-browser-{agent_id}"
+        ))
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
-        let process = cmd.spawn().map_err(|e| format!("Failed to launch Chromium: {e}"))?;
+        let process = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to launch Chromium: {e}"))?;
 
         // Wait for DevToolsActivePort file
-        let port_file = PathBuf::from(format!("/tmp/opencarrier-browser-{agent_id}/DevToolsActivePort"));
+        let port_file = PathBuf::from(format!(
+            "/tmp/opencarrier-browser-{agent_id}/DevToolsActivePort"
+        ));
         let ws_url = tokio::time::timeout(Duration::from_secs(CDP_CONNECT_TIMEOUT_SECS), async {
             loop {
                 if let Ok(content) = tokio::fs::read_to_string(&port_file).await {
@@ -374,13 +386,18 @@ impl BrowserSession {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
 
-        let process = cmd.spawn().map_err(|e| format!("Failed to launch obscura: {e}"))?;
+        let process = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to launch obscura: {e}"))?;
 
         // Wait for obscura to be ready (poll /json/version)
         let endpoint = format!("http://127.0.0.1:{port}");
         let ready = tokio::time::timeout(Duration::from_secs(CDP_CONNECT_TIMEOUT_SECS), async {
             loop {
-                if reqwest::get(format!("{endpoint}/json/version")).await.is_ok() {
+                if reqwest::get(format!("{endpoint}/json/version"))
+                    .await
+                    .is_ok()
+                {
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(200)).await;
@@ -417,7 +434,11 @@ impl BrowserSession {
                 .find_map(|t| {
                     let is_page = t.get("type").and_then(|v| v.as_str()) == Some("page");
                     let ws = t.get("webSocketDebuggerUrl").and_then(|v| v.as_str());
-                    if is_page { ws } else { None }
+                    if is_page {
+                        ws
+                    } else {
+                        None
+                    }
                 })
                 .ok_or_else(|| "No page target found in CDP target list".to_string())?
                 .to_string()
@@ -434,10 +455,7 @@ impl BrowserSession {
 
     async fn navigate(&mut self, url: &str) -> Result<String, String> {
         self.cdp
-            .send(
-                "Page.navigate",
-                serde_json::json!({ "url": url }),
-            )
+            .send("Page.navigate", serde_json::json!({ "url": url }))
             .await?;
         self.wait_for_load().await
     }
@@ -468,10 +486,9 @@ impl BrowserSession {
 
     async fn screenshot(&mut self) -> Result<String, String> {
         if self.cdp.backend_type() == BackendType::Obscura {
-            return Err(
-                "Screenshots not supported by Obscura backend. \
-                 Set BROWSER_CDP_ENDPOINT to a Chromium CDP endpoint for screenshot support.".to_string()
-            );
+            return Err("Screenshots not supported by Obscura backend. \
+                 Set BROWSER_CDP_ENDPOINT to a Chromium CDP endpoint for screenshot support."
+                .to_string());
         }
         let result = self
             .cdp
@@ -523,9 +540,7 @@ impl BrowserSession {
             .send("Page.navigateBack", serde_json::json!({}))
             .await
             .ok(); // Not all browsers support this
-        self.cdp
-            .run_js("history.back()")
-            .await?;
+        self.cdp.run_js("history.back()").await?;
         self.wait_for_load().await
     }
 
@@ -570,23 +585,40 @@ impl BrowserManager {
         }
     }
 
-    async fn send_command(&self, agent_id: &str, cmd: &str, params: Value) -> Result<String, String> {
+    async fn send_command(
+        &self,
+        agent_id: &str,
+        cmd: &str,
+        params: Value,
+    ) -> Result<String, String> {
         let session = self.get_or_create(agent_id).await?;
         let mut session = session.lock().await;
         session.last_active = Instant::now();
 
         match cmd {
             "navigate" => {
-                let url = params.get("url").and_then(|v| v.as_str()).ok_or("Missing url")?;
+                let url = params
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing url")?;
                 session.navigate(url).await
             }
             "click" => {
-                let x = params.get("x").and_then(|v| v.as_f64()).ok_or("Missing x")?;
-                let y = params.get("y").and_then(|v| v.as_f64()).ok_or("Missing y")?;
+                let x = params
+                    .get("x")
+                    .and_then(|v| v.as_f64())
+                    .ok_or("Missing x")?;
+                let y = params
+                    .get("y")
+                    .and_then(|v| v.as_f64())
+                    .ok_or("Missing y")?;
                 session.click(x, y).await
             }
             "type" => {
-                let text = params.get("text").and_then(|v| v.as_str()).ok_or("Missing text")?;
+                let text = params
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing text")?;
                 session.r#type(text).await
             }
             "screenshot" => session.screenshot().await,
@@ -596,16 +628,25 @@ impl BrowserManager {
                 Ok("Closed".to_string())
             }
             "scroll" => {
-                let direction = params.get("direction").and_then(|v| v.as_str()).unwrap_or("down");
+                let direction = params
+                    .get("direction")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("down");
                 let amount = params.get("amount").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
                 session.scroll(direction, amount).await
             }
             "wait" => {
-                let seconds = params.get("seconds").and_then(|v| v.as_f64()).unwrap_or(1.0);
+                let seconds = params
+                    .get("seconds")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0);
                 session.wait(seconds).await
             }
             "run_js" => {
-                let expression = params.get("expression").and_then(|v| v.as_str()).ok_or("Missing expression")?;
+                let expression = params
+                    .get("expression")
+                    .and_then(|v| v.as_str())
+                    .ok_or("Missing expression")?;
                 session.run_js(expression).await
             }
             "back" => session.go_back().await,
@@ -725,9 +766,7 @@ fn check_ssrf(url: &str) -> Result<(), String> {
 fn wrap_external_content(source_url: &str, content: &str) -> String {
     use sha2::{Digest, Sha256};
     let hash = hex::encode(Sha256::digest(source_url.as_bytes()));
-    format!(
-        "<untrusted-source hash=\"{hash}\">\n{content}\n</untrusted-source>"
-    )
+    format!("<untrusted-source hash=\"{hash}\">\n{content}\n</untrusted-source>")
 }
 
 // ---------------------------------------------------------------------------
@@ -806,7 +845,11 @@ impl BrowserMcpServer {
         let agent_id = "default"; // Single-user MCP
         let result = self
             .manager
-            .send_command(agent_id, "navigate", serde_json::json!({ "url": params.url }))
+            .send_command(
+                agent_id,
+                "navigate",
+                serde_json::json!({ "url": params.url }),
+            )
             .await?;
         Ok(format!("Navigated. Page state: {result}"))
     }
@@ -817,7 +860,11 @@ impl BrowserMcpServer {
         Parameters(params): Parameters<ClickParams>,
     ) -> Result<String, String> {
         self.manager
-            .send_command("default", "click", serde_json::json!({ "x": params.x, "y": params.y }))
+            .send_command(
+                "default",
+                "click",
+                serde_json::json!({ "x": params.x, "y": params.y }),
+            )
             .await
     }
 
@@ -827,11 +874,17 @@ impl BrowserMcpServer {
         Parameters(params): Parameters<TypeParams>,
     ) -> Result<String, String> {
         self.manager
-            .send_command("default", "type", serde_json::json!({ "text": params.text }))
+            .send_command(
+                "default",
+                "type",
+                serde_json::json!({ "text": params.text }),
+            )
             .await
     }
 
-    #[tool(description = "Take a screenshot. Returns base64-encoded PNG. Not supported by Obscura backend.")]
+    #[tool(
+        description = "Take a screenshot. Returns base64-encoded PNG. Not supported by Obscura backend."
+    )]
     async fn browser_screenshot(
         &self,
         Parameters(_params): Parameters<ScreenshotParams>,
@@ -900,7 +953,11 @@ impl BrowserMcpServer {
         Parameters(params): Parameters<RunJsParams>,
     ) -> Result<String, String> {
         self.manager
-            .send_command("default", "run_js", serde_json::json!({ "expression": params.expression }))
+            .send_command(
+                "default",
+                "run_js",
+                serde_json::json!({ "expression": params.expression }),
+            )
             .await
     }
 
@@ -923,8 +980,7 @@ impl BrowserMcpServer {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .with_writer(std::io::stderr)
         .init();

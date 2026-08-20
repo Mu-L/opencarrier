@@ -127,12 +127,14 @@ impl SenderGate {
             }
             texts.push(p.message);
         }
-        GatedOutcome::Ran(run(ClaimedBatch {
-            texts,
-            blocks: merged_blocks,
-            len,
-        })
-        .await)
+        GatedOutcome::Ran(
+            run(ClaimedBatch {
+                texts,
+                blocks: merged_blocks,
+                len,
+            })
+            .await,
+        )
     }
 }
 
@@ -227,8 +229,13 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         let g2 = Arc::clone(&gate);
         let t2 = tokio::spawn(async move {
-            g2.run::<_, _, usize>("agent:user-b", "b".to_string(), None, |b| async move { b.len })
-                .await
+            g2.run::<_, _, usize>(
+                "agent:user-b",
+                "b".to_string(),
+                None,
+                |b| async move { b.len },
+            )
+            .await
         });
         // t2 must NOT wait for t1 (80ms) — completes well within.
         let (r1, r2) = (t1.await.unwrap(), t2.await.unwrap());
@@ -244,15 +251,10 @@ mod tests {
             provider_metadata: None,
         }]);
         match gate
-            .run::<_, _, ()>(
-                "k",
-                "看图".to_string(),
-                blocks,
-                |b| async move {
-                    assert_eq!(b.blocks.len(), 1);
-                    assert_eq!(b.texts, vec!["看图".to_string()]);
-                },
-            )
+            .run::<_, _, ()>("k", "看图".to_string(), blocks, |b| async move {
+                assert_eq!(b.blocks.len(), 1);
+                assert_eq!(b.texts, vec!["看图".to_string()]);
+            })
             .await
         {
             GatedOutcome::Ran(()) => {}

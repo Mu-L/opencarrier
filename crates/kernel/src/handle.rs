@@ -7,11 +7,11 @@ use async_trait::async_trait;
 use runtime::kernel_handle::{self, KernelHandle};
 use runtime::llm_driver::CompletionRequest;
 use runtime::memory_handle::MemoryHandle;
+use std::sync::Arc;
 use types::agent::{AgentId, AgentManifest};
 use types::error::{CarrierError, CarrierResult};
 use types::event::*;
 use types::message::{ContentBlock, Message, MessageContent, Role};
-use std::sync::Arc;
 
 /// Well-known agent ID for system/kernel-originated events.
 pub const SYSTEM_AGENT_ID: AgentId = AgentId(uuid::Uuid::nil());
@@ -151,9 +151,14 @@ impl KernelHandle for CarrierKernel {
             extra: Default::default(),
         };
 
-        let brain: Arc<dyn runtime::llm_driver::Brain> =
-            Arc::clone(&*self.brain.brain.read().map_err(|e| CarrierError::Internal(format!("Brain lock: {e}")))?)
-                as Arc<dyn runtime::llm_driver::Brain>;
+        let brain: Arc<dyn runtime::llm_driver::Brain> = Arc::clone(
+            &*self
+                .brain
+                .brain
+                .read()
+                .map_err(|e| CarrierError::Internal(format!("Brain lock: {e}")))?,
+        )
+            as Arc<dyn runtime::llm_driver::Brain>;
 
         let result = brain
             .complete("vision", request)
@@ -162,7 +167,9 @@ impl KernelHandle for CarrierKernel {
 
         let description = result.text();
         if description.is_empty() {
-            return Err(CarrierError::LlmDriver("Vision model returned empty description".into()));
+            return Err(CarrierError::LlmDriver(
+                "Vision model returned empty description".into(),
+            ));
         }
 
         tracing::info!(
@@ -336,16 +343,17 @@ impl KernelHandle for CarrierKernel {
         sender_id: Option<&str>,
         job_json: serde_json::Value,
     ) -> CarrierResult<String> {
-        use types::scheduler::{
-            CronAction, CronDelivery, CronJob, CronJobId, CronSchedule,
-        };
+        use types::scheduler::{CronAction, CronDelivery, CronJob, CronJobId, CronSchedule};
 
         let name = job_json["name"]
             .as_str()
             .ok_or_else(|| CarrierError::InvalidInput("'name' must be a string".into()))?
             .to_string();
         let schedule: CronSchedule = {
-            let schedule_val = job_json.get("schedule").cloned().unwrap_or(serde_json::Value::Null);
+            let schedule_val = job_json
+                .get("schedule")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             // LLMs sometimes wrap the schedule in a string; unwrap it.
             let resolved = match &schedule_val {
                 serde_json::Value::String(s) => {
@@ -362,7 +370,10 @@ impl KernelHandle for CarrierKernel {
                 .map_err(|e| CarrierError::Serialization(format!("Invalid schedule: {e}")))?
         };
         let action: CronAction = {
-            let action_val = job_json.get("action").cloned().unwrap_or(serde_json::Value::Null);
+            let action_val = job_json
+                .get("action")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             let resolved = match &action_val {
                 serde_json::Value::String(s) => {
                     serde_json::from_str::<serde_json::Value>(s).unwrap_or(action_val)
@@ -373,7 +384,10 @@ impl KernelHandle for CarrierKernel {
                 .map_err(|e| CarrierError::Serialization(format!("Invalid action: {e}")))?
         };
         let delivery: CronDelivery = {
-            let val = job_json.get("delivery").cloned().unwrap_or(serde_json::Value::Null);
+            let val = job_json
+                .get("delivery")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             if val.is_null() {
                 // Default to LastChannel when owner_id is set so cron results
                 // are pushed to the user automatically.
@@ -390,8 +404,9 @@ impl KernelHandle for CarrierKernel {
                     other => other.clone(),
                 };
                 if resolved.is_object() {
-                    serde_json::from_value(resolved)
-                        .map_err(|e| CarrierError::Serialization(format!("Invalid delivery: {e}")))?
+                    serde_json::from_value(resolved).map_err(|e| {
+                        CarrierError::Serialization(format!("Invalid delivery: {e}"))
+                    })?
                 } else {
                     tracing::warn!("delivery is not an object, defaulting to None: {val}");
                     CronDelivery::None
@@ -401,7 +416,9 @@ impl KernelHandle for CarrierKernel {
         let one_shot = match job_json.get("one_shot") {
             Some(v) => match v {
                 serde_json::Value::Bool(b) => *b,
-                serde_json::Value::String(s) => matches!(s.to_lowercase().as_str(), "true" | "1" | "yes"),
+                serde_json::Value::String(s) => {
+                    matches!(s.to_lowercase().as_str(), "true" | "1" | "yes")
+                }
                 _ => false,
             },
             None => false,
@@ -488,7 +505,11 @@ impl KernelHandle for CarrierKernel {
         .to_string())
     }
 
-    async fn cron_list(&self, agent_id: &str, owner_id: Option<&str>) -> CarrierResult<Vec<serde_json::Value>> {
+    async fn cron_list(
+        &self,
+        agent_id: &str,
+        owner_id: Option<&str>,
+    ) -> CarrierResult<Vec<serde_json::Value>> {
         let (aid, _) = self.registry.resolve(agent_id)?;
         let mut jobs = self.cron_scheduler.list_jobs(aid);
         if let Some(oid) = owner_id {
@@ -622,10 +643,7 @@ impl KernelHandle for CarrierKernel {
             .map_err(|e| CarrierError::Network(format!("deliver_content: {e}")))
     }
 
-    fn get_toolset_tools(
-        &self,
-        toolset_name: &str,
-    ) -> Option<Vec<types::tool::ToolDefinition>> {
+    fn get_toolset_tools(&self, toolset_name: &str) -> Option<Vec<types::tool::ToolDefinition>> {
         let registry = self.plugins.toolset_registry.read().ok()?;
 
         // Resolve the registry key — try direct match first, then normalize-matching
@@ -674,8 +692,11 @@ impl KernelHandle for CarrierKernel {
                 let name_lower = tool.name.to_lowercase();
                 let desc_lower = tool.description.to_lowercase();
                 let score = CarrierKernel::score_tool(
-                    &query_lower, &keywords,
-                    &name_lower, &desc_lower, &ts_lower,
+                    &query_lower,
+                    &keywords,
+                    &name_lower,
+                    &desc_lower,
+                    &ts_lower,
                 );
                 if score > 0 {
                     scored.push((score, ts_name.clone(), tool.clone()));
@@ -690,25 +711,39 @@ impl KernelHandle for CarrierKernel {
             let server_name = config.name.to_lowercase();
             let server_desc = config.description.to_lowercase();
             let server_score = CarrierKernel::score_tool(
-                &query_lower, &keywords,
-                &server_name, &server_desc, &server_name,
+                &query_lower,
+                &keywords,
+                &server_name,
+                &server_desc,
+                &server_name,
             );
             let ts = format!("mcp_{}", runtime::mcp::normalize_name(&config.name));
             for tool in conn.tools() {
                 let name_lower = tool.name.to_lowercase();
                 let desc_lower = tool.description.to_lowercase();
                 let tool_score = CarrierKernel::score_tool(
-                    &query_lower, &keywords,
-                    &name_lower, &desc_lower, &server_name,
+                    &query_lower,
+                    &keywords,
+                    &name_lower,
+                    &desc_lower,
+                    &server_name,
                 );
-                let score = if tool_score > 0 { tool_score } else { server_score };
+                let score = if tool_score > 0 {
+                    tool_score
+                } else {
+                    server_score
+                };
                 if score > 0 {
                     // conn.tools() already returns namespaced names (e.g. mcp_wechat_oa_create_draft)
-                    scored.push((score + 50, ts.clone(), types::tool::ToolDefinition {
-                        name: tool.name.clone(),
-                        description: tool.description.clone(),
-                        input_schema: tool.input_schema.clone(),
-                    }));
+                    scored.push((
+                        score + 50,
+                        ts.clone(),
+                        types::tool::ToolDefinition {
+                            name: tool.name.clone(),
+                            description: tool.description.clone(),
+                            input_schema: tool.input_schema.clone(),
+                        },
+                    ));
                 }
             }
         }
@@ -734,7 +769,8 @@ impl KernelHandle for CarrierKernel {
                     1000 // flow-declared exact match — always wins
                 } else {
                     CarrierKernel::score_tool(
-                        &query_lower, &keywords,
+                        &query_lower,
+                        &keywords,
                         &name_lower,
                         &tool.description.to_lowercase(),
                         "plugin",
@@ -746,7 +782,7 @@ impl KernelHandle for CarrierKernel {
             }
         }
 
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|s| std::cmp::Reverse(s.0));
 
         // Filter by max_level. Dangerous tools (e.g. shell_exec) are only
         // visible when max_level is Dangerous — typically via system-flow
@@ -788,15 +824,16 @@ impl KernelHandle for CarrierKernel {
         Ok(Some(dispatcher.execute(tool_name, args, context)?))
     }
 
-    async fn generate_image_to_file(
-        &self,
-        prompt: &str,
-        out_dir: &str,
-    ) -> CarrierResult<String> {
+    async fn generate_image_to_file(&self, prompt: &str, out_dir: &str) -> CarrierResult<String> {
         use base64::Engine;
-        let brain: Arc<dyn runtime::llm_driver::Brain> =
-            Arc::clone(&*self.brain.brain.read().map_err(|e| CarrierError::Internal(format!("Brain lock: {e}")))?)
-                as Arc<dyn runtime::llm_driver::Brain>;
+        let brain: Arc<dyn runtime::llm_driver::Brain> = Arc::clone(
+            &*self
+                .brain
+                .brain
+                .read()
+                .map_err(|e| CarrierError::Internal(format!("Brain lock: {e}")))?,
+        )
+            as Arc<dyn runtime::llm_driver::Brain>;
 
         // Build an image-gen request (mirrors runtime/src/tools/media.rs).
         let mut extra = serde_json::Map::new();
@@ -824,14 +861,20 @@ impl KernelHandle for CarrierKernel {
             .map_err(|e| CarrierError::LlmDriver(format!("Image generation failed: {e}")))?;
 
         let image = match response.media {
-            Some(types::media::MediaOutput::Images { items }) => items.into_iter().next().ok_or_else(|| {
-                CarrierError::LlmDriver("image generation returned empty list".into())
-            })?,
+            Some(types::media::MediaOutput::Images { items }) => {
+                items.into_iter().next().ok_or_else(|| {
+                    CarrierError::LlmDriver("image generation returned empty list".into())
+                })?
+            }
             Some(types::media::MediaOutput::Image { data, .. }) => types::media::GeneratedImage {
                 data_base64: base64::engine::general_purpose::STANDARD.encode(&data),
                 url: None,
             },
-            _ => return Err(CarrierError::LlmDriver("image generation returned no media".into())),
+            _ => {
+                return Err(CarrierError::LlmDriver(
+                    "image generation returned no media".into(),
+                ))
+            }
         };
 
         let bytes = if !image.data_base64.is_empty() {
@@ -850,7 +893,9 @@ impl KernelHandle for CarrierKernel {
                 .map_err(|e| CarrierError::Network(format!("read image: {e}")))?
                 .to_vec()
         } else {
-            return Err(CarrierError::Internal("image has neither base64 data nor url".into()));
+            return Err(CarrierError::Internal(
+                "image has neither base64 data nor url".into(),
+            ));
         };
 
         let out_dir = std::path::PathBuf::from(out_dir);
@@ -885,7 +930,6 @@ impl KernelHandle for CarrierKernel {
         }
         Some((url, key))
     }
-
 }
 
 type ToolsetAlias = (fn(&str) -> bool, &'static str);
@@ -931,14 +975,63 @@ impl CarrierKernel {
         }
 
         let aliases: &[ToolsetAlias] = &[
-            (|q: &str| q.contains("file") || q.contains("save") || q.contains("read") || q.contains("write"), "filesystem"),
-            (|q: &str| q.contains("browser") || q.contains("browse") || q.contains("网页") || q.contains("打开"), "browser"),
-            (|q: &str| q.contains("wechat") || q.contains("微信") || q.contains("公众号") || q.contains("draft"), "wechat-oa"),
-            (|q: &str| q.contains("feishu") || q.contains("飞书") || q.contains("lark"), "feishu"),
-            (|q: &str| q.contains("wecom") || q.contains("企微") || q.contains("企业微信"), "wecom"),
-            (|q: &str| q.contains("shell") || q.contains("command") || q.contains("exec") || q.contains("终端"), "shell"),
-            (|q: &str| q.contains("image") || q.contains("图片") || q.contains("media") || q.contains("photo"), "media"),
-            (|q: &str| q.contains("search") || q.contains("fetch") || q.contains("web"), "web"),
+            (
+                |q: &str| {
+                    q.contains("file")
+                        || q.contains("save")
+                        || q.contains("read")
+                        || q.contains("write")
+                },
+                "filesystem",
+            ),
+            (
+                |q: &str| {
+                    q.contains("browser")
+                        || q.contains("browse")
+                        || q.contains("网页")
+                        || q.contains("打开")
+                },
+                "browser",
+            ),
+            (
+                |q: &str| {
+                    q.contains("wechat")
+                        || q.contains("微信")
+                        || q.contains("公众号")
+                        || q.contains("draft")
+                },
+                "wechat-oa",
+            ),
+            (
+                |q: &str| q.contains("feishu") || q.contains("飞书") || q.contains("lark"),
+                "feishu",
+            ),
+            (
+                |q: &str| q.contains("wecom") || q.contains("企微") || q.contains("企业微信"),
+                "wecom",
+            ),
+            (
+                |q: &str| {
+                    q.contains("shell")
+                        || q.contains("command")
+                        || q.contains("exec")
+                        || q.contains("终端")
+                },
+                "shell",
+            ),
+            (
+                |q: &str| {
+                    q.contains("image")
+                        || q.contains("图片")
+                        || q.contains("media")
+                        || q.contains("photo")
+                },
+                "media",
+            ),
+            (
+                |q: &str| q.contains("search") || q.contains("fetch") || q.contains("web"),
+                "web",
+            ),
         ];
         for (matches, ts) in aliases {
             if matches(query) && toolset_name == *ts {
@@ -991,13 +1084,12 @@ impl CarrierKernel {
                 old_id = %entry.id,
                 "Clone already registered - killing existing agent for reinstall"
             );
-            self.kill_agent(entry.id)
-                .map_err(CarrierError::from)?;
+            self.kill_agent(entry.id).map_err(CarrierError::from)?;
         }
         if workspace_dir.exists() {
-            for dir_entry in std::fs::read_dir(&workspace_dir)
-                .map_err(|e| CarrierError::Internal(format!("Failed to read workspace for reinstall: {e}")))?
-            {
+            for dir_entry in std::fs::read_dir(&workspace_dir).map_err(|e| {
+                CarrierError::Internal(format!("Failed to read workspace for reinstall: {e}"))
+            })? {
                 let dir_entry = dir_entry
                     .map_err(|e| CarrierError::Internal(format!("Dir entry error: {e}")))?;
                 let path = dir_entry.path();
@@ -1040,11 +1132,10 @@ impl CarrierKernel {
         }
 
         // File-level write of the fetched definition files.
-        let security_warnings =
-            write_files_to_workspace(&files, &workspace_dir).map_err(|e| {
-                let _ = std::fs::remove_dir_all(&workspace_dir);
-                CarrierError::Internal(format!("Failed to write files: {e}"))
-            })?;
+        let security_warnings = write_files_to_workspace(&files, &workspace_dir).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&workspace_dir);
+            CarrierError::Internal(format!("Failed to write files: {e}"))
+        })?;
 
         // Seed the default `self-growth` flow (factory-baked autonomous
         // learn/create capability) unless the clone ships its own. Done before
@@ -1079,11 +1170,12 @@ impl CarrierKernel {
             tracing::warn!(name = %clone_name, error = %e, "failed to seed format spec");
         }
 
-        let mut manifest = build_manifest_from_workspace(&workspace_dir, &clone_name, Some(clone_name.clone()))
-            .map_err(|e| {
-                let _ = std::fs::remove_dir_all(&workspace_dir);
-                CarrierError::Internal(format!("Failed to build manifest: {e}"))
-            })?;
+        let mut manifest =
+            build_manifest_from_workspace(&workspace_dir, &clone_name, Some(clone_name.clone()))
+                .map_err(|e| {
+                    let _ = std::fs::remove_dir_all(&workspace_dir);
+                    CarrierError::Internal(format!("Failed to build manifest: {e}"))
+                })?;
         manifest.workspace = Some(workspace_dir.clone());
 
         let toml_str = toml::to_string_pretty(&manifest)
@@ -1144,7 +1236,8 @@ impl MemoryHandle for MemorySubstrateHandle {
         key: &str,
         value: serde_json::Value,
     ) -> CarrierResult<()> {
-        self.inner.system_kv_set(agent_id, owner_id, user_id, key, value)
+        self.inner
+            .system_kv_set(agent_id, owner_id, user_id, key, value)
     }
 
     fn kv_get(
@@ -1173,7 +1266,8 @@ impl MemoryHandle for MemorySubstrateHandle {
         user_id: &str,
         key: &str,
     ) -> CarrierResult<()> {
-        self.inner.system_kv_delete(agent_id, owner_id, user_id, key)
+        self.inner
+            .system_kv_delete(agent_id, owner_id, user_id, key)
     }
 
     async fn tree_ingest(
@@ -1231,14 +1325,24 @@ impl MemoryHandle for MemorySubstrateHandle {
         source_kind: Option<&str>,
         limit: usize,
     ) -> CarrierResult<Vec<types::memory_tree::TreeSummary>> {
-        self.inner.tree_list_sources_async(owner_id, source_kind, limit).await
+        self.inner
+            .tree_list_sources_async(owner_id, source_kind, limit)
+            .await
     }
 
-    fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> CarrierResult<serde_json::Value> {
+    fn analytics_user_stats(
+        &self,
+        agent_id: &str,
+        active_days: u32,
+    ) -> CarrierResult<serde_json::Value> {
         self.inner.analytics_user_stats(agent_id, active_days)
     }
 
-    fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> CarrierResult<serde_json::Value> {
+    fn analytics_user_lookup(
+        &self,
+        agent_id: &str,
+        sender_id: &str,
+    ) -> CarrierResult<serde_json::Value> {
         self.inner.analytics_user_lookup(agent_id, sender_id)
     }
 
@@ -1246,7 +1350,11 @@ impl MemoryHandle for MemorySubstrateHandle {
         self.inner.analytics_usage(agent_id, days)
     }
 
-    fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> CarrierResult<serde_json::Value> {
+    fn analytics_recent_conversations(
+        &self,
+        agent_id: &str,
+        limit: u32,
+    ) -> CarrierResult<serde_json::Value> {
         self.inner.analytics_recent_conversations(agent_id, limit)
     }
 }
@@ -1313,10 +1421,7 @@ fn resolve_relative_at(mut schedule: serde_json::Value) -> CarrierResult<serde_j
         None | Some(serde_json::Value::Null) => return Ok(schedule),
         Some(v) => v
             .as_u64()
-            .or_else(|| {
-                v.as_str()
-                    .and_then(|s| s.trim().parse::<u64>().ok())
-            })
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
             .ok_or_else(|| {
                 CarrierError::InvalidInput(
                     "schedule.in_secs must be a positive integer (seconds from now)".into(),
@@ -1340,10 +1445,7 @@ fn resolve_relative_at(mut schedule: serde_json::Value) -> CarrierResult<serde_j
     let obj = schedule
         .as_object_mut()
         .expect("kind check above implies object");
-    obj.insert(
-        "at".to_string(),
-        serde_json::Value::String(at.to_rfc3339()),
-    );
+    obj.insert("at".to_string(), serde_json::Value::String(at.to_rfc3339()));
     obj.remove("in_secs");
     Ok(schedule)
 }

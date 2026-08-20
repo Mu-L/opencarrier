@@ -57,7 +57,9 @@ pub async fn get_bot_qrcode_with_base(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(CarrierError::Network(format!("get_bot_qrcode HTTP {status}: {body}")));
+        return Err(CarrierError::Network(format!(
+            "get_bot_qrcode HTTP {status}: {body}"
+        )));
     }
 
     resp.json::<QrCodeResponse>()
@@ -87,7 +89,9 @@ pub async fn get_qrcode_status(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(CarrierError::Network(format!("get_qrcode_status HTTP {status}: {body}")));
+        return Err(CarrierError::Network(format!(
+            "get_qrcode_status HTTP {status}: {body}"
+        )));
     }
 
     // iLink may return application/octet-stream content type
@@ -96,8 +100,9 @@ pub async fn get_qrcode_status(
         .await
         .map_err(|e| CarrierError::Network(format!("get_qrcode_status read body error: {e}")))?;
 
-    serde_json::from_str::<QrCodeStatusResponse>(&text)
-        .map_err(|e| CarrierError::Serialization(format!("get_qrcode_status parse error: {e}: {text}")))
+    serde_json::from_str::<QrCodeStatusResponse>(&text).map_err(|e| {
+        CarrierError::Serialization(format!("get_qrcode_status parse error: {e}: {text}"))
+    })
 }
 
 /// POST `/ilink/bot/getupdates`
@@ -127,7 +132,9 @@ pub async fn get_updates(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(CarrierError::Network(format!("getupdates HTTP {status}: {body}")));
+        return Err(CarrierError::Network(format!(
+            "getupdates HTTP {status}: {body}"
+        )));
     }
 
     let text = resp
@@ -194,7 +201,9 @@ pub async fn send_message(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(CarrierError::Network(format!("sendmessage HTTP {status}: {body}")));
+        return Err(CarrierError::Network(format!(
+            "sendmessage HTTP {status}: {body}"
+        )));
     }
 
     // iLink returns empty JSON or { } on success
@@ -220,9 +229,21 @@ pub async fn send_message_auto(
     text: &str,
 ) -> CarrierResult<()> {
     if let Some(tok) = context_token {
-        match send_message(http, bot_token, baseurl, to_user_id, Some(tok), client_id, text).await {
+        match send_message(
+            http,
+            bot_token,
+            baseurl,
+            to_user_id,
+            Some(tok),
+            client_id,
+            text,
+        )
+        .await
+        {
             Ok(()) => return Ok(()),
-            Err(e) => tracing::warn!(to = %to_user_id, error = %e, "send with context_token failed, retrying bare"),
+            Err(e) => {
+                tracing::warn!(to = %to_user_id, error = %e, "send with context_token failed, retrying bare")
+            }
         }
     }
     send_message(http, bot_token, baseurl, to_user_id, None, client_id, text).await
@@ -275,7 +296,9 @@ pub async fn send_image(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(CarrierError::Network(format!("send_image HTTP {status}: {body}")));
+        return Err(CarrierError::Network(format!(
+            "send_image HTTP {status}: {body}"
+        )));
     }
 
     let _ = resp
@@ -297,12 +320,27 @@ pub async fn send_image_auto(
     image_url: &str,
 ) -> CarrierResult<()> {
     if let Some(tok) = context_token {
-        match send_image(http, bot_token, baseurl, to_user_id, Some(tok), client_id, image_url).await {
+        match send_image(
+            http,
+            bot_token,
+            baseurl,
+            to_user_id,
+            Some(tok),
+            client_id,
+            image_url,
+        )
+        .await
+        {
             Ok(()) => return Ok(()),
-            Err(e) => tracing::warn!(to = %to_user_id, error = %e, "send_image with context_token failed, retrying bare"),
+            Err(e) => {
+                tracing::warn!(to = %to_user_id, error = %e, "send_image with context_token failed, retrying bare")
+            }
         }
     }
-    send_image(http, bot_token, baseurl, to_user_id, None, client_id, image_url).await
+    send_image(
+        http, bot_token, baseurl, to_user_id, None, client_id, image_url,
+    )
+    .await
 }
 
 /// POST `/ilink/bot/sendmessage` with ITEM_TYPE_VIDEO
@@ -354,7 +392,9 @@ pub async fn send_video(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(CarrierError::Network(format!("send_video HTTP {status}: {body}")));
+        return Err(CarrierError::Network(format!(
+            "send_video HTTP {status}: {body}"
+        )));
     }
 
     let _ = resp
@@ -376,12 +416,27 @@ pub async fn send_video_auto(
     video_url: &str,
 ) -> CarrierResult<()> {
     if let Some(tok) = context_token {
-        match send_video(http, bot_token, baseurl, to_user_id, Some(tok), client_id, video_url).await {
+        match send_video(
+            http,
+            bot_token,
+            baseurl,
+            to_user_id,
+            Some(tok),
+            client_id,
+            video_url,
+        )
+        .await
+        {
             Ok(()) => return Ok(()),
-            Err(e) => tracing::warn!(to = %to_user_id, error = %e, "send_video with context_token failed, retrying bare"),
+            Err(e) => {
+                tracing::warn!(to = %to_user_id, error = %e, "send_video with context_token failed, retrying bare")
+            }
         }
     }
-    send_video(http, bot_token, baseurl, to_user_id, None, client_id, video_url).await
+    send_video(
+        http, bot_token, baseurl, to_user_id, None, client_id, video_url,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -402,7 +457,9 @@ mod tests {
                 context_token: None,
                 item_list: Some(vec![SendItem {
                     type_: ITEM_TYPE_TEXT,
-                    text_item: Some(SendTextItem { text: "hi".to_string() }),
+                    text_item: Some(SendTextItem {
+                        text: "hi".to_string(),
+                    }),
                     image_item: None,
                     video_item: None,
                 }]),
@@ -410,7 +467,10 @@ mod tests {
             base_info: BaseInfo::default(),
         };
         let json = serde_json::to_string(&req).unwrap();
-        assert!(!json.contains("context_token"), "bare send must omit the field: {json}");
+        assert!(
+            !json.contains("context_token"),
+            "bare send must omit the field: {json}"
+        );
         assert!(json.contains("peer@im.wechat"));
     }
 
@@ -433,4 +493,3 @@ mod tests {
         assert!(json.contains("\"tok\""));
     }
 }
-

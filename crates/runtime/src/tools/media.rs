@@ -6,11 +6,11 @@
 use super::ToolModule;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use serde_json::Value;
+use std::path::Path;
 use types::config::ExecPolicy;
 use types::error::{CarrierError, CarrierResult};
 use types::tool::ToolDefinition;
-use serde_json::Value;
-use std::path::Path;
 
 /// Media, Docker, process, and canvas tools.
 pub struct MediaTools;
@@ -202,57 +202,50 @@ impl ToolModule for MediaTools {
             "media_transcribe" => Some(tool_media_transcribe(input, ctx.brain).await),
 
             // Image generation
-            "image_generate" => {
-                Some(
-                    tool_image_generate(
-                        input,
-                        ctx.brain,
-                        ctx.home_dir,
-                        ctx.agent_name,
-                        ctx.owner_id,
-                        ctx.sender_id,
-                        ctx.external_url,
-                    )
-                    .await
-                    ,
+            "image_generate" => Some(
+                tool_image_generate(
+                    input,
+                    ctx.brain,
+                    ctx.home_dir,
+                    ctx.agent_name,
+                    ctx.owner_id,
+                    ctx.sender_id,
+                    ctx.external_url,
                 )
-            }
+                .await,
+            ),
 
             // Video generation
-            "video_generate" => {
-                Some(tool_video_generate(input, ctx.brain).await)
-            }
+            "video_generate" => Some(tool_video_generate(input, ctx.brain).await),
 
             // TTS/STT
-            "text_to_speech" => {
-                Some(
-                    tool_text_to_speech(
-                        input,
-                        ctx.brain,
-                        ctx.home_dir,
-                        ctx.agent_name,
-                        ctx.owner_id,
-                        ctx.sender_id,
-                        ctx.external_url,
-                    )
-                    .await
-                    ,
+            "text_to_speech" => Some(
+                tool_text_to_speech(
+                    input,
+                    ctx.brain,
+                    ctx.home_dir,
+                    ctx.agent_name,
+                    ctx.owner_id,
+                    ctx.sender_id,
+                    ctx.external_url,
                 )
-            }
+                .await,
+            ),
             "speech_to_text" => {
                 Some(tool_speech_to_text(input, ctx.brain, ctx.workspace_root).await)
             }
 
             // Persistent process tools
-            "process_start" => {
-                Some(tool_process_start(
+            "process_start" => Some(
+                tool_process_start(
                     input,
                     ctx.process_manager,
                     ctx.caller_agent_id,
                     ctx.exec_policy,
                     ctx.allowed_env_vars,
-                ).await)
-            }
+                )
+                .await,
+            ),
             "process_poll" => {
                 Some(tool_process_poll(input, ctx.process_manager, ctx.caller_agent_id).await)
             }
@@ -267,21 +260,18 @@ impl ToolModule for MediaTools {
             }
 
             // Canvas / A2UI
-            "canvas_present" => {
-                Some(
-                    tool_canvas_present(
-                        input,
-                        ctx.workspace_root,
-                        ctx.home_dir,
-                        ctx.agent_name,
-                        ctx.owner_id,
-                        ctx.sender_id,
-                        ctx.external_url,
-                    )
-                    .await
-                    ,
+            "canvas_present" => Some(
+                tool_canvas_present(
+                    input,
+                    ctx.workspace_root,
+                    ctx.home_dir,
+                    ctx.agent_name,
+                    ctx.owner_id,
+                    ctx.sender_id,
+                    ctx.external_url,
                 )
-            }
+                .await,
+            ),
 
             _ => None,
         }
@@ -289,11 +279,15 @@ impl ToolModule for MediaTools {
 
     fn permission_level(&self, tool_name: &str) -> types::tool::PermissionLevel {
         match tool_name {
-            "image_analyze" | "media_describe" | "media_transcribe"
-            | "speech_to_text" => types::tool::PermissionLevel::ReadOnly,
-            "image_generate" | "video_generate" | "text_to_speech" | "canvas_present" => types::tool::PermissionLevel::Write,
-            "process_start" | "process_poll"
-            | "process_write" | "process_list" => types::tool::PermissionLevel::Execute,
+            "image_analyze" | "media_describe" | "media_transcribe" | "speech_to_text" => {
+                types::tool::PermissionLevel::ReadOnly
+            }
+            "image_generate" | "video_generate" | "text_to_speech" | "canvas_present" => {
+                types::tool::PermissionLevel::Write
+            }
+            "process_start" | "process_poll" | "process_write" | "process_list" => {
+                types::tool::PermissionLevel::Execute
+            }
             "process_kill" => types::tool::PermissionLevel::Dangerous,
             _ => types::tool::PermissionLevel::Dangerous,
         }
@@ -308,7 +302,9 @@ async fn tool_image_analyze(
     input: &serde_json::Value,
     ctx: &crate::tool_context::ToolContext<'_>,
 ) -> CarrierResult<String> {
-    let path = input["path"].as_str().ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
+    let path = input["path"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'path' parameter".to_string(),
+    ))?;
     let prompt = input["prompt"].as_str().unwrap_or("");
 
     // Resolve through sender sandbox so input/xxx and output/xxx work.
@@ -340,9 +336,12 @@ async fn tool_image_analyze(
         )?
     };
 
-    let data = tokio::fs::read(&resolved)
-        .await
-        .map_err(|e| CarrierError::Internal(format!("Failed to read image '{path}' ({}): {e}", resolved.display())))?;
+    let data = tokio::fs::read(&resolved).await.map_err(|e| {
+        CarrierError::Internal(format!(
+            "Failed to read image '{path}' ({}): {e}",
+            resolved.display()
+        ))
+    })?;
 
     let file_size = data.len();
 
@@ -501,8 +500,12 @@ async fn tool_media_describe(
     input: &serde_json::Value,
     ctx: &crate::tool_context::ToolContext<'_>,
 ) -> CarrierResult<String> {
-    let brain = ctx.brain.ok_or(CarrierError::Config("Brain not available. Check configuration.".to_string()))?;
-    let path = input["path"].as_str().ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
+    let brain = ctx.brain.ok_or(CarrierError::Config(
+        "Brain not available. Check configuration.".to_string(),
+    ))?;
+    let path = input["path"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'path' parameter".to_string(),
+    ))?;
     let prompt = input["prompt"]
         .as_str()
         .unwrap_or("Describe this image in detail.");
@@ -553,7 +556,11 @@ async fn tool_media_describe(
         "gif" => "image/gif",
         "webp" => "image/webp",
         "bmp" => "image/bmp",
-        _ => return Err(CarrierError::InvalidInput(format!("Unsupported image format: .{ext}"))),
+        _ => {
+            return Err(CarrierError::InvalidInput(format!(
+                "Unsupported image format: .{ext}"
+            )))
+        }
     };
 
     // Prefer public URL for vision.
@@ -573,12 +580,7 @@ async fn tool_media_describe(
         } else {
             format!("input/{rel}")
         };
-        image_url = crate::file_view::build_file_view_url(
-            ctx.external_url,
-            an,
-            &under_sender,
-            sid,
-        );
+        image_url = crate::file_view::build_file_view_url(ctx.external_url, an, &under_sender, sid);
     }
 
     let image_block = if let Some(url) = image_url.clone() {
@@ -636,7 +638,9 @@ async fn tool_media_describe(
 
     let description = response.text();
     if description.is_empty() {
-        return Err(CarrierError::LlmDriver("Vision model returned empty response".to_string()));
+        return Err(CarrierError::LlmDriver(
+            "Vision model returned empty response".to_string(),
+        ));
     }
 
     let mut result = serde_json::json!({
@@ -663,8 +667,12 @@ async fn tool_media_transcribe(
     brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
 ) -> CarrierResult<String> {
     use base64::Engine;
-    let brain = brain.ok_or(CarrierError::Config("Brain not available. Ensure audio modality is configured.".to_string()))?;
-    let path = input["path"].as_str().ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
+    let brain = brain.ok_or(CarrierError::Config(
+        "Brain not available. Ensure audio modality is configured.".to_string(),
+    ))?;
+    let path = input["path"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'path' parameter".to_string(),
+    ))?;
     // Allow /tmp/ paths for browser screenshots; validate relative paths normally
     if !path.starts_with("/tmp/") {
         let _ = crate::tools::validate_path(path)?;
@@ -688,7 +696,11 @@ async fn tool_media_transcribe(
         "flac" => "audio/flac",
         "m4a" => "audio/mp4",
         "webm" => "audio/webm",
-        _ => return Err(CarrierError::InvalidInput(format!("Unsupported audio format: .{ext}"))),
+        _ => {
+            return Err(CarrierError::InvalidInput(format!(
+                "Unsupported audio format: .{ext}"
+            )))
+        }
     };
 
     let audio_block = types::message::ContentBlock::Audio {
@@ -710,10 +722,9 @@ async fn tool_media_transcribe(
         extra: serde_json::Value::Object(serde_json::Map::new()),
     };
 
-    let response = brain
-        .complete("audio", request)
-        .await
-        .map_err(|e| CarrierError::LlmDriver(format!("Audio transcription brain call failed: {e}")))?;
+    let response = brain.complete("audio", request).await.map_err(|e| {
+        CarrierError::LlmDriver(format!("Audio transcription brain call failed: {e}"))
+    })?;
 
     let transcript = response.text();
     let result = serde_json::json!({
@@ -737,10 +748,12 @@ async fn tool_image_generate(
     sender_id: Option<&str>,
     external_url: Option<&str>,
 ) -> CarrierResult<String> {
-    let brain = brain.ok_or(CarrierError::Config("Brain not available. Ensure image modality is configured.".to_string()))?;
-    let prompt = input["prompt"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'prompt' parameter".to_string()))?;
+    let brain = brain.ok_or(CarrierError::Config(
+        "Brain not available. Ensure image modality is configured.".to_string(),
+    ))?;
+    let prompt = input["prompt"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'prompt' parameter".to_string(),
+    ))?;
 
     let model = input["model"].as_str().unwrap_or("dall-e-3");
     let mut size = input["size"].as_str().unwrap_or("1024x1024").to_string();
@@ -788,17 +801,14 @@ async fn tool_image_generate(
         extra: serde_json::Value::Object(extra),
     };
 
-    let response = brain
-        .complete("image", request)
-        .await
-        .map_err(|e| {
-            CarrierError::LlmDriver(format!(
-                "Image generation failed: {e}. \
+    let response = brain.complete("image", request).await.map_err(|e| {
+        CarrierError::LlmDriver(format!(
+            "Image generation failed: {e}. \
                  Do NOT retry image_generate with the same prompt. \
                  Tell the user the image generation service is currently unavailable \
                  and suggest trying again later."
-            ))
-        })?;
+        ))
+    })?;
 
     let images = match response.media {
         Some(types::media::MediaOutput::Images { items }) => items,
@@ -811,11 +821,17 @@ async fn tool_image_generate(
                 url: None,
             }]
         }
-        _ => return Err(CarrierError::LlmDriver("Image generation returned no images".to_string())),
+        _ => {
+            return Err(CarrierError::LlmDriver(
+                "Image generation returned no images".to_string(),
+            ))
+        }
     };
 
     if images.is_empty() {
-        return Err(CarrierError::LlmDriver("Image generation returned empty image list".to_string()));
+        return Err(CarrierError::LlmDriver(
+            "Image generation returned empty image list".to_string(),
+        ));
     }
 
     // Save images to workspace output directory if available
@@ -825,8 +841,7 @@ async fn tool_image_generate(
         // Match file_write / files/view: workspaces/{agent}/senders/{owner}[/users/{sid}]/output
         let sid = sender_id.unwrap_or("shared");
         let oid = owner_id.unwrap_or(sid);
-        let output_dir =
-            types::config::sender_data_dir(hd, oid, an, Some(sid)).join("output");
+        let output_dir = types::config::sender_data_dir(hd, oid, an, Some(sid)).join("output");
         tokio::fs::create_dir_all(&output_dir)
             .await
             .map_err(|e| CarrierError::Internal(format!("Failed to create output dir: {e}")))?;
@@ -845,7 +860,9 @@ async fn tool_image_generate(
                 use base64::Engine;
                 base64::engine::general_purpose::STANDARD
                     .decode(&image.data_base64)
-                    .map_err(|e| CarrierError::Internal(format!("Failed to decode base64 image: {e}")))?
+                    .map_err(|e| {
+                        CarrierError::Internal(format!("Failed to decode base64 image: {e}"))
+                    })?
             } else if let Some(ref url) = image.url {
                 // Download from URL (e.g. MiniMax returns temporary URLs)
                 let resp = reqwest::Client::new()
@@ -853,13 +870,19 @@ async fn tool_image_generate(
                     .timeout(std::time::Duration::from_secs(60))
                     .send()
                     .await
-                    .map_err(|e| CarrierError::Network(format!("Failed to download image from URL: {e}")))?;
+                    .map_err(|e| {
+                        CarrierError::Network(format!("Failed to download image from URL: {e}"))
+                    })?;
                 resp.bytes()
                     .await
-                    .map_err(|e| CarrierError::Network(format!("Failed to read image response: {e}")))?
+                    .map_err(|e| {
+                        CarrierError::Network(format!("Failed to read image response: {e}"))
+                    })?
                     .to_vec()
             } else {
-                return Err(CarrierError::Internal("Image has neither base64 data nor URL".to_string()));
+                return Err(CarrierError::Internal(
+                    "Image has neither base64 data nor URL".to_string(),
+                ));
             };
 
             tokio::fs::write(&path, &decoded)
@@ -883,7 +906,9 @@ async fn tool_image_generate(
             let file_id = uuid::Uuid::new_v4().to_string();
             let decoded = if !image.data_base64.is_empty() {
                 use base64::Engine;
-                base64::engine::general_purpose::STANDARD.decode(&image.data_base64).ok()
+                base64::engine::general_purpose::STANDARD
+                    .decode(&image.data_base64)
+                    .ok()
             } else {
                 None
             };
@@ -947,12 +972,7 @@ async fn tool_image_generate(
 
     // System capability: public browser links for every saved image.
     if let (Some(an), Some(sid)) = (agent_name, sender_id) {
-        let view_urls = crate::file_view::build_file_view_urls(
-            external_url,
-            an,
-            &rel_paths,
-            sid,
-        );
+        let view_urls = crate::file_view::build_file_view_urls(external_url, an, &rel_paths, sid);
         if !view_urls.is_empty() {
             response.insert("view_urls".into(), serde_json::json!(view_urls.clone()));
             if let Some(first) = view_urls.first() {
@@ -989,10 +1009,12 @@ async fn tool_video_generate(
     input: &serde_json::Value,
     brain: Option<&std::sync::Arc<dyn crate::llm_driver::Brain>>,
 ) -> CarrierResult<String> {
-    let brain = brain.ok_or(CarrierError::Config("Brain not available. Ensure video modality is configured.".to_string()))?;
-    let prompt = input["prompt"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'prompt' parameter".to_string()))?;
+    let brain = brain.ok_or(CarrierError::Config(
+        "Brain not available. Ensure video modality is configured.".to_string(),
+    ))?;
+    let prompt = input["prompt"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'prompt' parameter".to_string(),
+    ))?;
 
     let mut extra = serde_json::Map::new();
     if let Some(duration) = input["duration"].as_u64() {
@@ -1013,21 +1035,22 @@ async fn tool_video_generate(
         extra: serde_json::Value::Object(extra),
     };
 
-    let response = brain
-        .complete("video", request)
-        .await
-        .map_err(|e| {
-            CarrierError::LlmDriver(format!(
-                "Video generation failed: {e}. \
+    let response = brain.complete("video", request).await.map_err(|e| {
+        CarrierError::LlmDriver(format!(
+            "Video generation failed: {e}. \
                  Do NOT retry video_generate with the same prompt. \
                  Tell the user the video generation service is currently unavailable \
                  and suggest trying again later."
-            ))
-        })?;
+        ))
+    })?;
 
     let video_url = match response.media {
         Some(types::media::MediaOutput::Video { url, .. }) => url,
-        _ => return Err(CarrierError::LlmDriver("Video generation returned no video".to_string())),
+        _ => {
+            return Err(CarrierError::LlmDriver(
+                "Video generation returned no video".to_string(),
+            ))
+        }
     };
 
     let mut result = serde_json::Map::new();
@@ -1056,8 +1079,12 @@ async fn tool_text_to_speech(
     sender_id: Option<&str>,
     external_url: Option<&str>,
 ) -> CarrierResult<String> {
-    let brain = brain.ok_or(CarrierError::Config("Brain not available. Ensure tts modality is configured.".to_string()))?;
-    let text = input["text"].as_str().ok_or(CarrierError::InvalidInput("Missing 'text' parameter".to_string()))?;
+    let brain = brain.ok_or(CarrierError::Config(
+        "Brain not available. Ensure tts modality is configured.".to_string(),
+    ))?;
+    let text = input["text"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'text' parameter".to_string(),
+    ))?;
     let voice = input["voice"].as_str();
     let format = input["format"].as_str();
 
@@ -1088,21 +1115,29 @@ async fn tool_text_to_speech(
         .await
         .map_err(|e| CarrierError::LlmDriver(format!("TTS brain call failed: {e}")))?;
 
-    let media = response.media.ok_or(CarrierError::LlmDriver("TTS returned no media".to_string()))?;
+    let media = response
+        .media
+        .ok_or(CarrierError::LlmDriver("TTS returned no media".to_string()))?;
     let (audio_data, format, duration_ms) = match media {
         types::media::MediaOutput::Audio {
             data,
             format,
             duration_ms,
         } => (data, format, duration_ms),
-        _ => return Err(CarrierError::LlmDriver("TTS returned non-audio media".to_string())),
+        _ => {
+            return Err(CarrierError::LlmDriver(
+                "TTS returned non-audio media".to_string(),
+            ))
+        }
     };
 
     // Save audio to per-sender output directory
     let mut saved_path: Option<String> = None;
     let mut view_url: Option<String> = None;
     if let (Some(hd), Some(an)) = (home_dir, agent_name) {
-        let sid = sender_id.ok_or(CarrierError::Internal("Cannot save audio: no sender context".to_string()))?;
+        let sid = sender_id.ok_or(CarrierError::Internal(
+            "Cannot save audio: no sender context".to_string(),
+        ))?;
         let oid = owner_id.unwrap_or(sid);
         let rel_dir = types::config::sender_relative_path(oid, an, Some(sid), "output");
         let output_dir = hd.join(&rel_dir);
@@ -1146,8 +1181,12 @@ async fn tool_speech_to_text(
     workspace_root: Option<&Path>,
 ) -> CarrierResult<String> {
     use base64::Engine;
-    let brain = brain.ok_or(CarrierError::Config("Brain not available. Ensure audio modality is configured.".to_string()))?;
-    let raw_path = input["path"].as_str().ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
+    let brain = brain.ok_or(CarrierError::Config(
+        "Brain not available. Ensure audio modality is configured.".to_string(),
+    ))?;
+    let raw_path = input["path"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'path' parameter".to_string(),
+    ))?;
     let language = input["language"].as_str();
 
     let resolved = crate::tools::resolve_file_path(raw_path, workspace_root)?;
@@ -1224,11 +1263,15 @@ async fn tool_process_start(
     exec_policy: Option<&ExecPolicy>,
     allowed_env_vars: Option<&[String]>,
 ) -> CarrierResult<String> {
-    let pm = pm.ok_or(CarrierError::Internal("Process manager not available".to_string()))?;
-    let agent_id = caller_agent_id.ok_or(CarrierError::Internal("Missing caller agent identity".to_string()))?;
-    let command = input["command"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'command' parameter".to_string()))?;
+    let pm = pm.ok_or(CarrierError::Internal(
+        "Process manager not available".to_string(),
+    ))?;
+    let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
+        "Missing caller agent identity".to_string(),
+    ))?;
+    let command = input["command"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'command' parameter".to_string(),
+    ))?;
     let args: Vec<String> = input["args"]
         .as_array()
         .map(|arr| {
@@ -1254,14 +1297,22 @@ async fn tool_process_poll(
     pm: Option<&crate::process_manager::ProcessManager>,
     caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let pm = pm.ok_or(CarrierError::Internal("Process manager not available".to_string()))?;
-    let agent_id = caller_agent_id.ok_or(CarrierError::Internal("Missing caller agent identity".to_string()))?;
+    let pm = pm.ok_or(CarrierError::Internal(
+        "Process manager not available".to_string(),
+    ))?;
+    let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
+        "Missing caller agent identity".to_string(),
+    ))?;
     let proc_id = input["process_id"]
         .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'process_id' parameter".to_string()))?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'process_id' parameter".to_string(),
+        ))?;
     // Ownership: verify the process belongs to the caller
     if !pm.list(agent_id).iter().any(|p| p.id == proc_id) {
-        return Err(CarrierError::InvalidInput("Process not found or does not belong to you".to_string()));
+        return Err(CarrierError::InvalidInput(
+            "Process not found or does not belong to you".to_string(),
+        ));
     }
     let (stdout, stderr) = pm.read(proc_id).await?;
     Ok(serde_json::json!({
@@ -1277,16 +1328,26 @@ async fn tool_process_write(
     pm: Option<&crate::process_manager::ProcessManager>,
     caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let pm = pm.ok_or(CarrierError::Internal("Process manager not available".to_string()))?;
-    let agent_id = caller_agent_id.ok_or(CarrierError::Internal("Missing caller agent identity".to_string()))?;
+    let pm = pm.ok_or(CarrierError::Internal(
+        "Process manager not available".to_string(),
+    ))?;
+    let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
+        "Missing caller agent identity".to_string(),
+    ))?;
     let proc_id = input["process_id"]
         .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'process_id' parameter".to_string()))?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'process_id' parameter".to_string(),
+        ))?;
     // Ownership: verify the process belongs to the caller
     if !pm.list(agent_id).iter().any(|p| p.id == proc_id) {
-        return Err(CarrierError::InvalidInput("Process not found or does not belong to you".to_string()));
+        return Err(CarrierError::InvalidInput(
+            "Process not found or does not belong to you".to_string(),
+        ));
     }
-    let data = input["data"].as_str().ok_or(CarrierError::InvalidInput("Missing 'data' parameter".to_string()))?;
+    let data = input["data"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'data' parameter".to_string(),
+    ))?;
     // Always append newline if not present (common expectation for REPLs)
     let data = if data.ends_with('\n') {
         data.to_string()
@@ -1303,14 +1364,22 @@ async fn tool_process_kill(
     pm: Option<&crate::process_manager::ProcessManager>,
     caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let pm = pm.ok_or(CarrierError::Internal("Process manager not available".to_string()))?;
-    let agent_id = caller_agent_id.ok_or(CarrierError::Internal("Missing caller agent identity".to_string()))?;
+    let pm = pm.ok_or(CarrierError::Internal(
+        "Process manager not available".to_string(),
+    ))?;
+    let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
+        "Missing caller agent identity".to_string(),
+    ))?;
     let proc_id = input["process_id"]
         .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'process_id' parameter".to_string()))?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'process_id' parameter".to_string(),
+        ))?;
     // Ownership: verify the process belongs to the caller
     if !pm.list(agent_id).iter().any(|p| p.id == proc_id) {
-        return Err(CarrierError::InvalidInput("Process not found or does not belong to you".to_string()));
+        return Err(CarrierError::InvalidInput(
+            "Process not found or does not belong to you".to_string(),
+        ));
     }
     pm.kill(proc_id).await?;
     Ok(r#"{"status": "killed"}"#.to_string())
@@ -1321,8 +1390,12 @@ async fn tool_process_list(
     pm: Option<&crate::process_manager::ProcessManager>,
     caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let pm = pm.ok_or(CarrierError::Internal("Process manager not available".to_string()))?;
-    let agent_id = caller_agent_id.ok_or(CarrierError::Internal("Missing caller agent identity".to_string()))?;
+    let pm = pm.ok_or(CarrierError::Internal(
+        "Process manager not available".to_string(),
+    ))?;
+    let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
+        "Missing caller agent identity".to_string(),
+    ))?;
     let procs = pm.list(agent_id);
     let list: Vec<serde_json::Value> = procs
         .iter()
@@ -1370,7 +1443,9 @@ fn sanitize_canvas_html(html: &str, max_bytes: usize) -> CarrierResult<String> {
     ];
     for tag in &dangerous_tags {
         if lower.contains(tag) {
-            return Err(CarrierError::InvalidInput(format!("Forbidden HTML tag detected: {tag}")));
+            return Err(CarrierError::InvalidInput(format!(
+                "Forbidden HTML tag detected: {tag}"
+            )));
         }
     }
 
@@ -1389,7 +1464,9 @@ fn sanitize_canvas_html(html: &str, max_bytes: usize) -> CarrierResult<String> {
     let dangerous_schemes = ["javascript:", "vbscript:", "data:text/html"];
     for scheme in &dangerous_schemes {
         if lower.contains(scheme) {
-            return Err(CarrierError::InvalidInput(format!("Forbidden URL scheme detected: {scheme}")));
+            return Err(CarrierError::InvalidInput(format!(
+                "Forbidden URL scheme detected: {scheme}"
+            )));
         }
     }
 
@@ -1406,7 +1483,9 @@ async fn tool_canvas_present(
     sender_id: Option<&str>,
     external_url: Option<&str>,
 ) -> CarrierResult<String> {
-    let html = input["html"].as_str().ok_or(CarrierError::InvalidInput("Missing 'html' parameter".to_string()))?;
+    let html = input["html"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'html' parameter".to_string(),
+    ))?;
     let title = input["title"].as_str().unwrap_or("Canvas");
 
     // Use configured max from task-local (set by agent_loop from KernelConfig), or default 512KB.
@@ -1419,14 +1498,19 @@ async fn tool_canvas_present(
     let canvas_id = uuid::Uuid::new_v4().to_string();
 
     // Save to per-sender output directory
-    let (output_dir, rel_dir) = if let (Some(_root), Some(hd), Some(an)) = (workspace_root, home_dir, agent_name) {
-        let sid = sender_id.ok_or(CarrierError::Internal("Cannot save canvas: no sender context".to_string()))?;
-        let oid = owner_id.unwrap_or(sid);
-        let rel = types::config::sender_relative_path(oid, an, Some(sid), "output");
-        (hd.join(&rel), rel)
-    } else {
-        return Err(CarrierError::Internal("Cannot save canvas: no workspace".to_string()));
-    };
+    let (output_dir, rel_dir) =
+        if let (Some(_root), Some(hd), Some(an)) = (workspace_root, home_dir, agent_name) {
+            let sid = sender_id.ok_or(CarrierError::Internal(
+                "Cannot save canvas: no sender context".to_string(),
+            ))?;
+            let oid = owner_id.unwrap_or(sid);
+            let rel = types::config::sender_relative_path(oid, an, Some(sid), "output");
+            (hd.join(&rel), rel)
+        } else {
+            return Err(CarrierError::Internal(
+                "Cannot save canvas: no workspace".to_string(),
+            ));
+        };
     let _ = tokio::fs::create_dir_all(&output_dir).await;
 
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");

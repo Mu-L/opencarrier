@@ -4,9 +4,9 @@ use std::collections::HashMap;
 
 use tracing::{error, info, warn};
 
-use crate::kernel_handle::KernelHandle;
 use super::parse::parse_notify_markers;
 use super::types::{ChannelSendFn, NotifyTarget};
+use crate::kernel_handle::KernelHandle;
 
 /// Parse and dispatch `[NOTIFY:…]` markers. Returns the reply text with markers
 /// stripped. Pushes are fire-and-forget (`spawn_blocking`); failures are logged.

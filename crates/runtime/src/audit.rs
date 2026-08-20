@@ -362,7 +362,10 @@ mod tests {
 
         let result = log.verify_integrity();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("hash mismatch at seq 1"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("hash mismatch at seq 1"));
     }
 
     #[test]

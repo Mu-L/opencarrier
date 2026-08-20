@@ -50,16 +50,31 @@ impl ChunkStore {
                      lifecycle_status=EXCLUDED.lifecycle_status, \
                      created_at_ms=EXCLUDED.created_at_ms",
                 &[
-                    &c.id, &c.owner_id, &c.user_id, &c.agent_id, &sk, &c.source_id,
-                    &c.source_ref, &c.timestamp_ms, &c.time_range_start_ms, &c.time_range_end_ms,
-                    &c.tags_json, &c.content, &tc, &sq, &c.partial_message,
-                    &c.lifecycle_status, &c.created_at_ms,
+                    &c.id,
+                    &c.owner_id,
+                    &c.user_id,
+                    &c.agent_id,
+                    &sk,
+                    &c.source_id,
+                    &c.source_ref,
+                    &c.timestamp_ms,
+                    &c.time_range_start_ms,
+                    &c.time_range_end_ms,
+                    &c.tags_json,
+                    &c.content,
+                    &tc,
+                    &sq,
+                    &c.partial_message,
+                    &c.lifecycle_status,
+                    &c.created_at_ms,
                 ],
             )
             .await
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
         }
-        tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())
     }
 
@@ -117,12 +132,13 @@ impl ChunkStore {
         let ls = lifecycle_status.map(str::to_string);
         let lim = limit as i64;
 
-        let mut sql = "SELECT id, owner_id, user_id, agent_id, source_kind, source_id, source_ref, \
+        let mut sql =
+            "SELECT id, owner_id, user_id, agent_id, source_kind, source_id, source_ref, \
                        timestamp_ms, time_range_start_ms, time_range_end_ms, \
                        tags_json, content, token_count, seq_in_source, \
                        partial_message, lifecycle_status, created_at_ms \
                        FROM mem_tree_chunks WHERE owner_id=$1"
-            .to_string();
+                .to_string();
         let mut params: Vec<&(dyn ToSql + Sync)> = vec![&owner];
         let mut i = 2;
         if let Some(u) = &uid {
@@ -189,7 +205,9 @@ impl ChunkStore {
             .await
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
         }
-        tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())
     }
 
@@ -242,27 +260,57 @@ impl ChunkStore {
             _ => SourceKind::Chat,
         };
         Ok(Chunk {
-            id: row.try_get(0).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            owner_id: row.try_get(1).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            user_id: row.try_get(2).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            agent_id: row.try_get(3).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            id: row
+                .try_get(0)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            owner_id: row
+                .try_get(1)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            user_id: row
+                .try_get(2)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            agent_id: row
+                .try_get(3)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             source_kind,
-            source_id: row.try_get(5).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            source_ref: row.try_get(6).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            timestamp_ms: row.try_get(7).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            time_range_start_ms: row.try_get(8).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            time_range_end_ms: row.try_get(9).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            tags_json: row.try_get(10).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            content: row.try_get(11).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            source_id: row
+                .try_get(5)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            source_ref: row
+                .try_get(6)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            timestamp_ms: row
+                .try_get(7)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            time_range_start_ms: row
+                .try_get(8)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            time_range_end_ms: row
+                .try_get(9)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            tags_json: row
+                .try_get(10)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            content: row
+                .try_get(11)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             token_count: row
                 .try_get::<_, i32>(12)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as u32,
             seq_in_source: row
                 .try_get::<_, i32>(13)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
-            partial_message: row.try_get(14).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            lifecycle_status: row.try_get(15).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            created_at_ms: row.try_get(16).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as u32,
+            partial_message: row
+                .try_get(14)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            lifecycle_status: row
+                .try_get(15)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            created_at_ms: row
+                .try_get(16)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
         })
     }
 }
@@ -274,13 +322,20 @@ mod tests {
 
     async fn setup() -> Option<ChunkStore> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         Some(ChunkStore::new(pool))
     }
 
@@ -316,7 +371,10 @@ mod tests {
             }
         };
         let chunk = make_chunk("owner_1", "001", 0);
-        store.upsert_chunks(std::slice::from_ref(&chunk)).await.unwrap();
+        store
+            .upsert_chunks(std::slice::from_ref(&chunk))
+            .await
+            .unwrap();
         let got = store.get_chunk("owner_1", None, "chunk_001").await.unwrap();
         assert!(got.is_some());
         assert_eq!(got.unwrap().content, "Hello 001");
@@ -331,7 +389,11 @@ mod tests {
                 return;
             }
         };
-        assert!(store.get_chunk("owner_1", None, "nope").await.unwrap().is_none());
+        assert!(store
+            .get_chunk("owner_1", None, "nope")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -345,7 +407,11 @@ mod tests {
         };
         let chunk = make_chunk("owner_1", "001", 0);
         store.upsert_chunks(&[chunk]).await.unwrap();
-        assert!(store.get_chunk("owner_2", None, "chunk_001").await.unwrap().is_none());
+        assert!(store
+            .get_chunk("owner_2", None, "chunk_001")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -360,13 +426,29 @@ mod tests {
         let mut alice = make_chunk("owner_1", "alice", 0);
         alice.user_id = "alice".to_string();
         store.upsert_chunks(&[alice]).await.unwrap();
-        assert!(store.get_chunk("owner_1", Some("bob"), "chunk_alice").await.unwrap().is_none());
-        assert!(store.get_chunk("owner_1", Some("alice"), "chunk_alice").await.unwrap().is_some());
+        assert!(store
+            .get_chunk("owner_1", Some("bob"), "chunk_alice")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_chunk("owner_1", Some("alice"), "chunk_alice")
+            .await
+            .unwrap()
+            .is_some());
 
         let shared = make_chunk("owner_1", "shared", 0);
         store.upsert_chunks(&[shared]).await.unwrap();
-        assert!(store.get_chunk("owner_1", Some("alice"), "chunk_shared").await.unwrap().is_some());
-        assert!(store.get_chunk("owner_1", Some("bob"), "chunk_shared").await.unwrap().is_some());
+        assert!(store
+            .get_chunk("owner_1", Some("alice"), "chunk_shared")
+            .await
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_chunk("owner_1", Some("bob"), "chunk_shared")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
@@ -409,7 +491,11 @@ mod tests {
             .update_lifecycle("owner_1", "chunk_001", "admitted")
             .await
             .unwrap();
-        let got = store.get_chunk("owner_1", None, "chunk_001").await.unwrap().unwrap();
+        let got = store
+            .get_chunk("owner_1", None, "chunk_001")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got.lifecycle_status, "admitted");
     }
 
@@ -423,11 +509,26 @@ mod tests {
             }
         };
         store
-            .upsert_chunks(&[make_chunk("owner_1", "001", 0), make_chunk("owner_1", "002", 1)])
+            .upsert_chunks(&[
+                make_chunk("owner_1", "001", 0),
+                make_chunk("owner_1", "002", 1),
+            ])
             .await
             .unwrap();
         assert_eq!(store.count_chunks("owner_1", None).await.unwrap(), 2);
-        assert_eq!(store.count_chunks("owner_1", Some("admitted")).await.unwrap(), 2);
-        assert_eq!(store.count_chunks("owner_1", Some("pending_extraction")).await.unwrap(), 0);
+        assert_eq!(
+            store
+                .count_chunks("owner_1", Some("admitted"))
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            store
+                .count_chunks("owner_1", Some("pending_extraction"))
+                .await
+                .unwrap(),
+            0
+        );
     }
 }

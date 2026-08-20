@@ -4,10 +4,10 @@ use super::ToolModule;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
+use types::error::{CarrierError, CarrierResult};
+use types::tool::{PermissionLevel, ToolDefinition};
 
 // ---------------------------------------------------------------------------
 // Inter-agent tools
@@ -26,11 +26,9 @@ async fn tool_agent_send(
         .ok_or(CarrierError::InvalidInput(
             "Missing 'agent_id' parameter".to_string(),
         ))?;
-    let message = input["message"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput(
-            "Missing 'message' parameter".to_string(),
-        ))?;
+    let message = input["message"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'message' parameter".to_string(),
+    ))?;
 
     // Check + increment inter-agent call depth
     crate::tools::check_call_depth()?;
@@ -40,8 +38,16 @@ async fn tool_agent_send(
 
     crate::tool_runner::AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.send_to_agent(agent_id, message, sender_id, None, caller_agent_id, owner_id, None)
-                .await
+            kh.send_to_agent(
+                agent_id,
+                message,
+                sender_id,
+                None,
+                caller_agent_id,
+                owner_id,
+                None,
+            )
+            .await
         })
         .await
 }
@@ -194,7 +200,9 @@ impl ToolModule for AgentMgmtTools {
         let owner_id = ctx.owner_id;
 
         match name {
-            "agent_send" => Some(tool_agent_send(input, kernel, caller_agent_id, owner_id, sender_id).await),
+            "agent_send" => {
+                Some(tool_agent_send(input, kernel, caller_agent_id, owner_id, sender_id).await)
+            }
             "agent_spawn" => Some(tool_agent_spawn(input, kernel, caller_agent_id).await),
             "agent_list" => Some(tool_agent_list(kernel, caller_agent_id)),
             "agent_kill" => Some(tool_agent_kill(input, kernel, caller_agent_id)),

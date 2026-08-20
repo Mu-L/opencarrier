@@ -4,9 +4,8 @@
 //! receives bot message callbacks as JSON text frames, sends ACKs, and echoes keep-alive.
 
 use crate::api;
-use crate::token::AccessTokenCache;
 use crate::models::*;
-use types::plugin::{PluginContent, PluginMessage};
+use crate::token::AccessTokenCache;
 use channels_common::InboundDedup;
 use futures::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,13 +15,14 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
 use types::error::{CarrierError, CarrierResult};
+use types::plugin::{PluginContent, PluginMessage};
 
 const DEDUP_TTL: Duration = Duration::from_secs(60);
 const DEDUP_MAX_ENTRIES: usize = 10_000;
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 pub struct DingTalkWsClient {
-    bot_id: String,  // app_key (used as route key in PluginMessage)
+    bot_id: String, // app_key (used as route key in PluginMessage)
     token_cache: Arc<AccessTokenCache>,
     shutdown: Arc<AtomicBool>,
     dedup: InboundDedup,
@@ -92,12 +92,12 @@ impl DingTalkWsClient {
         )
         .await?;
 
-        let endpoint = gw
-            .endpoint
-            .ok_or_else(|| CarrierError::InvalidInput("Missing endpoint in gateway response".to_string()))?;
-        let ticket = gw
-            .ticket
-            .ok_or_else(|| CarrierError::InvalidInput("Missing ticket in gateway response".to_string()))?;
+        let endpoint = gw.endpoint.ok_or_else(|| {
+            CarrierError::InvalidInput("Missing endpoint in gateway response".to_string())
+        })?;
+        let ticket = gw.ticket.ok_or_else(|| {
+            CarrierError::InvalidInput("Missing ticket in gateway response".to_string())
+        })?;
 
         let ws_url = format!("{endpoint}?ticket={ticket}");
 
@@ -308,18 +308,33 @@ impl DingTalkWsClient {
                     .unwrap_or("")
                     .to_string();
                 if download_code.is_empty() {
-                    PluginContent::Image { url: String::new(), caption: None, data: None }
+                    PluginContent::Image {
+                        url: String::new(),
+                        caption: None,
+                        data: None,
+                    }
                 } else {
                     match self.download_media(&download_code).await {
                         Ok(raw_data) => {
                             let mime = types::media::detect_image_mime(&raw_data);
-                            let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &raw_data);
+                            let b64 = base64::Engine::encode(
+                                &base64::engine::general_purpose::STANDARD,
+                                &raw_data,
+                            );
                             let data_uri = format!("data:{mime};base64,{b64}");
-                            PluginContent::Image { url: data_uri, caption: None, data: Some(raw_data) }
+                            PluginContent::Image {
+                                url: data_uri,
+                                caption: None,
+                                data: Some(raw_data),
+                            }
                         }
                         Err(e) => {
                             warn!(tenant = %self.bot_id, download_code = %download_code, error = %e, "Failed to download image");
-                            PluginContent::Image { url: String::new(), caption: None, data: None }
+                            PluginContent::Image {
+                                url: String::new(),
+                                caption: None,
+                                data: None,
+                            }
                         }
                     }
                 }
@@ -351,7 +366,11 @@ impl DingTalkWsClient {
                 } else {
                     None
                 };
-                PluginContent::File { url: download_code, filename: file_name, data: file_data }
+                PluginContent::File {
+                    url: download_code,
+                    filename: file_name,
+                    data: file_data,
+                }
             }
             _ => {
                 info!(tenant = %self.bot_id, msg_type, "Ignoring unsupported message type");

@@ -248,7 +248,8 @@ mod tests {
     fn test_signal_token_count() {
         assert!((signal_token_count("") - 0.0).abs() < 0.01);
         assert!((signal_token_count("short") - 0.0).abs() < 0.01); // ~2 tokens, below 10
-        assert!((signal_token_count(&"hello ".repeat(1000)) - 1.0).abs() < 0.01); // ~250 tokens -> plateau
+        assert!((signal_token_count(&"hello ".repeat(1000)) - 1.0).abs() < 0.01);
+        // ~250 tokens -> plateau
     }
 
     #[test]
@@ -258,7 +259,8 @@ mod tests {
         assert!(signal_unique_words(repetitive) < 0.3);
 
         // Diverse
-        let diverse = "the quick brown fox jumps over the lazy dog and then some more words here we go";
+        let diverse =
+            "the quick brown fox jumps over the lazy dog and then some more words here we go";
         assert!(signal_unique_words(diverse) > 0.5);
 
         // Too few words

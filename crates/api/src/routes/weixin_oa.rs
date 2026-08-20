@@ -47,7 +47,10 @@ pub struct WechatSignParams {
 /// The session.json is the source of truth for the OA token (checkSign secret)
 /// and bind_agent. Delegates to the shared `wechat-oa` core loader — the same
 /// single reader the daemon and admin endpoints use.
-fn load_session(state: &Arc<AppState>, app_id: &str) -> Option<channel_weixin_oa::WeixinOaSessionFile> {
+fn load_session(
+    state: &Arc<AppState>,
+    app_id: &str,
+) -> Option<channel_weixin_oa::WeixinOaSessionFile> {
     wechat_oa::session::load_account(&state.kernel.config.home_dir, app_id)
 }
 
@@ -77,13 +80,19 @@ pub async fn weixin_oa_verify(
     ) {
         (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
         _ => {
-            return (StatusCode::BAD_REQUEST, "missing signature params".to_string());
+            return (
+                StatusCode::BAD_REQUEST,
+                "missing signature params".to_string(),
+            );
         }
     };
 
     if session.token.is_empty() {
         tracing::warn!(%app_id, "weixin-oa verify: token not configured in session.json");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "token not configured".to_string());
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "token not configured".to_string(),
+        );
     }
 
     if !check_sign(&session.token, &timestamp, &nonce, &signature) {
@@ -121,7 +130,11 @@ pub async fn weixin_oa_callback(
         tracing::warn!(%app_id, "weixin-oa callback: no token configured, rejecting");
         return (StatusCode::FORBIDDEN, "no token configured".to_string());
     }
-    if let (Some(sig), Some(ts), Some(nc)) = (params.signature.as_ref(), params.timestamp.as_ref(), params.nonce.as_ref()) {
+    if let (Some(sig), Some(ts), Some(nc)) = (
+        params.signature.as_ref(),
+        params.timestamp.as_ref(),
+        params.nonce.as_ref(),
+    ) {
         if !check_sign(&session.token, ts, nc, sig) {
             tracing::warn!(%app_id, "weixin-oa callback: signature mismatch");
             return (StatusCode::FORBIDDEN, "signature mismatch".to_string());
@@ -211,7 +224,11 @@ pub async fn weixin_oa_callback(
     // the highest-priority subscribe push_text rule wins.
     // Other hits (keyword any, subscribe+miniprogram) use the customer-service
     // API (keyword opens the 48h window; miniprogram can't be a passive XML).
-    let matched = match state.kernel.automation_rule_list("weixin-oa", &app_id).await {
+    let matched = match state
+        .kernel
+        .automation_rule_list("weixin-oa", &app_id)
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(%app_id, error=%e, "weixin-oa: automation_rule_list failed");
@@ -406,11 +423,20 @@ pub async fn weixin_oa_callback(
             let secret = session.app_secret.clone();
             let url_c = bind_url.clone();
             let openid = from_user.clone();
-            let event_unionid: Option<String> =
-                if !msg.unionid.is_empty() { Some(msg.unionid.clone()) } else { None };
+            let event_unionid: Option<String> = if !msg.unionid.is_empty() {
+                Some(msg.unionid.clone())
+            } else {
+                None
+            };
             match tokio::time::timeout(
                 Duration::from_millis(2000),
-                resolve_and_bind(&url_c, &app_id_c, &secret, &openid, event_unionid.as_deref()),
+                resolve_and_bind(
+                    &url_c,
+                    &app_id_c,
+                    &secret,
+                    &openid,
+                    event_unionid.as_deref(),
+                ),
             )
             .await
             {

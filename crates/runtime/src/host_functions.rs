@@ -7,10 +7,10 @@
 //! They receive `&GuestState` (not `&mut`) and return JSON values.
 
 use crate::sandbox::GuestState;
-use types::capability::{capability_matches, Capability};
 use serde_json::json;
 use std::path::{Component, Path};
 use tracing::debug;
+use types::capability::{capability_matches, Capability};
 
 /// Dispatch a host call to the appropriate handler.
 ///
@@ -634,12 +634,24 @@ mod tests {
     #[test]
     fn test_is_private_ip() {
         use std::net::IpAddr;
-        assert!(types::ssrf::is_private_ip(&"10.0.0.1".parse::<IpAddr>().unwrap()));
-        assert!(types::ssrf::is_private_ip(&"172.16.0.1".parse::<IpAddr>().unwrap()));
-        assert!(types::ssrf::is_private_ip(&"192.168.1.1".parse::<IpAddr>().unwrap()));
-        assert!(types::ssrf::is_private_ip(&"169.254.169.254".parse::<IpAddr>().unwrap()));
-        assert!(!types::ssrf::is_private_ip(&"8.8.8.8".parse::<IpAddr>().unwrap()));
-        assert!(!types::ssrf::is_private_ip(&"1.1.1.1".parse::<IpAddr>().unwrap()));
+        assert!(types::ssrf::is_private_ip(
+            &"10.0.0.1".parse::<IpAddr>().unwrap()
+        ));
+        assert!(types::ssrf::is_private_ip(
+            &"172.16.0.1".parse::<IpAddr>().unwrap()
+        ));
+        assert!(types::ssrf::is_private_ip(
+            &"192.168.1.1".parse::<IpAddr>().unwrap()
+        ));
+        assert!(types::ssrf::is_private_ip(
+            &"169.254.169.254".parse::<IpAddr>().unwrap()
+        ));
+        assert!(!types::ssrf::is_private_ip(
+            &"8.8.8.8".parse::<IpAddr>().unwrap()
+        ));
+        assert!(!types::ssrf::is_private_ip(
+            &"1.1.1.1".parse::<IpAddr>().unwrap()
+        ));
     }
 
     #[test]

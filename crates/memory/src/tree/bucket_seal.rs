@@ -60,7 +60,14 @@ impl BucketSealEngine {
         timestamp_ms: i64,
     ) -> CarrierResult<Vec<String>> {
         // 1. Push leaf into L0 buffer
-        self.append_to_buffer(owner_id, &tree.id, 0, chunk_id, token_count as i64, timestamp_ms)?;
+        self.append_to_buffer(
+            owner_id,
+            &tree.id,
+            0,
+            chunk_id,
+            token_count as i64,
+            timestamp_ms,
+        )?;
 
         // 2. Cascade seals upward
         self.cascade_seals(owner_id, tree, 0, false)
@@ -76,7 +83,14 @@ impl BucketSealEngine {
         token_count: u32,
         timestamp_ms: i64,
     ) -> CarrierResult<bool> {
-        self.append_to_buffer(owner_id, &tree.id, 0, chunk_id, token_count as i64, timestamp_ms)?;
+        self.append_to_buffer(
+            owner_id,
+            &tree.id,
+            0,
+            chunk_id,
+            token_count as i64,
+            timestamp_ms,
+        )?;
 
         let buf = self.get_or_create_buffer(owner_id, &tree.id, 0)?;
         Ok(should_seal(&buf))
@@ -148,10 +162,9 @@ impl BucketSealEngine {
         force_now: bool,
     ) -> CarrierResult<Vec<String>> {
         let mut sealed_ids: Vec<String> = Vec::new();
-        let mut level = start_level;
         let mut first_iteration = true;
 
-        for _ in 0..MAX_CASCADE_DEPTH {
+        for level in (start_level..).take(MAX_CASCADE_DEPTH as usize) {
             let buf = self.get_or_create_buffer(owner_id, &tree.id, level)?;
             let forced = first_iteration && force_now;
             first_iteration = false;
@@ -165,19 +178,13 @@ impl BucketSealEngine {
 
             let summary_id = self.seal_one_level(owner_id, tree, &buf)?;
             sealed_ids.push(summary_id);
-            level += 1;
         }
 
         Ok(sealed_ids)
     }
 
     /// Seal `buf` at `level` into one summary at `level + 1`.
-    fn seal_one_level(
-        &self,
-        owner_id: &str,
-        tree: &Tree,
-        buf: &Buffer,
-    ) -> CarrierResult<String> {
+    fn seal_one_level(&self, owner_id: &str, tree: &Tree, buf: &Buffer) -> CarrierResult<String> {
         let level = buf.level;
         let target_level = level + 1;
 
@@ -191,9 +198,21 @@ impl BucketSealEngine {
         }
 
         // Compute envelope across children
-        let time_range_start_ms = inputs.iter().map(|i| i.time_range_start_ms).min().unwrap_or(0);
-        let time_range_end_ms = inputs.iter().map(|i| i.time_range_end_ms).max().unwrap_or(0);
-        let score = inputs.iter().map(|i| i.score).fold(f32::NEG_INFINITY, f32::max).max(0.0);
+        let time_range_start_ms = inputs
+            .iter()
+            .map(|i| i.time_range_start_ms)
+            .min()
+            .unwrap_or(0);
+        let time_range_end_ms = inputs
+            .iter()
+            .map(|i| i.time_range_end_ms)
+            .max()
+            .unwrap_or(0);
+        let score = inputs
+            .iter()
+            .map(|i| i.score)
+            .fold(f32::NEG_INFINITY, f32::max)
+            .max(0.0);
 
         // Run summariser
         let ctx = SummaryContext {
@@ -251,12 +270,8 @@ impl BucketSealEngine {
 
         // Update tree max_level if needed
         if target_level > tree.max_level {
-            self.tree_store.update_tree_after_seal(
-                owner_id,
-                &tree.id,
-                target_level,
-                now_ms,
-            )?;
+            self.tree_store
+                .update_tree_after_seal(owner_id, &tree.id, target_level, now_ms)?;
         }
 
         tracing::info!(
@@ -303,7 +318,12 @@ impl BucketSealEngine {
             // Try to read full body from disk, fall back to SQLite content
             let body = self
                 .content_store
-                .read_chunk_body(owner_id, chunk.source_kind.as_str(), &chunk.source_id, &chunk.id)
+                .read_chunk_body(
+                    owner_id,
+                    chunk.source_kind.as_str(),
+                    &chunk.source_id,
+                    &chunk.id,
+                )
                 .unwrap_or_else(|_| chunk.content.clone());
 
             out.push(SummaryInput {
@@ -359,8 +379,7 @@ pub fn should_seal(buf: &Buffer) -> bool {
         return false;
     }
     if buf.level == 0 {
-        buf.token_sum >= INPUT_TOKEN_BUDGET as i64
-            || (buf.item_ids.len() as u32) >= SUMMARY_FANOUT
+        buf.token_sum >= INPUT_TOKEN_BUDGET as i64 || (buf.item_ids.len() as u32) >= SUMMARY_FANOUT
     } else {
         (buf.item_ids.len() as u32) >= SUMMARY_FANOUT
     }
@@ -370,10 +389,10 @@ pub fn should_seal(buf: &Buffer) -> bool {
 mod tests {
     use super::*;
     use crate::migration::run_migrations;
-    use types::memory_tree::TreeKind;
     use crate::tree::summariser::inert::InertSummariser;
     use crate::tree::types::SourceKind;
     use tempfile::TempDir;
+    use types::memory_tree::TreeKind;
 
     fn setup() -> (BucketSealEngine, Arc<Mutex<Connection>>, TempDir) {
         let conn = Connection::open_in_memory().unwrap();
@@ -503,7 +522,13 @@ mod tests {
             let chunk_id = format!("chunk_{i}");
             insert_chunk(&conn, "owner_1", &chunk_id, INPUT_TOKEN_BUDGET / 10 + 1);
             engine
-                .append_leaf("owner_1", &tree, &chunk_id, INPUT_TOKEN_BUDGET / 10 + 1, 1000 + i as i64)
+                .append_leaf(
+                    "owner_1",
+                    &tree,
+                    &chunk_id,
+                    INPUT_TOKEN_BUDGET / 10 + 1,
+                    1000 + i as i64,
+                )
                 .unwrap();
         }
 
@@ -529,9 +554,7 @@ mod tests {
             .unwrap();
 
         // Should not duplicate in buffer
-        let buf = engine
-            .get_or_create_buffer("owner_1", &tree.id, 0)
-            .unwrap();
+        let buf = engine.get_or_create_buffer("owner_1", &tree.id, 0).unwrap();
         assert_eq!(buf.item_ids.len(), 1);
     }
 
@@ -547,9 +570,7 @@ mod tests {
             .unwrap();
 
         // Force seal
-        let sealed = engine
-            .cascade_all_from("owner_1", &tree, 0, true)
-            .unwrap();
+        let sealed = engine.cascade_all_from("owner_1", &tree, 0, true).unwrap();
         assert_eq!(sealed.len(), 1);
 
         // Verify L1 summary created

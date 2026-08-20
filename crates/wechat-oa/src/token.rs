@@ -116,7 +116,12 @@ pub fn invalidate(app_id: &str) {
 mod tests {
     use super::*;
 
-    fn cache_with(app_id: &str, secret: &str, token: &str, ttl: Duration) -> DashMap<String, CachedToken> {
+    fn cache_with(
+        app_id: &str,
+        secret: &str,
+        token: &str,
+        ttl: Duration,
+    ) -> DashMap<String, CachedToken> {
         let m = DashMap::new();
         m.insert(
             app_id.to_string(),
@@ -141,7 +146,10 @@ mod tests {
     #[test]
     fn miss_when_expired() {
         let m = cache_with("wxAAA", "s1", "TOK", Duration::from_secs(0));
-        assert_eq!(cached_token(&m, "wxAAA", hash_secret("s1"), Instant::now()), None);
+        assert_eq!(
+            cached_token(&m, "wxAAA", hash_secret("s1"), Instant::now()),
+            None
+        );
     }
 
     /// A rotated secret is an automatic miss — the cached token was issued

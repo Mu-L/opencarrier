@@ -1,12 +1,12 @@
 //! Agent scheduler — manages agent execution and resource tracking.
 
-use types::agent::{AgentId, ResourceQuota};
-use types::error::{CarrierError, CarrierResult};
-use types::message::TokenUsage;
 use dashmap::DashMap;
 use std::time::Instant;
 use tokio::task::JoinHandle;
 use tracing::debug;
+use types::agent::{AgentId, ResourceQuota};
+use types::error::{CarrierError, CarrierResult};
+use types::message::TokenUsage;
 
 /// Tracks resource usage for an agent with a rolling hourly window.
 #[derive(Debug)]

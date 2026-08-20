@@ -10,9 +10,9 @@
 //! - Consecutive same-role messages (Anthropic API requires alternation)
 //! - Oversized or potentially malicious tool result content
 
-use types::message::{ContentBlock, Message, MessageContent, Role};
 use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn};
+use types::message::{ContentBlock, Message, MessageContent, Role};
 
 /// Statistics from a repair operation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -228,7 +228,7 @@ fn insert_synthetic_results(messages: &mut Vec<Message>) -> usize {
 
     // Insert in reverse order so indices stay valid
     let mut sorted: Vec<(usize, Vec<ContentBlock>)> = grouped.into_iter().collect();
-    sorted.sort_by(|a, b| b.0.cmp(&a.0));
+    sorted.sort_by_key(|e| std::cmp::Reverse(e.0));
 
     for (assistant_idx, blocks) in sorted {
         let insert_pos = assistant_idx + 1;

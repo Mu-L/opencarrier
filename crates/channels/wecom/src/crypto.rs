@@ -34,7 +34,8 @@ pub(crate) fn decrypt_aes_cbc(key: &[u8], encrypted_base64: &str) -> CarrierResu
     let pad = decrypted
         .last()
         .copied()
-        .ok_or_else(|| CarrierError::Internal("decrypted payload is empty".to_string()))? as usize;
+        .ok_or_else(|| CarrierError::Internal("decrypted payload is empty".to_string()))?
+        as usize;
 
     if pad == 0 || pad > 32 || decrypted.len() < pad {
         return Err(CarrierError::Internal(format!(

@@ -6,6 +6,6 @@
 #![allow(unused_imports)]
 
 pub(crate) use crate::flow::{
-    FlowOutcome, MapContext, MapOutcome, ResumeState, FLOW_DEPTH, FAILURE_CANCEL_KEYWORDS,
+    FlowOutcome, MapContext, MapOutcome, ResumeState, FAILURE_CANCEL_KEYWORDS, FLOW_DEPTH,
     MAX_FLOW_DEPTH,
 };

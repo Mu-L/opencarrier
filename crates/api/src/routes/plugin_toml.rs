@@ -23,7 +23,9 @@ pub const CHANNEL_FIELD_MAX_LEN: usize = 512;
 pub fn channel_validate_field(value: &str, field_name: &str) -> CarrierResult<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(CarrierError::InvalidInput(format!("{field_name} is required")));
+        return Err(CarrierError::InvalidInput(format!(
+            "{field_name} is required"
+        )));
     }
     if trimmed.len() > CHANNEL_FIELD_MAX_LEN {
         return Err(CarrierError::InvalidInput(format!(
@@ -94,7 +96,8 @@ pub fn read_toml(path: &std::path::Path) -> CarrierResult<toml::Value> {
 
 /// Serialize a TOML value and write it atomically.
 pub fn write_toml(path: &std::path::Path, doc: &toml::Value) -> CarrierResult<()> {
-    let content = toml::to_string_pretty(doc)
-        .map_err(|e| CarrierError::Serialization(format!("Failed to serialize plugin config: {e}")))?;
+    let content = toml::to_string_pretty(doc).map_err(|e| {
+        CarrierError::Serialization(format!("Failed to serialize plugin config: {e}"))
+    })?;
     atomic_write(path, &content).map_err(CarrierError::Io)
 }

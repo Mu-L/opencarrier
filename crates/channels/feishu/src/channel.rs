@@ -6,13 +6,13 @@
 
 use crate::token::BotTokenCache;
 use crate::ws::FeishuWsClient;
-use types::channel::Channel;
-use types::error::{CarrierError, CarrierResult};
-use types::plugin::PluginMessage;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::info;
+use types::channel::Channel;
+use types::error::{CarrierError, CarrierResult};
+use types::plugin::PluginMessage;
 
 /// Channel adapter for a single Feishu tenant (one app_id).
 pub struct FeishuChannel {
@@ -64,7 +64,9 @@ impl Channel for FeishuChannel {
             .spawn(move || {
                 run_ws_loop(&bot_name, app_id, token_cache, shutdown, sender);
             })
-            .map_err(|e| CarrierError::Internal(format!("Failed to spawn Feishu WS thread: {e}")))?;
+            .map_err(|e| {
+                CarrierError::Internal(format!("Failed to spawn Feishu WS thread: {e}"))
+            })?;
 
         self.thread_handle = Some(handle);
         info!(tenant = %log_name, "FeishuChannel started");
@@ -85,9 +87,7 @@ impl Channel for FeishuChannel {
         let user_id = user_id.to_string();
 
         types::channel::block_on_detached(async move {
-            let token = token_cache
-                .get_token()
-                .await?;
+            let token = token_cache.get_token().await?;
             let http = token_cache.http().clone();
             let base = token_cache.api_base().to_string();
             let resp = crate::api::send_message(

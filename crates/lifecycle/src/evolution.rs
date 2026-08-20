@@ -192,7 +192,12 @@ pub fn apply_evolution(
         let is_private = candidate.scope == "private";
         let target_workspace = if is_private {
             if let (Some(oid), Some(hd)) = (owner_id.or(sender_id), home_dir) {
-                Some(types::config::sender_data_dir(hd, oid, &extract_agent_name(workspace), sender_id))
+                Some(types::config::sender_data_dir(
+                    hd,
+                    oid,
+                    &extract_agent_name(workspace),
+                    sender_id,
+                ))
             } else {
                 None
             }
@@ -230,7 +235,12 @@ pub fn apply_evolution(
         // Also update private MEMORY.md if we wrote private knowledge
         if analysis.knowledge.iter().any(|k| k.scope == "private") {
             if let (Some(oid), Some(hd)) = (owner_id.or(sender_id), home_dir) {
-                let sender_dir = types::config::sender_data_dir(hd, oid, &extract_agent_name(workspace), sender_id);
+                let sender_dir = types::config::sender_data_dir(
+                    hd,
+                    oid,
+                    &extract_agent_name(workspace),
+                    sender_id,
+                );
                 if let Err(e) = update_private_memory_index(&sender_dir) {
                     tracing::warn!(error = %e, "Evolution: failed to update private memory index");
                 }
@@ -342,10 +352,7 @@ pub fn update_memory_index(workspace: &Path) -> Result<()> {
 
     let preserved = extract_preserved_sections(&existing);
 
-    let mut lines = vec![
-        "# 知识索引".to_string(),
-        String::new(),
-    ];
+    let mut lines = vec!["# 知识索引".to_string(), String::new()];
 
     // Preserved: 技能 section (V3 format)
     if let Some(ref skills) = preserved.skills {
@@ -793,8 +800,7 @@ mod tests {
         assert_eq!(saved.len(), 1, "should append, not skip");
 
         // File should have dual-layer format: compiled truth preserved + timeline appended
-        let content =
-            fs::read_to_string(workspace.join("knowledge/test-knowledge.md")).unwrap();
+        let content = fs::read_to_string(workspace.join("knowledge/test-knowledge.md")).unwrap();
         let (compiled, timeline) = split_dual_layer(&content);
         assert!(
             compiled.contains("original"),

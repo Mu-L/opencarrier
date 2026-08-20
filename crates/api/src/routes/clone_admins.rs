@@ -23,7 +23,12 @@ pub async fn list_clone_admins(
 ) -> impl IntoResponse {
     let ws = match find_workspace(&state, &name) {
         Some(ws) => ws,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Agent not found"}))),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Agent not found"})),
+            )
+        }
     };
 
     let admins = admin_store::read_admins(&ws);
@@ -38,19 +43,30 @@ pub async fn approve_clone_admin(
 ) -> impl IntoResponse {
     let ws = match find_workspace(&state, &name) {
         Some(ws) => ws,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Agent not found"}))),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Agent not found"})),
+            )
+        }
     };
 
     let sender_id = match body["sender_id"].as_str() {
         Some(id) => id.to_string(),
-        None => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Missing sender_id"}))),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Missing sender_id"})),
+            )
+        }
     };
 
     match admin_store::approve(&ws, &sender_id) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(admin_store::AdminError::NotFoundInPending) => {
-            (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not found in pending list"})))
-        }
+        Err(admin_store::AdminError::NotFoundInPending) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Not found in pending list"})),
+        ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to approve: {e}")})),
@@ -65,17 +81,24 @@ pub async fn revoke_clone_admin(
 ) -> impl IntoResponse {
     let ws = match find_workspace(&state, &name) {
         Some(ws) => ws,
-        None => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Agent not found"}))),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Agent not found"})),
+            )
+        }
     };
 
     match admin_store::revoke(&ws, &sender_id) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(admin_store::AdminError::IsCreator) => {
-            (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Cannot revoke creator"})))
-        }
-        Err(admin_store::AdminError::NotFoundInAdmins) => {
-            (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Admin not found"})))
-        }
+        Err(admin_store::AdminError::IsCreator) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Cannot revoke creator"})),
+        ),
+        Err(admin_store::AdminError::NotFoundInAdmins) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Admin not found"})),
+        ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to revoke: {e}")})),
@@ -85,7 +108,16 @@ pub async fn revoke_clone_admin(
 
 pub fn router() -> axum::Router<Arc<AppState>> {
     axum::Router::new()
-        .route("/api/clones/{name}/admins", axum::routing::get(list_clone_admins))
-        .route("/api/clones/{name}/admins/approve", axum::routing::post(approve_clone_admin))
-        .route("/api/clones/{name}/admins/{sender_id}", axum::routing::delete(revoke_clone_admin))
+        .route(
+            "/api/clones/{name}/admins",
+            axum::routing::get(list_clone_admins),
+        )
+        .route(
+            "/api/clones/{name}/admins/approve",
+            axum::routing::post(approve_clone_admin),
+        )
+        .route(
+            "/api/clones/{name}/admins/{sender_id}",
+            axum::routing::delete(revoke_clone_admin),
+        )
 }

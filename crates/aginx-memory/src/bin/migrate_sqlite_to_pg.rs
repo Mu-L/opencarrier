@@ -31,7 +31,9 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!(pg = %args.pg, "connecting PG");
     let (mut pg, conn) = tokio_postgres::connect(&args.pg, NoTls).await?;
-    tokio::spawn(async move { let _ = conn.await; });
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
 
     // Ensure the aginxMemory schema exists (idempotent).
     aginx_memory::migrations::runner()
@@ -61,7 +63,10 @@ async fn main() -> anyhow::Result<()> {
         .execute("DELETE FROM mem_tree_jobs", &[])
         .await
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
-    tracing::info!(cleared, "cleared mem_tree_jobs (historical chunks already in mem_tree_chunks)");
+    tracing::info!(
+        cleared,
+        "cleared mem_tree_jobs (historical chunks already in mem_tree_chunks)"
+    );
 
     tracing::info!("migration complete");
     Ok(())
@@ -74,7 +79,9 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> CarrierRe
         let entry = entry.map_err(|e| CarrierError::Internal(e.to_string()))?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
-        let ft = entry.file_type().map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let ft = entry
+            .file_type()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
         if ft.is_dir() {
             copy_dir_recursive(&from, &to)?;
         } else {
@@ -98,7 +105,9 @@ fn parse_args() -> anyhow::Result<Args> {
     let mut content_dst = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
-        let v = it.next().ok_or_else(|| anyhow::anyhow!("missing value for {a}"))?;
+        let v = it
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("missing value for {a}"))?;
         match a.as_str() {
             "--sqlite" => sqlite = Some(PathBuf::from(v)),
             "--pg" => pg = Some(v),

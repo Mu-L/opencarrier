@@ -35,7 +35,11 @@ pub async fn drill_down(
         Some(s) => (s.child_ids.clone(), Some(s.tree_id.clone())),
         None => {
             // It's a leaf - no children
-            if chunk_store.get_chunk(owner_id, user_id, node_id).await?.is_some() {
+            if chunk_store
+                .get_chunk(owner_id, user_id, node_id)
+                .await?
+                .is_some()
+            {
                 return Ok(Vec::new());
             }
             return Ok(Vec::new());
@@ -136,13 +140,20 @@ mod tests {
 
     async fn setup() -> Option<(Pool, TempDir)> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         Some((pool, TempDir::new().ok()?))
     }
 
@@ -155,7 +166,9 @@ mod tests {
                 return;
             }
         };
-        let result = drill_down(&pool, "owner_1", None, "nonexistent", 0, None).await.unwrap();
+        let result = drill_down(&pool, "owner_1", None, "nonexistent", 0, None)
+            .await
+            .unwrap();
         assert!(result.is_empty());
     }
 
@@ -168,7 +181,9 @@ mod tests {
                 return;
             }
         };
-        let result = drill_down(&pool, "owner_1", None, "nonexistent", 1, None).await.unwrap();
+        let result = drill_down(&pool, "owner_1", None, "nonexistent", 1, None)
+            .await
+            .unwrap();
         assert!(result.is_empty());
     }
 
@@ -212,19 +227,42 @@ mod tests {
             chunk_store.upsert_chunks(&[c]).await.unwrap();
         }
 
-        let seal_engine = BucketSealEngine::new(pool.clone(), dir.path().to_path_buf(), Arc::new(InertSummariser));
+        let seal_engine = BucketSealEngine::new(
+            pool.clone(),
+            dir.path().to_path_buf(),
+            Arc::new(InertSummariser),
+        );
         for i in 0..10 {
             seal_engine
-                .append_to_buffer("owner_1", &tree.id, 0, &format!("chunk_dd_{i}"), 6000, 1_700_000_000_000)
+                .append_to_buffer(
+                    "owner_1",
+                    &tree.id,
+                    0,
+                    &format!("chunk_dd_{i}"),
+                    6000,
+                    1_700_000_000_000,
+                )
                 .await
                 .unwrap();
         }
-        seal_engine.cascade_seals("owner_1", &tree, 0, false).await.unwrap();
+        seal_engine
+            .cascade_seals("owner_1", &tree, 0, false)
+            .await
+            .unwrap();
 
-        let refreshed = tree_store.get_tree("owner_1", None, &tree.id).await.unwrap().unwrap();
+        let refreshed = tree_store
+            .get_tree("owner_1", None, &tree.id)
+            .await
+            .unwrap()
+            .unwrap();
         let root_id = refreshed.root_id.unwrap();
 
-        let result = drill_down(&pool, "owner_1", None, &root_id, 1, None).await.unwrap();
-        assert!(!result.is_empty(), "drill_down from sealed L1 should return leaf children");
+        let result = drill_down(&pool, "owner_1", None, &root_id, 1, None)
+            .await
+            .unwrap();
+        assert!(
+            !result.is_empty(),
+            "drill_down from sealed L1 should return leaf children"
+        );
     }
 }

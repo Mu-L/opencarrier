@@ -75,7 +75,9 @@ impl WakePayload {
     /// - `text` must not contain control characters other than newline.
     pub fn validate(&self) -> CarrierResult<()> {
         if self.text.is_empty() {
-            return Err(CarrierError::InvalidInput("text must not be empty".to_string()));
+            return Err(CarrierError::InvalidInput(
+                "text must not be empty".to_string(),
+            ));
         }
         if self.text.len() > MAX_WAKE_TEXT {
             return Err(CarrierError::InvalidInput(format!(
@@ -104,7 +106,9 @@ impl AgentHookPayload {
     /// - `channel`, if present, must not exceed 64 characters.
     pub fn validate(&self) -> CarrierResult<()> {
         if self.message.is_empty() {
-            return Err(CarrierError::InvalidInput("message must not be empty".to_string()));
+            return Err(CarrierError::InvalidInput(
+                "message must not be empty".to_string(),
+            ));
         }
         if self.message.len() > MAX_AGENT_MESSAGE {
             return Err(CarrierError::InvalidInput(format!(

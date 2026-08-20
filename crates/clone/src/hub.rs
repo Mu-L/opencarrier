@@ -234,18 +234,10 @@ pub async fn search_templates_json(
 }
 
 /// Get a single template's detail from Hub.
-pub async fn get_template(
-    hub_url: &str,
-    api_key: &str,
-    name: &str,
-) -> Result<serde_json::Value> {
+pub async fn get_template(hub_url: &str, api_key: &str, name: &str) -> Result<serde_json::Value> {
     validate_hub_url(hub_url)?;
     let base = hub_url.trim_end_matches('/');
-    let url = format!(
-        "{}/api/templates/{}",
-        base,
-        urlencoding::encode(name)
-    );
+    let url = format!("{}/api/templates/{}", base, urlencoding::encode(name));
 
     let resp = hub_get(&url, api_key)
         .send()
@@ -290,8 +282,7 @@ pub async fn install_template(
 
     // hub_template_id = template name (name-based Hub API)
     let hub_id = hub_template_key(name, None);
-    let manifest =
-        crate::build_manifest_from_workspace(workspace_dir, name, Some(hub_id))?;
+    let manifest = crate::build_manifest_from_workspace(workspace_dir, name, Some(hub_id))?;
     let toml_str = toml::to_string_pretty(&manifest).context("Failed to serialize agent.toml")?;
     std::fs::write(workspace_dir.join("agent.toml"), toml_str)?;
 
@@ -327,8 +318,7 @@ pub async fn fetch_dup_manifest(
         let body = resp.text().await.unwrap_or_default();
         bail!("拉取 manifest 失败 {}: {} - {}", name, status, body);
     }
-    let manifest: crate::manifest::Manifest =
-        resp.json().await.context("解析 manifest 失败")?;
+    let manifest: crate::manifest::Manifest = resp.json().await.context("解析 manifest 失败")?;
     Ok(manifest)
 }
 
@@ -380,8 +370,7 @@ pub async fn fetch_dup_files(
     std::collections::BTreeMap<String, Vec<u8>>,
 )> {
     let manifest = fetch_dup_manifest(hub_url, api_key, name, version).await?;
-    let mut files: std::collections::BTreeMap<String, Vec<u8>> =
-        std::collections::BTreeMap::new();
+    let mut files: std::collections::BTreeMap<String, Vec<u8>> = std::collections::BTreeMap::new();
     for path in manifest.files.keys() {
         let bytes = fetch_dup_file(hub_url, api_key, name, path, version).await?;
         files.insert(path.clone(), bytes);
@@ -429,7 +418,11 @@ pub async fn push_dup_files(
     }
 
     let total_kb = files.values().map(|b| b.len()).sum::<usize>() as f64 / 1024.0;
-    tracing::info!("正在推送到 Hub 文件级 ({} files / {:.1} KB)...", files.len(), total_kb);
+    tracing::info!(
+        "正在推送到 Hub 文件级 ({} files / {:.1} KB)...",
+        files.len(),
+        total_kb
+    );
 
     let resp = hub_post(&url, api_key)
         .json(&payload)
@@ -677,10 +670,7 @@ pub async fn download_mcp_server(
 // === Brain Config ===
 
 /// Fetch brain configuration from Hub.
-pub async fn fetch_brain_config(
-    hub_url: &str,
-    api_key: &str,
-) -> Result<serde_json::Value> {
+pub async fn fetch_brain_config(hub_url: &str, api_key: &str) -> Result<serde_json::Value> {
     validate_hub_url(hub_url)?;
     let base = hub_url.trim_end_matches('/');
     let url = format!("{}/api/brain/config", base);

@@ -223,13 +223,45 @@ mod tests {
         // list_by_app returns ALL rules (enabled+disabled); the callback filters
         // enabled in Rust so the admin `list` tool can see disabled rules too.
         let store = test_store();
-        store.upsert(&rule("a", "app1", TriggerKind::Keyword, TaskKind::PushText, 5, true))
+        store
+            .upsert(&rule(
+                "a",
+                "app1",
+                TriggerKind::Keyword,
+                TaskKind::PushText,
+                5,
+                true,
+            ))
             .unwrap();
-        store.upsert(&rule("b", "app1", TriggerKind::Subscribe, TaskKind::PushText, 10, true))
+        store
+            .upsert(&rule(
+                "b",
+                "app1",
+                TriggerKind::Subscribe,
+                TaskKind::PushText,
+                10,
+                true,
+            ))
             .unwrap();
-        store.upsert(&rule("c", "app1", TriggerKind::Keyword, TaskKind::PushText, 1, false))
+        store
+            .upsert(&rule(
+                "c",
+                "app1",
+                TriggerKind::Keyword,
+                TaskKind::PushText,
+                1,
+                false,
+            ))
             .unwrap();
-        store.upsert(&rule("d", "app2", TriggerKind::Subscribe, TaskKind::PushText, 100, true))
+        store
+            .upsert(&rule(
+                "d",
+                "app2",
+                TriggerKind::Subscribe,
+                TaskKind::PushText,
+                100,
+                true,
+            ))
             .unwrap();
 
         let rules = store.list_by_app("weixin-oa", "app1").unwrap();
@@ -242,13 +274,26 @@ mod tests {
     #[test]
     fn upsert_updates_existing_preserving_created_at() {
         let store = test_store();
-        let mut first = rule("a", "app1", TriggerKind::Keyword, TaskKind::PushText, 0, true);
+        let mut first = rule(
+            "a",
+            "app1",
+            TriggerKind::Keyword,
+            TaskKind::PushText,
+            0,
+            true,
+        );
         first.created_at = "ORIGINAL".to_string();
         store.upsert(&first).unwrap();
 
         // Update: change fields, attempt to overwrite created_at (must be ignored).
-        let mut updated =
-            rule("a", "app1", TriggerKind::Subscribe, TaskKind::PushMiniprogram, 5, true);
+        let mut updated = rule(
+            "a",
+            "app1",
+            TriggerKind::Subscribe,
+            TaskKind::PushMiniprogram,
+            5,
+            true,
+        );
         updated.created_at = "SHOULD_BE_IGNORED".to_string();
         updated.updated_at = "NEW".to_string();
         store.upsert(&updated).unwrap();
@@ -266,7 +311,14 @@ mod tests {
     fn delete_removes_rule() {
         let store = test_store();
         store
-            .upsert(&rule("a", "app1", TriggerKind::Subscribe, TaskKind::PushText, 0, true))
+            .upsert(&rule(
+                "a",
+                "app1",
+                TriggerKind::Subscribe,
+                TaskKind::PushText,
+                0,
+                true,
+            ))
             .unwrap();
         store.delete("a").unwrap();
         assert!(store.list_by_app("weixin-oa", "app1").unwrap().is_empty());

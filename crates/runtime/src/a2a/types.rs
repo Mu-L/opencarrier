@@ -112,7 +112,9 @@ pub struct A2aMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum A2aPart {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     File {
         name: String,
         mime_type: String,

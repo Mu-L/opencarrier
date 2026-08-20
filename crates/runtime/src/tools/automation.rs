@@ -13,10 +13,10 @@ use super::ToolModule;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
+use serde_json::Value;
 use types::automation::{AutomationRule, TaskKind, TriggerKind};
 use types::error::{CarrierError, CarrierResult};
 use types::tool::{PermissionLevel, ToolDefinition};
-use serde_json::Value;
 
 pub struct AutomationRulesTools;
 
@@ -124,10 +124,10 @@ impl ToolModule for AutomationRulesTools {
 
     fn permission_level(&self, tool_name: &str) -> PermissionLevel {
         match tool_name {
-            "automation_rule_list" | "automation_rule_upsert" | "automation_rule_delete"
-            | "message_push" => {
-                PermissionLevel::Write
-            }
+            "automation_rule_list"
+            | "automation_rule_upsert"
+            | "automation_rule_delete"
+            | "message_push" => PermissionLevel::Write,
             _ => PermissionLevel::Dangerous,
         }
     }
@@ -284,8 +284,7 @@ async fn tool_rule_upsert(
             // thumb_media_id alone is invalid in wecom's media library), and
             // avoids the divergent validation the hand-written parser had.
             let content = build_content_descriptor(input)?;
-            serde_json::to_value(content)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+            serde_json::to_value(content).map_err(|e| CarrierError::Serialization(e.to_string()))?
         }
     };
 
@@ -334,11 +333,7 @@ async fn tool_rule_delete(
 /// (only text messages arrive), cannot deliver miniprogram cards, and the
 /// bridge gate implements keyword → push_text/push only. Reject at write time
 /// so misconfigured rules never silently no-op in production.
-fn validate_weixin_scope(
-    channel: &str,
-    trigger: TriggerKind,
-    task: TaskKind,
-) -> CarrierResult<()> {
+fn validate_weixin_scope(channel: &str, trigger: TriggerKind, task: TaskKind) -> CarrierResult<()> {
     if channel != "weixin" {
         return Ok(());
     }
@@ -356,9 +351,7 @@ fn validate_weixin_scope(
 }
 
 /// Build a `ContentDescriptor` from tool input fields (text or miniprogram).
-fn build_content_descriptor(
-    input: &Value,
-) -> CarrierResult<types::content::ContentDescriptor> {
+fn build_content_descriptor(input: &Value) -> CarrierResult<types::content::ContentDescriptor> {
     use types::content::{ContentDescriptor, MiniprogramContent};
 
     if let Some(text) = input["text"].as_str() {
@@ -368,15 +361,15 @@ fn build_content_descriptor(
         });
     }
     if let Some(mp) = input.get("miniprogram") {
-        let appid = mp["appid"].as_str().ok_or_else(|| {
-            CarrierError::InvalidInput("miniprogram.appid required".to_string())
-        })?;
+        let appid = mp["appid"]
+            .as_str()
+            .ok_or_else(|| CarrierError::InvalidInput("miniprogram.appid required".to_string()))?;
         let pagepath = mp["pagepath"].as_str().ok_or_else(|| {
             CarrierError::InvalidInput("miniprogram.pagepath required".to_string())
         })?;
-        let title = mp["title"].as_str().ok_or_else(|| {
-            CarrierError::InvalidInput("miniprogram.title required".to_string())
-        })?;
+        let title = mp["title"]
+            .as_str()
+            .ok_or_else(|| CarrierError::InvalidInput("miniprogram.title required".to_string()))?;
         let thumb_media_id = mp["thumb_media_id"].as_str().map(String::from);
         let thumb_url = mp["thumb_url"].as_str().map(String::from);
         return Ok(ContentDescriptor {
@@ -443,14 +436,28 @@ mod tests {
         assert!(validate_weixin_scope("weixin", TriggerKind::Keyword, TaskKind::PushText).is_ok());
         assert!(validate_weixin_scope("weixin", TriggerKind::Keyword, TaskKind::Push).is_ok());
         // Rejected triggers: iLink has no event surface.
-        assert!(validate_weixin_scope("weixin", TriggerKind::Subscribe, TaskKind::PushText).is_err());
-        assert!(validate_weixin_scope("weixin", TriggerKind::MenuClick, TaskKind::PushText).is_err());
+        assert!(
+            validate_weixin_scope("weixin", TriggerKind::Subscribe, TaskKind::PushText).is_err()
+        );
+        assert!(
+            validate_weixin_scope("weixin", TriggerKind::MenuClick, TaskKind::PushText).is_err()
+        );
         assert!(validate_weixin_scope("weixin", TriggerKind::Scan, TaskKind::PushText).is_err());
         // Rejected tasks: no miniprogram cards, no notify_admin on iLink.
-        assert!(validate_weixin_scope("weixin", TriggerKind::Keyword, TaskKind::PushMiniprogram).is_err());
-        assert!(validate_weixin_scope("weixin", TriggerKind::Keyword, TaskKind::NotifyAdmin).is_err());
+        assert!(
+            validate_weixin_scope("weixin", TriggerKind::Keyword, TaskKind::PushMiniprogram)
+                .is_err()
+        );
+        assert!(
+            validate_weixin_scope("weixin", TriggerKind::Keyword, TaskKind::NotifyAdmin).is_err()
+        );
         // Other channels unrestricted.
-        assert!(validate_weixin_scope("weixin-oa", TriggerKind::Subscribe, TaskKind::NotifyAdmin).is_ok());
-        assert!(validate_weixin_scope("wecom", TriggerKind::Scan, TaskKind::PushMiniprogram).is_ok());
+        assert!(
+            validate_weixin_scope("weixin-oa", TriggerKind::Subscribe, TaskKind::NotifyAdmin)
+                .is_ok()
+        );
+        assert!(
+            validate_weixin_scope("wecom", TriggerKind::Scan, TaskKind::PushMiniprogram).is_ok()
+        );
     }
 }

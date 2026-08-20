@@ -6,19 +6,19 @@
 
 pub mod api;
 pub mod channel;
+pub mod models;
 pub mod pbbp2;
 pub mod token;
-pub mod models;
 pub mod ws;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use tokio::sync::mpsc;
+use tracing::{info, warn};
 use types::channel::Channel;
 use types::error::{CarrierError, CarrierResult};
 use types::plugin::PluginMessage;
-use tokio::sync::mpsc;
-use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
 // Runtime bot entry
@@ -168,9 +168,7 @@ impl Channel for SessionWatcher {
         let user_id = user_id.to_string();
 
         types::channel::block_on_detached(async move {
-            let token = token_cache
-                .get_token()
-                .await?;
+            let token = token_cache.get_token().await?;
             let http = token_cache.http().clone();
             let base = token_cache.api_base().to_string();
             let resp =
@@ -191,7 +189,11 @@ impl Channel for SessionWatcher {
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
+    fn start_sender(
+        &self,
+        sender_id: &str,
+        sender: mpsc::Sender<PluginMessage>,
+    ) -> CarrierResult<()> {
         FEISHU_STATE.load_new_from_dir();
         spawn_bot_by_id(sender_id, &sender);
         info!(sender_id = %sender_id, "Feishu: started new sender");

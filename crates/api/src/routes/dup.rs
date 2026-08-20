@@ -16,8 +16,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::Engine;
 use std::collections::BTreeMap;
-use std::path::{Component, PathBuf};
 use std::path::Path as StdPath;
+use std::path::{Component, PathBuf};
 use std::sync::Arc;
 
 /// Runtime top-level entries push/file must never touch (mirror manifest::SKIP).
@@ -93,10 +93,7 @@ pub async fn get_dup_file(
     match std::fs::read(&file_path) {
         Ok(bytes) => (
             StatusCode::OK,
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "application/octet-stream",
-            )],
+            [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
             Bytes::from(bytes),
         )
             .into_response(),
@@ -188,8 +185,7 @@ pub async fn push_dup(
 /// traversal safety. Returns the absolute path or a `(status, message)` error.
 fn safe_path(workspace: &StdPath, rel: &str) -> Result<PathBuf, (StatusCode, String)> {
     let p = StdPath::new(rel);
-    if p
-        .components()
+    if p.components()
         .any(|c| matches!(c, Component::ParentDir | Component::RootDir))
     {
         return Err((StatusCode::FORBIDDEN, "Path traversal denied".into()));
@@ -200,7 +196,12 @@ fn safe_path(workspace: &StdPath, rel: &str) -> Result<PathBuf, (StatusCode, Str
     }
     let ws_canonical = match workspace.canonicalize() {
         Ok(p) => p,
-        Err(_) => return Err((StatusCode::INTERNAL_SERVER_ERROR, "Workspace path error".into())),
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Workspace path error".into(),
+            ))
+        }
     };
     let file_path = workspace.join(rel);
     // For new files, validate via the parent dir; for existing, via the file itself.

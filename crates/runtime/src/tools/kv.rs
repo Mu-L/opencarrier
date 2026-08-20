@@ -6,10 +6,10 @@
 use crate::memory_handle::MemoryHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
+use types::error::{CarrierError, CarrierResult};
+use types::tool::{PermissionLevel, ToolDefinition};
 
 pub struct KvTools;
 
@@ -72,7 +72,11 @@ impl super::ToolModule for KvTools {
     ) -> Option<CarrierResult<String>> {
         let memory = match ctx.memory {
             Some(m) => m,
-            None => return Some(Err(CarrierError::Internal("kv tools: memory not available".to_string()))),
+            None => {
+                return Some(Err(CarrierError::Internal(
+                    "kv tools: memory not available".to_string(),
+                )))
+            }
         };
 
         match name {
@@ -97,9 +101,9 @@ async fn handle_kv_get(
     memory: &Arc<dyn MemoryHandle>,
     ctx: &ToolContext<'_>,
 ) -> CarrierResult<String> {
-    let key = input["key"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'key' parameter".to_string()))?;
+    let key = input["key"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'key' parameter".to_string(),
+    ))?;
     let agent_id = ctx
         .caller_agent_id
         .ok_or(CarrierError::Internal("No agent context".to_string()))?;
@@ -117,9 +121,9 @@ async fn handle_kv_set(
     memory: &Arc<dyn MemoryHandle>,
     ctx: &ToolContext<'_>,
 ) -> CarrierResult<String> {
-    let key = input["key"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'key' parameter".to_string()))?;
+    let key = input["key"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'key' parameter".to_string(),
+    ))?;
     let value = input
         .get("value")
         .cloned()
@@ -150,7 +154,10 @@ async fn handle_kv_list(
 
     let pairs = memory.kv_list(agent_id, owner_id, user_id)?;
     let filtered: Vec<_> = if let Some(p) = prefix {
-        pairs.into_iter().filter(|(k, _)| k.starts_with(p)).collect()
+        pairs
+            .into_iter()
+            .filter(|(k, _)| k.starts_with(p))
+            .collect()
     } else {
         pairs
     };

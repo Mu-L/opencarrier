@@ -151,14 +151,25 @@ pub async fn wecom_smartbot_poll(
                             );
                             // Auto-create bot and bind to agent
                             cleanup_wecom_pending();
-                            let agent_name =
-                                WECOM_PENDING_AGENTS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() }).remove(&query.scode).map(|(v, _)| v);
+                            let agent_name = WECOM_PENDING_AGENTS
+                                .lock()
+                                .unwrap_or_else(|e| {
+                                    tracing::warn!("Mutex poisoned, recovering");
+                                    e.into_inner()
+                                })
+                                .remove(&query.scode)
+                                .map(|(v, _)| v);
                             if let Some(agent_name) = agent_name {
-                                if let Err(e) =
-                                    register_bot_from_scan(&state, "wecom", &serde_json::json!({
+                                if let Err(e) = register_bot_from_scan(
+                                    &state,
+                                    "wecom",
+                                    &serde_json::json!({
                                         "bot_id": bot_id,
                                         "secret": secret,
-                                    }), &agent_name).await
+                                    }),
+                                    &agent_name,
+                                )
+                                .await
                                 {
                                     tracing::warn!(
                                         agent = %agent_name,
@@ -217,7 +228,10 @@ fn generate_session_id() -> String {
 }
 
 fn cleanup_expired_sessions() {
-    let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+    let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+        tracing::warn!("Mutex poisoned, recovering");
+        e.into_inner()
+    });
     let now = std::time::Instant::now();
     sessions.retain(|_, v| v.expires_at > now);
 }
@@ -226,7 +240,10 @@ fn cleanup_expired_sessions() {
 /// and auto-creates + binds the bot when auth succeeds.
 fn spawn_background_device_poll(state: Arc<AppState>, session_id: String) {
     let session = {
-        let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+        let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+            tracing::warn!("Mutex poisoned, recovering");
+            e.into_inner()
+        });
         match sessions.get(&session_id).cloned() {
             Some(s) => s,
             None => return,
@@ -259,7 +276,10 @@ fn spawn_background_device_poll(state: Arc<AppState>, session_id: String) {
 
             // Check if credentials were already stored (client poll got there first)
             {
-                let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+                let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+                    tracing::warn!("Mutex poisoned, recovering");
+                    e.into_inner()
+                });
                 if let Some(s) = sessions.get(&sid) {
                     if s.credentials.is_some() {
                         tracing::info!(session_id = %sid, "Background poll: already resolved");
@@ -285,7 +305,10 @@ fn spawn_background_device_poll(state: Arc<AppState>, session_id: String) {
                 PollResult::Success(creds) => {
                     // Store credentials in session
                     {
-                        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+                        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+                            tracing::warn!("Mutex poisoned, recovering");
+                            e.into_inner()
+                        });
                         if let Some(s) = sessions.get_mut(&sid) {
                             s.credentials = Some(creds.clone());
                         }
@@ -334,7 +357,13 @@ fn spawn_background_wecom_poll(state: Arc<AppState>, scode: String, agent_name: 
 
             if std::time::Instant::now() > deadline {
                 tracing::info!(scode = %scode, "WeCom background poll: timed out");
-                WECOM_PENDING_AGENTS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() }).remove(&scode);
+                WECOM_PENDING_AGENTS
+                    .lock()
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("Mutex poisoned, recovering");
+                        e.into_inner()
+                    })
+                    .remove(&scode);
                 return;
             }
 
@@ -395,13 +424,25 @@ fn spawn_background_wecom_poll(state: Arc<AppState>, scode: String, agent_name: 
                         }
                     }
                 }
-                WECOM_PENDING_AGENTS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() }).remove(&scode);
+                WECOM_PENDING_AGENTS
+                    .lock()
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("Mutex poisoned, recovering");
+                        e.into_inner()
+                    })
+                    .remove(&scode);
                 return;
             }
 
             if status == "expired" || status == "fail" {
                 tracing::info!(scode = %scode, status = %status, "WeCom background poll: terminal status");
-                WECOM_PENDING_AGENTS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() }).remove(&scode);
+                WECOM_PENDING_AGENTS
+                    .lock()
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("Mutex poisoned, recovering");
+                        e.into_inner()
+                    })
+                    .remove(&scode);
                 return;
             }
         }
@@ -648,7 +689,10 @@ pub async fn feishu_device_auth_begin(
 
     {
         cleanup_expired_sessions();
-        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+            tracing::warn!("Mutex poisoned, recovering");
+            e.into_inner()
+        });
         if sessions.len() >= MAX_DEVICE_AUTH_SESSIONS {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -684,7 +728,10 @@ pub async fn feishu_device_auth_poll(
     cleanup_expired_sessions();
 
     let session = {
-        let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+        let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+            tracing::warn!("Mutex poisoned, recovering");
+            e.into_inner()
+        });
         match sessions.get(&query.session_id) {
             Some(s) => s.clone(),
             None => {
@@ -701,7 +748,10 @@ pub async fn feishu_device_auth_poll(
     }
 
     if std::time::Instant::now() > session.expires_at {
-        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+            tracing::warn!("Mutex poisoned, recovering");
+            e.into_inner()
+        });
         sessions.remove(&query.session_id);
         return (
             StatusCode::OK,
@@ -792,7 +842,10 @@ pub async fn feishu_device_auth_poll(
         });
 
         {
-            let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+            let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+                tracing::warn!("Mutex poisoned, recovering");
+                e.into_inner()
+            });
             if let Some(s) = sessions.get_mut(&query.session_id) {
                 s.credentials = Some(result.clone());
             }
@@ -825,7 +878,10 @@ pub async fn feishu_device_auth_poll(
     }
 
     if status.eq_ignore_ascii_case("EXPIRED") || status.eq_ignore_ascii_case("FAIL") {
-        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+            tracing::warn!("Mutex poisoned, recovering");
+            e.into_inner()
+        });
         sessions.remove(&query.session_id);
         return (
             StatusCode::OK,
@@ -961,7 +1017,10 @@ pub async fn dingtalk_device_auth_begin(
 
     {
         cleanup_expired_sessions();
-        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+            tracing::warn!("Mutex poisoned, recovering");
+            e.into_inner()
+        });
         if sessions.len() >= MAX_DEVICE_AUTH_SESSIONS {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -992,7 +1051,10 @@ pub async fn dingtalk_device_auth_poll(
     cleanup_expired_sessions();
 
     let session = {
-        let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+        let sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+            tracing::warn!("Mutex poisoned, recovering");
+            e.into_inner()
+        });
         match sessions.get(&query.session_id) {
             Some(s) => s.clone(),
             None => {
@@ -1009,7 +1071,10 @@ pub async fn dingtalk_device_auth_poll(
     }
 
     if std::time::Instant::now() > session.expires_at {
-        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+            tracing::warn!("Mutex poisoned, recovering");
+            e.into_inner()
+        });
         sessions.remove(&query.session_id);
         return (
             StatusCode::OK,
@@ -1065,7 +1130,10 @@ pub async fn dingtalk_device_auth_poll(
             });
 
             {
-                let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+                let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+                    tracing::warn!("Mutex poisoned, recovering");
+                    e.into_inner()
+                });
                 if let Some(s) = sessions.get_mut(&query.session_id) {
                     s.credentials = Some(result.clone());
                 }
@@ -1077,8 +1145,7 @@ pub async fn dingtalk_device_auth_poll(
                     "client_id": client_id,
                     "client_secret": client_secret,
                 });
-                if let Err(e) =
-                    register_bot_from_scan(&state, "dingtalk", &creds, agent_name).await
+                if let Err(e) = register_bot_from_scan(&state, "dingtalk", &creds, agent_name).await
                 {
                     tracing::warn!(agent = %agent_name, error = %e, "Register DingTalk bot from scan failed");
                 }
@@ -1089,7 +1156,10 @@ pub async fn dingtalk_device_auth_poll(
     }
 
     if status == "EXPIRED" || status == "FAIL" {
-        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+        let mut sessions = DEVICE_AUTH_SESSIONS.lock().unwrap_or_else(|e| {
+            tracing::warn!("Mutex poisoned, recovering");
+            e.into_inner()
+        });
         sessions.remove(&query.session_id);
         return (
             StatusCode::OK,
@@ -1110,7 +1180,10 @@ pub async fn dingtalk_device_auth_poll(
 /// GET /api/senders — list all senders and their agent bindings.
 pub async fn list_senders(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let Some(ref pm) = state.channel_manager else {
-        return (StatusCode::OK, Json(serde_json::json!({"senders": [], "total": 0})));
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"senders": [], "total": 0})),
+        );
     };
     let pm = pm.lock().await;
     let routes = pm.list_sender_routes_with_aliases();
@@ -1392,10 +1465,7 @@ pub async fn sender_send_message(
     };
     let pm = pm.lock().await;
     match pm.channel_send_by_bot(&id, &user_id, &text) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "sent"})),
-        ),
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "sent"}))),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -1409,7 +1479,10 @@ static WECOM_PENDING_AGENTS: LazyLock<Mutex<HashMap<String, (String, std::time::
 
 fn cleanup_wecom_pending() {
     const WECOM_TTL_SECS: u64 = 600; // 10 minutes
-    let mut pending = WECOM_PENDING_AGENTS.lock().unwrap_or_else(|e| { tracing::warn!("Mutex poisoned, recovering"); e.into_inner() });
+    let mut pending = WECOM_PENDING_AGENTS.lock().unwrap_or_else(|e| {
+        tracing::warn!("Mutex poisoned, recovering");
+        e.into_inner()
+    });
     let now = std::time::Instant::now();
     pending.retain(|_, (_, created_at)| now.duration_since(*created_at).as_secs() < WECOM_TTL_SECS);
 }
@@ -1427,7 +1500,11 @@ async fn register_bot_from_scan(
     // Resolve agent_name: accept name or UUID, store as name
     let agent_ref = crate::routes::common::resolve_to_name(agent_name, &state.kernel.registry)
         .map_err(|(_, json)| {
-            let msg = json.0.get("error").and_then(|v| v.as_str()).unwrap_or("Agent not found");
+            let msg = json
+                .0
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Agent not found");
             CarrierError::AgentNotFound(msg.to_string())
         })?;
 
@@ -1598,10 +1675,7 @@ pub async fn push_to_user(
     // get_session_for_send looks up by user_id first, so this works
     // for any user with an active session.
     match pm.channel_send_by_bot(&user_id, &user_id, &text) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"status": "sent"})),
-        ),
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"status": "sent"}))),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -1617,7 +1691,10 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
     use axum::routing;
     axum::Router::new()
         // Sender management
-        .route("/api/senders", routing::get(list_senders).post(create_sender))
+        .route(
+            "/api/senders",
+            routing::get(list_senders).post(create_sender),
+        )
         .route(
             "/api/senders/{id}",
             routing::get(get_sender).delete(delete_sender),
@@ -1626,7 +1703,10 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
             "/api/senders/{id}/bind",
             routing::put(bind_sender).delete(unbind_sender),
         )
-        .route("/api/senders/{id}/alias", routing::put(set_sender_alias_route))
+        .route(
+            "/api/senders/{id}/alias",
+            routing::put(set_sender_alias_route),
+        )
         .route("/api/senders/{id}/send", routing::post(sender_send_message))
         .route("/api/push", routing::post(push_to_user))
         // Device auth flows

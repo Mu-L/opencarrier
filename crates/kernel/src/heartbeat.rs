@@ -10,10 +10,10 @@
 //! After exhausting attempts, agents are marked as Terminated (dead).
 
 use crate::registry::AgentRegistry;
-use types::agent::{AgentId, AgentState, ScheduleMode};
 use chrono::Utc;
 use dashmap::DashMap;
 use tracing::{debug, warn};
+use types::agent::{AgentId, AgentState, ScheduleMode};
 
 /// Default heartbeat check interval (seconds).
 const DEFAULT_CHECK_INTERVAL_SECS: u64 = 30;

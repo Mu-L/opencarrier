@@ -6,9 +6,9 @@
 //! These tests use real WASM execution — no mocks.
 
 use kernel::CarrierKernel;
+use std::sync::Arc;
 use types::agent::AgentManifest;
 use types::config::{DefaultModelConfig, KernelConfig};
-use std::sync::Arc;
 
 /// Minimal echo module: returns input JSON wrapped as `{"response": "..."}`.
 ///

@@ -60,7 +60,7 @@ pub fn query_global(
     }
 
     let total = hits.len();
-    hits.sort_by(|a, b| b.time_range_end_ms.cmp(&a.time_range_end_ms));
+    hits.sort_by_key(|h| std::cmp::Reverse(h.time_range_end_ms));
     hits.truncate(limit);
 
     Ok(QueryResponse {

@@ -4,10 +4,10 @@ use super::ToolModule;
 use crate::memory_handle::MemoryHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
+use types::error::{CarrierError, CarrierResult};
+use types::tool::{PermissionLevel, ToolDefinition};
 
 pub struct DataAnalyzeTools;
 
@@ -21,7 +21,8 @@ impl ToolModule for DataAnalyzeTools {
                 user_stats (total/active/new users), \
                 user_lookup (per-user conversation details), \
                 usage_analytics (token consumption/trends), \
-                recent_conversations (latest session list).".to_string(),
+                recent_conversations (latest session list)."
+                .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -61,11 +62,7 @@ impl ToolModule for DataAnalyzeTools {
         let memory = ctx.memory?;
         let agent_id = ctx.caller_agent_id?;
 
-        Some(
-            run_data_analyze(input, memory, agent_id, ctx.is_clone_admin)
-                .await
-                ,
-        )
+        Some(run_data_analyze(input, memory, agent_id, ctx.is_clone_admin).await)
     }
 
     fn permission_level(&self, _tool_name: &str) -> PermissionLevel {

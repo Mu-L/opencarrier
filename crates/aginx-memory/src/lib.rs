@@ -8,13 +8,13 @@
 // on startup and by tests to set up schema.
 refinery::embed_migrations!("migrations");
 
-pub mod pg;
 pub mod bucket_seal;
-pub mod routing;
 pub mod digest;
-pub mod jobs;
-pub mod retrieval;
 pub mod ingest;
-pub mod routes;
-pub mod server;
+pub mod jobs;
 pub mod migrate;
+pub mod pg;
+pub mod retrieval;
+pub mod routes;
+pub mod routing;
+pub mod server;

@@ -89,8 +89,9 @@ impl ProcessManager {
 
         // Validate command against exec policy
         if let Some(policy) = exec_policy {
-            crate::subprocess_sandbox::validate_process_command(command, args, policy)
-                .map_err(|e| CarrierError::InvalidInput(format!("Command rejected by exec policy: {e}")))?;
+            crate::subprocess_sandbox::validate_process_command(command, args, policy).map_err(
+                |e| CarrierError::InvalidInput(format!("Command rejected by exec policy: {e}")),
+            )?;
         }
 
         let mut cmd = tokio::process::Command::new(command);
@@ -106,9 +107,9 @@ impl ProcessManager {
         #[cfg(unix)]
         cmd.process_group(0);
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| CarrierError::Internal(format!("Failed to start process '{}': {}", command, e)))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            CarrierError::Internal(format!("Failed to start process '{}': {}", command, e))
+        })?;
 
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
@@ -181,10 +182,9 @@ impl ProcessManager {
 
     /// Write data to a process's stdin.
     pub async fn write(&self, process_id: &str, data: &str) -> CarrierResult<()> {
-        let mut entry = self
-            .processes
-            .get_mut(process_id)
-            .ok_or_else(|| CarrierError::InvalidInput(format!("Process '{}' not found", process_id)))?;
+        let mut entry = self.processes.get_mut(process_id).ok_or_else(|| {
+            CarrierError::InvalidInput(format!("Process '{}' not found", process_id))
+        })?;
 
         let proc = entry.value_mut();
         if let Some(stdin) = &mut proc.stdin {
@@ -198,16 +198,17 @@ impl ProcessManager {
                 .map_err(|e| CarrierError::Internal(format!("Flush failed: {}", e)))?;
             Ok(())
         } else {
-            Err(CarrierError::InvalidInput("Process stdin is closed".to_string()))
+            Err(CarrierError::InvalidInput(
+                "Process stdin is closed".to_string(),
+            ))
         }
     }
 
     /// Read accumulated stdout/stderr (non-blocking drain).
     pub async fn read(&self, process_id: &str) -> CarrierResult<(Vec<String>, Vec<String>)> {
-        let entry = self
-            .processes
-            .get(process_id)
-            .ok_or_else(|| CarrierError::InvalidInput(format!("Process '{}' not found", process_id)))?;
+        let entry = self.processes.get(process_id).ok_or_else(|| {
+            CarrierError::InvalidInput(format!("Process '{}' not found", process_id))
+        })?;
 
         let mut stdout = entry.stdout_buf.lock().await;
         let mut stderr = entry.stderr_buf.lock().await;
@@ -220,10 +221,9 @@ impl ProcessManager {
 
     /// Kill a process.
     pub async fn kill(&self, process_id: &str) -> CarrierResult<()> {
-        let (_, mut proc) = self
-            .processes
-            .remove(process_id)
-            .ok_or_else(|| CarrierError::InvalidInput(format!("Process '{}' not found", process_id)))?;
+        let (_, mut proc) = self.processes.remove(process_id).ok_or_else(|| {
+            CarrierError::InvalidInput(format!("Process '{}' not found", process_id))
+        })?;
 
         if let Some(pid) = proc.child.id() {
             debug!(process_id, pid, "Killing persistent process");

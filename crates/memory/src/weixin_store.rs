@@ -4,8 +4,8 @@
 //! Session data (bot_token, context_tokens, etc.) is stored in the
 //! `weixin_sessions` table within the central `opencarrier.db`.
 
-use std::sync::{Arc, Mutex};
 use rusqlite::Connection;
+use std::sync::{Arc, Mutex};
 use types::error::{CarrierError, CarrierResult};
 
 /// Serialized form of a WeChat iLink bot session.
@@ -37,27 +37,33 @@ impl WeixinSessionStore {
 
     /// Load all persisted sessions.
     pub fn load_all(&self) -> CarrierResult<Vec<WeixinSessionRow>> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
-        let mut stmt = conn.prepare(
-            "SELECT channel, sender_key, bot_id, bot_token, baseurl, ilink_bot_id, \
+        let mut stmt = conn
+            .prepare(
+                "SELECT channel, sender_key, bot_id, bot_token, baseurl, ilink_bot_id, \
                     user_id, expires_at, bind_agent, context_tokens \
-             FROM weixin_sessions"
-        ).map_err(|e| CarrierError::Memory(e.to_string()))?;
-        let rows = stmt.query_map([], |row| {
-            Ok(WeixinSessionRow {
-                channel: row.get(0)?,
-                sender_key: row.get(1)?,
-                bot_id: row.get(2)?,
-                bot_token: row.get(3)?,
-                baseurl: row.get(4)?,
-                ilink_bot_id: row.get(5)?,
-                user_id: row.get(6)?,
-                expires_at: row.get(7)?,
-                bind_agent: row.get(8)?,
-                context_tokens: row.get(9)?,
+             FROM weixin_sessions",
+            )
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(WeixinSessionRow {
+                    channel: row.get(0)?,
+                    sender_key: row.get(1)?,
+                    bot_id: row.get(2)?,
+                    bot_token: row.get(3)?,
+                    baseurl: row.get(4)?,
+                    ilink_bot_id: row.get(5)?,
+                    user_id: row.get(6)?,
+                    expires_at: row.get(7)?,
+                    bind_agent: row.get(8)?,
+                    context_tokens: row.get(9)?,
+                })
             })
-        }).map_err(|e| CarrierError::Memory(e.to_string()))?;
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let mut sessions = Vec::new();
         for row in rows {
@@ -68,7 +74,9 @@ impl WeixinSessionStore {
 
     /// Upsert a single session.
     pub fn upsert(&self, row: &WeixinSessionRow) -> CarrierResult<()> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         let user_id = row.user_id.as_deref().unwrap_or("");
         conn.execute(
@@ -88,10 +96,15 @@ impl WeixinSessionStore {
 
     /// Delete a session by user_id.
     pub fn delete(&self, user_id: &str) -> CarrierResult<()> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
-        conn.execute("DELETE FROM weixin_sessions WHERE user_id = ?1", rusqlite::params![user_id])
-            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM weixin_sessions WHERE user_id = ?1",
+            rusqlite::params![user_id],
+        )
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())
     }
 }

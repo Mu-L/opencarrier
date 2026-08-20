@@ -1,16 +1,16 @@
 //! WeChat iLink session watcher — dynamic session discovery, polling, and send.
 
 use crate::api;
-use crate::token::WEIXIN_STATE;
-use crate::models::*;
 use crate::crypto;
-use types::plugin::{PluginContent, PluginMessage};
+use crate::models::*;
+use crate::token::WEIXIN_STATE;
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
+use types::plugin::{PluginContent, PluginMessage};
 use uuid::Uuid;
 
 use types::channel::Channel;
@@ -109,7 +109,10 @@ fn run_poll_loop(session_key: &str, sender: mpsc::Sender<PluginMessage>, shutdow
     {
         Ok(rt) => rt,
         Err(e) => {
-            error!(session_key = session_key, "Failed to create tokio runtime: {e}");
+            error!(
+                session_key = session_key,
+                "Failed to create tokio runtime: {e}"
+            );
             return;
         }
     };
@@ -205,7 +208,8 @@ async fn poll_loop_inner(
                 if let Some(new_cursor) = &resp.get_updates_buf {
                     if !new_cursor.is_empty() {
                         if let Some(state) = WEIXIN_STATE.bots.get(session_key) {
-                            *state.cursor.lock().unwrap_or_else(|e| e.into_inner()) = new_cursor.clone();
+                            *state.cursor.lock().unwrap_or_else(|e| e.into_inner()) =
+                                new_cursor.clone();
                         }
                     }
                 }
@@ -215,10 +219,20 @@ async fn poll_loop_inner(
                     for msg in &msgs {
                         if let Some(items) = &msg.item_list {
                             for item in items {
-                                info!(session_key = session_key, item_type = item.type_.unwrap_or(-1i32 as u32), has_file = item.file_item.is_some(), has_image = item.image_item.is_some(), has_text = item.text_item.is_some(), "Raw WeChat item");
+                                info!(
+                                    session_key = session_key,
+                                    item_type = item.type_.unwrap_or(-1i32 as u32),
+                                    has_file = item.file_item.is_some(),
+                                    has_image = item.image_item.is_some(),
+                                    has_text = item.text_item.is_some(),
+                                    "Raw WeChat item"
+                                );
                             }
                         } else {
-                            info!(session_key = session_key, "WeChat message with no item_list");
+                            info!(
+                                session_key = session_key,
+                                "WeChat message with no item_list"
+                            );
                         }
                     }
                     // Renew session expiry on every successful getUpdates
@@ -231,7 +245,9 @@ async fn poll_loop_inner(
                             now + SESSION_DURATION_SECS,
                             std::sync::atomic::Ordering::Relaxed,
                         );
-                        state.active.store(true, std::sync::atomic::Ordering::Relaxed);
+                        state
+                            .active
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                         WEIXIN_STATE.persist_if_due(&state);
                     }
                     for msg in msgs {
@@ -264,10 +280,7 @@ async fn poll_loop_inner(
 }
 
 /// Download a CDN media file, AES-decrypt it, and return raw bytes.
-async fn download_cdn_raw(
-    http: &reqwest::Client,
-    media: &CDNMedia,
-) -> CarrierResult<Vec<u8>> {
+async fn download_cdn_raw(http: &reqwest::Client, media: &CDNMedia) -> CarrierResult<Vec<u8>> {
     let eqp = media
         .encrypt_query_param
         .as_deref()
@@ -347,10 +360,16 @@ async fn process_inbound_message(
                         if !text.is_empty() {
                             PluginContent::Text(text)
                         } else {
-                            PluginContent::Voice { url: String::new(), duration_seconds: 0 }
+                            PluginContent::Voice {
+                                url: String::new(),
+                                duration_seconds: 0,
+                            }
                         }
                     } else {
-                        PluginContent::Voice { url: String::new(), duration_seconds: 0 }
+                        PluginContent::Voice {
+                            url: String::new(),
+                            duration_seconds: 0,
+                        }
                     }
                 }
                 ITEM_TYPE_FILE => {
@@ -360,31 +379,38 @@ async fn process_inbound_message(
                         .unwrap_or_default();
                     info!(filename = %filename, has_media = file_item.and_then(|f| f.media.as_ref()).is_some(), "WeChat file message received");
                     let data = match file_item.and_then(|f| f.media.as_ref()) {
-                        Some(media) => {
-                            match download_cdn_raw(http, media).await {
-                                Ok(bytes) => {
-                                    info!(filename = %filename, size = bytes.len(), "WeChat file downloaded from CDN");
-                                    Some(bytes)
-                                }
-                                Err(e) => {
-                                    warn!(filename = %filename, error = %e, "Failed to download WeChat file from CDN");
-                                    None
-                                }
+                        Some(media) => match download_cdn_raw(http, media).await {
+                            Ok(bytes) => {
+                                info!(filename = %filename, size = bytes.len(), "WeChat file downloaded from CDN");
+                                Some(bytes)
                             }
-                        }
+                            Err(e) => {
+                                warn!(filename = %filename, error = %e, "Failed to download WeChat file from CDN");
+                                None
+                            }
+                        },
                         None => None,
                     };
-                    PluginContent::File { url: String::new(), filename, data }
-                }
-                ITEM_TYPE_VIDEO => {
-                    PluginContent::Video {
+                    PluginContent::File {
                         url: String::new(),
-                        duration_seconds: item.video_item.as_ref().and_then(|v| v.play_length).map(|d| d as u32),
-                        caption: None,
+                        filename,
+                        data,
                     }
                 }
+                ITEM_TYPE_VIDEO => PluginContent::Video {
+                    url: String::new(),
+                    duration_seconds: item
+                        .video_item
+                        .as_ref()
+                        .and_then(|v| v.play_length)
+                        .map(|d| d as u32),
+                    caption: None,
+                },
                 _ => {
-                    warn!(item_type, "Unknown WeChat item type, treating as empty text");
+                    warn!(
+                        item_type,
+                        "Unknown WeChat item type, treating as empty text"
+                    );
                     PluginContent::Text(String::new())
                 }
             }
@@ -500,7 +526,9 @@ impl Channel for SessionWatcher {
             .spawn(move || {
                 respawn_watcher_loop(sender, shutdown);
             })
-            .map_err(|e| CarrierError::Internal(format!("Failed to spawn respawn watcher thread: {e}")))?;
+            .map_err(|e| {
+                CarrierError::Internal(format!("Failed to spawn respawn watcher thread: {e}"))
+            })?;
         self.thread_handle = Some(handle);
         info!("WeChat SessionWatcher started");
         Ok(())
@@ -509,10 +537,14 @@ impl Channel for SessionWatcher {
     fn send(&self, bot_id: &str, user_id: &str, text: &str) -> CarrierResult<()> {
         let state = WEIXIN_STATE
             .get_session_for_send(bot_id, user_id)
-            .ok_or_else(|| CarrierError::InvalidInput(format!("No session for bot {bot_id}, user {user_id}")))?;
+            .ok_or_else(|| {
+                CarrierError::InvalidInput(format!("No session for bot {bot_id}, user {user_id}"))
+            })?;
 
         if state.is_expired() {
-            return Err(CarrierError::Network(format!("Token expired for bot {bot_id}")));
+            return Err(CarrierError::Network(format!(
+                "Token expired for bot {bot_id}"
+            )));
         }
 
         // context_token is optional in the iLink protocol (verified
@@ -536,7 +568,9 @@ impl Channel for SessionWatcher {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    let _ = tx.send(Err(CarrierError::Internal(format!("Failed to create send runtime: {e}"))));
+                    let _ = tx.send(Err(CarrierError::Internal(format!(
+                        "Failed to create send runtime: {e}"
+                    ))));
                     return;
                 }
             };
@@ -568,10 +602,14 @@ impl Channel for SessionWatcher {
     ) -> CarrierResult<()> {
         let state = WEIXIN_STATE
             .get_session_for_send(bot_id, user_id)
-            .ok_or_else(|| CarrierError::InvalidInput(format!("No session for bot {bot_id}, user {user_id}")))?;
+            .ok_or_else(|| {
+                CarrierError::InvalidInput(format!("No session for bot {bot_id}, user {user_id}"))
+            })?;
 
         if state.is_expired() {
-            return Err(CarrierError::Network(format!("Token expired for bot {bot_id}")));
+            return Err(CarrierError::Network(format!(
+                "Token expired for bot {bot_id}"
+            )));
         }
 
         // context_token optional — see send() for the verified protocol model.
@@ -612,12 +650,24 @@ impl Channel for SessionWatcher {
         types::channel::block_on_detached(async move {
             match send_kind {
                 "video" => api::send_video_auto(
-                    &http, &bot_token, &baseurl, &user_id, context_token.as_deref(), &client_id, &payload,
+                    &http,
+                    &bot_token,
+                    &baseurl,
+                    &user_id,
+                    context_token.as_deref(),
+                    &client_id,
+                    &payload,
                 )
                 .await
                 .map_err(|e| CarrierError::Network(e.to_string())),
                 "image" => api::send_image_auto(
-                    &http, &bot_token, &baseurl, &user_id, context_token.as_deref(), &client_id, &payload,
+                    &http,
+                    &bot_token,
+                    &baseurl,
+                    &user_id,
+                    context_token.as_deref(),
+                    &client_id,
+                    &payload,
                 )
                 .await
                 .map_err(|e| CarrierError::Network(e.to_string())),
@@ -637,7 +687,11 @@ impl Channel for SessionWatcher {
         info!("SessionWatcher stopped");
     }
 
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
+    fn start_sender(
+        &self,
+        sender_id: &str,
+        sender: mpsc::Sender<PluginMessage>,
+    ) -> CarrierResult<()> {
         WEIXIN_STATE.load_new_from_dir();
         // Force-spawn poll thread regardless of active flag.
         // register_from_qr sets active=true, which causes spawn_bot_by_id to skip,
@@ -756,7 +810,10 @@ mod dedup_tests {
         let bot = format!("test-bot-{}", uuid::Uuid::new_v4());
         let keys = vec![format!("mid:{bot}:42"), format!("fp:{bot}:u:1:t3:abc")];
         assert!(claim_inbound(&keys), "first claim should succeed");
-        assert!(!claim_inbound(&keys), "second claim should be dropped as duplicate");
+        assert!(
+            !claim_inbound(&keys),
+            "second claim should be dropped as duplicate"
+        );
     }
 
     #[test]

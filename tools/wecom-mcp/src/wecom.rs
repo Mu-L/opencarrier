@@ -144,12 +144,7 @@ impl WecomClient {
 
     /// GET with auto-injected access_token in query string.
     #[allow(dead_code)]
-    pub async fn api_get(
-        &self,
-        corp_id: &str,
-        secret: &str,
-        path: &str,
-    ) -> Result<Value> {
+    pub async fn api_get(&self, corp_id: &str, secret: &str, path: &str) -> Result<Value> {
         let token = self.get_token(corp_id, secret).await?;
         let url = format!("{}{}?access_token={}", WECOM_API_BASE, path, token);
         let json: Value = self.http.get(&url).send().await?.json().await?;
@@ -266,7 +261,11 @@ impl WecomMcpProxy {
                     if let Some(url) = cached.category_urls.get(category) {
                         return Ok(url.clone());
                     }
-                    bail!("MCP category '{}' not found or not authorized for bot {}", category, bot_id);
+                    bail!(
+                        "MCP category '{}' not found or not authorized for bot {}",
+                        category,
+                        bot_id
+                    );
                 }
             }
         }
@@ -274,13 +273,7 @@ impl WecomMcpProxy {
         // Fetch fresh config.
         let auth_body = Self::build_config_request(bot_id, bot_secret);
         let url = format!("{}/cgi-bin/aibot/cli/get_mcp_config", WECOM_API_BASE);
-        let resp = self
-            .client
-            .http
-            .post(&url)
-            .json(&auth_body)
-            .send()
-            .await?;
+        let resp = self.client.http.post(&url).json(&auth_body).send().await?;
 
         if !resp.status().is_success() {
             bail!("MCP config HTTP {} for bot {}", resp.status(), bot_id);
@@ -296,10 +289,7 @@ impl WecomMcpProxy {
 
         let mut category_urls: HashMap<String, String> = HashMap::new();
         for item in list {
-            let biz_type = item
-                .get("biz_type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let biz_type = item.get("biz_type").and_then(|v| v.as_str()).unwrap_or("");
             let item_url = item.get("url").and_then(|v| v.as_str()).unwrap_or("");
             let is_authed = item
                 .get("is_authed")
@@ -352,26 +342,47 @@ impl WecomMcpProxy {
             // Contact
             "get_userlist" => "contact",
             // Doc
-            "get_doc_content" | "create_doc" | "edit_doc_content"
-            | "smartpage_export_task" | "smartpage_get_export_result"
-            | "smartsheet_get_sheet" | "smartsheet_add_sheet"
-            | "smartsheet_update_sheet" | "smartsheet_delete_sheet"
-            | "smartsheet_get_fields" | "smartsheet_add_fields"
-            | "smartsheet_update_fields" | "smartsheet_delete_fields"
-            | "smartsheet_get_records" | "smartsheet_add_records"
-            | "smartsheet_update_records" | "smartsheet_delete_records" => "doc",
+            "get_doc_content"
+            | "create_doc"
+            | "edit_doc_content"
+            | "smartpage_export_task"
+            | "smartpage_get_export_result"
+            | "smartsheet_get_sheet"
+            | "smartsheet_add_sheet"
+            | "smartsheet_update_sheet"
+            | "smartsheet_delete_sheet"
+            | "smartsheet_get_fields"
+            | "smartsheet_add_fields"
+            | "smartsheet_update_fields"
+            | "smartsheet_delete_fields"
+            | "smartsheet_get_records"
+            | "smartsheet_add_records"
+            | "smartsheet_update_records"
+            | "smartsheet_delete_records" => "doc",
             // Msg
             "get_msg_chat_list" | "get_message" | "send_message" => "msg",
             // Todo
-            "get_todo_list" | "get_todo_detail" | "create_todo"
-            | "update_todo" | "delete_todo" | "change_todo_user_status" => "todo",
+            "get_todo_list"
+            | "get_todo_detail"
+            | "create_todo"
+            | "update_todo"
+            | "delete_todo"
+            | "change_todo_user_status" => "todo",
             // Meeting
-            "create_meeting" | "list_user_meetings" | "get_meeting_info"
-            | "cancel_meeting" | "set_invite_meeting_members" => "meeting",
+            "create_meeting"
+            | "list_user_meetings"
+            | "get_meeting_info"
+            | "cancel_meeting"
+            | "set_invite_meeting_members" => "meeting",
             // Schedule
-            "get_schedule_list_by_range" | "get_schedule_detail" | "create_schedule"
-            | "update_schedule" | "cancel_schedule" | "add_schedule_attendees"
-            | "del_schedule_attendees" | "check_availability" => "schedule",
+            "get_schedule_list_by_range"
+            | "get_schedule_detail"
+            | "create_schedule"
+            | "update_schedule"
+            | "cancel_schedule"
+            | "add_schedule_attendees"
+            | "del_schedule_attendees"
+            | "check_availability" => "schedule",
             _ => "contact", // fallback
         }
     }
@@ -396,10 +407,15 @@ impl WecomMcpProxy {
             Err(e) => {
                 let err_str = e.to_string();
                 if err_str.contains("401") || err_str.contains("403") {
-                    tracing::warn!("MCP proxy auth error for bot {}, invalidating config cache and retrying", bot_id);
+                    tracing::warn!(
+                        "MCP proxy auth error for bot {}, invalidating config cache and retrying",
+                        bot_id
+                    );
                     self.invalidate_config(bot_id).await;
-                    self.call_mcp_tool_inner(corp_id, secret, bot_id, bot_secret, tool_name, arguments)
-                        .await
+                    self.call_mcp_tool_inner(
+                        corp_id, secret, bot_id, bot_secret, tool_name, arguments,
+                    )
+                    .await
                 } else {
                     result
                 }
@@ -449,7 +465,11 @@ impl WecomMcpProxy {
 
         let status = resp.status();
         if status.as_u16() == 401 || status.as_u16() == 403 {
-            bail!("MCP proxy HTTP {} — auth error for tool {}", status, tool_name);
+            bail!(
+                "MCP proxy HTTP {} — auth error for tool {}",
+                status,
+                tool_name
+            );
         }
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();

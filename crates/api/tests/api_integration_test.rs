@@ -7,16 +7,16 @@
 //!
 //! Run: cargo test -p carrier-api --test api_integration_test -- --nocapture
 
-use axum::Router;
 use api::middleware;
 use api::routes::{self, AppState};
 use api::ws;
+use axum::Router;
 use kernel::CarrierKernel;
-use types::config::{DefaultModelConfig, KernelConfig};
 use std::sync::Arc;
 use std::time::Instant;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
+use types::config::{DefaultModelConfig, KernelConfig};
 
 // ---------------------------------------------------------------------------
 // Test infrastructure
@@ -46,10 +46,7 @@ async fn start_test_server_with_llm() -> TestServer {
     start_test_server_with_provider("llama-3.3-70b-versatile", "GROQ_API_KEY").await
 }
 
-async fn start_test_server_with_provider(
-    model: &str,
-    api_key_env: &str,
-) -> TestServer {
+async fn start_test_server_with_provider(model: &str, api_key_env: &str) -> TestServer {
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
 
     // Create minimal brain.json for tests (single-layer format)

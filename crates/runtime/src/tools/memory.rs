@@ -1,13 +1,13 @@
 //! Consolidated memory_tree tool — dispatches to the correct retrieval primitive
 //! based on the `mode` argument. Reduces tool surface from 7 entries to 1.
 
-use crate::tool_context::ToolContext;
 use crate::memory_handle::MemoryHandle;
+use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
+use types::error::{CarrierError, CarrierResult};
+use types::tool::{PermissionLevel, ToolDefinition};
 
 pub struct MemoryTools;
 
@@ -95,7 +95,11 @@ impl super::ToolModule for MemoryTools {
 
         let memory = match ctx.memory {
             Some(m) => m,
-            None => return Some(Err(CarrierError::Internal("memory_tree: memory not available".to_string()))),
+            None => {
+                return Some(Err(CarrierError::Internal(
+                    "memory_tree: memory not available".to_string(),
+                )))
+            }
         };
         let owner_id = ctx.owner_id.unwrap_or("default");
         let user_id = ctx.sender_id;
@@ -133,11 +137,9 @@ async fn handle_search_entities(
     owner_id: &str,
     user_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let query = input["query"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput(
-            "query is required for search_entities".to_string(),
-        ))?;
+    let query = input["query"].as_str().ok_or(CarrierError::InvalidInput(
+        "query is required for search_entities".to_string(),
+    ))?;
     let kind = input["kind"].as_str();
     let limit = input["limit"].as_u64().unwrap_or(5) as usize;
 
@@ -165,7 +167,10 @@ async fn handle_search_entities(
     for m in &matches {
         lines.push(format!(
             "- {} (kind: {}, mentions: {}, last seen: {})",
-            m.canonical_id, m.kind, m.mention_count, format_timestamp(m.last_seen_ms)
+            m.canonical_id,
+            m.kind,
+            m.mention_count,
+            format_timestamp(m.last_seen_ms)
         ));
     }
     Ok(lines.join("\n"))
@@ -253,11 +258,9 @@ async fn handle_drill_down(
     owner_id: &str,
     user_id: Option<&str>,
 ) -> CarrierResult<String> {
-    let node_id = input["node_id"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput(
-            "node_id is required for drill_down".to_string(),
-        ))?;
+    let node_id = input["node_id"].as_str().ok_or(CarrierError::InvalidInput(
+        "node_id is required for drill_down".to_string(),
+    ))?;
     let max_depth = input["max_depth"].as_u64().unwrap_or(1) as u32;
     let limit = input["limit"].as_u64().unwrap_or(20) as usize;
 
@@ -277,7 +280,11 @@ async fn handle_drill_down(
 
     let mut lines = Vec::new();
     for hit in &resp.hits {
-        let kind = if hit.node_kind == types::memory_tree::NodeKind::Summary { "summary" } else { "chunk" };
+        let kind = if hit.node_kind == types::memory_tree::NodeKind::Summary {
+            "summary"
+        } else {
+            "chunk"
+        };
         lines.push(format!(
             "[{}|L{}] {} (id: {}, children: [{}])",
             kind,
@@ -328,7 +335,11 @@ async fn handle_fetch_leaves(
 
     let mut lines = Vec::new();
     for hit in &resp.hits {
-        lines.push(format!("[leaf|{}] (id: {})", truncate_content(&hit.content, 300), hit.node_id));
+        lines.push(format!(
+            "[leaf|{}] (id: {})",
+            truncate_content(&hit.content, 300),
+            hit.node_id
+        ));
     }
     Ok(lines.join("\n"))
 }
@@ -344,7 +355,11 @@ fn format_hit_response(resp: types::memory_tree::QueryResponse) -> CarrierResult
 
     let mut lines = Vec::new();
     for hit in &resp.hits {
-        let kind = if hit.node_kind == types::memory_tree::NodeKind::Summary { "summary" } else { "chunk" };
+        let kind = if hit.node_kind == types::memory_tree::NodeKind::Summary {
+            "summary"
+        } else {
+            "chunk"
+        };
         let time = format_time_range(hit.time_range_start_ms, hit.time_range_end_ms);
         let children = if hit.child_ids.is_empty() {
             String::new()
@@ -391,7 +406,11 @@ fn format_timestamp(ms: i64) -> String {
 }
 
 fn format_time_range(start_ms: i64, end_ms: i64) -> String {
-    format!("{} — {}", format_timestamp(start_ms), format_timestamp(end_ms))
+    format!(
+        "{} — {}",
+        format_timestamp(start_ms),
+        format_timestamp(end_ms)
+    )
 }
 
 #[cfg(test)]

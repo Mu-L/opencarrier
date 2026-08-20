@@ -4,10 +4,10 @@ use super::ToolModule;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
+use types::error::{CarrierError, CarrierResult};
+use types::tool::{PermissionLevel, ToolDefinition};
 
 // ---------------------------------------------------------------------------
 // Cross-workspace training tools (for trainer agents)
@@ -19,7 +19,9 @@ async fn tool_train_read(
     _caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
     let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
-    let path = input["path"].as_str().ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
+    let path = input["path"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'path' parameter".to_string(),
+    ))?;
     let full_path = crate::workspace_sandbox::resolve_sandbox_path(path, &target_root)?;
     tokio::fs::read_to_string(&full_path)
         .await
@@ -32,10 +34,12 @@ async fn tool_train_write(
     _caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
     let target_root = crate::tools::resolve_target_workspace(input, kernel)?;
-    let path = input["path"].as_str().ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
-    let content = input["content"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'content' parameter".to_string()))?;
+    let path = input["path"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'path' parameter".to_string(),
+    ))?;
+    let content = input["content"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'content' parameter".to_string(),
+    ))?;
     let full_path = crate::workspace_sandbox::resolve_sandbox_path(path, &target_root)?;
     if let Some(parent) = full_path.parent() {
         tokio::fs::create_dir_all(parent)
@@ -64,11 +68,7 @@ async fn tool_train_list(
         .await
         .map_err(CarrierError::Io)?;
     let mut files = Vec::new();
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .map_err(CarrierError::Io)?
-    {
+    while let Some(entry) = entries.next_entry().await.map_err(CarrierError::Io)? {
         let name = entry.file_name().to_string_lossy().to_string();
         let metadata = entry.metadata().await;
         let suffix = match metadata {
@@ -112,11 +112,14 @@ async fn tool_clone_install(
     crate::tools::validate_clone_name(name)?;
 
     let files_obj = input["files"].as_object().ok_or_else(|| {
-        CarrierError::InvalidInput("Missing 'files' parameter (object of path -> content)".to_string())
+        CarrierError::InvalidInput(
+            "Missing 'files' parameter (object of path -> content)".to_string(),
+        )
     })?;
     if files_obj.is_empty() {
         return Err(CarrierError::InvalidInput(
-            "'files' cannot be empty — at least SOUL.md and system_prompt.md are required".to_string(),
+            "'files' cannot be empty — at least SOUL.md and system_prompt.md are required"
+                .to_string(),
         ));
     }
 
@@ -171,19 +174,24 @@ async fn tool_clone_publish(
         .collect();
     let hash = clone::manifest::manifest_hash(&file_hashes);
 
-    let (hub_url, api_key) = kh
-        .clone_hub_config()
-        .ok_or_else(|| CarrierError::Internal("Hub not configured (hub.url / api_key missing)".into()))?;
+    let (hub_url, api_key) = kh.clone_hub_config().ok_or_else(|| {
+        CarrierError::Internal("Hub not configured (hub.url / api_key missing)".into())
+    })?;
 
-    let template_name = clone::hub::push_dup_files(&hub_url, &api_key, name, &files, &hash, None, None)
-        .await
-        .map_err(|e| CarrierError::Network(format!("Failed to push to Hub: {e}")))?;
+    let template_name =
+        clone::hub::push_dup_files(&hub_url, &api_key, name, &files, &hash, None, None)
+            .await
+            .map_err(|e| CarrierError::Network(format!("Failed to push to Hub: {e}")))?;
 
     let short_hash = &hash[..hash.len().min(12)];
     Ok(format!(
         "已推送到 DupHub: {template_name}（{} 文件，hash={short_hash}{}）",
         files.len(),
-        if added_version { "，已补 version 字段" } else { "" }
+        if added_version {
+            "，已补 version 字段"
+        } else {
+            ""
+        }
     ))
 }
 
@@ -377,11 +385,23 @@ mod tests {
     #[test]
     fn clone_lifecycle_permissions() {
         let tools = TrainingTools;
-        assert_eq!(tools.permission_level("clone_install"), PermissionLevel::Write);
-        assert_eq!(tools.permission_level("clone_publish"), PermissionLevel::Write);
-        assert_eq!(tools.permission_level("clone_export"), PermissionLevel::None);
+        assert_eq!(
+            tools.permission_level("clone_install"),
+            PermissionLevel::Write
+        );
+        assert_eq!(
+            tools.permission_level("clone_publish"),
+            PermissionLevel::Write
+        );
+        assert_eq!(
+            tools.permission_level("clone_export"),
+            PermissionLevel::None
+        );
         // Unknown tools still fail-safe to Dangerous.
-        assert_eq!(tools.permission_level("clone_unknown"), PermissionLevel::Dangerous);
+        assert_eq!(
+            tools.permission_level("clone_unknown"),
+            PermissionLevel::Dangerous
+        );
     }
 
     #[tokio::test]

@@ -48,7 +48,11 @@ pub async fn create_cron_job(
     let agent_id = body["agent_id"].as_str().unwrap_or("");
     let sender_id = body["sender_id"].as_str();
     let owner_id = body["owner_id"].as_str();
-    match state.kernel.cron_create(agent_id, owner_id, sender_id, body.clone()).await {
+    match state
+        .kernel
+        .cron_create(agent_id, owner_id, sender_id, body.clone())
+        .await
+    {
         Ok(result) => (
             StatusCode::CREATED,
             Json(serde_json::json!({"result": result})),

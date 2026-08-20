@@ -4,9 +4,9 @@
 //! replacing the old flat KV/semantic/knowledge stores with a hierarchical
 //! tree structure adapted from OpenHuman.
 
+use crate::error::CarrierResult;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use crate::error::CarrierResult;
 
 // ---------------------------------------------------------------------------
 // Retrieval types (shared between types and memory crates)

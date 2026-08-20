@@ -40,9 +40,7 @@ impl super::ToolModule for DocumentTools {
         ctx: &ToolContext<'_>,
     ) -> Option<CarrierResult<String>> {
         match name {
-            "document_generate" => {
-                Some(tool_document_generate(input, ctx).await)
-            }
+            "document_generate" => Some(tool_document_generate(input, ctx).await),
             _ => None,
         }
     }
@@ -53,9 +51,9 @@ impl super::ToolModule for DocumentTools {
 }
 
 async fn tool_document_generate(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<String> {
-    let format = input["format"]
-        .as_str()
-        .ok_or_else(|| CarrierError::InvalidInput("Missing 'format' (docx/pptx/pdf)".to_string()))?;
+    let format = input["format"].as_str().ok_or_else(|| {
+        CarrierError::InvalidInput("Missing 'format' (docx/pptx/pdf)".to_string())
+    })?;
     let content = input["content"]
         .as_str()
         .ok_or_else(|| CarrierError::InvalidInput("Missing 'content' (markdown)".to_string()))?;
@@ -108,9 +106,9 @@ async fn tool_document_generate(input: &Value, ctx: &ToolContext<'_>) -> Carrier
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| CarrierError::Internal(format!("Failed to run pandoc (is it installed?): {e}")))?;
+    let child = cmd.spawn().map_err(|e| {
+        CarrierError::Internal(format!("Failed to run pandoc (is it installed?): {e}"))
+    })?;
     let output = tokio::time::timeout(std::time::Duration::from_secs(60), child.wait_with_output())
         .await
         .map_err(|_| CarrierError::Internal("Pandoc timed out after 60 seconds".to_string()))?

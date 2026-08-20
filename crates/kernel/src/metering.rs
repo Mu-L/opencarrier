@@ -1,12 +1,12 @@
 //! Metering engine — tracks LLM token usage and enforces budget alerts.
 
+use chrono::Datelike;
 use memory::usage::{UsageRecord, UsageStore, UsageSummary};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use types::agent::AgentId;
 use types::config::BudgetConfig;
 use types::error::CarrierResult;
-use chrono::Datelike;
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 
 /// A budget threshold that was just crossed.
 #[derive(Debug, Clone)]

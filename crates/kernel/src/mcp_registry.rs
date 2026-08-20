@@ -4,9 +4,9 @@
 //! directory structure for installed MCP servers. Generates a single config
 //! snippet file that can be included from config.toml.
 
-use types::mcp_manifest::{McpInstalledRecord, McpServerManifest};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
+use types::mcp_manifest::{McpInstalledRecord, McpServerManifest};
 
 /// Base directory for MCP server data: `~/.opencarrier/mcp-servers/`.
 pub fn mcp_base_dir() -> PathBuf {

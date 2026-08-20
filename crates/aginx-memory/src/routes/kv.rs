@@ -43,7 +43,18 @@ pub async fn kv_set(
     Json(req): Json<KvSetReq>,
 ) -> Result<Json<()>, (axum::http::StatusCode, String)> {
     let store = KvStore::new(state.pool.clone());
-    to_resp(store.set(&req.agent_id, &req.owner_id, &req.user_id, &req.key, req.value).await).map(Json)
+    to_resp(
+        store
+            .set(
+                &req.agent_id,
+                &req.owner_id,
+                &req.user_id,
+                &req.key,
+                req.value,
+            )
+            .await,
+    )
+    .map(Json)
 }
 
 pub async fn kv_get(
@@ -51,7 +62,12 @@ pub async fn kv_get(
     Json(req): Json<KvKeyReq>,
 ) -> Result<Json<Option<Value>>, (axum::http::StatusCode, String)> {
     let store = KvStore::new(state.pool.clone());
-    to_resp(store.get(&req.agent_id, &req.owner_id, &req.user_id, &req.key).await).map(Json)
+    to_resp(
+        store
+            .get(&req.agent_id, &req.owner_id, &req.user_id, &req.key)
+            .await,
+    )
+    .map(Json)
 }
 
 pub async fn kv_list(
@@ -59,7 +75,12 @@ pub async fn kv_list(
     Json(req): Json<KvScopeReq>,
 ) -> Result<Json<Vec<(String, Value)>>, (axum::http::StatusCode, String)> {
     let store = KvStore::new(state.pool.clone());
-    to_resp(store.list_kv(&req.agent_id, &req.owner_id, &req.user_id).await).map(Json)
+    to_resp(
+        store
+            .list_kv(&req.agent_id, &req.owner_id, &req.user_id)
+            .await,
+    )
+    .map(Json)
 }
 
 pub async fn kv_delete(
@@ -67,7 +88,12 @@ pub async fn kv_delete(
     Json(req): Json<KvKeyReq>,
 ) -> Result<Json<()>, (axum::http::StatusCode, String)> {
     let store = KvStore::new(state.pool.clone());
-    to_resp(store.delete(&req.agent_id, &req.owner_id, &req.user_id, &req.key).await).map(Json)
+    to_resp(
+        store
+            .delete(&req.agent_id, &req.owner_id, &req.user_id, &req.key)
+            .await,
+    )
+    .map(Json)
 }
 
 /// Flatten a `CarrierResult<T>` into the axum `Result<Json<T>, _>` shape.

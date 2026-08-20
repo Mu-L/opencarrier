@@ -126,19 +126,26 @@ pub async fn classify_intent(
     // Intent classification is a lightweight LLM call (max_tokens=200).
     // Apply a 30s timeout to prevent it from blocking the entire request
     // if the LLM API is unresponsive.
-    let response = match tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        driver.complete(request),
-    )
-    .await
-    {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(CarrierError::LlmDriver(format!("intent LLM call failed: {e}"))),
-        Err(_) => return Err(CarrierError::LlmDriver("intent LLM call timed out after 30s".to_string())),
-    };
+    let response =
+        match tokio::time::timeout(std::time::Duration::from_secs(30), driver.complete(request))
+            .await
+        {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                return Err(CarrierError::LlmDriver(format!(
+                    "intent LLM call failed: {e}"
+                )))
+            }
+            Err(_) => {
+                return Err(CarrierError::LlmDriver(
+                    "intent LLM call timed out after 30s".to_string(),
+                ))
+            }
+        };
 
     let text = response.text();
-    parse_response(&text).ok_or_else(|| CarrierError::Internal(format!("intent response parse failed: {text}")))
+    parse_response(&text)
+        .ok_or_else(|| CarrierError::Internal(format!("intent response parse failed: {text}")))
 }
 
 #[cfg(test)]
@@ -154,16 +161,15 @@ mod tests {
 
     #[test]
     fn test_parse_with_code_fence() {
-        let r = parse_response(
-            "```json\n{\"is_new\": false, \"reasoning\": \"延续\"}\n```",
-        )
-        .unwrap();
+        let r =
+            parse_response("```json\n{\"is_new\": false, \"reasoning\": \"延续\"}\n```").unwrap();
         assert!(!r.is_new);
     }
 
     #[test]
     fn test_parse_with_surrounding_text() {
-        let r = parse_response(r#"分析结果：{"is_new": true, "reasoning": "new task"} 完成"#).unwrap();
+        let r =
+            parse_response(r#"分析结果：{"is_new": true, "reasoning": "new task"} 完成"#).unwrap();
         assert!(r.is_new);
     }
 

@@ -1,8 +1,8 @@
 //! Agent registry — tracks all agents, their state, and indexes.
 
+use dashmap::DashMap;
 use types::agent::{AgentEntry, AgentId, AgentManifest, AgentMode, AgentState};
 use types::error::{CarrierError, CarrierResult};
-use dashmap::DashMap;
 
 /// Registry of all agents in the kernel.
 pub struct AgentRegistry {
@@ -62,7 +62,8 @@ impl AgentRegistry {
                 .map(|e| (id, e))
                 .ok_or_else(|| CarrierError::AgentNotFound(id.to_string()))
         } else {
-            let entry = self.find_by_name(id_or_name)
+            let entry = self
+                .find_by_name(id_or_name)
                 .ok_or_else(|| CarrierError::AgentNotFound(id_or_name.to_string()))?;
             Ok((entry.id, entry))
         }
@@ -318,9 +319,9 @@ impl Default for AgentRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use types::agent::*;
     use chrono::Utc;
     use std::collections::HashMap;
+    use types::agent::*;
 
     fn test_entry(name: &str) -> AgentEntry {
         AgentEntry {

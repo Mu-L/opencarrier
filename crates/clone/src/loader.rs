@@ -88,10 +88,9 @@ impl TemplateManifest {
                     arr.iter()
                         .filter_map(|item| match item {
                             serde_json::Value::String(s) => Some(s.clone()),
-                            serde_json::Value::Object(o) => o
-                                .get("name")
-                                .and_then(|n| n.as_str())
-                                .map(str::to_string),
+                            serde_json::Value::Object(o) => {
+                                o.get("name").and_then(|n| n.as_str()).map(str::to_string)
+                            }
                             _ => None,
                         })
                         .collect()

@@ -1,8 +1,8 @@
 //! WeChat iLink plugin tools — built-in, no FFI.
 
+use serde_json::Value;
 use types::plugin::PluginToolContext;
 use types::tool::{PluginToolDef, PluginToolError, ToolProvider};
-use serde_json::Value;
 
 use crate::auth;
 use crate::token::WEIXIN_STATE;
@@ -22,11 +22,12 @@ impl ToolProvider for WeixinQrLoginTool {
         }
     }
 
-    fn execute(&self, args: &Value, _context: &PluginToolContext) -> Result<String, PluginToolError> {
-        let bot_id = args["bot_id"]
-            .as_str()
-            .unwrap_or("default")
-            .to_string();
+    fn execute(
+        &self,
+        args: &Value,
+        _context: &PluginToolContext,
+    ) -> Result<String, PluginToolError> {
+        let bot_id = args["bot_id"].as_str().unwrap_or("default").to_string();
 
         let http = crate::build_http_client();
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -56,7 +57,11 @@ impl ToolProvider for WeixinSendMessageTool {
         }
     }
 
-    fn execute(&self, args: &Value, _context: &PluginToolContext) -> Result<String, PluginToolError> {
+    fn execute(
+        &self,
+        args: &Value,
+        _context: &PluginToolContext,
+    ) -> Result<String, PluginToolError> {
         let bot_id = args["bot_id"]
             .as_str()
             .ok_or_else(|| PluginToolError::tool("missing bot_id"))?;
@@ -69,10 +74,14 @@ impl ToolProvider for WeixinSendMessageTool {
 
         let state = WEIXIN_STATE
             .get_session_for_send(bot_id, user_id)
-            .ok_or_else(|| PluginToolError::tool(format!("No session for bot {bot_id}, user {user_id}")))?;
+            .ok_or_else(|| {
+                PluginToolError::tool(format!("No session for bot {bot_id}, user {user_id}"))
+            })?;
 
         if state.is_expired() {
-            return Err(PluginToolError::tool("Token expired, please re-scan QR code"));
+            return Err(PluginToolError::tool(
+                "Token expired, please re-scan QR code",
+            ));
         }
 
         // context_token optional (verified 2026-08-19): bare sends deliver
@@ -123,7 +132,11 @@ impl ToolProvider for WeixinSendImageTool {
         }
     }
 
-    fn execute(&self, args: &Value, _context: &PluginToolContext) -> Result<String, PluginToolError> {
+    fn execute(
+        &self,
+        args: &Value,
+        _context: &PluginToolContext,
+    ) -> Result<String, PluginToolError> {
         let bot_id = args["bot_id"]
             .as_str()
             .ok_or_else(|| PluginToolError::tool("missing bot_id"))?;
@@ -136,10 +149,14 @@ impl ToolProvider for WeixinSendImageTool {
 
         let state = WEIXIN_STATE
             .get_session_for_send(bot_id, user_id)
-            .ok_or_else(|| PluginToolError::tool(format!("No session for bot {bot_id}, user {user_id}")))?;
+            .ok_or_else(|| {
+                PluginToolError::tool(format!("No session for bot {bot_id}, user {user_id}"))
+            })?;
 
         if state.is_expired() {
-            return Err(PluginToolError::tool("Token expired, please re-scan QR code"));
+            return Err(PluginToolError::tool(
+                "Token expired, please re-scan QR code",
+            ));
         }
 
         // context_token optional — see send_message tool note.
@@ -188,7 +205,11 @@ impl ToolProvider for WeixinSendVideoTool {
         }
     }
 
-    fn execute(&self, args: &Value, _context: &PluginToolContext) -> Result<String, PluginToolError> {
+    fn execute(
+        &self,
+        args: &Value,
+        _context: &PluginToolContext,
+    ) -> Result<String, PluginToolError> {
         let bot_id = args["bot_id"]
             .as_str()
             .ok_or_else(|| PluginToolError::tool("missing bot_id"))?;
@@ -201,10 +222,14 @@ impl ToolProvider for WeixinSendVideoTool {
 
         let state = WEIXIN_STATE
             .get_session_for_send(bot_id, user_id)
-            .ok_or_else(|| PluginToolError::tool(format!("No session for bot {bot_id}, user {user_id}")))?;
+            .ok_or_else(|| {
+                PluginToolError::tool(format!("No session for bot {bot_id}, user {user_id}"))
+            })?;
 
         if state.is_expired() {
-            return Err(PluginToolError::tool("Token expired, please re-scan QR code"));
+            return Err(PluginToolError::tool(
+                "Token expired, please re-scan QR code",
+            ));
         }
 
         // context_token optional — see send_message tool note.
@@ -253,7 +278,11 @@ impl ToolProvider for WeixinStatusTool {
         }
     }
 
-    fn execute(&self, _args: &Value, _context: &PluginToolContext) -> Result<String, PluginToolError> {
+    fn execute(
+        &self,
+        _args: &Value,
+        _context: &PluginToolContext,
+    ) -> Result<String, PluginToolError> {
         let statuses = WEIXIN_STATE.status_list();
         if statuses.is_empty() {
             return Ok("No WeChat accounts linked. Use weixin_qr_login to link one.".to_string());

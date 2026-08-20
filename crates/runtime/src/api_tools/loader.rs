@@ -32,7 +32,8 @@ pub fn load_all_api_tools(home_dir: &Path, workspace_dir: Option<&Path>) -> Vec<
         let ws_path = ws.join("api_tools.toml");
         let ws_tools = load_api_tools_file(&ws_path);
 
-        let global_names: std::collections::HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
+        let global_names: std::collections::HashSet<String> =
+            tools.iter().map(|t| t.name.clone()).collect();
 
         for tool in ws_tools {
             if global_names.contains(&tool.name) {

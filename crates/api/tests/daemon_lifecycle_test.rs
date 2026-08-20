@@ -3,16 +3,16 @@
 //! Tests the real daemon startup, PID file management, health serving,
 //! and graceful shutdown sequence.
 
-use axum::Router;
 use api::middleware;
 use api::routes::{self, AppState};
 use api::server::{read_daemon_info, DaemonInfo};
+use axum::Router;
 use kernel::CarrierKernel;
-use types::config::{DefaultModelConfig, KernelConfig};
 use std::sync::Arc;
 use std::time::Instant;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
+use types::config::{DefaultModelConfig, KernelConfig};
 
 // ---------------------------------------------------------------------------
 // Tests

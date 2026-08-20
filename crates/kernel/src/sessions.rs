@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
+use tracing::{debug, info, warn};
 use types::agent::*;
 use types::error::CarrierError;
-use tracing::{debug, info, warn};
 
 use crate::error::{KernelError, KernelResult};
 use crate::kernel::CarrierKernel;
@@ -120,7 +120,11 @@ impl CarrierKernel {
             KernelError::Carrier(CarrierError::AgentNotFound(agent_id.to_string()))
         })?;
 
-        let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
+        let agent_name = self
+            .registry
+            .get(agent_id)
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| agent_id.to_string());
         let session = self
             .memory
             .create_session_with_label(agent_name, label)
@@ -451,7 +455,11 @@ impl CarrierKernel {
         &self,
         entry: &AgentEntry,
         purpose: &str,
-    ) -> KernelResult<(String, String, std::sync::Arc<dyn runtime::llm_driver::LlmDriver>)> {
+    ) -> KernelResult<(
+        String,
+        String,
+        std::sync::Arc<dyn runtime::llm_driver::LlmDriver>,
+    )> {
         let modality = if self.brain_read().has_modality("fast") {
             "fast".to_string()
         } else {
@@ -485,7 +493,10 @@ impl CarrierKernel {
         owner_id: Option<&str>,
         user_id: Option<&str>,
     ) -> KernelResult<String> {
-        use runtime::compactor::{compact_session, needs_compaction, needs_compaction_by_tokens, estimate_token_count, CompactionConfig};
+        use runtime::compactor::{
+            compact_session, estimate_token_count, needs_compaction, needs_compaction_by_tokens,
+            CompactionConfig,
+        };
 
         let entry = self.registry.get(agent_id).ok_or_else(|| {
             KernelError::Carrier(CarrierError::AgentNotFound(agent_id.to_string()))
@@ -500,7 +511,7 @@ impl CarrierKernel {
                 agent_name: entry.name.clone(),
                 messages: Vec::new(),
                 context_window_tokens: 0,
-                    turn_summaries: Vec::new(),
+                turn_summaries: Vec::new(),
                 label: None,
             });
 
@@ -636,7 +647,7 @@ impl CarrierKernel {
                     agent_id = %agent_id, error = %e,
                     "Failed to persist compaction summary to kv"
                 ),
-                }
+            }
         }
 
         // 2. Flush structured facts via the same idempotent merge the
@@ -661,7 +672,9 @@ impl CarrierKernel {
             updated_session.messages.len()
         );
         if cleared_summaries > 0 {
-            msg.push_str(&format!(" Cleared {cleared_summaries} stale turn summaries (L0 rebuilds)."));
+            msg.push_str(&format!(
+                " Cleared {cleared_summaries} stale turn summaries (L0 rebuilds)."
+            ));
         }
 
         let repairs = repair_stats.orphaned_results_removed
@@ -720,16 +733,21 @@ impl CarrierKernel {
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    if text.is_empty() { None } else { Some(text) }
+                    if text.is_empty() {
+                        None
+                    } else {
+                        Some(text)
+                    }
                 }
             });
 
         // Prefer the "fast" modality for cheap/quick classification.
         let (_modality, model, driver) = self.resolve_fast_llm(entry, "classifier")?;
 
-        let classification = classify_intent(driver, &model, last_assistant.as_deref(), new_user_msg)
-            .await
-            .map_err(KernelError::Carrier)?;
+        let classification =
+            classify_intent(driver, &model, last_assistant.as_deref(), new_user_msg)
+                .await
+                .map_err(KernelError::Carrier)?;
 
         if classification.is_new {
             tracing::info!(
@@ -775,18 +793,21 @@ impl CarrierKernel {
                 agent_name: entry.name.clone(),
                 messages: Vec::new(),
                 context_window_tokens: 0,
-                    turn_summaries: Vec::new(),
+                turn_summaries: Vec::new(),
                 label: None,
             });
 
         let system_prompt = &entry.manifest.model.system_prompt;
         // Core tool set (same as messaging.rs — other tools found via tool_search)
-        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions(self.config.cli_exec.clone())
-            .into_iter()
-            .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
-            .collect();
+        let mut tools: Vec<types::tool::ToolDefinition> =
+            runtime::tool_runner::builtin_tool_definitions(self.config.cli_exec.clone())
+                .into_iter()
+                .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
+                .collect();
         if !entry.manifest.subagents.is_empty() {
-            tools.extend(types::agent::build_subagent_tool_definitions(&entry.manifest.subagents));
+            tools.extend(types::agent::build_subagent_tool_definitions(
+                &entry.manifest.subagents,
+            ));
         }
         // Use 200K default or the model's known context window
         let context_window = if session.context_window_tokens > 0 {

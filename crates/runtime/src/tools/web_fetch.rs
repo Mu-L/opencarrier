@@ -7,12 +7,12 @@
 use super::ToolModule;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
+use serde_json::Value;
 use std::collections::HashSet;
 use tracing::warn;
+use types::error::{CarrierError, CarrierResult};
 use types::taint::{TaintLabel, TaintSink, TaintedValue};
 use types::tool::{PermissionLevel, ToolDefinition};
-use serde_json::Value;
 
 pub struct WebFetchModule;
 
@@ -51,12 +51,18 @@ impl ToolModule for WebFetchModule {
 
         // Taint check — block URLs containing API keys/tokens/secrets
         if let Some(violation) = check_taint_net_fetch(url) {
-            return Some(Err(CarrierError::Network(format!("Taint violation: {violation}"))));
+            return Some(Err(CarrierError::Network(format!(
+                "Taint violation: {violation}"
+            ))));
         }
 
         let engine = match ctx.fetch_engine {
             Some(e) => e,
-            None => return Some(Err(CarrierError::Internal("Web fetch not available".to_string()))),
+            None => {
+                return Some(Err(CarrierError::Internal(
+                    "Web fetch not available".to_string(),
+                )))
+            }
         };
 
         let method = input["method"].as_str().unwrap_or("GET");

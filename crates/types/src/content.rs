@@ -153,13 +153,15 @@ impl ContentDescriptor {
                 self.link.get_or_insert_with(LinkContent::default).url = value.to_string();
             }
             "link.pic_url" => {
-                self.link.get_or_insert_with(LinkContent::default).pic_url = Some(value.to_string());
+                self.link.get_or_insert_with(LinkContent::default).pic_url =
+                    Some(value.to_string());
             }
             "image.url" => {
                 self.image.get_or_insert_with(MediaRef::default).url = Some(value.to_string());
             }
             "image.file_path" => {
-                self.image.get_or_insert_with(MediaRef::default).file_path = Some(value.to_string());
+                self.image.get_or_insert_with(MediaRef::default).file_path =
+                    Some(value.to_string());
             }
             "image.media_id" => {
                 self.image.get_or_insert_with(MediaRef::default).media_id = Some(value.to_string());
@@ -168,7 +170,8 @@ impl ContentDescriptor {
                 self.video.get_or_insert_with(MediaRef::default).url = Some(value.to_string());
             }
             "video.file_path" => {
-                self.video.get_or_insert_with(MediaRef::default).file_path = Some(value.to_string());
+                self.video.get_or_insert_with(MediaRef::default).file_path =
+                    Some(value.to_string());
             }
             "video.media_id" => {
                 self.video.get_or_insert_with(MediaRef::default).media_id = Some(value.to_string());
@@ -186,7 +189,8 @@ impl ContentDescriptor {
                 self.voice.get_or_insert_with(MediaRef::default).url = Some(value.to_string());
             }
             "voice.file_path" => {
-                self.voice.get_or_insert_with(MediaRef::default).file_path = Some(value.to_string());
+                self.voice.get_or_insert_with(MediaRef::default).file_path =
+                    Some(value.to_string());
             }
             "voice.media_id" => {
                 self.voice.get_or_insert_with(MediaRef::default).media_id = Some(value.to_string());
@@ -227,14 +231,17 @@ impl ContentDescriptor {
                     .template_id = value.to_string();
             }
             "template.url" => {
-                self.template.get_or_insert_with(TemplateContent::default).url =
-                    Some(value.to_string());
+                self.template
+                    .get_or_insert_with(TemplateContent::default)
+                    .url = Some(value.to_string());
             }
             // `template.data` is a JSON object, not a scalar — deliberately NOT
             // overridable via `field=value` strings (falls into the unknown-
             // field error arm below on purpose).
             _ => {
-                return Err(CarrierError::InvalidInput(format!("unknown override field: {field}")));
+                return Err(CarrierError::InvalidInput(format!(
+                    "unknown override field: {field}"
+                )));
             }
         }
         Ok(())
@@ -305,7 +312,10 @@ thumb_url = "https://mmecoa.qpic.cn/cover.png"
         let mp = d.miniprogram.as_ref().unwrap();
         assert_eq!(mp.appid, "wxabc");
         assert_eq!(mp.thumb_media_id.as_deref(), Some("OA_PERM"));
-        assert_eq!(mp.thumb_url.as_deref(), Some("https://mmecoa.qpic.cn/cover.png"));
+        assert_eq!(
+            mp.thumb_url.as_deref(),
+            Some("https://mmecoa.qpic.cn/cover.png")
+        );
         assert!(cfg.get("不存在").is_none());
     }
 
@@ -343,9 +353,27 @@ thumb_url = "https://mmecoa.qpic.cn/cover.png"
         assert!(full.is_complete());
         // Missing any of appid/pagepath/title -> not complete (partial override
         // case: must degrade instead of sending a broken card).
-        assert!(!MiniprogramContent { appid: String::new(), pagepath: "p".into(), title: "t".into(), ..Default::default() }.is_complete());
-        assert!(!MiniprogramContent { appid: "wx".into(), pagepath: String::new(), title: "t".into(), ..Default::default() }.is_complete());
-        assert!(!MiniprogramContent { appid: "wx".into(), pagepath: "p".into(), title: String::new(), ..Default::default() }.is_complete());
+        assert!(!MiniprogramContent {
+            appid: String::new(),
+            pagepath: "p".into(),
+            title: "t".into(),
+            ..Default::default()
+        }
+        .is_complete());
+        assert!(!MiniprogramContent {
+            appid: "wx".into(),
+            pagepath: String::new(),
+            title: "t".into(),
+            ..Default::default()
+        }
+        .is_complete());
+        assert!(!MiniprogramContent {
+            appid: "wx".into(),
+            pagepath: "p".into(),
+            title: String::new(),
+            ..Default::default()
+        }
+        .is_complete());
     }
 
     #[test]
@@ -385,7 +413,10 @@ thumb_url = "https://mmecoa.qpic.cn/cover.png"
         d2.apply_override("template.url", "https://y").unwrap();
         assert!(d2.apply_override("template.data", "{}").is_err());
         assert!(d2.template.as_ref().unwrap().is_complete());
-        assert_eq!(d2.template.as_ref().unwrap().url.as_deref(), Some("https://y"));
+        assert_eq!(
+            d2.template.as_ref().unwrap().url.as_deref(),
+            Some("https://y")
+        );
 
         // Round-trip through the full descriptor.
         let rt: ContentDescriptor =

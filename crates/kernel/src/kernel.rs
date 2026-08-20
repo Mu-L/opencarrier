@@ -7,10 +7,10 @@ use crate::config::load_config;
 use crate::error::{KernelError, KernelResult};
 use crate::event_bus::EventBus;
 use crate::metering::MeteringEngine;
+use crate::prompt_sources::read_identity_file;
 use crate::registry::AgentRegistry;
 use crate::scheduler::AgentScheduler;
 use crate::supervisor::Supervisor;
-use crate::prompt_sources::read_identity_file;
 use crate::workspace::{ensure_workspace, generate_identity_files};
 use memory::MemorySubstrate;
 use runtime::audit::AuditLog;
@@ -38,7 +38,8 @@ pub struct KernelA2a {
     /// A2A task store for tracking task lifecycle.
     pub a2a_task_store: runtime::a2a::A2aTaskStore,
     /// Discovered external A2A agent cards with discovery timestamp.
-    pub a2a_external_agents: std::sync::Mutex<Vec<(String, runtime::a2a::AgentCard, std::time::Instant)>>,
+    pub a2a_external_agents:
+        std::sync::Mutex<Vec<(String, runtime::a2a::AgentCard, std::time::Instant)>>,
 }
 
 impl KernelA2a {
@@ -49,7 +50,9 @@ impl KernelA2a {
         const STALE_TTL_SECS: u64 = 600; // 10 minutes
         if let Ok(mut agents) = self.a2a_external_agents.lock() {
             let now = std::time::Instant::now();
-            agents.retain(|(_, _, discovered_at)| now.duration_since(*discovered_at).as_secs() < STALE_TTL_SECS);
+            agents.retain(|(_, _, discovered_at)| {
+                now.duration_since(*discovered_at).as_secs() < STALE_TTL_SECS
+            });
         }
     }
 }
@@ -149,8 +152,7 @@ pub struct CarrierKernel {
     /// Channel deliver function: (channel_type, bot_id, user_id, content) -> Result.
     /// Wired up alongside channel_send_fn. Backs `[DELIVER:key]` marker handling
     /// and script/no-agent rich-content delivery.
-    pub channel_deliver_fn:
-        std::sync::RwLock<Option<runtime::plugin::bridge::ChannelDeliverFn>>,
+    pub channel_deliver_fn: std::sync::RwLock<Option<runtime::plugin::bridge::ChannelDeliverFn>>,
     /// Channel proactive-push capability probe: channel_type → bool.
     /// Wired up alongside channel_send_fn.
     pub channel_supports_proactive_fn: std::sync::RwLock<Option<ChannelProactivePushFn>>,
@@ -177,18 +179,19 @@ impl CarrierKernel {
         hub: &types::config::HubConfig,
         brain_path: &std::path::Path,
     ) -> CarrierResult<types::brain::BrainConfig> {
-        let api_key = std::env::var(&hub.api_key_env)
-            .map_err(|_| CarrierError::Config(format!("Environment variable {} not set", hub.api_key_env)))?;
+        let api_key = std::env::var(&hub.api_key_env).map_err(|_| {
+            CarrierError::Config(format!("Environment variable {} not set", hub.api_key_env))
+        })?;
 
         let rt = tokio::runtime::Runtime::new()
             .map_err(|e| CarrierError::Internal(format!("Failed to create tokio runtime: {e}")))?;
-        let json_value = rt.block_on(
-            clone::hub::fetch_brain_config(&hub.url, &api_key)
-        )
-        .map_err(|e| CarrierError::Internal(format!("Hub brain config fetch failed: {e}")))?;
+        let json_value = rt
+            .block_on(clone::hub::fetch_brain_config(&hub.url, &api_key))
+            .map_err(|e| CarrierError::Internal(format!("Hub brain config fetch failed: {e}")))?;
 
-        let json_str = serde_json::to_string(&json_value)
-            .map_err(|e| CarrierError::Internal(format!("Failed to serialize brain config: {e}")))?;
+        let json_str = serde_json::to_string(&json_value).map_err(|e| {
+            CarrierError::Internal(format!("Failed to serialize brain config: {e}"))
+        })?;
 
         let config: types::brain::BrainConfig = serde_json::from_str(&json_str)
             .map_err(|e| CarrierError::Internal(format!("Invalid brain config from Hub: {e}")))?;
@@ -290,16 +293,16 @@ impl CarrierKernel {
                 extra: Default::default(),
             };
 
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(60),
-                driver.complete(request),
-            ).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(60), driver.complete(request))
+                .await
+            {
                 Ok(Ok(completion)) => {
                     let text = completion.text();
                     match lifecycle::evolution::parse_analysis_response(&text) {
                         Ok(analysis) => {
                             let saved = lifecycle::evolution::apply_evolution(
-                                &workspace, &analysis,
+                                &workspace,
+                                &analysis,
                                 owner_id_owned.as_deref(),
                                 sender_id_owned.as_deref(),
                                 Some(&home_dir),
@@ -314,18 +317,15 @@ impl CarrierKernel {
                             // Feedback pipeline — anonymize and push to Hub
                             if feedback_to_hub && !analysis.knowledge.is_empty() {
                                 for candidate in &analysis.knowledge {
-                                    let (sys, user) =
-                                        lifecycle::feedback::build_anonymize_prompt(
-                                            &candidate.title,
-                                            &candidate.content,
-                                        );
+                                    let (sys, user) = lifecycle::feedback::build_anonymize_prompt(
+                                        &candidate.title,
+                                        &candidate.content,
+                                    );
                                     let anon_req = runtime::llm_driver::CompletionRequest {
                                         model: String::new(),
                                         messages: vec![types::message::Message {
                                             role: types::message::Role::User,
-                                            content: types::message::MessageContent::Text(
-                                                user,
-                                            ),
+                                            content: types::message::MessageContent::Text(user),
                                         }],
                                         tools: vec![],
                                         max_tokens: 1024,
@@ -337,7 +337,9 @@ impl CarrierKernel {
                                     match tokio::time::timeout(
                                         std::time::Duration::from_secs(30),
                                         driver.complete(anon_req),
-                                    ).await {
+                                    )
+                                    .await
+                                    {
                                         Ok(Ok(anon_resp)) => {
                                             let anon_text = anon_resp.text();
                                             let (title, content) =
@@ -345,16 +347,17 @@ impl CarrierKernel {
                                                     &anon_text,
                                                 )
                                                 .unwrap_or_else(|_| {
-                                                    (candidate.title.clone(), candidate.content.clone())
+                                                    (
+                                                        candidate.title.clone(),
+                                                        candidate.content.clone(),
+                                                    )
                                                 });
-                                            if let Err(e) =
-                                                lifecycle::feedback::save_feedback(
-                                                    &workspace,
-                                                    &clone_name,
-                                                    &title,
-                                                    &content,
-                                                )
-                                            {
+                                            if let Err(e) = lifecycle::feedback::save_feedback(
+                                                &workspace,
+                                                &clone_name,
+                                                &title,
+                                                &content,
+                                            ) {
                                                 tracing::warn!(error = %e, "Feedback: failed to save");
                                             }
                                         }
@@ -362,7 +365,9 @@ impl CarrierKernel {
                                             tracing::warn!(error = %e, "Feedback: anonymize LLM failed");
                                         }
                                         Err(_) => {
-                                            tracing::warn!("Feedback: anonymize LLM timed out after 30s");
+                                            tracing::warn!(
+                                                "Feedback: anonymize LLM timed out after 30s"
+                                            );
                                         }
                                     }
                                 }
@@ -483,9 +488,8 @@ impl CarrierKernel {
             let json_str = std::fs::read_to_string(&brain_path).map_err(|e| {
                 KernelError::BootFailed(format!("Cannot read {}: {e}", brain_path.display()))
             })?;
-            let brain_config: types::brain::BrainConfig =
-                serde_json::from_str(&json_str)
-                    .map_err(|e| KernelError::BootFailed(format!("Invalid brain.json: {e}")))?;
+            let brain_config: types::brain::BrainConfig = serde_json::from_str(&json_str)
+                .map_err(|e| KernelError::BootFailed(format!("Invalid brain.json: {e}")))?;
             let brain = Brain::new(brain_config)
                 .map_err(|e| KernelError::BootFailed(format!("Brain init failed: {e}")))?;
             info!("Brain loaded from {}", brain_path.display());
@@ -536,14 +540,11 @@ impl CarrierKernel {
         // Initialize web fetch engine (SSRF-protected fetch + caching)
         let cache_ttl = std::time::Duration::from_secs(config.web.cache_ttl_minutes * 60);
         let web_cache = Arc::new(runtime::web_cache::WebCache::new(cache_ttl));
-        let fetch_engine = runtime::web_fetch::WebFetchEngine::new(
-            config.web.fetch.clone(),
-            web_cache,
-        );
+        let fetch_engine =
+            runtime::web_fetch::WebFetchEngine::new(config.web.fetch.clone(), web_cache);
 
         // Initialize media understanding engine
-        let media_engine =
-            runtime::media_understanding::MediaEngine::new(config.media.clone());
+        let media_engine = runtime::media_understanding::MediaEngine::new(config.media.clone());
 
         // Initialize cron scheduler with DB-backed persistence
         let mut cron_scheduler =
@@ -853,15 +854,17 @@ impl CarrierKernel {
     /// Call this before `spawn_agent` when a `SignedManifest` JSON is provided
     /// alongside the TOML. Returns the verified manifest TOML string on success.
     pub fn verify_signed_manifest(&self, signed_json: &str) -> KernelResult<String> {
-        let signed: types::manifest_signing::SignedManifest =
-            serde_json::from_str(signed_json).map_err(|e| {
+        let signed: types::manifest_signing::SignedManifest = serde_json::from_str(signed_json)
+            .map_err(|e| {
                 KernelError::Carrier(types::error::CarrierError::Config(format!(
                     "Invalid signed manifest JSON: {e}"
                 )))
             })?;
 
         // Verify using trust store if trusted keys are configured
-        let trusted_keys: Vec<ed25519_dalek::VerifyingKey> = self.config.trusted_signing_keys
+        let trusted_keys: Vec<ed25519_dalek::VerifyingKey> = self
+            .config
+            .trusted_signing_keys
             .iter()
             .filter_map(|hex_str| {
                 let bytes = hex::decode(hex_str).ok()?;
@@ -870,7 +873,9 @@ impl CarrierKernel {
             })
             .collect();
         if !trusted_keys.is_empty() {
-            signed.verify_with_trust_store(&trusted_keys).map_err(KernelError::Carrier)?;
+            signed
+                .verify_with_trust_store(&trusted_keys)
+                .map_err(KernelError::Carrier)?;
         } else {
             // Fallback: verify with embedded key + warn
             warn!("No trusted_signing_keys configured — verifying with embedded key (less secure)");
@@ -889,7 +894,8 @@ impl CarrierKernel {
             std::collections::HashMap::new();
 
         // Group builtin tools by toolset
-        let all_builtins = runtime::tool_runner::builtin_tool_definitions(self.config.cli_exec.clone());
+        let all_builtins =
+            runtime::tool_runner::builtin_tool_definitions(self.config.cli_exec.clone());
         for tool in &all_builtins {
             if let Some(ts_name) = Self::tool_to_toolset(&tool.name) {
                 registry
@@ -915,23 +921,28 @@ impl CarrierKernel {
     /// Map a builtin tool name to its toolset. Returns None for core tools.
     fn tool_to_toolset(name: &str) -> Option<&'static str> {
         match name {
-            "session_summarize"
-            | "tool_search"
-            | "flow_load" | "flow_create" | "flow_update"
-            | "knowledge_read" | "knowledge_list"
-            | "file_read" | "file_list"
-            | "cron_create" | "cron_list" | "cron_cancel"
-            | "memory_tree"
-            | "task_plan" => None,
+            "session_summarize" | "tool_search" | "flow_load" | "flow_create" | "flow_update"
+            | "knowledge_read" | "knowledge_list" | "file_read" | "file_list" | "cron_create"
+            | "cron_list" | "cron_cancel" | "memory_tree" | "task_plan" => None,
             n if n.starts_with("file_") => Some("filesystem"),
             "shell_exec" => Some("shell"),
-            n if n.starts_with("knowledge_") || n.starts_with("flow_") || n == "clone_evaluate" => Some("knowledge"),
+            n if n.starts_with("knowledge_") || n.starts_with("flow_") || n == "clone_evaluate" => {
+                Some("knowledge")
+            }
             n if n.starts_with("memory_") => Some("memory"),
-            n if n.starts_with("media_") || n.starts_with("image_") || n == "text_to_speech" || n == "speech_to_text" => Some("media"),
+            n if n.starts_with("media_")
+                || n.starts_with("image_")
+                || n == "text_to_speech"
+                || n == "speech_to_text" =>
+            {
+                Some("media")
+            }
             n if n.starts_with("web_") => Some("web"),
             n if n.starts_with("browser_") => Some("browser"),
             n if n.starts_with("agent_") || n.starts_with("train_") => Some("agent"),
-            n if n.starts_with("location_") || n.starts_with("system_") || n == "user_profile" => Some("misc"),
+            n if n.starts_with("location_") || n.starts_with("system_") || n == "user_profile" => {
+                Some("misc")
+            }
             n if n.starts_with("process_") => Some("process"),
             "apply_patch" => Some("filesystem"),
             _ => Some("misc"),
@@ -950,7 +961,8 @@ impl CarrierKernel {
         };
 
         if !registry.is_empty() {
-            summary.push_str("\n\n--- Built-in Toolsets ---\nAll tools are available directly.\n\n");
+            summary
+                .push_str("\n\n--- Built-in Toolsets ---\nAll tools are available directly.\n\n");
 
             let mut entries: Vec<_> = registry.iter().collect();
             entries.sort_by_key(|(name, _)| name.as_str());
@@ -963,7 +975,12 @@ impl CarrierKernel {
                     examples.join(", ")
                 };
 
-                summary.push_str(&format!("- [{}] {} tools: {}\n", name, tools.len(), example_str));
+                summary.push_str(&format!(
+                    "- [{}] {} tools: {}\n",
+                    name,
+                    tools.len(),
+                    example_str
+                ));
             }
         }
 
@@ -979,9 +996,18 @@ impl CarrierKernel {
                 } else {
                     format!(": {}", config.description)
                 };
-                let tool_names: Vec<&str> = conn.tools().iter().take(3).map(|t| t.name.as_str()).collect();
+                let tool_names: Vec<&str> = conn
+                    .tools()
+                    .iter()
+                    .take(3)
+                    .map(|t| t.name.as_str())
+                    .collect();
                 let tool_str = if conn.tools().len() > 3 {
-                    format!("{}, ... ({} total)", tool_names.join(", "), conn.tools().len())
+                    format!(
+                        "{}, ... ({} total)",
+                        tool_names.join(", "),
+                        conn.tools().len()
+                    )
                 } else {
                     tool_names.join(", ")
                 };
@@ -1025,7 +1051,11 @@ impl CarrierKernel {
         use types::memory_tree::{GlobalQuery, SourceQuery};
 
         // Tree ingest partition: owner_id.unwrap_or("default"), user = sender.
-        let tree_owner = if owner_id.is_empty() { "default" } else { owner_id };
+        let tree_owner = if owner_id.is_empty() {
+            "default"
+        } else {
+            owner_id
+        };
 
         let handle = crate::handle::make_memory_handle(std::sync::Arc::clone(&self.memory));
         // Route through the injected handle so AGINXMEMORY_URL (external
@@ -1089,7 +1119,11 @@ impl CarrierKernel {
                     scope: h.tree_scope.clone(),
                     kind: h.tree_kind.to_string(),
                     content: h.content.chars().take(500).collect(),
-                    time_range: format!("{} — {}", Self::format_time_ms(h.time_range_start_ms), Self::format_time_ms(h.time_range_end_ms)),
+                    time_range: format!(
+                        "{} — {}",
+                        Self::format_time_ms(h.time_range_start_ms),
+                        Self::format_time_ms(h.time_range_end_ms)
+                    ),
                 })
                 .collect(),
             Err(e) => {
@@ -1286,7 +1320,12 @@ impl CarrierKernel {
             sender_id: sender_id.clone(),
             sender_name,
             user_profile_summary: sender_id.as_ref().and_then(|sid| {
-                crate::prompt_sources::read_user_profile_summary(&self.config.home_dir, oid, &manifest.name, Some(sid))
+                crate::prompt_sources::read_user_profile_summary(
+                    &self.config.home_dir,
+                    oid,
+                    &manifest.name,
+                    Some(sid),
+                )
             }),
             // Admin session signal — creator/approved admin per admins.json.
             // Drives the [管理员会话] prompt section + admin-gated tools.
@@ -1311,10 +1350,15 @@ impl CarrierKernel {
                 .workspace
                 .as_ref()
                 .and_then(|w| crate::prompt_sources::read_workspace_flows_prompts(w)),
-            knowledge_content: manifest
-                .workspace
-                .as_ref()
-                .and_then(|w| crate::prompt_sources::read_knowledge_content(w, Some(oid), sender_id.as_deref(), Some(&self.config.home_dir), Some(&manifest.name))),
+            knowledge_content: manifest.workspace.as_ref().and_then(|w| {
+                crate::prompt_sources::read_knowledge_content(
+                    w,
+                    Some(oid),
+                    sender_id.as_deref(),
+                    Some(&self.config.home_dir),
+                    Some(&manifest.name),
+                )
+            }),
             clone_agents_md: manifest
                 .workspace
                 .as_ref()
@@ -1327,10 +1371,9 @@ impl CarrierKernel {
                 .workspace
                 .as_ref()
                 .and_then(|w| crate::prompt_sources::read_identity_file(w, "MENTAL-MODELS.md")),
-            decision_heuristics_md: manifest
-                .workspace
-                .as_ref()
-                .and_then(|w| crate::prompt_sources::read_identity_file(w, "DECISION-HEURISTICS.md")),
+            decision_heuristics_md: manifest.workspace.as_ref().and_then(|w| {
+                crate::prompt_sources::read_identity_file(w, "DECISION-HEURISTICS.md")
+            }),
             expression_dna_md: manifest
                 .workspace
                 .as_ref()
@@ -1345,8 +1388,7 @@ impl CarrierKernel {
             task_id,
             chain_id,
         };
-        manifest.model.system_prompt =
-            runtime::prompt_builder::build_system_prompt(&prompt_ctx);
+        manifest.model.system_prompt = runtime::prompt_builder::build_system_prompt(&prompt_ctx);
     }
 
     /// Push a notification to admins (automation `notify_admin` rule bypass).
@@ -1371,9 +1413,7 @@ impl CarrierKernel {
                 .iter()
                 .find(|r| r.name == notify_type)
                 .cloned()
-                .ok_or_else(|| {
-                    CarrierError::Config(format!("no notify route '{notify_type}'"))
-                })?
+                .ok_or_else(|| CarrierError::Config(format!("no notify route '{notify_type}'")))?
         };
 
         // 2. Build the push message (prefix + content + source).
@@ -1489,7 +1529,12 @@ impl CarrierKernel {
             .await
     }
 
-    pub async fn follower_touch(&self, channel: &str, app_id: &str, openid: &str) -> CarrierResult<()> {
+    pub async fn follower_touch(
+        &self,
+        channel: &str,
+        app_id: &str,
+        openid: &str,
+    ) -> CarrierResult<()> {
         self.memory.follower_touch(channel, app_id, openid).await
     }
 
@@ -1626,7 +1671,8 @@ impl CarrierKernel {
             let deliver_fn = std::sync::Arc::clone(&deliver_fn);
             let content = content.clone();
             let (ch, bot, user) = (channel.clone(), bot_id.clone(), user_id.clone());
-            match tokio::task::spawn_blocking(move || deliver_fn(&ch, &bot, &user, &content)).await {
+            match tokio::task::spawn_blocking(move || deliver_fn(&ch, &bot, &user, &content)).await
+            {
                 Ok(Ok(())) => tracing::info!(
                     target_channel = %channel, target_user = %user_id,
                     "push_message delivered"
@@ -1663,13 +1709,12 @@ impl CarrierKernel {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::capabilities::manifest_to_capabilities;
-    use types::capability::Capability;
     use std::collections::HashMap;
+    use types::capability::Capability;
 
     /// 检索回指 regression: kv prefetch must read the SAME partition the
     /// writers use — `(agent_name, owner_id or "", sender_id or "")`. The old
@@ -1699,17 +1744,41 @@ mod tests {
         // entry point passes owner_id=None).
         let handle = crate::handle::make_memory_handle(std::sync::Arc::clone(&kernel.memory));
         handle
-            .kv_set("mem-agent", "", "user-A", "preference.tone", serde_json::json!("casual"))
+            .kv_set(
+                "mem-agent",
+                "",
+                "user-A",
+                "preference.tone",
+                serde_json::json!("casual"),
+            )
             .unwrap();
         handle
-            .kv_set("mem-agent", "", "user-A", "session_compaction.2026-08-01", serde_json::json!("old summary"))
+            .kv_set(
+                "mem-agent",
+                "",
+                "user-A",
+                "session_compaction.2026-08-01",
+                serde_json::json!("old summary"),
+            )
             .unwrap();
         handle
-            .kv_set("mem-agent", "", "user-A", "session_compaction.2026-08-17", serde_json::json!("new summary"))
+            .kv_set(
+                "mem-agent",
+                "",
+                "user-A",
+                "session_compaction.2026-08-17",
+                serde_json::json!("new summary"),
+            )
             .unwrap();
         // Another user's data — must NOT leak into user-A's prefetch.
         handle
-            .kv_set("mem-agent", "", "user-B", "preference.secret", serde_json::json!("B-only"))
+            .kv_set(
+                "mem-agent",
+                "",
+                "user-B",
+                "preference.secret",
+                serde_json::json!("B-only"),
+            )
             .unwrap();
 
         let (drawer, recalled) = kernel.prefetch_kv_memories("mem-agent", "", "user-A");
@@ -1733,7 +1802,13 @@ mod tests {
         // The OLD read partition (owner as user) must not be what we read:
         // seeding there and asserting invisibility proves the coordinates.
         handle
-            .kv_set("mem-agent", "user-A", "user-A", "preference.legacy", serde_json::json!("stale partition"))
+            .kv_set(
+                "mem-agent",
+                "user-A",
+                "user-A",
+                "preference.legacy",
+                serde_json::json!("stale partition"),
+            )
             .unwrap();
         let (drawer2, _) = kernel.prefetch_kv_memories("mem-agent", "", "user-A");
         assert!(
@@ -1781,8 +1856,12 @@ mod tests {
         };
         manifest.capabilities.tools = vec!["file_read".to_string(), "web_fetch".to_string()];
         let caps = manifest_to_capabilities(&manifest);
-        assert!(caps.iter().any(|c| matches!(c, Capability::ToolInvoke(t) if t == "file_read")));
-        assert!(caps.iter().any(|c| matches!(c, Capability::ToolInvoke(t) if t == "web_fetch")));
+        assert!(caps
+            .iter()
+            .any(|c| matches!(c, Capability::ToolInvoke(t) if t == "file_read")));
+        assert!(caps
+            .iter()
+            .any(|c| matches!(c, Capability::ToolInvoke(t) if t == "web_fetch")));
     }
 
     fn test_manifest(name: &str, description: &str, tags: Vec<String>) -> AgentManifest {
@@ -1821,7 +1900,12 @@ mod tests {
         }
     }
 
-    fn register_test_agent(registry: &AgentRegistry, name: &str, desc: &str, tags: Vec<String>) -> AgentId {
+    fn register_test_agent(
+        registry: &AgentRegistry,
+        name: &str,
+        desc: &str,
+        tags: Vec<String>,
+    ) -> AgentId {
         use types::agent::{AgentEntry, AgentIdentity, AgentMode, AgentState, SessionId};
         let id = AgentId::new();
         let entry = AgentEntry {
@@ -1847,7 +1931,12 @@ mod tests {
     #[test]
     fn test_send_to_agent_by_name_resolution() {
         let registry = AgentRegistry::new();
-        let id = register_test_agent(&registry, "alice", "Alice agent", vec!["helper".to_string()]);
+        let id = register_test_agent(
+            &registry,
+            "alice",
+            "Alice agent",
+            vec!["helper".to_string()],
+        );
         assert!(registry.get(id).is_some());
         let found = registry.find_by_name("alice");
         assert!(found.is_some());
@@ -1858,9 +1947,17 @@ mod tests {
     fn test_find_agents_by_tag() {
         let registry = AgentRegistry::new();
         register_test_agent(&registry, "bob", "Bob agent", vec!["coding".to_string()]);
-        register_test_agent(&registry, "carol", "Carol agent", vec!["writing".to_string()]);
+        register_test_agent(
+            &registry,
+            "carol",
+            "Carol agent",
+            vec!["writing".to_string()],
+        );
         let all = registry.list();
-        let coding: Vec<_> = all.iter().filter(|a| a.manifest.tags.contains(&"coding".to_string())).collect();
+        let coding: Vec<_> = all
+            .iter()
+            .filter(|a| a.manifest.tags.contains(&"coding".to_string()))
+            .collect();
         assert_eq!(coding.len(), 1);
         assert_eq!(coding[0].name, "bob");
     }
@@ -1880,6 +1977,8 @@ mod tests {
         manifest.capabilities.tools = vec!["file_read".to_string()];
         let caps = manifest_to_capabilities(&manifest);
         assert_eq!(caps.len(), 1);
-        assert!(caps.iter().any(|c| matches!(c, Capability::ToolInvoke(t) if t == "file_read")));
+        assert!(caps
+            .iter()
+            .any(|c| matches!(c, Capability::ToolInvoke(t) if t == "file_read")));
     }
 }

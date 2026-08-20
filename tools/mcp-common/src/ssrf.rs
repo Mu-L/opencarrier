@@ -39,9 +39,9 @@ pub fn check_ssrf(url: &str) -> Result<(), String> {
 
     let port = if url.starts_with("https") { 443 } else { 80 };
     let socket_addr = format!("{hostname}:{port}");
-    let addrs = socket_addr.to_socket_addrs().map_err(|e| {
-        format!("SSRF blocked: cannot resolve {hostname}: {e}")
-    })?;
+    let addrs = socket_addr
+        .to_socket_addrs()
+        .map_err(|e| format!("SSRF blocked: cannot resolve {hostname}: {e}"))?;
 
     for addr in addrs {
         let ip = addr.ip();

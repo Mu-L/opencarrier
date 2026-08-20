@@ -106,7 +106,8 @@ impl BucketSealEngine {
         start_level: u32,
         force_now: bool,
     ) -> CarrierResult<Vec<String>> {
-        self.cascade_seals(owner_id, tree, start_level, force_now).await
+        self.cascade_seals(owner_id, tree, start_level, force_now)
+            .await
     }
 
     /// Append a single item to a buffer (idempotent on item_id).
@@ -164,10 +165,9 @@ impl BucketSealEngine {
         force_now: bool,
     ) -> CarrierResult<Vec<String>> {
         let mut sealed_ids: Vec<String> = Vec::new();
-        let mut level = start_level;
         let mut first_iteration = true;
 
-        for _ in 0..MAX_CASCADE_DEPTH {
+        for level in (start_level..).take(MAX_CASCADE_DEPTH as usize) {
             let buf = self.get_or_create_buffer(owner_id, &tree.id, level).await?;
             let forced = first_iteration && force_now;
             first_iteration = false;
@@ -181,7 +181,6 @@ impl BucketSealEngine {
 
             let summary_id = self.seal_one_level(owner_id, tree, &buf).await?;
             sealed_ids.push(summary_id);
-            level += 1;
         }
 
         Ok(sealed_ids)
@@ -207,8 +206,16 @@ impl BucketSealEngine {
         }
 
         // Compute envelope across children
-        let time_range_start_ms = inputs.iter().map(|i| i.time_range_start_ms).min().unwrap_or(0);
-        let time_range_end_ms = inputs.iter().map(|i| i.time_range_end_ms).max().unwrap_or(0);
+        let time_range_start_ms = inputs
+            .iter()
+            .map(|i| i.time_range_start_ms)
+            .min()
+            .unwrap_or(0);
+        let time_range_end_ms = inputs
+            .iter()
+            .map(|i| i.time_range_end_ms)
+            .max()
+            .unwrap_or(0);
         let score = inputs
             .iter()
             .map(|i| i.score)
@@ -273,7 +280,9 @@ impl BucketSealEngine {
 
         // Persist the summary + clear this buffer + append to parent buffer.
         self.tree_store.insert_summary(owner_id, &node).await?;
-        self.tree_store.clear_buffer(owner_id, &tree.id, level).await?;
+        self.tree_store
+            .clear_buffer(owner_id, &tree.id, level)
+            .await?;
 
         let mut parent = self
             .get_or_create_buffer(owner_id, &tree.id, target_level)
@@ -404,8 +413,7 @@ pub fn should_seal(buf: &Buffer) -> bool {
         return false;
     }
     if buf.level == 0 {
-        buf.token_sum >= INPUT_TOKEN_BUDGET as i64
-            || (buf.item_ids.len() as u32) >= SUMMARY_FANOUT
+        buf.token_sum >= INPUT_TOKEN_BUDGET as i64 || (buf.item_ids.len() as u32) >= SUMMARY_FANOUT
     } else {
         (buf.item_ids.len() as u32) >= SUMMARY_FANOUT
     }
@@ -422,13 +430,20 @@ mod tests {
 
     async fn setup() -> Option<(BucketSealEngine, Pool, TempDir)> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         let dir = TempDir::new().ok()?;
         let engine = BucketSealEngine::new(
             pool.clone(),

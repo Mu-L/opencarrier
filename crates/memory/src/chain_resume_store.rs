@@ -150,7 +150,7 @@ mod tests {
         store.reset("c1", 2).unwrap();
         assert_eq!(store.get("c1", 2).unwrap(), 0);
         assert_eq!(store.bump("c1", 2).unwrap(), 1); // counts restart from 1
-        // reset on a never-seen step just writes a zero row.
+                                                     // reset on a never-seen step just writes a zero row.
         store.reset("c1", 4).unwrap();
         assert_eq!(store.get("c1", 4).unwrap(), 0);
     }

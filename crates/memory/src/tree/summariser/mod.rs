@@ -10,7 +10,7 @@
 
 pub mod inert;
 
-use crate::tree::types::{OUTPUT_TOKEN_BUDGET, TreeKind};
+use crate::tree::types::{TreeKind, OUTPUT_TOKEN_BUDGET};
 
 /// Input to the summariser — one leaf chunk or lower-level summary.
 #[derive(Clone, Debug)]

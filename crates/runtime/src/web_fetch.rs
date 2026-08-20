@@ -7,19 +7,19 @@
 use crate::str_utils::safe_truncate_str;
 use crate::web_cache::WebCache;
 use crate::web_content::{html_to_markdown, wrap_external_content};
-use types::config::WebFetchConfig;
-use types::ssrf;
-use types::error::{CarrierError, CarrierResult};
 use std::sync::Arc;
 use tracing::{debug, warn};
+use types::config::WebFetchConfig;
+use types::error::{CarrierError, CarrierResult};
+use types::ssrf;
 
 /// 外挂 AginxBrowser 需要兜底抓取的站点（JS 渲染或风控）。命中且 AginxBrowser 已启用时
 /// 走浏览器，其余走 reqwest 直连。这是 web_fetch 的私有路由策略，不暴露为配置。
 const AGINXBROWSER_HOSTS: &[&str] = &[
-    "mp.weixin.qq.com", // 微信公众号文章（风控）
+    "mp.weixin.qq.com",   // 微信公众号文章（风控）
     "zhuanlan.zhihu.com", // 知乎专栏（JS 渲染）
-    "search.jd.com", // 京东搜索（动态）
-    "github.com", // GitHub（动态 + 需代理）
+    "search.jd.com",      // 京东搜索（动态）
+    "github.com",         // GitHub（动态 + 需代理）
 ];
 
 /// 读 AGINXBROWSER_URL。未设/空 → None（不启用外挂，纯 reqwest，行为等同改造前）。
@@ -242,7 +242,8 @@ impl WebFetchEngine {
             "format": "markdown",
             "wait_secs": 4, // 等 JS 渲染（微信/动态页必需）
         });
-        let resp: serde_json::Value = self.client
+        let resp: serde_json::Value = self
+            .client
             .post(format!("{}/fetch", base.trim_end_matches('/')))
             .json(&body)
             .send()
@@ -255,7 +256,9 @@ impl WebFetchEngine {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .filter(|s| !s.trim().is_empty())
-            .ok_or_else(|| CarrierError::Network("AginxBrowser response missing/empty content".into()))
+            .ok_or_else(|| {
+                CarrierError::Network("AginxBrowser response missing/empty content".into())
+            })
     }
 }
 
@@ -283,7 +286,8 @@ impl WebFetchEngine {
 
         for _ in 0..max_hops {
             let status = resp.status().as_u16();
-            if !(status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+            if !(status == 301 || status == 302 || status == 303 || status == 307 || status == 308)
+            {
                 return Ok((resp, current_url));
             }
 
@@ -297,7 +301,11 @@ impl WebFetchEngine {
                 location
             } else if location.starts_with('/') {
                 let base = ssrf::extract_host(&current_url);
-                let scheme = if current_url.starts_with("https") { "https" } else { "http" };
+                let scheme = if current_url.starts_with("https") {
+                    "https"
+                } else {
+                    "http"
+                };
                 format!("{scheme}://{base}{location}")
             } else {
                 format!("{current_url}/{location}")
@@ -307,14 +315,21 @@ impl WebFetchEngine {
 
             debug!(from = %current_url, to = %next_url, "Following redirect");
 
-            let req = self.client.get(&next_url)
-                .header("User-Agent", format!("Mozilla/5.0 (compatible; {})", crate::USER_AGENT));
+            let req = self.client.get(&next_url).header(
+                "User-Agent",
+                format!("Mozilla/5.0 (compatible; {})", crate::USER_AGENT),
+            );
 
-            resp = req.send().await.map_err(|e| CarrierError::Network(format!("Redirect request failed: {e}")))?;
+            resp = req
+                .send()
+                .await
+                .map_err(|e| CarrierError::Network(format!("Redirect request failed: {e}")))?;
             current_url = next_url;
         }
 
-        Err(CarrierError::Network("Too many redirects (max 5)".to_string()))
+        Err(CarrierError::Network(
+            "Too many redirects (max 5)".to_string(),
+        ))
     }
 }
 
@@ -354,9 +369,15 @@ mod tests {
     fn test_ssrf_blocks_private_ip() {
         use std::net::IpAddr;
         assert!(ssrf::is_private_ip(&"10.0.0.1".parse::<IpAddr>().unwrap()));
-        assert!(ssrf::is_private_ip(&"172.16.0.1".parse::<IpAddr>().unwrap()));
-        assert!(ssrf::is_private_ip(&"192.168.1.1".parse::<IpAddr>().unwrap()));
-        assert!(ssrf::is_private_ip(&"169.254.169.254".parse::<IpAddr>().unwrap()));
+        assert!(ssrf::is_private_ip(
+            &"172.16.0.1".parse::<IpAddr>().unwrap()
+        ));
+        assert!(ssrf::is_private_ip(
+            &"192.168.1.1".parse::<IpAddr>().unwrap()
+        ));
+        assert!(ssrf::is_private_ip(
+            &"169.254.169.254".parse::<IpAddr>().unwrap()
+        ));
     }
 
     #[test]

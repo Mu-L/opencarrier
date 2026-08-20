@@ -145,7 +145,10 @@ async fn list_owners_with_trees(pool: &Pool) -> CarrierResult<Vec<String>> {
         .await
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
     rows.iter()
-        .map(|r| r.try_get(0).map_err(|e| CarrierError::Serialization(e.to_string())))
+        .map(|r| {
+            r.try_get(0)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))
+        })
         .collect::<CarrierResult<Vec<String>>>()
 }
 
@@ -156,14 +159,7 @@ fn next_sleep_duration() -> Duration {
     let now_local = tz.from_utc_datetime(&chrono::Utc::now().naive_utc());
     let tomorrow = now_local.date_naive() + chrono::Duration::days(1);
     let next_local = tz
-        .with_ymd_and_hms(
-            tomorrow.year(),
-            tomorrow.month(),
-            tomorrow.day(),
-            0,
-            5,
-            0,
-        )
+        .with_ymd_and_hms(tomorrow.year(), tomorrow.month(), tomorrow.day(), 0, 5, 0)
         .single()
         .unwrap_or_else(|| now_local + chrono::Duration::hours(24));
     (next_local - now_local)

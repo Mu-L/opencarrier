@@ -137,8 +137,9 @@ impl TreeWorkerPool {
             }
             Err(e) => {
                 tracing::warn!("[tree_jobs] job failed id={job_id} err={e:#}");
-                if let Err(e2) =
-                    job_store.mark_failed(&job_id, &format!("{e:#}"), job.locked_until_ms).await
+                if let Err(e2) = job_store
+                    .mark_failed(&job_id, &format!("{e:#}"), job.locked_until_ms)
+                    .await
                 {
                     tracing::warn!("[tree_jobs] mark_failed error: {e2:#}");
                 }

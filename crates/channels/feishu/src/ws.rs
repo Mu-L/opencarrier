@@ -12,8 +12,6 @@
 use crate::api;
 use crate::pbbp2::*;
 use crate::token::BotTokenCache;
-use types::plugin::{PluginContent, PluginMessage};
-use types::error::{CarrierError, CarrierResult};
 use channels_common::InboundDedup;
 use futures::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +21,8 @@ use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
+use types::error::{CarrierError, CarrierResult};
+use types::plugin::{PluginContent, PluginMessage};
 
 /// Message deduplication map: message_id → received_at.
 const DEDUP_TTL: Duration = Duration::from_secs(300);
@@ -34,18 +34,14 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(120);
 
 pub struct FeishuWsClient {
-    bot_id: String,  // app_id (used as route key in PluginMessage)
+    bot_id: String, // app_id (used as route key in PluginMessage)
     token_cache: Arc<BotTokenCache>,
     shutdown: Arc<AtomicBool>,
     dedup: InboundDedup,
 }
 
 impl FeishuWsClient {
-    pub fn new(
-        bot_id: String,
-        token_cache: Arc<BotTokenCache>,
-        shutdown: Arc<AtomicBool>,
-    ) -> Self {
+    pub fn new(bot_id: String, token_cache: Arc<BotTokenCache>, shutdown: Arc<AtomicBool>) -> Self {
         Self {
             bot_id,
             token_cache,
@@ -108,10 +104,9 @@ impl FeishuWsClient {
             )));
         }
 
-        let ws_url = ws_resp
-            .data
-            .and_then(|d| d.url)
-            .ok_or_else(|| CarrierError::InvalidInput("Missing URL in ws/endpoint response".to_string()))?;
+        let ws_url = ws_resp.data.and_then(|d| d.url).ok_or_else(|| {
+            CarrierError::InvalidInput("Missing URL in ws/endpoint response".to_string())
+        })?;
 
         // Extract service_id from URL query params (needed for ping frames).
         let service_id = parse_service_id(&ws_url).unwrap_or(0);
@@ -373,18 +368,33 @@ impl FeishuWsClient {
                     .to_string();
 
                 if image_key.is_empty() {
-                    PluginContent::Image { url: String::new(), caption: None, data: None }
+                    PluginContent::Image {
+                        url: String::new(),
+                        caption: None,
+                        data: None,
+                    }
                 } else {
                     match self.download_media(&image_key, "image").await {
                         Ok(raw_data) => {
                             let mime = types::media::detect_image_mime(&raw_data);
-                            let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &raw_data);
+                            let b64 = base64::Engine::encode(
+                                &base64::engine::general_purpose::STANDARD,
+                                &raw_data,
+                            );
                             let data_uri = format!("data:{mime};base64,{b64}");
-                            PluginContent::Image { url: data_uri, caption: None, data: Some(raw_data) }
+                            PluginContent::Image {
+                                url: data_uri,
+                                caption: None,
+                                data: Some(raw_data),
+                            }
                         }
                         Err(e) => {
                             warn!(tenant = %self.bot_id, image_key = %image_key, error = %e, "Failed to download image");
-                            PluginContent::Image { url: String::new(), caption: None, data: None }
+                            PluginContent::Image {
+                                url: String::new(),
+                                caption: None,
+                                data: None,
+                            }
                         }
                     }
                 }
@@ -395,7 +405,10 @@ impl FeishuWsClient {
                     .and_then(|v| v.get("file_key").and_then(|k| k.as_str()))
                     .unwrap_or("")
                     .to_string();
-                PluginContent::Voice { url: file_key, duration_seconds: 0 }
+                PluginContent::Voice {
+                    url: file_key,
+                    duration_seconds: 0,
+                }
             }
             "file" => {
                 let file_key = content_json
@@ -422,7 +435,11 @@ impl FeishuWsClient {
                 } else {
                     None
                 };
-                PluginContent::File { url: file_key, filename: file_name, data: file_data }
+                PluginContent::File {
+                    url: file_key,
+                    filename: file_name,
+                    data: file_data,
+                }
             }
             _ => {
                 info!(tenant = %self.bot_id, msg_type, "Ignoring unsupported message type");
@@ -493,7 +510,9 @@ impl FeishuWsClient {
         match kind {
             "image" => api::download_image(&http, &token, &base, key).await,
             "file" => api::download_file(&http, &token, &base, key).await,
-            _ => Err(CarrierError::InvalidInput(format!("Unknown media kind: {kind}"))),
+            _ => Err(CarrierError::InvalidInput(format!(
+                "Unknown media kind: {kind}"
+            ))),
         }
     }
 }

@@ -235,7 +235,9 @@ fn default_version() -> u32 {
 impl WorkspaceState {
     /// Load state from the workspace's `.opencarrier/workspace-state.json`.
     pub fn load(workspace_root: &Path) -> Self {
-        let path = workspace_root.join(".opencarrier").join("workspace-state.json");
+        let path = workspace_root
+            .join(".opencarrier")
+            .join("workspace-state.json");
         match std::fs::read_to_string(&path) {
             Ok(json) => serde_json::from_str(&json).unwrap_or_default(),
             Err(_) => Self::default(),

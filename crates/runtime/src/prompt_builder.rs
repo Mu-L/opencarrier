@@ -177,7 +177,9 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             || ctx.expression_dna_md.is_some()
             || ctx.timeline_md.is_some()
         {
-            let mut identity_section = String::from("## 身份层详解\nSOUL.md 中的视角和风格指向这些详解文件。回答时参考对应内容。\n");
+            let mut identity_section = String::from(
+                "## 身份层详解\nSOUL.md 中的视角和风格指向这些详解文件。回答时参考对应内容。\n",
+            );
             if let Some(ref mm) = ctx.mental_models_md {
                 if !mm.trim().is_empty() {
                     identity_section.push_str(&format!("\n### 心智模型\n{}\n", cap_str(mm, 3000)));
@@ -185,7 +187,8 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
             }
             if let Some(ref dh) = ctx.decision_heuristics_md {
                 if !dh.trim().is_empty() {
-                    identity_section.push_str(&format!("\n### 决策启发式\n{}\n", cap_str(dh, 1500)));
+                    identity_section
+                        .push_str(&format!("\n### 决策启发式\n{}\n", cap_str(dh, 1500)));
                 }
             }
             if let Some(ref ed) = ctx.expression_dna_md {
@@ -603,7 +606,7 @@ pub fn build_tools_section(granted_tools: &[String]) -> String {
          **IMPORTANT**: You can ONLY use tools listed below OR tools discovered via `tool_search`. \
          Do NOT guess or invent tool names. If you need a capability not listed below, you MUST \
          call `tool_search(\"what you need\")` first — it returns the tool's name, description, \
-         and parameter schema. Then you can call that tool directly.\n"
+         and parameter schema. Then you can call that tool directly.\n",
     );
     for (category, tools) in &groups {
         out.push_str(&format!("\n**{}**: ", capitalize(category)));
@@ -627,7 +630,13 @@ pub fn build_tools_section(granted_tools: &[String]) -> String {
         .collect();
     if !removed.is_empty() {
         out.push_str("\n\n**Removed tools** (do NOT attempt to call these): ");
-        out.push_str(&removed.iter().map(|t| t.as_ref()).collect::<Vec<_>>().join(", "));
+        out.push_str(
+            &removed
+                .iter()
+                .map(|t| t.as_ref())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
         out.push('.');
     }
 
@@ -645,7 +654,10 @@ pub fn build_memory_section(memories: &[(String, String)], tree_hits: &[TreeMemo
         out.push_str("[Recent context from memory tree]\n");
         for hit in tree_hits.iter().take(5) {
             let capped = cap_str(&hit.content, 500);
-            out.push_str(&format!("- [{}/{}] {} ({})\n", hit.kind, hit.scope, capped, hit.time_range));
+            out.push_str(&format!(
+                "- [{}/{}] {} ({})\n",
+                hit.kind, hit.scope, capped, hit.time_range
+            ));
         }
         out.push('\n');
     }
@@ -695,7 +707,14 @@ fn build_drawer_section(entries: &[DrawerEntry]) -> String {
 
         // For event entries, only show last 5
         let items_to_show: Vec<&&DrawerEntry> = if *prefix == "event" {
-            items.iter().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect()
+            items
+                .iter()
+                .rev()
+                .take(5)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect()
         } else {
             items.iter().collect()
         };

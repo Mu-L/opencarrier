@@ -81,10 +81,18 @@ pub fn tool_meta(name: &str) -> ToolMeta {
         "file_search" => (Files, "search files by name pattern", None),
 
         // Web
-        "web_fetch" => (Web, "fetch a URL and get its content as markdown", Some(20_000)),
+        "web_fetch" => (
+            Web,
+            "fetch a URL and get its content as markdown",
+            Some(20_000),
+        ),
 
         // Browser
-        "browser_navigate" => (Browser, "open a URL in the browser and return content", None),
+        "browser_navigate" => (
+            Browser,
+            "open a URL in the browser and return content",
+            None,
+        ),
         "browser_click" => (Browser, "click an element on the page via JS", None),
         "browser_type" => (Browser, "type text into an input field via JS", None),
         "browser_screenshot" => (
@@ -130,7 +138,11 @@ pub fn tool_meta(name: &str) -> ToolMeta {
         "cron_delete" => (Scheduling, "remove a scheduled task", None),
 
         // Processes
-        "process_start" => (Processes, "start a long-running process (REPL, server)", None),
+        "process_start" => (
+            Processes,
+            "start a long-running process (REPL, server)",
+            None,
+        ),
         "process_poll" => (Processes, "read stdout/stderr from a running process", None),
         "process_write" => (Processes, "write to a process's stdin", None),
         "process_kill" => (Processes, "terminate a running process", None),
@@ -197,22 +209,49 @@ mod tests {
     fn union_table_matches_legacy_three_tables() {
         // Category + hint + cap agree with the old tool_category/tool_hint/
         // tool_max_result_chars for representative names across every bucket.
-        assert_eq!(meta("file_read"), ("Files", "read file contents", Some(50_000)));
+        assert_eq!(
+            meta("file_read"),
+            ("Files", "read file contents", Some(50_000))
+        );
         assert_eq!(
             meta("web_fetch"),
-            ("Web", "fetch a URL and get its content as markdown", Some(20_000))
+            (
+                "Web",
+                "fetch a URL and get its content as markdown",
+                Some(20_000)
+            )
         );
-        assert_eq!(meta("shell_exec"), ("Shell", "execute a shell command", Some(10_000)));
+        assert_eq!(
+            meta("shell_exec"),
+            ("Shell", "execute a shell command", Some(10_000))
+        );
         assert_eq!(
             meta("browser_navigate"),
-            ("Browser", "open a URL in the browser and return content", None)
+            (
+                "Browser",
+                "open a URL in the browser and return content",
+                None
+            )
         );
-        assert_eq!(meta("agent_send"), ("Agents", "send a message to another agent", None));
-        assert_eq!(meta("image_generate"), ("Media", "generate an image from a prompt", None));
-        assert_eq!(meta("cron_create"), ("Scheduling", "schedule a recurring task", None));
+        assert_eq!(
+            meta("agent_send"),
+            ("Agents", "send a message to another agent", None)
+        );
+        assert_eq!(
+            meta("image_generate"),
+            ("Media", "generate an image from a prompt", None)
+        );
+        assert_eq!(
+            meta("cron_create"),
+            ("Scheduling", "schedule a recurring task", None)
+        );
         assert_eq!(
             meta("process_start"),
-            ("Processes", "start a long-running process (REPL, server)", None)
+            (
+                "Processes",
+                "start a long-running process (REPL, server)",
+                None
+            )
         );
     }
 
@@ -230,9 +269,16 @@ mod tests {
         // flow_* → Flows (prefix rule made explicit).
         assert_eq!(
             meta("knowledge_extract"),
-            ("Other", "extract and save new knowledge from conversation", None)
+            (
+                "Other",
+                "extract and save new knowledge from conversation",
+                None
+            )
         );
-        assert_eq!(meta("session_summarize"), ("Other", "save a conversation summary", None));
+        assert_eq!(
+            meta("session_summarize"),
+            ("Other", "save a conversation summary", None)
+        );
         assert_eq!(meta("flow_create"), ("Flows", "create a new flow", None));
         assert_eq!(meta("flow_load"), ("Flows", "load full flow content", None));
     }

@@ -92,8 +92,9 @@ mod tests {
 
     #[test]
     fn test_detect_multiple_mentions() {
-        let mentions =
-            detect_text_tool_mentions("先读知识库。[Called knowledge_read]然后搜索。[Called web_search]");
+        let mentions = detect_text_tool_mentions(
+            "先读知识库。[Called knowledge_read]然后搜索。[Called web_search]",
+        );
         assert_eq!(
             mentions,
             vec!["knowledge_read".to_string(), "web_search".to_string()]
@@ -134,7 +135,9 @@ mod tests {
     #[test]
     fn test_strip_multiple_called() {
         assert_eq!(
-            strip_tool_call_artifacts("我需要先搜索一下。[Called tool_search] 然后再读。[Called knowledge_read]"),
+            strip_tool_call_artifacts(
+                "我需要先搜索一下。[Called tool_search] 然后再读。[Called knowledge_read]"
+            ),
             "我需要先搜索一下。 然后再读。"
         );
     }
@@ -172,8 +175,7 @@ mod tests {
 
     #[test]
     fn test_detect_mixed_en_cn() {
-        let mentions =
-            detect_text_tool_mentions("[Called knowledge_read] 再 [调用 sqlite_query]");
+        let mentions = detect_text_tool_mentions("[Called knowledge_read] 再 [调用 sqlite_query]");
         assert_eq!(
             mentions,
             vec!["knowledge_read".to_string(), "sqlite_query".to_string()]

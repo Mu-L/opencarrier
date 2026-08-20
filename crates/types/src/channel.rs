@@ -133,7 +133,11 @@ pub trait Channel: Send + Sync {
     /// Called by the API after writing a new `senders/{sender_id}/session.json`.
     /// The channel should load the session and start its connection immediately,
     /// without waiting for a polling cycle.
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
+    fn start_sender(
+        &self,
+        sender_id: &str,
+        sender: mpsc::Sender<PluginMessage>,
+    ) -> CarrierResult<()> {
         let _ = (sender_id, sender);
         Err(CarrierError::InvalidInput(format!(
             "start_sender not implemented for {}",

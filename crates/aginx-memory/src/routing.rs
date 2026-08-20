@@ -123,13 +123,20 @@ mod tests {
 
     async fn setup() -> Option<(Pool, std::path::PathBuf, TempDir)> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         let dir = TempDir::new().ok()?;
         Some((pool, dir.path().to_path_buf(), dir))
     }
@@ -143,7 +150,9 @@ mod tests {
                 return;
             }
         };
-        let result = route_leaf_to_topic_trees(&pool, &content_root, "owner_1", "chunk_1", 100, 1000, &[]).await;
+        let result =
+            route_leaf_to_topic_trees(&pool, &content_root, "owner_1", "chunk_1", 100, 1000, &[])
+                .await;
         assert!(result.is_ok());
     }
 
@@ -167,8 +176,12 @@ mod tests {
             .unwrap();
 
         let url = std::env::var("AGINX_MEMORY_TEST_PG").unwrap();
-        let (conn, c) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.unwrap();
-        tokio::spawn(async move { let _ = c.await; });
+        let (conn, c) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            let _ = c.await;
+        });
         conn.execute(
             "UPDATE mem_tree_entity_hotness SET mention_count_30d=5000, distinct_sources=10, \
              query_hits_30d=5 WHERE owner_id='owner_1' AND entity_id=$1",
@@ -177,9 +190,15 @@ mod tests {
         .await
         .unwrap();
 
-        route_leaf_to_topic_trees(&pool, &content_root, "owner_1", "chunk_1", 100, 1000, &[
-            entity_id.to_string(),
-        ])
+        route_leaf_to_topic_trees(
+            &pool,
+            &content_root,
+            "owner_1",
+            "chunk_1",
+            100,
+            1000,
+            &[entity_id.to_string()],
+        )
         .await
         .unwrap();
 

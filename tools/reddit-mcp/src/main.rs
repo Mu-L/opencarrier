@@ -422,7 +422,10 @@ impl RedditServer {
 
     #[tool(description = "获取 Reddit 用户帖子")]
     async fn reddit_user_posts(&self, Parameters(params): Parameters<UserPostsParams>) -> String {
-        let path = format!("/user/{}/submitted.json", urlencoding::encode(&params.username));
+        let path = format!(
+            "/user/{}/submitted.json",
+            urlencoding::encode(&params.username)
+        );
         let limit = params.limit.unwrap_or(15);
         let query = format!("limit={limit}");
         match api::reddit_api(
@@ -446,7 +449,10 @@ impl RedditServer {
         &self,
         Parameters(params): Parameters<UserCommentsParams>,
     ) -> String {
-        let path = format!("/user/{}/comments.json", urlencoding::encode(&params.username));
+        let path = format!(
+            "/user/{}/comments.json",
+            urlencoding::encode(&params.username)
+        );
         let limit = params.limit.unwrap_or(15);
         let query = format!("limit={limit}");
         match api::reddit_api(

@@ -70,14 +70,14 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> CarrierRe
                 .to_os_string();
             components.push(name);
 
-            let parent = ancestor
-                .parent()
-                .ok_or_else(|| CarrierError::InvalidInput("Invalid path: no parent directory".to_string()))?;
+            let parent = ancestor.parent().ok_or_else(|| {
+                CarrierError::InvalidInput("Invalid path: no parent directory".to_string())
+            })?;
 
             if parent.exists() {
-                let canon_parent = parent
-                    .canonicalize()
-                    .map_err(|e| CarrierError::Internal(format!("Failed to resolve parent directory: {e}")))?;
+                let canon_parent = parent.canonicalize().map_err(|e| {
+                    CarrierError::Internal(format!("Failed to resolve parent directory: {e}"))
+                })?;
                 // Verify the existing ancestor is inside the sandbox
                 if !canon_parent.starts_with(&canon_root) {
                     return Err(CarrierError::InvalidInput(format!(
@@ -154,7 +154,9 @@ pub fn resolve_sandbox_path_for_write(
 
     // Block writes to protected config files (unless clone admin).
     // These files define the clone's identity — only trainers should modify them.
-    if (rel_str == "agent.toml" || rel_str == "SOUL.md" || rel_str == "system_prompt.md") && !is_clone_admin {
+    if (rel_str == "agent.toml" || rel_str == "SOUL.md" || rel_str == "system_prompt.md")
+        && !is_clone_admin
+    {
         return Err(CarrierError::InvalidInput(format!(
             "Write denied: '{}' is a protected config file (only trainer may modify)",
             rel_str
@@ -257,7 +259,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let result = resolve_sandbox_path("../../../etc/passwd", dir.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Path traversal denied"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Path traversal denied"));
     }
 
     #[test]

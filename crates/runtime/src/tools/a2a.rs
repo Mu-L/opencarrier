@@ -4,10 +4,10 @@ use super::ToolModule;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
+use types::error::{CarrierError, CarrierResult};
+use types::tool::{PermissionLevel, ToolDefinition};
 
 // ---------------------------------------------------------------------------
 // A2A outbound tools
@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 /// Discover an external A2A agent by fetching its agent card.
 async fn tool_a2a_discover(input: &serde_json::Value) -> CarrierResult<String> {
-    let url = input["url"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'url' parameter".to_string()))?;
+    let url = input["url"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'url' parameter".to_string(),
+    ))?;
 
     // SSRF protection: block private/metadata IPs
     if types::ssrf::check_ssrf(url).is_err() {
@@ -39,9 +39,9 @@ async fn tool_a2a_send(
     kernel: Option<&Arc<dyn KernelHandle>>,
 ) -> CarrierResult<String> {
     let kh = crate::tools::require_kernel(kernel)?;
-    let message = input["message"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'message' parameter".to_string()))?;
+    let message = input["message"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'message' parameter".to_string(),
+    ))?;
 
     // Resolve agent URL: either directly provided or looked up by name
     let url = if let Some(url) = input["agent_url"].as_str() {
@@ -64,9 +64,7 @@ async fn tool_a2a_send(
 
     let session_id = input["session_id"].as_str();
     let client = crate::a2a::A2aClient::new();
-    let task = client
-        .send_task(&url, message, session_id)
-        .await?;
+    let task = client.send_task(&url, message, session_id).await?;
 
     serde_json::to_string_pretty(&task)
         .map_err(|e| CarrierError::Serialization(format!("Serialization error: {e}")))

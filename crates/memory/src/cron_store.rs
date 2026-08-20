@@ -4,13 +4,13 @@
 //! an in-memory DashMap for hot-path operations; this store handles
 //! persistence (load/save/delete) against the central `opencarrier.db`.
 
+use chrono::{DateTime, Utc};
+use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use rusqlite::Connection;
 use types::error::{CarrierError, CarrierResult};
 use types::scheduler::{CronAction, CronDelivery, CronJob, CronJobId, CronSchedule};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
 /// Runtime metadata not stored in CronJob itself.
 #[derive(Debug, Serialize, Deserialize)]
@@ -69,33 +69,37 @@ impl CronJobStore {
 
     /// Load all persisted jobs from the database.
     pub fn load_all(&self) -> CarrierResult<Vec<JobMeta>> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, owner_id, sender_id, name, enabled, schedule, action, delivery, \
                     one_shot, last_status, consecutive_errors, created_at, last_run, next_run, chain \
              FROM cron_jobs"
         ).map_err(|e| CarrierError::Memory(e.to_string()))?;
-        let rows = stmt.query_map([], |row| {
-            Ok(RowData {
-                id: row.get(0)?,
-                agent_id: row.get(1)?,
-                owner_id: row.get(2)?,
-                sender_id: row.get(3)?,
-                name: row.get(4)?,
-                enabled: row.get(5)?,
-                schedule_json: row.get(6)?,
-                action_json: row.get(7)?,
-                delivery_json: row.get(8)?,
-                one_shot: row.get(9)?,
-                last_status: row.get(10)?,
-                consecutive_errors: row.get(11)?,
-                created_at: row.get(12)?,
-                last_run: row.get(13)?,
-                next_run: row.get(14)?,
-                chain_json: row.get(15)?,
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(RowData {
+                    id: row.get(0)?,
+                    agent_id: row.get(1)?,
+                    owner_id: row.get(2)?,
+                    sender_id: row.get(3)?,
+                    name: row.get(4)?,
+                    enabled: row.get(5)?,
+                    schedule_json: row.get(6)?,
+                    action_json: row.get(7)?,
+                    delivery_json: row.get(8)?,
+                    one_shot: row.get(9)?,
+                    last_status: row.get(10)?,
+                    consecutive_errors: row.get(11)?,
+                    created_at: row.get(12)?,
+                    last_run: row.get(13)?,
+                    next_run: row.get(14)?,
+                    chain_json: row.get(15)?,
+                })
             })
-        }).map_err(|e| CarrierError::Memory(e.to_string()))?;
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let mut metas = Vec::new();
         for row in rows {
@@ -109,7 +113,9 @@ impl CronJobStore {
 
     /// Persist all jobs (replaces entire table contents).
     pub fn save_all(&self, metas: &[JobMeta]) -> CarrierResult<()> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         conn.execute("DELETE FROM cron_jobs", [])
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -121,14 +127,18 @@ impl CronJobStore {
 
     /// Insert or update a single job.
     pub fn upsert(&self, meta: &JobMeta) -> CarrierResult<()> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         self.insert_meta(&conn, meta)
     }
 
     /// Delete a job by ID.
     pub fn delete(&self, id: &str) -> CarrierResult<()> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         conn.execute("DELETE FROM cron_jobs WHERE id = ?1", rusqlite::params![id])
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -277,9 +287,7 @@ mod tests {
                 owner_id: None,
                 sender_id: Some("o-test@im.wechat".to_string()),
                 name: "roundtrip".to_string(),
-                schedule: CronSchedule::At {
-                    at: Utc::now(),
-                },
+                schedule: CronSchedule::At { at: Utc::now() },
                 action: CronAction::AgentTurn {
                     message: "m".to_string(),
                     model_override: None,

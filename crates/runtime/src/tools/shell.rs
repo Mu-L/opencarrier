@@ -3,14 +3,14 @@
 use super::ToolModule;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::config::ExecSecurityMode;
-use types::error::{CarrierError, CarrierResult};
-use types::taint::{TaintLabel, TaintSink, TaintedValue};
-use types::tool::ToolDefinition;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
 use tracing::warn;
+use types::config::ExecSecurityMode;
+use types::error::{CarrierError, CarrierResult};
+use types::taint::{TaintLabel, TaintSink, TaintedValue};
+use types::tool::ToolDefinition;
 
 /// Resolve the `shell_exec`/`cli_exec` subprocess cwd.
 ///
@@ -78,8 +78,7 @@ impl ToolModule for ShellTools {
         // re-check below) verified <DIR> is inside the workspace and <REST>
         // matches a pattern.
         let (effective_command, effective_cwd): (String, Option<std::path::PathBuf>) =
-            if let Some((rest, cd_dir)) =
-                types::flow::strip_cd_prefix(command, ctx.workspace_root)
+            if let Some((rest, cd_dir)) = types::flow::strip_cd_prefix(command, ctx.workspace_root)
             {
                 (rest, Some(cd_dir))
             } else {
@@ -102,7 +101,10 @@ impl ToolModule for ShellTools {
         // shell_allow were already enforced in tool_runner; re-check allow here.
         let flow_shell_scoped = ctx
             .flow_shell_allow
-            .map(|p| !p.is_empty() && types::flow::command_matches_flow_shell_allow(command, p, ctx.workspace_root))
+            .map(|p| {
+                !p.is_empty()
+                    && types::flow::command_matches_flow_shell_allow(command, p, ctx.workspace_root)
+            })
             .unwrap_or(false);
 
         // Exec policy enforcement (allowlist / deny / full) — unless flow-scoped.
@@ -121,8 +123,8 @@ impl ToolModule for ShellTools {
         }
 
         // Skip heuristic taint patterns for Full exec policy or flow-scoped allow.
-        let is_full_exec = flow_shell_scoped
-            || exec_policy.is_some_and(|p| p.mode == ExecSecurityMode::Full);
+        let is_full_exec =
+            flow_shell_scoped || exec_policy.is_some_and(|p| p.mode == ExecSecurityMode::Full);
         if !is_full_exec {
             let suspicious_patterns = ["curl ", "wget ", "| sh", "| bash", "base64 -d", "eval "];
             for pattern in &suspicious_patterns {
@@ -136,22 +138,34 @@ impl ToolModule for ShellTools {
                             %violation,
                             "Shell taint check failed"
                         );
-                        return Some(Err(CarrierError::Sandbox(format!("Taint violation: {violation}"))));
+                        return Some(Err(CarrierError::Sandbox(format!(
+                            "Taint violation: {violation}"
+                        ))));
                     }
                 }
             }
         }
 
         // Flow-scoped shell_exec (shell_allow matched) runs vetted flow scripts that
-    // may make slow API calls (image/video gen, vision describe) — give them a
-    // longer default timeout than the 30s exec_policy default. The agent can
-    // still override per-call via the `timeout_seconds` input field.
-    let default_timeout_secs = if flow_shell_scoped {
-        FLOW_SHELL_DEFAULT_TIMEOUT_SECS
-    } else {
-        exec_policy.map(|p| p.timeout_secs).unwrap_or(30)
-    };
-    Some(exec_shell(input, &effective_command, allowed_env, workspace_root, exec_policy, default_timeout_secs).await)
+        // may make slow API calls (image/video gen, vision describe) — give them a
+        // longer default timeout than the 30s exec_policy default. The agent can
+        // still override per-call via the `timeout_seconds` input field.
+        let default_timeout_secs = if flow_shell_scoped {
+            FLOW_SHELL_DEFAULT_TIMEOUT_SECS
+        } else {
+            exec_policy.map(|p| p.timeout_secs).unwrap_or(30)
+        };
+        Some(
+            exec_shell(
+                input,
+                &effective_command,
+                allowed_env,
+                workspace_root,
+                exec_policy,
+                default_timeout_secs,
+            )
+            .await,
+        )
     }
 
     fn permission_level(&self, _tool_name: &str) -> types::tool::PermissionLevel {
@@ -220,7 +234,9 @@ async fn exec_shell(
     // For ordinary commands it equals input["command"]. timeout still comes
     // from the original input.
     let command = effective_command;
-    let timeout_secs = input["timeout_seconds"].as_u64().unwrap_or(default_timeout_secs);
+    let timeout_secs = input["timeout_seconds"]
+        .as_u64()
+        .unwrap_or(default_timeout_secs);
 
     let use_direct_exec = exec_policy
         .map(|p| p.mode == ExecSecurityMode::Allowlist)
@@ -233,7 +249,9 @@ async fn exec_shell(
             )
         })?;
         if argv.is_empty() {
-            return Err(CarrierError::InvalidInput("Empty command after parsing".to_string()));
+            return Err(CarrierError::InvalidInput(
+                "Empty command after parsing".to_string(),
+            ));
         }
         let mut c = tokio::process::Command::new(&argv[0]);
         if argv.len() > 1 {
@@ -320,7 +338,9 @@ async fn exec_shell(
                 "{header}\n\nSTDOUT:\n{stdout_str}\nSTDERR:\n{stderr_str}"
             ))
         }
-        Ok(Err(e)) => Err(CarrierError::Internal(format!("Failed to execute command: {e}"))),
+        Ok(Err(e)) => Err(CarrierError::Internal(format!(
+            "Failed to execute command: {e}"
+        ))),
         Err(_) => Err(timeout_error(timeout_secs)),
     }
 }
@@ -396,7 +416,12 @@ impl ToolModule for CliExecTools {
         // 1. Check whitelist
         let allowed = self.config.commands.iter().find(|c| c.name == command_name);
         if allowed.is_none() {
-            let available: Vec<&str> = self.config.commands.iter().map(|c| c.name.as_str()).collect();
+            let available: Vec<&str> = self
+                .config
+                .commands
+                .iter()
+                .map(|c| c.name.as_str())
+                .collect();
             return Some(Err(CarrierError::Sandbox(format!(
                 "Command '{command_name}' not in cli_exec allowlist. Available: {}",
                 available.join(", ")
@@ -408,14 +433,17 @@ impl ToolModule for CliExecTools {
         let mut argv = vec![command_name.to_string()];
         if !args_str.is_empty() {
             // SECURITY: reject shell metacharacters in args
-            if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(args_str) {
+            if let Some(reason) = crate::subprocess_sandbox::contains_shell_metacharacters(args_str)
+            {
                 return Some(Err(CarrierError::Sandbox(format!(
                     "cli_exec blocked: args contain {reason}. \
                      Shell metacharacters (pipes, redirects, subshells) are not allowed."
                 ))));
             }
             let parsed = shlex::split(args_str).ok_or_else(|| {
-                CarrierError::InvalidInput("Arguments contain unmatched quotes or invalid syntax".to_string())
+                CarrierError::InvalidInput(
+                    "Arguments contain unmatched quotes or invalid syntax".to_string(),
+                )
             });
             match parsed {
                 Ok(parts) => argv.extend(parts),
@@ -486,7 +514,9 @@ impl ToolModule for CliExecTools {
                     "{header}\n\nSTDOUT:\n{stdout_str}\nSTDERR:\n{stderr_str}"
                 )))
             }
-            Ok(Err(e)) => Some(Err(CarrierError::Sandbox(format!("Failed to execute command: {e}")))),
+            Ok(Err(e)) => Some(Err(CarrierError::Sandbox(format!(
+                "Failed to execute command: {e}"
+            )))),
             Err(_) => Some(Err(timeout_error(timeout_secs))),
         }
     }
@@ -533,7 +563,10 @@ mod tests {
     #[test]
     fn timeout_error_names_its_facts() {
         let msg = timeout_error(30).to_string();
-        assert!(msg.contains("Timed out: true"), "must state timed_out: {msg}");
+        assert!(
+            msg.contains("Timed out: true"),
+            "must state timed_out: {msg}"
+        );
         assert!(
             msg.contains("no exit status"),
             "must state no exit code was captured: {msg}"

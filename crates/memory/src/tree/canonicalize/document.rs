@@ -22,7 +22,11 @@ pub struct DocumentInput {
 }
 
 /// Canonicalise a single document. Returns `None` if both title and body are empty.
-pub fn canonicalise(_source_id: &str, _tags: &[String], doc: DocumentInput) -> Option<CanonicalisedSource> {
+pub fn canonicalise(
+    _source_id: &str,
+    _tags: &[String],
+    doc: DocumentInput,
+) -> Option<CanonicalisedSource> {
     if doc.body.trim().is_empty() && doc.title.trim().is_empty() {
         return None;
     }

@@ -422,11 +422,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ws = setup_workspace(&tmp);
 
-        fs::write(
-            ws.join("knowledge/empty.md"),
-            "---\nname: empty\n---\n\n",
-        )
-        .unwrap();
+        fs::write(ws.join("knowledge/empty.md"), "---\nname: empty\n---\n\n").unwrap();
 
         let report = check_health(&ws);
         assert!(report.issues.iter().any(|i| i.kind == IssueKind::EmptyFile));
@@ -534,11 +530,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ws = setup_workspace(&tmp);
 
-        fs::write(
-            ws.join("knowledge/empty.md"),
-            "---\nname: empty\n---\n\n",
-        )
-        .unwrap();
+        fs::write(ws.join("knowledge/empty.md"), "---\nname: empty\n---\n\n").unwrap();
 
         let report = check_health(&ws);
         let fixed = auto_fix(&ws, &report);

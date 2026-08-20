@@ -42,21 +42,25 @@ impl BotTokenCache {
         let api_base = self.api_base.clone();
         let app_id = self.app_id.clone();
         let app_secret = self.app_secret.clone();
-        get_cached_token(&self.token, Duration::from_secs(TOKEN_REFRESH_AHEAD_SECS), move || async move {
-            let resp = api::get_tenant_token(&http, &api_base, &app_id, &app_secret).await?;
-            if resp.code != 0 {
-                return Err(CarrierError::Network(format!(
-                    "Feishu token API error: code={} msg={}",
-                    resp.code, resp.msg
-                )));
-            }
-            let token = resp
-                .tenant_access_token
-                .ok_or(CarrierError::Network("Missing tenant_access_token in response".to_string()))?;
-            let expire_secs = resp.expire.unwrap_or(7200);
-            info!(app_id = %app_id, expire_secs, "Refreshed Feishu tenant_access_token");
-            Ok((token, expire_secs))
-        })
+        get_cached_token(
+            &self.token,
+            Duration::from_secs(TOKEN_REFRESH_AHEAD_SECS),
+            move || async move {
+                let resp = api::get_tenant_token(&http, &api_base, &app_id, &app_secret).await?;
+                if resp.code != 0 {
+                    return Err(CarrierError::Network(format!(
+                        "Feishu token API error: code={} msg={}",
+                        resp.code, resp.msg
+                    )));
+                }
+                let token = resp.tenant_access_token.ok_or(CarrierError::Network(
+                    "Missing tenant_access_token in response".to_string(),
+                ))?;
+                let expire_secs = resp.expire.unwrap_or(7200);
+                info!(app_id = %app_id, expire_secs, "Refreshed Feishu tenant_access_token");
+                Ok((token, expire_secs))
+            },
+        )
         .await
     }
 

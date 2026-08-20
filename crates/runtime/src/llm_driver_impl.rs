@@ -8,11 +8,11 @@ use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmErr
 use crate::think_filter::{FilterAction, StreamingThinkFilter};
 use crate::USER_AGENT;
 use async_trait::async_trait;
-use types::message::{ContentBlock, MessageContent, Role, StopReason, TokenUsage};
-use types::tool::ToolCall;
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
-use futures::StreamExt;
+use types::message::{ContentBlock, MessageContent, Role, StopReason, TokenUsage};
+use types::tool::ToolCall;
 use zeroize::Zeroizing;
 
 // ---------------------------------------------------------------------------
@@ -107,10 +107,15 @@ enum OaiContentPart {
 }
 
 #[derive(Debug, Serialize)]
-struct OaiImageUrl { url: String }
+struct OaiImageUrl {
+    url: String,
+}
 
 #[derive(Debug, Serialize)]
-struct OaiInputAudio { data: String, format: String }
+struct OaiInputAudio {
+    data: String,
+    format: String,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct OaiToolCall {
@@ -121,7 +126,10 @@ struct OaiToolCall {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct OaiFunction { name: String, arguments: String }
+struct OaiFunction {
+    name: String,
+    arguments: String,
+}
 
 #[derive(Debug, Serialize)]
 struct OaiTool {
@@ -131,13 +139,23 @@ struct OaiTool {
 }
 
 #[derive(Debug, Serialize)]
-struct OaiToolDef { name: String, description: String, parameters: serde_json::Value }
+struct OaiToolDef {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
 
 #[derive(Debug, Deserialize)]
-struct OaiResponse { choices: Vec<OaiChoice>, usage: Option<OaiUsage> }
+struct OaiResponse {
+    choices: Vec<OaiChoice>,
+    usage: Option<OaiUsage>,
+}
 
 #[derive(Debug, Deserialize)]
-struct OaiChoice { message: OaiResponseMessage, finish_reason: Option<String> }
+struct OaiChoice {
+    message: OaiResponseMessage,
+    finish_reason: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 struct OaiResponseMessage {
@@ -147,7 +165,10 @@ struct OaiResponseMessage {
 }
 
 #[derive(Debug, Deserialize)]
-struct OaiUsage { prompt_tokens: u64, completion_tokens: u64 }
+struct OaiUsage {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+}
 
 fn extract_reasoning_text(val: &serde_json::Value) -> String {
     val.as_str().unwrap_or("").to_string()
@@ -221,7 +242,11 @@ impl UnifiedHttpDriver {
                     let mut has_tool_results = false;
                     for block in blocks {
                         match block {
-                            ContentBlock::ToolResult { tool_use_id, content, .. } => {
+                            ContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                                ..
+                            } => {
                                 has_tool_results = true;
                                 oai_messages.push(OaiMessage {
                                     role: "tool".to_string(),
@@ -262,7 +287,9 @@ impl UnifiedHttpDriver {
                                     image_url: OaiImageUrl { url: image_url },
                                 });
                             }
-                            ContentBlock::Audio { data, media_type, .. } => {
+                            ContentBlock::Audio {
+                                data, media_type, ..
+                            } => {
                                 parts.push(OaiContentPart::InputAudio {
                                     input_audio: OaiInputAudio {
                                         data: data.clone(),
@@ -291,7 +318,9 @@ impl UnifiedHttpDriver {
                     for block in blocks {
                         match block {
                             ContentBlock::Text { text, .. } => text_parts.push(text.clone()),
-                            ContentBlock::ToolUse { id, name, input, .. } => {
+                            ContentBlock::ToolUse {
+                                id, name, input, ..
+                            } => {
                                 tc_list.push(OaiToolCall {
                                     id: id.clone(),
                                     call_type: "function".to_string(),
@@ -311,14 +340,26 @@ impl UnifiedHttpDriver {
                     oai_messages.push(OaiMessage {
                         role: "assistant".to_string(),
                         content: if text_parts.is_empty() {
-                            if has_tool_calls { Some(OaiMessageContent::Text(String::new())) } else { None }
+                            if has_tool_calls {
+                                Some(OaiMessageContent::Text(String::new()))
+                            } else {
+                                None
+                            }
                         } else {
                             Some(OaiMessageContent::Text(text_parts.join("")))
                         },
-                        tool_calls: if tc_list.is_empty() { None } else { Some(tc_list) },
+                        tool_calls: if tc_list.is_empty() {
+                            None
+                        } else {
+                            Some(tc_list)
+                        },
                         tool_call_id: None,
                         // Always include reasoning_content — aginxbrain handles provider differences
-                        reasoning_content: if reasoning_text.is_empty() { None } else { Some(reasoning_text) },
+                        reasoning_content: if reasoning_text.is_empty() {
+                            None
+                        } else {
+                            Some(reasoning_text)
+                        },
                     });
                 }
                 _ => {}
@@ -369,8 +410,16 @@ impl UnifiedHttpDriver {
             });
         }
 
-        let max_tokens = if request.max_tokens > 0 { Some(request.max_tokens) } else { None };
-        let temperature = if request.temperature > 0.0 { Some(request.temperature) } else { None };
+        let max_tokens = if request.max_tokens > 0 {
+            Some(request.max_tokens)
+        } else {
+            None
+        };
+        let temperature = if request.temperature > 0.0 {
+            Some(request.temperature)
+        } else {
+            None
+        };
 
         let tools: Vec<OaiTool> = request.tools.iter().map(|t| {
             let schema = types::tool::normalize_schema_for_provider(&t.input_schema, "openai");
@@ -387,7 +436,11 @@ impl UnifiedHttpDriver {
             }
         }).collect();
 
-        let tool_choice = if tools.is_empty() { None } else { Some(serde_json::json!("auto")) };
+        let tool_choice = if tools.is_empty() {
+            None
+        } else {
+            Some(serde_json::json!("auto"))
+        };
 
         OaiRequest {
             model: request.model.clone(),
@@ -407,24 +460,34 @@ impl UnifiedHttpDriver {
 // ---------------------------------------------------------------------------
 
 impl UnifiedHttpDriver {
-    async fn complete_openai(&self, request: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+    async fn complete_openai(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, LlmError> {
         let mut oai_request = self.build_oai_request(&request);
         // Image generation needs a longer header timeout (up to 180s for first byte)
         let is_image = request.extra.get("n").is_some() && request.extra.get("size").is_some();
         let header_timeout = if is_image { 180 } else { 60 };
-        let resp = self.send_openai_with_retry(&mut oai_request, header_timeout).await?;
+        let resp = self
+            .send_openai_with_retry(&mut oai_request, header_timeout)
+            .await?;
 
         let body = tokio::time::timeout(
             std::time::Duration::from_secs(LLM_BODY_READ_TIMEOUT_SECS),
             resp.text(),
         )
         .await
-        .map_err(|_| LlmError::Http(format!("Response body read timed out after {LLM_BODY_READ_TIMEOUT_SECS}s")))?
+        .map_err(|_| {
+            LlmError::Http(format!(
+                "Response body read timed out after {LLM_BODY_READ_TIMEOUT_SECS}s"
+            ))
+        })?
         .map_err(|e| LlmError::Http(e.to_string()))?;
 
         // aginxbrain wraps some responses in {"code":"Success","output":{...}}
         // Try standard OpenAI format first; if missing `choices`, unwrap from `output`
-        let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| LlmError::Parse(e.to_string()))?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| LlmError::Parse(e.to_string()))?;
         let oai_json = if parsed.get("choices").is_some() {
             parsed
         } else if let Some(output) = parsed.get("output") {
@@ -432,9 +495,13 @@ impl UnifiedHttpDriver {
         } else {
             parsed
         };
-        let oai_response: OaiResponse = serde_json::from_value(oai_json).map_err(|e| LlmError::Parse(e.to_string()))?;
+        let oai_response: OaiResponse =
+            serde_json::from_value(oai_json).map_err(|e| LlmError::Parse(e.to_string()))?;
 
-        let choice = oai_response.choices.into_iter().next()
+        let choice = oai_response
+            .choices
+            .into_iter()
+            .next()
             .ok_or_else(|| LlmError::Parse("No choices in response".to_string()))?;
 
         let mut content = Vec::new();
@@ -457,11 +524,16 @@ impl UnifiedHttpDriver {
                         let (cleaned, thinking) = extract_think_tags(text);
                         if let Some(think_text) = thinking {
                             if choice.message.reasoning_content.is_none() {
-                                content.push(ContentBlock::Thinking { thinking: think_text });
+                                content.push(ContentBlock::Thinking {
+                                    thinking: think_text,
+                                });
                             }
                         }
                         if !cleaned.is_empty() {
-                            content.push(ContentBlock::Text { text: cleaned, provider_metadata: None });
+                            content.push(ContentBlock::Text {
+                                text: cleaned,
+                                provider_metadata: None,
+                            });
                         }
                     }
                 }
@@ -473,7 +545,8 @@ impl UnifiedHttpDriver {
                             text_parts.push(s.to_string());
                         } else if let Some(url) = part.get("image").and_then(|v| v.as_str()) {
                             image_urls.push(url.to_string());
-                        } else if let Some(url) = part.get("image_url")
+                        } else if let Some(url) = part
+                            .get("image_url")
                             .and_then(|v| v.get("url"))
                             .and_then(|v| v.as_str())
                         {
@@ -487,20 +560,26 @@ impl UnifiedHttpDriver {
                         let (cleaned, thinking) = extract_think_tags(&text);
                         if let Some(think_text) = thinking {
                             if choice.message.reasoning_content.is_none() {
-                                content.push(ContentBlock::Thinking { thinking: think_text });
+                                content.push(ContentBlock::Thinking {
+                                    thinking: think_text,
+                                });
                             }
                         }
                         if !cleaned.is_empty() {
-                            content.push(ContentBlock::Text { text: cleaned, provider_metadata: None });
+                            content.push(ContentBlock::Text {
+                                text: cleaned,
+                                provider_metadata: None,
+                            });
                         }
                     }
                     if !image_urls.is_empty() {
-                        let items: Vec<types::media::GeneratedImage> = image_urls.into_iter().map(|url| {
-                            types::media::GeneratedImage {
+                        let items: Vec<types::media::GeneratedImage> = image_urls
+                            .into_iter()
+                            .map(|url| types::media::GeneratedImage {
                                 data_base64: String::new(),
                                 url: Some(url),
-                            }
-                        }).collect();
+                            })
+                            .collect();
                         media = Some(types::media::MediaOutput::Images { items });
                     }
                 }
@@ -508,16 +587,29 @@ impl UnifiedHttpDriver {
             }
         }
 
-        let has_text = content.iter().any(|b| matches!(b, ContentBlock::Text { .. }));
-        let has_thinking = content.iter().any(|b| matches!(b, ContentBlock::Thinking { .. }));
+        let has_text = content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { .. }));
+        let has_thinking = content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Thinking { .. }));
         if has_thinking && !has_text && choice.message.tool_calls.is_none() && media.is_none() {
-            let thinking_text = content.iter().find_map(|b| match b {
-                ContentBlock::Thinking { thinking } => Some(thinking.as_str()),
-                _ => None,
-            }).unwrap_or("");
+            let thinking_text = content
+                .iter()
+                .find_map(|b| match b {
+                    ContentBlock::Thinking { thinking } => Some(thinking.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("");
             let summary = extract_thinking_summary(thinking_text);
-            debug!(summary_len = summary.len(), "Synthesizing text from thinking-only response");
-            content.push(ContentBlock::Text { text: summary, provider_metadata: None });
+            debug!(
+                summary_len = summary.len(),
+                "Synthesizing text from thinking-only response"
+            );
+            content.push(ContentBlock::Text {
+                text: summary,
+                provider_metadata: None,
+            });
         }
 
         if let Some(calls) = choice.message.tool_calls {
@@ -532,7 +624,8 @@ impl UnifiedHttpDriver {
                     );
                     continue;
                 }
-                let input: serde_json::Value = serde_json::from_str(&call.function.arguments).unwrap_or_default();
+                let input: serde_json::Value =
+                    serde_json::from_str(&call.function.arguments).unwrap_or_default();
                 content.push(ContentBlock::ToolUse {
                     id: call.id.clone(),
                     name: call.function.name.clone(),
@@ -551,30 +644,50 @@ impl UnifiedHttpDriver {
             Some("stop") => StopReason::EndTurn,
             Some("tool_calls") => StopReason::ToolUse,
             Some("length") => StopReason::MaxTokens,
-            _ => if !tool_calls.is_empty() { StopReason::ToolUse } else { StopReason::EndTurn },
+            _ => {
+                if !tool_calls.is_empty() {
+                    StopReason::ToolUse
+                } else {
+                    StopReason::EndTurn
+                }
+            }
         };
 
-        let mut usage = oai_response.usage.map(|u| TokenUsage {
-            input_tokens: u.prompt_tokens,
-            output_tokens: u.completion_tokens,
-        }).unwrap_or_default();
+        let mut usage = oai_response
+            .usage
+            .map(|u| TokenUsage {
+                input_tokens: u.prompt_tokens,
+                output_tokens: u.completion_tokens,
+            })
+            .unwrap_or_default();
 
         if !content.is_empty() && usage.input_tokens == 0 && usage.output_tokens == 0 {
             debug!("Response has content but no usage stats — setting synthetic output_tokens=1");
             usage.output_tokens = 1;
         }
 
-        Ok(CompletionResponse { content, stop_reason, tool_calls, usage, media })
+        Ok(CompletionResponse {
+            content,
+            stop_reason,
+            tool_calls,
+            usage,
+            media,
+        })
     }
 
     /// OpenAI-specific retry with request body mutation.
-    async fn send_openai_with_retry(&self, oai_request: &mut OaiRequest, header_timeout_secs: u64) -> Result<reqwest::Response, LlmError> {
+    async fn send_openai_with_retry(
+        &self,
+        oai_request: &mut OaiRequest,
+        header_timeout_secs: u64,
+    ) -> Result<reqwest::Response, LlmError> {
         let max_retries: u8 = 3;
         for attempt in 0..=max_retries {
             let url = self.base_url.clone();
             debug!(url = %url, attempt, "Sending OpenAI API request");
 
-            let builder = self.client
+            let builder = self
+                .client
                 .post(&url)
                 .header("content-type", "application/json")
                 .header("authorization", format!("Bearer {}", self.api_key.as_str()))
@@ -601,9 +714,10 @@ impl UnifiedHttpDriver {
                 Ok(r) => r,
                 Err(e) => {
                     let err_str = e.to_string();
-                    if attempt < max_retries && (err_str.contains("error decoding")
-                        || err_str.contains("error sending")
-                        || err_str.contains("connection"))
+                    if attempt < max_retries
+                        && (err_str.contains("error decoding")
+                            || err_str.contains("error sending")
+                            || err_str.contains("connection"))
                     {
                         let retry_ms = (attempt as u64 + 1) * 2000;
                         warn!(%err_str, attempt, retry_ms, "HTTP transport error, retrying");
@@ -619,36 +733,49 @@ impl UnifiedHttpDriver {
                 return Ok(resp);
             }
 
-            let body = match tokio::time::timeout(
-                std::time::Duration::from_secs(15),
-                resp.text(),
-            )
-            .await
-            {
-                Ok(Ok(text)) => text,
-                Ok(Err(e)) => {
-                    warn!("Error reading error response body: {e}");
-                    String::new()
-                }
-                Err(_) => "[body read timed out]".to_string(),
-            };
+            let body =
+                match tokio::time::timeout(std::time::Duration::from_secs(15), resp.text()).await {
+                    Ok(Ok(text)) => text,
+                    Ok(Err(e)) => {
+                        warn!("Error reading error response body: {e}");
+                        String::new()
+                    }
+                    Err(_) => "[body read timed out]".to_string(),
+                };
 
             // Log 400 errors with tool details for debugging provider schema issues
             if status == 400 && body.contains("arguments") && attempt == 0 {
-                let problem_tools: Vec<&str> = oai_request.tools.iter()
+                let problem_tools: Vec<&str> = oai_request
+                    .tools
+                    .iter()
                     .filter(|t| !t.function.parameters.is_object())
                     .map(|t| t.function.name.as_str())
                     .collect();
-                let bad_msg_args: Vec<String> = oai_request.messages.iter()
+                let bad_msg_args: Vec<String> = oai_request
+                    .messages
+                    .iter()
                     .filter_map(|m| m.tool_calls.as_ref())
                     .flat_map(|calls| calls.iter())
                     .filter(|c| {
                         let s = c.function.arguments.trim();
-                        s.is_empty() || s == "null" || serde_json::from_str::<serde_json::Value>(s).is_err()
+                        s.is_empty()
+                            || s == "null"
+                            || serde_json::from_str::<serde_json::Value>(s).is_err()
                     })
-                    .map(|c| format!("{}: {}...", c.function.name, &c.function.arguments[..c.function.arguments.len().min(80)]))
+                    .map(|c| {
+                        format!(
+                            "{}: {}...",
+                            c.function.name,
+                            &c.function.arguments[..c.function.arguments.len().min(80)]
+                        )
+                    })
                     .collect();
-                warn!(status, ?problem_tools, ?bad_msg_args, "Provider rejected tool arguments schema");
+                warn!(
+                    status,
+                    ?problem_tools,
+                    ?bad_msg_args,
+                    "Provider rejected tool arguments schema"
+                );
             }
 
             // 429 rate limit
@@ -659,12 +786,17 @@ impl UnifiedHttpDriver {
                     tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
                     continue;
                 }
-                return Err(LlmError::RateLimited { retry_after_ms: 5000 });
+                return Err(LlmError::RateLimited {
+                    retry_after_ms: 5000,
+                });
             }
 
             // Strip temperature for models that don't support it
-            if status == 400 && oai_request.temperature.is_some() && attempt < max_retries
-                && (body.contains("temperature") && (body.contains("unsupported_parameter") || body.contains("deprecated")))
+            if status == 400
+                && oai_request.temperature.is_some()
+                && attempt < max_retries
+                && (body.contains("temperature")
+                    && (body.contains("unsupported_parameter") || body.contains("deprecated")))
             {
                 warn!(model = %oai_request.model, "Stripping temperature for this model");
                 oai_request.temperature = None;
@@ -675,17 +807,25 @@ impl UnifiedHttpDriver {
             if status == 400 && body.contains("max_tokens") && attempt < max_retries {
                 let current = oai_request.max_tokens.unwrap_or(4096);
                 let cap = extract_max_tokens_limit(&body).unwrap_or(current / 2);
-                warn!(old = current, new = cap, "Auto-capping max_tokens to model limit");
+                warn!(
+                    old = current,
+                    new = cap,
+                    "Auto-capping max_tokens to model limit"
+                );
                 oai_request.max_tokens = Some(cap);
                 continue;
             }
 
             // Retry without tools
             let body_lower = body.to_lowercase();
-            if !oai_request.tools.is_empty() && attempt < max_retries
-                && (status == 500 || body_lower.contains("internal error")
-                    || (status == 400 && (body_lower.contains("does not support tools")
-                        || body_lower.contains("tool") && body_lower.contains("not supported"))))
+            if !oai_request.tools.is_empty()
+                && attempt < max_retries
+                && (status == 500
+                    || body_lower.contains("internal error")
+                    || (status == 400
+                        && (body_lower.contains("does not support tools")
+                            || body_lower.contains("tool")
+                                && body_lower.contains("not supported"))))
             {
                 warn!(model = %oai_request.model, status, "Model may not support tools, retrying without tools");
                 oai_request.tools.clear();
@@ -693,10 +833,16 @@ impl UnifiedHttpDriver {
                 continue;
             }
 
-            return Err(LlmError::Api { status, message: crate::str_utils::safe_truncate_str(&body, 500).to_string() });
+            return Err(LlmError::Api {
+                status,
+                message: crate::str_utils::safe_truncate_str(&body, 500).to_string(),
+            });
         }
 
-        Err(LlmError::Api { status: 0, message: "Max retries exceeded".to_string() })
+        Err(LlmError::Api {
+            status: 0,
+            message: "Max retries exceeded".to_string(),
+        })
     }
 }
 
@@ -826,11 +972,19 @@ fn extract_think_tags(text: &str) -> (String, Option<String>) {
 
 /// Extract a brief summary from thinking-only content.
 fn extract_thinking_summary(thinking: &str) -> String {
-    let paragraphs: Vec<&str> = thinking.split("\n\n").filter(|p| !p.trim().is_empty()).collect();
+    let paragraphs: Vec<&str> = thinking
+        .split("\n\n")
+        .filter(|p| !p.trim().is_empty())
+        .collect();
     if let Some(last) = paragraphs.last() {
         let trimmed = last.trim();
         if trimmed.len() > 200 {
-            let end = trimmed.char_indices().take_while(|(i, _)| *i < 200).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(0);
+            let end = trimmed
+                .char_indices()
+                .take_while(|(i, _)| *i < 200)
+                .last()
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
             format!("{}...", &trimmed[..end])
         } else {
             trimmed.to_string()
@@ -845,7 +999,10 @@ fn extract_max_tokens_limit(body: &str) -> Option<u32> {
     let idx = body.find("max_tokens")?;
     let after = &body[idx + "max_tokens".len()..];
     let start = after.find(|c: char| c.is_ascii_digit())?;
-    let digits: String = after[start..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = after[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     digits.parse().ok()
 }
 
@@ -909,13 +1066,17 @@ impl LlmDriver for UnifiedHttpDriver {
                 let line = buffer[..pos].trim_end().to_string();
                 buffer = buffer[pos + 1..].to_string();
 
-                if line.is_empty() || line.starts_with(':') { continue; }
+                if line.is_empty() || line.starts_with(':') {
+                    continue;
+                }
 
                 let data = match line.strip_prefix("data:") {
                     Some(d) => d.trim_start(),
                     None => continue,
                 };
-                if data == "[DONE]" { continue; }
+                if data == "[DONE]" {
+                    continue;
+                }
 
                 let json: serde_json::Value = match serde_json::from_str(data) {
                     Ok(v) => v,
@@ -923,8 +1084,12 @@ impl LlmDriver for UnifiedHttpDriver {
                 };
 
                 if let Some(u) = json.get("usage") {
-                    if let Some(pt) = u["prompt_tokens"].as_u64() { usage.input_tokens = pt; }
-                    if let Some(ct) = u["completion_tokens"].as_u64() { usage.output_tokens = ct; }
+                    if let Some(pt) = u["prompt_tokens"].as_u64() {
+                        usage.input_tokens = pt;
+                    }
+                    if let Some(ct) = u["completion_tokens"].as_u64() {
+                        usage.output_tokens = ct;
+                    }
                 }
 
                 let choices = match json["choices"].as_array() {
@@ -952,7 +1117,8 @@ impl LlmDriver for UnifiedHttpDriver {
                                         let _ = tx.send(StreamEvent::TextDelta { text: t }).await;
                                     }
                                     FilterAction::EmitThinking(t) => {
-                                        let _ = tx.send(StreamEvent::ThinkingDelta { text: t }).await;
+                                        let _ =
+                                            tx.send(StreamEvent::ThinkingDelta { text: t }).await;
                                     }
                                 }
                             }
@@ -963,7 +1129,11 @@ impl LlmDriver for UnifiedHttpDriver {
                         if !reasoning.is_empty() {
                             got_real_content = true;
                             reasoning_content.push_str(reasoning);
-                            let _ = tx.send(StreamEvent::ThinkingDelta { text: reasoning.to_string() }).await;
+                            let _ = tx
+                                .send(StreamEvent::ThinkingDelta {
+                                    text: reasoning.to_string(),
+                                })
+                                .await;
                         }
                     }
 
@@ -986,21 +1156,29 @@ impl LlmDriver for UnifiedHttpDriver {
                             if let Some(func) = call.get("function") {
                                 if let Some(name) = func["name"].as_str() {
                                     tool_accum[idx].1 = name.to_string();
-                                    let _ = tx.send(StreamEvent::ToolUseStart {
-                                        id: tool_accum[idx].0.clone(),
-                                        name: name.to_string(),
-                                    }).await;
+                                    let _ = tx
+                                        .send(StreamEvent::ToolUseStart {
+                                            id: tool_accum[idx].0.clone(),
+                                            name: name.to_string(),
+                                        })
+                                        .await;
                                 }
                                 if let Some(args) = func["arguments"].as_str() {
                                     tool_accum[idx].2.push_str(args);
-                                    let _ = tx.send(StreamEvent::ToolInputDelta { text: args.to_string() }).await;
+                                    let _ = tx
+                                        .send(StreamEvent::ToolInputDelta {
+                                            text: args.to_string(),
+                                        })
+                                        .await;
                                 }
                             }
                         }
                     }
 
                     if let Some(fr) = choice["finish_reason"].as_str() {
-                        if !fr.is_empty() { finish_reason = Some(fr.to_string()); }
+                        if !fr.is_empty() {
+                            finish_reason = Some(fr.to_string());
+                        }
                     }
                 }
 
@@ -1022,8 +1200,12 @@ impl LlmDriver for UnifiedHttpDriver {
         // Flush think filter
         for action in think_filter.flush() {
             match action {
-                FilterAction::EmitText(t) => { let _ = tx.send(StreamEvent::TextDelta { text: t }).await; }
-                FilterAction::EmitThinking(t) => { let _ = tx.send(StreamEvent::ThinkingDelta { text: t }).await; }
+                FilterAction::EmitText(t) => {
+                    let _ = tx.send(StreamEvent::TextDelta { text: t }).await;
+                }
+                FilterAction::EmitThinking(t) => {
+                    let _ = tx.send(StreamEvent::ThinkingDelta { text: t }).await;
+                }
             }
         }
 
@@ -1032,7 +1214,9 @@ impl LlmDriver for UnifiedHttpDriver {
         let mut tool_calls = Vec::new();
 
         if !reasoning_content.is_empty() {
-            content.push(ContentBlock::Thinking { thinking: reasoning_content });
+            content.push(ContentBlock::Thinking {
+                thinking: reasoning_content,
+            });
         }
 
         if !text_content.is_empty() {
@@ -1041,7 +1225,10 @@ impl LlmDriver for UnifiedHttpDriver {
                 content.push(ContentBlock::Thinking { thinking: th });
             }
             if !clean_text.is_empty() {
-                content.push(ContentBlock::Text { text: clean_text, provider_metadata: None });
+                content.push(ContentBlock::Text {
+                    text: clean_text,
+                    provider_metadata: None,
+                });
             }
         }
 
@@ -1069,31 +1256,57 @@ impl LlmDriver for UnifiedHttpDriver {
                 input: input.clone(),
                 provider_metadata: None,
             });
-            tool_calls.push(ToolCall { id: id.clone(), name: name.clone(), input });
-            let _ = tx.send(StreamEvent::ToolUseEnd {
+            tool_calls.push(ToolCall {
                 id: id.clone(),
                 name: name.clone(),
-                input: serde_json::from_str(args_json).unwrap_or_default(),
-            }).await;
+                input,
+            });
+            let _ = tx
+                .send(StreamEvent::ToolUseEnd {
+                    id: id.clone(),
+                    name: name.clone(),
+                    input: serde_json::from_str(args_json).unwrap_or_default(),
+                })
+                .await;
         }
 
         if content.is_empty() && tool_calls.is_empty() {
-            content.push(ContentBlock::Text { text: text_content.clone(), provider_metadata: None });
+            content.push(ContentBlock::Text {
+                text: text_content.clone(),
+                provider_metadata: None,
+            });
         }
 
         let stop_reason = match finish_reason.as_deref() {
             Some("stop") => StopReason::EndTurn,
             Some("tool_calls") => StopReason::ToolUse,
             Some("length") => StopReason::MaxTokens,
-            _ => if !tool_calls.is_empty() { StopReason::ToolUse } else { StopReason::EndTurn },
+            _ => {
+                if !tool_calls.is_empty() {
+                    StopReason::ToolUse
+                } else {
+                    StopReason::EndTurn
+                }
+            }
         };
 
         if usage.output_tokens == 0 && (!content.is_empty() || !tool_accum.is_empty()) {
             usage.output_tokens = 1;
         }
 
-        let response = CompletionResponse { content, stop_reason, tool_calls, usage, media: None };
-        let _ = tx.send(StreamEvent::ContentComplete { stop_reason: response.stop_reason, usage: response.usage }).await;
+        let response = CompletionResponse {
+            content,
+            stop_reason,
+            tool_calls,
+            usage,
+            media: None,
+        };
+        let _ = tx
+            .send(StreamEvent::ContentComplete {
+                stop_reason: response.stop_reason,
+                usage: response.usage,
+            })
+            .await;
         Ok(response)
     }
 }

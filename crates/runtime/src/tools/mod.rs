@@ -28,11 +28,11 @@ pub mod web_search;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use types::error::{CarrierError, CarrierResult};
+use types::tool::{PermissionLevel, ToolDefinition};
 
 // ---------------------------------------------------------------------------
 // Shared AginBrowser helpers (used by browser.rs and web_search.rs)
@@ -156,14 +156,17 @@ pub fn builtin_modules(cli_exec_config: types::config::CliExecConfig) -> Vec<Box
     }
     // Merge in dynamically registered tools (from api_tool_register)
     let dynamic = crate::api_tools::register::dynamic_tools();
-    let static_names: std::collections::HashSet<String> = api_tool_configs.iter().map(|t| t.name.clone()).collect();
+    let static_names: std::collections::HashSet<String> =
+        api_tool_configs.iter().map(|t| t.name.clone()).collect();
     for dt in dynamic {
         if !static_names.contains(&dt.name) {
             api_tool_configs.push(dt);
         }
     }
     if !api_tool_configs.is_empty() {
-        modules.push(Box::new(crate::api_tools::DeclarativeApiModule::new(api_tool_configs)));
+        modules.push(Box::new(crate::api_tools::DeclarativeApiModule::new(
+            api_tool_configs,
+        )));
     }
 
     modules
@@ -204,14 +207,16 @@ pub(crate) fn resolve_target_workspace(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
 ) -> CarrierResult<PathBuf> {
-    let kh = kernel.ok_or(CarrierError::Internal("train_* tools require kernel access".to_string()))?;
-    let target = input["target"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'target' parameter (target clone name)".to_string()))?;
+    let kh = kernel.ok_or(CarrierError::Internal(
+        "train_* tools require kernel access".to_string(),
+    ))?;
+    let target = input["target"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'target' parameter (target clone name)".to_string(),
+    ))?;
 
-    let target_workspace = kh
-        .resolve_agent_workspace(target)
-        .ok_or_else(|| CarrierError::InvalidInput(format!("Agent '{}' not found or has no workspace", target)))?;
+    let target_workspace = kh.resolve_agent_workspace(target).ok_or_else(|| {
+        CarrierError::InvalidInput(format!("Agent '{}' not found or has no workspace", target))
+    })?;
 
     let path = PathBuf::from(&target_workspace);
     if !path.exists() {
@@ -237,7 +242,9 @@ pub fn validate_path(path: &str) -> CarrierResult<&str> {
                 ));
             }
             std::path::Component::RootDir | std::path::Component::Prefix(_) => {
-                return Err(CarrierError::InvalidInput("Absolute paths are forbidden".to_string()));
+                return Err(CarrierError::InvalidInput(
+                    "Absolute paths are forbidden".to_string(),
+                ));
             }
             _ => {}
         }
@@ -248,10 +255,15 @@ pub fn validate_path(path: &str) -> CarrierResult<&str> {
 /// Sanitize a string before using it as a single path component.
 pub fn sanitize_path_component(name: &str) -> CarrierResult<&str> {
     if name.is_empty() {
-        return Err(CarrierError::InvalidInput("Empty path component".to_string()));
+        return Err(CarrierError::InvalidInput(
+            "Empty path component".to_string(),
+        ));
     }
     if name.contains('/') || name.contains('\\') || name == ".." || name.contains("..") {
-        return Err(CarrierError::InvalidInput(format!("Invalid path component: {:?}", name)));
+        return Err(CarrierError::InvalidInput(format!(
+            "Invalid path component: {:?}",
+            name
+        )));
     }
     for component in std::path::Path::new(name).components() {
         match component {
@@ -276,7 +288,9 @@ pub fn sanitize_path_component(name: &str) -> CarrierResult<&str> {
 /// Validate a clone name: only lowercase alphanumeric and hyphens allowed.
 pub fn validate_clone_name(name: &str) -> CarrierResult<&str> {
     if name.is_empty() {
-        return Err(CarrierError::InvalidInput("Clone name cannot be empty".to_string()));
+        return Err(CarrierError::InvalidInput(
+            "Clone name cannot be empty".to_string(),
+        ));
     }
     if name.len() > 64 {
         return Err(CarrierError::InvalidInput(
@@ -302,7 +316,9 @@ pub fn validate_clone_name(name: &str) -> CarrierResult<&str> {
 /// Validate a file path key inside clone files map — no traversal, no absolute paths.
 pub fn validate_clone_file_path(path: &str) -> CarrierResult<&str> {
     if path.is_empty() {
-        return Err(CarrierError::InvalidInput("File path cannot be empty".to_string()));
+        return Err(CarrierError::InvalidInput(
+            "File path cannot be empty".to_string(),
+        ));
     }
     if path.starts_with('/') || path.starts_with("..") {
         return Err(CarrierError::InvalidInput(format!(
@@ -331,7 +347,9 @@ pub fn resolve_file_path_for_read(
     agent_name: Option<&str>,
 ) -> CarrierResult<PathBuf> {
     if let Some(root) = workspace_root {
-        crate::workspace_sandbox::resolve_sandbox_path_for_read(raw_path, root, sender_id, agent_name)
+        crate::workspace_sandbox::resolve_sandbox_path_for_read(
+            raw_path, root, sender_id, agent_name,
+        )
     } else {
         let _ = validate_path(raw_path)?;
         Ok(PathBuf::from(raw_path))

@@ -4,10 +4,10 @@
 //! injection keeping context length controlled, only tool result truncation
 //! and the final error fallback are needed.
 
-use types::message::{ContentBlock, Message, MessageContent};
-use types::tool::ToolDefinition;
 use std::collections::HashSet;
 use tracing::warn;
+use types::message::{ContentBlock, Message, MessageContent};
+use types::tool::ToolDefinition;
 
 /// Drain `count` messages from the front, ensuring no ToolUse/ToolResult pairs
 /// are split at the cut boundary.

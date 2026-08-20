@@ -3,14 +3,14 @@
 //! Abstracts over multiple LLM providers (Anthropic, OpenAI, Ollama, etc.).
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use thiserror::Error;
 use types::brain::EndpointReport;
 use types::error::{CarrierError, CarrierResult};
 use types::media::MediaOutput;
 use types::message::{ContentBlock, Message, StopReason, TokenUsage};
 use types::tool::{ToolCall, ToolDefinition};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use thiserror::Error;
 
 /// Error type for LLM driver operations.
 #[derive(Error, Debug)]
@@ -231,10 +231,7 @@ pub trait Brain: Send + Sync {
     }
 
     /// Resolve credentials for a provider (for skill credential injection).
-    fn credentials_for(
-        &self,
-        _provider: &str,
-    ) -> Option<types::brain::ProviderCredentials> {
+    fn credentials_for(&self, _provider: &str) -> Option<types::brain::ProviderCredentials> {
         None
     }
 
@@ -353,15 +350,15 @@ impl std::fmt::Debug for DriverConfig {
 pub fn create_driver(config: &DriverConfig) -> Result<Arc<dyn LlmDriver>, LlmError> {
     // All HTTP API drivers — UnifiedHttpDriver (OpenAI format)
     // Validate base_url for HTTP drivers
-    let base_url = config.base_url.clone().ok_or_else(|| LlmError::Config(
-        "base_url required for HTTP driver".to_string(),
-    ))?;
+    let base_url = config
+        .base_url
+        .clone()
+        .ok_or_else(|| LlmError::Config("base_url required for HTTP driver".to_string()))?;
 
     let api_key = config.api_key.clone().unwrap_or_default();
 
     Ok(Arc::new(crate::llm_driver_impl::UnifiedHttpDriver::new(
-        api_key,
-        base_url,
+        api_key, base_url,
     )))
 }
 

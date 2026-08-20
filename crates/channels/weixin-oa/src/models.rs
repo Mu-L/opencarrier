@@ -89,7 +89,7 @@ pub struct ProxyKeyPayload {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProxyMessage {
-    pub key: Option<String>, // JSON string of ProxyKeyPayload
+    pub key: Option<String>,  // JSON string of ProxyKeyPayload
     pub data: Option<String>, // raw XML
     pub sign: Option<String>,
     pub openid: Option<String>,

@@ -1,6 +1,6 @@
 //! A2A Client — discover and interact with external A2A agents.
 
-use super::types::{AgentCard, A2aTask};
+use super::types::{A2aTask, AgentCard};
 use tracing::{debug, info, warn};
 use types::error::{CarrierError, CarrierResult};
 

@@ -81,10 +81,9 @@ pub async fn set_brain_modality(
         .to_string();
 
     let result = state.kernel.update_brain(|config| {
-        config.modalities.insert(
-            name.clone(),
-            types::brain::ModalityEntry { description },
-        );
+        config
+            .modalities
+            .insert(name.clone(), types::brain::ModalityEntry { description });
     });
 
     match result {
@@ -311,13 +310,7 @@ pub async fn models_list(
         })
         .collect();
     if let Some(p) = provider_filter {
-        models.retain(|m| {
-            m["provider"]
-                .as_str()
-                .unwrap_or("")
-                .to_lowercase()
-                == p
-        });
+        models.retain(|m| m["provider"].as_str().unwrap_or("").to_lowercase() == p);
     }
     Json(models)
 }
@@ -329,7 +322,10 @@ pub async fn models_aliases(State(state): State<Arc<AppState>>) -> impl IntoResp
     let brain = state.kernel.brain_info();
     let mut map = serde_json::Map::new();
     for m in brain.list_modalities() {
-        map.insert(m.name.clone(), serde_json::Value::String(brain.model_for(&m.name)));
+        map.insert(
+            m.name.clone(),
+            serde_json::Value::String(brain.model_for(&m.name)),
+        );
     }
     Json(serde_json::Value::Object(map))
 }

@@ -6,10 +6,10 @@ use crate::kernel_handle::KernelHandle;
 use crate::memory_handle::MemoryHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
+use types::error::{CarrierError, CarrierResult};
+use types::tool::{PermissionLevel, ToolDefinition};
 
 const SCHEDULES_KEY: &str = "__carrier_schedules";
 
@@ -204,7 +204,13 @@ async fn tool_schedule_create(
     };
 
     schedules.push(entry);
-    mem.kv_set(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    mem.kv_set(
+        aid,
+        "",
+        "",
+        SCHEDULES_KEY,
+        serde_json::Value::Array(schedules),
+    )?;
 
     Ok(format!(
         "Schedule created:\n  ID: {schedule_id}\n  Description: {description}\n  Cron: {cron_expr}\n  Original: {schedule_str}"
@@ -259,9 +265,9 @@ async fn tool_schedule_delete(
     let aid = caller_agent_id.ok_or(CarrierError::Internal(
         "No agent context for schedule_delete".to_string(),
     ))?;
-    let id = input["id"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'id' parameter".to_string()))?;
+    let id = input["id"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'id' parameter".to_string(),
+    ))?;
 
     let mut schedules: Vec<serde_json::Value> = match mem.kv_get(aid, "", "", SCHEDULES_KEY)? {
         Some(serde_json::Value::Array(arr)) => arr,
@@ -277,7 +283,13 @@ async fn tool_schedule_delete(
         )));
     }
 
-    mem.kv_set(aid, "", "", SCHEDULES_KEY, serde_json::Value::Array(schedules))?;
+    mem.kv_set(
+        aid,
+        "",
+        "",
+        SCHEDULES_KEY,
+        serde_json::Value::Array(schedules),
+    )?;
     Ok(format!("Schedule '{id}' deleted."))
 }
 
@@ -297,7 +309,8 @@ async fn tool_cron_create(
         "Agent ID required for cron_create".to_string(),
     ))?;
     tracing::debug!(agent_id, ?input, "cron_create called");
-    kh.cron_create(agent_id, owner_id, sender_id, input.clone()).await
+    kh.cron_create(agent_id, owner_id, sender_id, input.clone())
+        .await
 }
 
 async fn tool_cron_list(
@@ -324,11 +337,9 @@ async fn tool_cron_cancel(
     let agent_id = caller_agent_id.ok_or(CarrierError::Internal(
         "Agent ID required for cron_cancel".to_string(),
     ))?;
-    let job_id = input["job_id"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput(
-            "Missing 'job_id' parameter".to_string(),
-        ))?;
+    let job_id = input["job_id"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'job_id' parameter".to_string(),
+    ))?;
     // Ownership check: verify this job belongs to the caller
     let jobs = kh.cron_list(agent_id, owner_id).await?;
     let owned = jobs
@@ -457,7 +468,9 @@ impl ToolModule for SchedulingTools {
             "schedule_delete" => Some(tool_schedule_delete(input, memory, caller_agent_id).await),
 
             // Cron scheduling tools
-            "cron_create" => Some(tool_cron_create(input, kernel, caller_agent_id, owner_id, sender_id).await),
+            "cron_create" => {
+                Some(tool_cron_create(input, kernel, caller_agent_id, owner_id, sender_id).await)
+            }
             "cron_list" => Some(tool_cron_list(kernel, caller_agent_id, owner_id).await),
             "cron_cancel" => Some(tool_cron_cancel(input, kernel, caller_agent_id, owner_id).await),
 
@@ -468,7 +481,9 @@ impl ToolModule for SchedulingTools {
     fn permission_level(&self, tool_name: &str) -> PermissionLevel {
         match tool_name {
             "schedule_list" | "cron_list" => PermissionLevel::None,
-            "schedule_create" | "schedule_delete" | "cron_create" | "cron_cancel" => PermissionLevel::Write,
+            "schedule_create" | "schedule_delete" | "cron_create" | "cron_cancel" => {
+                PermissionLevel::Write
+            }
             _ => PermissionLevel::Dangerous,
         }
     }

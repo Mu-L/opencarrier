@@ -50,7 +50,10 @@ impl FlowRunStore {
     /// Create a new flow run record (status defaults to whatever the row says,
     /// typically `running`).
     pub fn create(&self, row: &FlowRunRow) -> CarrierResult<()> {
-        let conn = self.conn.lock().map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
         conn.execute(
             "INSERT INTO flow_runs \
                (run_id, session_id, agent_id, sender_id, flow_name, input, completed_steps, \
@@ -78,7 +81,10 @@ impl FlowRunStore {
 
     /// Load a flow run by id.
     pub fn get(&self, run_id: &str) -> CarrierResult<Option<FlowRunRow>> {
-        let conn = self.conn.lock().map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
                 "SELECT run_id, session_id, agent_id, sender_id, flow_name, input, \
@@ -114,7 +120,10 @@ impl FlowRunStore {
     /// List waiting flow runs for a sender+agent (used by `user_input` resume;
     /// included now so the schema/query is validated).
     pub fn list_pending(&self, sender_id: &str, agent_id: &str) -> CarrierResult<Vec<FlowRunRow>> {
-        let conn = self.conn.lock().map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
                 "SELECT run_id, session_id, agent_id, sender_id, flow_name, input, \
@@ -153,7 +162,10 @@ impl FlowRunStore {
     /// List `waiting` runs whose `expires_at` deadline has passed (used by the
     /// background expiry tick to mark them `timed_out`).
     pub fn list_expired(&self, now_rfc3339: &str) -> CarrierResult<Vec<FlowRunRow>> {
-        let conn = self.conn.lock().map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
         let mut stmt = conn
             .prepare(
                 "SELECT run_id, session_id, agent_id, sender_id, flow_name, input, \
@@ -198,7 +210,10 @@ impl FlowRunStore {
         status: &str,
         completed_steps_json: &str,
     ) -> CarrierResult<()> {
-        let conn = self.conn.lock().map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
         conn.execute(
             "UPDATE flow_runs SET status = ?2, completed_steps = ?3, expires_at = NULL, \
              updated_at = ?4 WHERE run_id = ?1",
@@ -217,7 +232,10 @@ impl FlowRunStore {
         map_context: Option<&str>,
         expires_at: Option<&str>,
     ) -> CarrierResult<()> {
-        let conn = self.conn.lock().map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
         conn.execute(
             "UPDATE flow_runs SET status = 'waiting', waiting_at = ?2, map_context = ?3, \
              expires_at = ?4, updated_at = ?5 WHERE run_id = ?1",
@@ -282,7 +300,8 @@ mod tests {
     fn update_status_persists() {
         let s = store();
         s.create(&sample_row("run-2")).unwrap();
-        s.update_status("run-2", "completed", r#"{"draft":"..."}"#).unwrap();
+        s.update_status("run-2", "completed", r#"{"draft":"..."}"#)
+            .unwrap();
         let got = s.get("run-2").unwrap().unwrap();
         assert_eq!(got.status, "completed");
         assert_eq!(got.completed_steps, r#"{"draft":"..."}"#);
@@ -320,7 +339,8 @@ mod tests {
         let s = store();
         s.create(&sample_row("run-d")).unwrap();
         let deadline = "2099-01-01T00:00:00+00:00";
-        s.set_waiting("run-d", "review", None, Some(deadline)).unwrap();
+        s.set_waiting("run-d", "review", None, Some(deadline))
+            .unwrap();
         let got = s.get("run-d").unwrap().unwrap();
         assert_eq!(got.status, "waiting");
         assert_eq!(got.expires_at.as_deref(), Some(deadline));
@@ -353,7 +373,8 @@ mod tests {
         s.create(&sample_row("run-e")).unwrap();
         s.set_waiting("run-e", "review", None, Some("2099-01-01T00:00:00+00:00"))
             .unwrap();
-        s.update_status("run-e", "completed", r#"{"review":"ok"}"#).unwrap();
+        s.update_status("run-e", "completed", r#"{"review":"ok"}"#)
+            .unwrap();
         let got = s.get("run-e").unwrap().unwrap();
         assert_eq!(got.status, "completed");
         assert!(got.expires_at.is_none());

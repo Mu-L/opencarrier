@@ -124,7 +124,10 @@ pub fn save_secret_key(key: &str, value: &str, home_dir: &std::path::Path) -> st
 
     // Replace existing key or append
     let line_prefix = format!("{key}=");
-    if let Some(pos) = content.lines().position(|line| line.starts_with(&line_prefix)) {
+    if let Some(pos) = content
+        .lines()
+        .position(|line| line.starts_with(&line_prefix))
+    {
         let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
         content = lines
             .iter()
@@ -156,10 +159,7 @@ pub fn check_file_permissions(path: &std::path::Path) -> Option<String> {
     if !path.exists() {
         return None;
     }
-    let mode = std::fs::metadata(path)
-        .ok()?
-        .permissions()
-        .mode();
+    let mode = std::fs::metadata(path).ok()?.permissions().mode();
     if mode & 0o077 != 0 {
         Some(format!(
             "File {:?} has overly permissive permissions ({:o}). Run: chmod 600 {:?}",

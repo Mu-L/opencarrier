@@ -31,7 +31,14 @@ pub fn merge_key_facts(
 ) {
     for fact in facts {
         if let Some((key, new_values)) = classify_fact(fact) {
-            merge_drawer_value(memory_handle, agent_name, owner_id, user_id, &key, new_values);
+            merge_drawer_value(
+                memory_handle,
+                agent_name,
+                owner_id,
+                user_id,
+                &key,
+                new_values,
+            );
         }
     }
 }
@@ -69,21 +76,28 @@ fn classify_fact(fact: &str) -> Option<(String, Vec<String>)> {
     }
 
     // Preference
-    if lower.contains("prefers") || lower.contains("likes") || lower.contains("wants")
-        || lower.contains("偏好") || lower.contains("喜欢")
+    if lower.contains("prefers")
+        || lower.contains("likes")
+        || lower.contains("wants")
+        || lower.contains("偏好")
+        || lower.contains("喜欢")
     {
         return Some(("preference.general".to_string(), vec![fact.to_string()]));
     }
 
     // Entity: accounts, projects, organizations
-    if lower.contains("account") || lower.contains("公众号") || lower.contains("workspace")
+    if lower.contains("account")
+        || lower.contains("公众号")
+        || lower.contains("workspace")
         || lower.contains("项目")
     {
         return Some(("entity.accounts".to_string(), vec![fact.to_string()]));
     }
 
     // Event: decisions, scheduled items
-    if lower.contains("decided") || lower.contains("决定") || lower.contains("scheduled")
+    if lower.contains("decided")
+        || lower.contains("决定")
+        || lower.contains("scheduled")
         || lower.contains("计划")
     {
         let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
@@ -137,9 +151,7 @@ fn merge_drawer_value(
         }
     };
 
-    let value = serde_json::Value::Array(
-        merged.drain(..).map(serde_json::Value::String).collect(),
-    );
+    let value = serde_json::Value::Array(merged.drain(..).map(serde_json::Value::String).collect());
 
     if let Err(e) = memory_handle.kv_set(agent_name, owner_id, user_id, key, value) {
         debug!("Failed to write drawer key '{}': {}", key, e);
@@ -169,7 +181,9 @@ mod tests {
 
     impl StubHandle {
         fn new() -> Self {
-            Self { kv: Mutex::new(HashMap::new()) }
+            Self {
+                kv: Mutex::new(HashMap::new()),
+            }
         }
         fn snapshot(&self, owner: &str, user: &str, key: &str) -> Option<serde_json::Value> {
             self.kv
@@ -182,53 +196,132 @@ mod tests {
 
     #[async_trait]
     impl MemoryHandle for StubHandle {
-        fn kv_set(&self, _agent: &str, owner: &str, user: &str, key: &str, value: serde_json::Value) -> CarrierResult<()> {
-            self.kv.lock().unwrap().insert((owner.to_string(), user.to_string(), key.to_string()), value);
+        fn kv_set(
+            &self,
+            _agent: &str,
+            owner: &str,
+            user: &str,
+            key: &str,
+            value: serde_json::Value,
+        ) -> CarrierResult<()> {
+            self.kv.lock().unwrap().insert(
+                (owner.to_string(), user.to_string(), key.to_string()),
+                value,
+            );
             Ok(())
         }
-        fn kv_get(&self, _agent: &str, owner: &str, user: &str, key: &str) -> CarrierResult<Option<serde_json::Value>> {
-            Ok(self.kv.lock().unwrap().get(&(owner.to_string(), user.to_string(), key.to_string())).cloned())
+        fn kv_get(
+            &self,
+            _agent: &str,
+            owner: &str,
+            user: &str,
+            key: &str,
+        ) -> CarrierResult<Option<serde_json::Value>> {
+            Ok(self
+                .kv
+                .lock()
+                .unwrap()
+                .get(&(owner.to_string(), user.to_string(), key.to_string()))
+                .cloned())
         }
-        fn kv_list(&self, _agent: &str, _owner: &str, _user: &str) -> CarrierResult<Vec<(String, serde_json::Value)>> {
+        fn kv_list(
+            &self,
+            _agent: &str,
+            _owner: &str,
+            _user: &str,
+        ) -> CarrierResult<Vec<(String, serde_json::Value)>> {
             Ok(Vec::new())
         }
-        fn kv_delete(&self, _agent: &str, _owner: &str, _user: &str, _key: &str) -> CarrierResult<()> {
+        fn kv_delete(
+            &self,
+            _agent: &str,
+            _owner: &str,
+            _user: &str,
+            _key: &str,
+        ) -> CarrierResult<()> {
             Ok(())
         }
         async fn tree_ingest(&self, _req: IngestRequest) -> CarrierResult<IngestResult> {
-            Ok(IngestResult { chunks_created: 0, chunks_dropped: 0, source_id: String::new() })
+            Ok(IngestResult {
+                chunks_created: 0,
+                chunks_dropped: 0,
+                source_id: String::new(),
+            })
         }
         async fn tree_query_source(&self, _req: SourceQuery<'_>) -> CarrierResult<QueryResponse> {
-            Ok(QueryResponse { hits: vec![], total: 0, truncated: false })
+            Ok(QueryResponse {
+                hits: vec![],
+                total: 0,
+                truncated: false,
+            })
         }
         async fn tree_query_global(&self, _req: GlobalQuery<'_>) -> CarrierResult<QueryResponse> {
-            Ok(QueryResponse { hits: vec![], total: 0, truncated: false })
+            Ok(QueryResponse {
+                hits: vec![],
+                total: 0,
+                truncated: false,
+            })
         }
         async fn tree_query_topic(&self, _req: TopicQuery<'_>) -> CarrierResult<QueryResponse> {
-            Ok(QueryResponse { hits: vec![], total: 0, truncated: false })
+            Ok(QueryResponse {
+                hits: vec![],
+                total: 0,
+                truncated: false,
+            })
         }
-        async fn tree_search_entities(&self, _req: EntitySearch<'_>) -> CarrierResult<Vec<EntityMatch>> {
+        async fn tree_search_entities(
+            &self,
+            _req: EntitySearch<'_>,
+        ) -> CarrierResult<Vec<EntityMatch>> {
             Ok(Vec::new())
         }
         async fn tree_drill_down(&self, _req: DrillDownQuery<'_>) -> CarrierResult<QueryResponse> {
-            Ok(QueryResponse { hits: vec![], total: 0, truncated: false })
+            Ok(QueryResponse {
+                hits: vec![],
+                total: 0,
+                truncated: false,
+            })
         }
-        async fn tree_fetch_leaves(&self, _req: FetchLeavesQuery<'_>) -> CarrierResult<QueryResponse> {
-            Ok(QueryResponse { hits: vec![], total: 0, truncated: false })
+        async fn tree_fetch_leaves(
+            &self,
+            _req: FetchLeavesQuery<'_>,
+        ) -> CarrierResult<QueryResponse> {
+            Ok(QueryResponse {
+                hits: vec![],
+                total: 0,
+                truncated: false,
+            })
         }
-        async fn tree_list_sources(&self, _owner: &str, _kind: Option<&str>, _limit: usize) -> CarrierResult<Vec<TreeSummary>> {
+        async fn tree_list_sources(
+            &self,
+            _owner: &str,
+            _kind: Option<&str>,
+            _limit: usize,
+        ) -> CarrierResult<Vec<TreeSummary>> {
             Ok(Vec::new())
         }
-        fn analytics_user_stats(&self, _agent: &str, _days: u32) -> CarrierResult<serde_json::Value> {
+        fn analytics_user_stats(
+            &self,
+            _agent: &str,
+            _days: u32,
+        ) -> CarrierResult<serde_json::Value> {
             Ok(serde_json::Value::Null)
         }
-        fn analytics_user_lookup(&self, _agent: &str, _sender: &str) -> CarrierResult<serde_json::Value> {
+        fn analytics_user_lookup(
+            &self,
+            _agent: &str,
+            _sender: &str,
+        ) -> CarrierResult<serde_json::Value> {
             Ok(serde_json::Value::Null)
         }
         fn analytics_usage(&self, _agent: &str, _days: u32) -> CarrierResult<serde_json::Value> {
             Ok(serde_json::Value::Null)
         }
-        fn analytics_recent_conversations(&self, _agent: &str, _limit: u32) -> CarrierResult<serde_json::Value> {
+        fn analytics_recent_conversations(
+            &self,
+            _agent: &str,
+            _limit: u32,
+        ) -> CarrierResult<serde_json::Value> {
             Ok(serde_json::Value::Null)
         }
     }
@@ -252,7 +345,12 @@ mod tests {
         let event_entry = snap.iter().find(|((_, _, k), _)| k.starts_with("event."));
         assert!(event_entry.is_some(), "event.* key should exist");
         if let Some((_, serde_json::Value::Array(arr))) = event_entry {
-            assert_eq!(arr.len(), 1, "event fact must not duplicate on re-flush: {:?}", arr);
+            assert_eq!(
+                arr.len(),
+                1,
+                "event fact must not duplicate on re-flush: {:?}",
+                arr
+            );
         } else {
             panic!("event entry not an array");
         }
@@ -260,8 +358,20 @@ mod tests {
 
         // State key also dedups.
         let pref = "likes dark mode".to_string();
-        merge_key_facts(&handle, "agent", "owner", "user", std::slice::from_ref(&pref));
-        merge_key_facts(&handle, "agent", "owner", "user", std::slice::from_ref(&pref));
+        merge_key_facts(
+            &handle,
+            "agent",
+            "owner",
+            "user",
+            std::slice::from_ref(&pref),
+        );
+        merge_key_facts(
+            &handle,
+            "agent",
+            "owner",
+            "user",
+            std::slice::from_ref(&pref),
+        );
         let pref_snap = stub.snapshot("owner", "user", "preference.general");
         if let Some(serde_json::Value::Array(arr)) = pref_snap {
             assert_eq!(arr.len(), 1, "preference fact must not duplicate");
@@ -275,13 +385,21 @@ mod tests {
     fn test_merge_key_facts_distinct_survive() {
         let stub = Arc::new(StubHandle::new());
         let handle: Arc<dyn MemoryHandle> = stub.clone();
-        merge_key_facts(&handle, "agent", "owner", "user", &[
-            "likes dark mode".to_string(),
-            "likes tea".to_string(),
-        ]);
+        merge_key_facts(
+            &handle,
+            "agent",
+            "owner",
+            "user",
+            &["likes dark mode".to_string(), "likes tea".to_string()],
+        );
         let snap = stub.snapshot("owner", "user", "preference.general");
         if let Some(serde_json::Value::Array(arr)) = snap {
-            assert_eq!(arr.len(), 2, "two distinct preferences should both survive: {:?}", arr);
+            assert_eq!(
+                arr.len(),
+                2,
+                "two distinct preferences should both survive: {:?}",
+                arr
+            );
         } else {
             panic!("preference entry missing");
         }

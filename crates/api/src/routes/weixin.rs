@@ -16,8 +16,17 @@ use std::sync::Arc;
 /// `set_sender_route` stores and keeps `session.json`'s `bind_agent` field
 /// consistent regardless of whether the agent was found locally or installed
 /// from hub on demand.
-async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<(String, String, Option<String>)> {
-    let hub_url = state.kernel.config.hub.url.trim_end_matches('/').to_string();
+async fn try_install_from_hub(
+    state: &Arc<AppState>,
+    name: &str,
+) -> Option<(String, String, Option<String>)> {
+    let hub_url = state
+        .kernel
+        .config
+        .hub
+        .url
+        .trim_end_matches('/')
+        .to_string();
     if hub_url.is_empty() {
         return None;
     }
@@ -56,9 +65,12 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<(Stri
     match install {
         Ok((agent_id, agent_name, display_name)) => {
             tracing::info!(%agent_id, %agent_name, "Hub template auto-installed for QR binding");
-            let share_url = state.kernel.config.external_url.as_ref().map(|url| {
-                format!("{}/share?clone={}", url.trim_end_matches('/'), agent_name)
-            });
+            let share_url = state
+                .kernel
+                .config
+                .external_url
+                .as_ref()
+                .map(|url| format!("{}/share?clone={}", url.trim_end_matches('/'), agent_name));
             Some((agent_name, display_name, share_url))
         }
         Err(e) => {
@@ -71,10 +83,7 @@ async fn try_install_from_hub(state: &Arc<AppState>, name: &str) -> Option<(Stri
 ///
 /// Query params: `?bot=<name>` (optional, defaults to "default")
 pub async fn weixin_qrcode(Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
-    let raw_bot = params
-        .get("bot")
-        .map(|s| s.as_str())
-        .unwrap_or("default");
+    let raw_bot = params.get("bot").map(|s| s.as_str()).unwrap_or("default");
     let bot = match weixin_sanitize_bot_id(raw_bot) {
         Some(t) => t,
         None => {
@@ -137,10 +146,7 @@ pub async fn weixin_qrcode_status(
     State(state): State<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let raw_bot = params
-        .get("bot")
-        .map(|s| s.as_str())
-        .unwrap_or("default");
+    let raw_bot = params.get("bot").map(|s| s.as_str()).unwrap_or("default");
     let bot = match weixin_sanitize_bot_id(raw_bot) {
         Some(t) => t,
         None => {
@@ -239,8 +245,11 @@ pub async fn weixin_qrcode_status(
         // Resolve agent_name early so both rebind and new-user paths can use it
         // Stores (agent_name, display_name, share_url) — always agent name, never UUID.
         let agent_name_param = params.get("agent_name").map(|s| s.as_str()).unwrap_or("");
-        let resolved_agent: Option<(String, String, Option<String>)> = if !agent_name_param.is_empty() {
-            match crate::routes::common::resolve_agent_id(agent_name_param, &state.kernel.registry) {
+        let resolved_agent: Option<(String, String, Option<String>)> = if !agent_name_param
+            .is_empty()
+        {
+            match crate::routes::common::resolve_agent_id(agent_name_param, &state.kernel.registry)
+            {
                 Ok((_, entry)) => {
                     let display = entry.manifest.display_name.clone();
                     Some((entry.name.clone(), display, None))
@@ -287,8 +296,10 @@ pub async fn weixin_qrcode_status(
 
                             tf["bot_token"] = serde_json::Value::String(bot_token.to_string());
                             tf["baseurl"] = serde_json::Value::String(raw_baseurl.to_string());
-                            tf["ilink_bot_id"] = serde_json::Value::String(ilink_bot_id.to_string());
-                            tf["expires_at"] = serde_json::Value::Number(serde_json::Number::from(now + 86400));
+                            tf["ilink_bot_id"] =
+                                serde_json::Value::String(ilink_bot_id.to_string());
+                            tf["expires_at"] =
+                                serde_json::Value::Number(serde_json::Number::from(now + 86400));
                             tf["bot_id"] = serde_json::Value::String(existing_bot.clone());
 
                             let effective_agent = resolved_agent
@@ -331,9 +342,8 @@ pub async fn weixin_qrcode_status(
                                 }
                             }
 
-                            let share_url = resolved_agent
-                                .as_ref()
-                                .and_then(|(_, _, url)| url.clone());
+                            let share_url =
+                                resolved_agent.as_ref().and_then(|(_, _, url)| url.clone());
                             return (
                                 StatusCode::OK,
                                 Json(serde_json::json!({
@@ -396,8 +406,9 @@ pub async fn weixin_qrcode_status(
         // Register dynamic binding + start sender
         if let Some((ref agent_id, _, _)) = resolved_agent {
             // Resolve to agent name for routing (already resolved above, but agent_id may differ)
-            let agent_name = crate::routes::common::resolve_to_name(agent_id, &state.kernel.registry)
-                .unwrap_or_else(|_| agent_id.clone());
+            let agent_name =
+                crate::routes::common::resolve_to_name(agent_id, &state.kernel.registry)
+                    .unwrap_or_else(|_| agent_id.clone());
             if let Some(ref pm_arc) = state.channel_manager {
                 let pm = pm_arc.lock().await;
                 if !sender_id.is_empty() {
@@ -409,9 +420,7 @@ pub async fn weixin_qrcode_status(
             }
         }
 
-        let share_url = resolved_agent
-            .as_ref()
-            .and_then(|(_, _, url)| url.clone());
+        let share_url = resolved_agent.as_ref().and_then(|(_, _, url)| url.clone());
 
         tracing::info!(
             bot,
@@ -551,14 +560,19 @@ pub async fn weixin_save_token(
         &baseurl,
         &ilink_bot_id,
         Some(sender_id),
-        if bind_agent.is_empty() { None } else { Some(&bind_agent) },
+        if bind_agent.is_empty() {
+            None
+        } else {
+            Some(&bind_agent)
+        },
     );
 
     // Register dynamic bridge binding + start sender
     if !bind_agent.is_empty() {
         // Resolve bind_agent to agent name (accept UUID or name)
-        let agent_name = crate::routes::common::resolve_to_name(&bind_agent, &state.kernel.registry)
-            .unwrap_or_else(|_| bind_agent.clone());
+        let agent_name =
+            crate::routes::common::resolve_to_name(&bind_agent, &state.kernel.registry)
+                .unwrap_or_else(|_| bind_agent.clone());
         if let Some(ref pm_arc) = state.channel_manager {
             let pm = pm_arc.lock().await;
             if !sender_id.is_empty() {
@@ -701,7 +715,6 @@ pub async fn channels_status(State(state): State<Arc<AppState>>) -> impl IntoRes
     )
 }
 
-
 // ---------------------------------------------------------------------------
 // WeChat helpers
 // ---------------------------------------------------------------------------
@@ -741,7 +754,6 @@ fn weixin_validate_baseurl(url: &str) -> bool {
         || url.starts_with("https://ilinkai.weixin.qq.com/")
 }
 
-
 /// POST `/api/weixin/{name}/bind` — bind a WeChat bot to an agent.
 pub async fn weixin_bind_bot(
     State(state): State<Arc<AppState>>,
@@ -759,15 +771,16 @@ pub async fn weixin_bind_bot(
     };
 
     // Resolve agent_name: accept name or UUID, store as name
-    let agent_name = match crate::routes::common::resolve_to_name(&agent_input, &state.kernel.registry) {
-        Ok(name) => name,
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": format!("分身 '{agent_input}' 不存在")})),
-            );
-        }
-    };
+    let agent_name =
+        match crate::routes::common::resolve_to_name(&agent_input, &state.kernel.registry) {
+            Ok(name) => name,
+            Err(_) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": format!("分身 '{agent_input}' 不存在")})),
+                );
+            }
+        };
 
     // Scan senders/ for weixin sessions matching the bot name
     let home = &state.kernel.config.home_dir;

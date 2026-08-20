@@ -10,10 +10,10 @@ use crate::llm_driver::{
 };
 use crate::llm_errors;
 use std::sync::Arc;
-use types::error::{CarrierError, CarrierResult};
-use types::message::{ContentBlock, Message, MessageContent, Role, TurnSummary};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
+use types::error::{CarrierError, CarrierResult};
+use types::message::{ContentBlock, Message, MessageContent, Role, TurnSummary};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -28,7 +28,8 @@ pub const BASE_RETRY_DELAY_MS: u64 = 1000;
 /// Timeout for a single LLM API call (seconds).
 /// Catches mid-stream hangs where the server goes silent after connection.
 /// Must match `LLM_HTTP_TIMEOUT_SECS` in llm_driver_impl.rs.
-pub(in crate::agent_loop) const PER_LLM_CALL_TIMEOUT_SECS: u64 = crate::llm_driver_impl::LLM_HTTP_TIMEOUT_SECS;
+pub(in crate::agent_loop) const PER_LLM_CALL_TIMEOUT_SECS: u64 =
+    crate::llm_driver_impl::LLM_HTTP_TIMEOUT_SECS;
 
 /// Wall-clock timeout for streaming LLM calls (seconds).
 /// Even though the driver has a per-chunk idle timeout (120s), keepalive bytes
@@ -90,8 +91,12 @@ pub const TOOL_TIMEOUT_SECS: u64 = 120;
 /// exceed the default 120s; the inner shell.rs timeout also rises for
 /// flow-scoped shell_allow calls).
 pub const TOOL_TIMEOUT_LONG_SECS: u64 = 300;
-pub const TOOL_LONG_TIMEOUT_NAMES: &[&str] =
-    &["image_generate", "browser_navigate", "browser_execute", "shell_exec"];
+pub const TOOL_LONG_TIMEOUT_NAMES: &[&str] = &[
+    "image_generate",
+    "browser_navigate",
+    "browser_execute",
+    "shell_exec",
+];
 
 /// Maximum message history size before auto-trimming to prevent context overflow.
 pub const MAX_HISTORY_MESSAGES: usize = 30;
@@ -300,11 +305,9 @@ pub(in crate::agent_loop) async fn call_with_retry(
             match &stream_tx {
                 Some(tx) => driver.stream(request.clone(), tx.clone()).await,
                 None => {
-                    let (drain_tx, mut drain_rx) =
-                        mpsc::channel::<StreamEvent>(64);
-                    let drain = tokio::spawn(async move {
-                        while drain_rx.recv().await.is_some() {}
-                    });
+                    let (drain_tx, mut drain_rx) = mpsc::channel::<StreamEvent>(64);
+                    let drain =
+                        tokio::spawn(async move { while drain_rx.recv().await.is_some() {} });
                     let result = driver.stream(request.clone(), drain_tx).await;
                     drain.abort();
                     result
@@ -315,12 +318,7 @@ pub(in crate::agent_loop) async fn call_with_retry(
         // Acquire per-call concurrency permit so the slot is only held
         // during actual API work, not across the entire agent loop.
         let _permit = if let Some(sem) = llm_concurrency_limit {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                sem.acquire(),
-            )
-            .await
-            {
+            match tokio::time::timeout(std::time::Duration::from_secs(30), sem.acquire()).await {
                 Ok(Ok(permit)) => Some(permit),
                 Ok(Err(_)) => {
                     last_error = Some("LLM concurrency semaphore closed".to_string());
@@ -364,7 +362,11 @@ pub(in crate::agent_loop) async fn call_with_retry(
         let result = match tokio::time::timeout(timeout, call).await {
             Ok(r) => r,
             Err(_) => {
-                warn!(attempt, timeout_secs = timeout.as_secs(), "LLM call timed out (wall-clock)");
+                warn!(
+                    attempt,
+                    timeout_secs = timeout.as_secs(),
+                    "LLM call timed out (wall-clock)"
+                );
                 last_error = Some("LLM call timed out".to_string());
                 if attempt == MAX_RETRIES {
                     return Err(CarrierError::LlmDriver(format!(
@@ -396,8 +398,7 @@ pub(in crate::agent_loop) async fn call_with_retry(
                         MAX_RETRIES
                     )));
                 }
-                let delay =
-                    std::cmp::max(retry_after_ms, BASE_RETRY_DELAY_MS * 2u64.pow(attempt));
+                let delay = std::cmp::max(retry_after_ms, BASE_RETRY_DELAY_MS * 2u64.pow(attempt));
                 warn!(
                     attempt,
                     delay_ms = delay,
@@ -417,8 +418,7 @@ pub(in crate::agent_loop) async fn call_with_retry(
                         MAX_RETRIES
                     )));
                 }
-                let delay =
-                    std::cmp::max(retry_after_ms, BASE_RETRY_DELAY_MS * 2u64.pow(attempt));
+                let delay = std::cmp::max(retry_after_ms, BASE_RETRY_DELAY_MS * 2u64.pow(attempt));
                 warn!(
                     attempt,
                     delay_ms = delay,
@@ -474,7 +474,15 @@ pub(in crate::agent_loop) async fn call_with_fallback(
     llm_concurrency_limit: Option<&Arc<tokio::sync::Semaphore>>,
 ) -> CarrierResult<CompletionResponse> {
     let Some(brain) = brain else {
-        return call_with_retry(fallback_driver, request, stream_tx, None, None, llm_concurrency_limit).await;
+        return call_with_retry(
+            fallback_driver,
+            request,
+            stream_tx,
+            None,
+            None,
+            llm_concurrency_limit,
+        )
+        .await;
     };
 
     let endpoints = brain.endpoints_for(modality);
@@ -491,7 +499,16 @@ pub(in crate::agent_loop) async fn call_with_fallback(
             req.model = ep.model.clone();
             let start = std::time::Instant::now();
             let tx_arg = stream_tx.clone();
-            match call_with_retry(&*driver, req, tx_arg, Some(&ep.provider), None, llm_concurrency_limit).await {
+            match call_with_retry(
+                &*driver,
+                req,
+                tx_arg,
+                Some(&ep.provider),
+                None,
+                llm_concurrency_limit,
+            )
+            .await
+            {
                 Ok(response) => {
                     let latency = start.elapsed().as_millis() as u64;
                     brain.report(types::brain::EndpointReport {
@@ -544,7 +561,11 @@ pub(in crate::agent_loop) fn trim_oldest_turns(messages: &mut Vec<Message>, max_
     // We drain in pairs (user + assistant) to keep whole turns.
     let excess = messages.len() - max_retained;
     // Round up to the nearest even number to preserve turn boundaries
-    let drain_count = if excess.is_multiple_of(2) { excess } else { excess + 1 };
+    let drain_count = if excess.is_multiple_of(2) {
+        excess
+    } else {
+        excess + 1
+    };
     messages.drain(..drain_count.min(messages.len()));
 }
 

@@ -6,8 +6,8 @@ use rusqlite::Connection;
 use types::error::CarrierResult;
 use types::memory_tree::{NodeKind, QueryResponse, RetrievalHit, TreeKind};
 
-use crate::tree::store::ChunkStore;
 use crate::tree::score_store::ScoreStore;
+use crate::tree::store::ChunkStore;
 
 /// Maximum number of chunk IDs that can be fetched in one call.
 const MAX_FETCH_BATCH: usize = 20;
@@ -87,7 +87,13 @@ mod tests {
         (Arc::new(Mutex::new(conn)), dir)
     }
 
-    fn insert_chunk(conn: &Arc<Mutex<Connection>>, owner_id: &str, id: &str, seq: u32, content: &str) {
+    fn insert_chunk(
+        conn: &Arc<Mutex<Connection>>,
+        owner_id: &str,
+        id: &str,
+        seq: u32,
+        content: &str,
+    ) {
         let store = ChunkStore::new(conn.clone());
         let chunk = Chunk {
             id: id.to_string(),

@@ -38,16 +38,37 @@ pub fn build_router(state: AppState) -> Router {
         .route("/kv/get", axum::routing::post(routes::kv::kv_get))
         .route("/kv/list", axum::routing::post(routes::kv::kv_list))
         .route("/kv/delete", axum::routing::post(routes::kv::kv_delete))
-        .route("/tree/ingest", axum::routing::post(routes::tree::tree_ingest))
-        .route("/tree/query_source", axum::routing::post(routes::tree::query_source))
-        .route("/tree/query_global", axum::routing::post(routes::tree::query_global))
-        .route("/tree/query_topic", axum::routing::post(routes::tree::query_topic))
+        .route(
+            "/tree/ingest",
+            axum::routing::post(routes::tree::tree_ingest),
+        )
+        .route(
+            "/tree/query_source",
+            axum::routing::post(routes::tree::query_source),
+        )
+        .route(
+            "/tree/query_global",
+            axum::routing::post(routes::tree::query_global),
+        )
+        .route(
+            "/tree/query_topic",
+            axum::routing::post(routes::tree::query_topic),
+        )
         .route(
             "/tree/search_entities",
             axum::routing::post(routes::tree::search_entities),
         )
-        .route("/tree/drill_down", axum::routing::post(routes::tree::drill_down))
-        .route("/tree/fetch_leaves", axum::routing::post(routes::tree::fetch_leaves))
-        .route("/tree/list_sources", axum::routing::post(routes::tree::list_sources))
+        .route(
+            "/tree/drill_down",
+            axum::routing::post(routes::tree::drill_down),
+        )
+        .route(
+            "/tree/fetch_leaves",
+            axum::routing::post(routes::tree::fetch_leaves),
+        )
+        .route(
+            "/tree/list_sources",
+            axum::routing::post(routes::tree::list_sources),
+        )
         .with_state(state)
 }

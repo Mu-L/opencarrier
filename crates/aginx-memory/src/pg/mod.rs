@@ -5,12 +5,12 @@
 //! state (sessions/agents/cron/...) stays in opencarrier's in-process SQLite and
 //! is NOT here.
 
-pub mod kv_store;
 pub mod chunk_store;
-pub mod tree_store;
-pub mod score_store;
 pub mod entity_store;
 pub mod job_store;
+pub mod kv_store;
+pub mod score_store;
+pub mod tree_store;
 
 #[cfg(test)]
 /// Drop all aginxMemory tables and re-run migrations. Tests call this so each

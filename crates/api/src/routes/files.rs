@@ -364,8 +364,12 @@ pub async fn upload_file(
             if let Some(ref _ws) = entry.manifest.workspace {
                 let agent_name = &entry.manifest.name;
                 let user_input_dir = types::config::sender_data_dir(
-                    &state.kernel.config.home_dir, owner_id.as_deref().unwrap_or(sid), agent_name, Some(sid),
-                ).join("input");
+                    &state.kernel.config.home_dir,
+                    owner_id.as_deref().unwrap_or(sid),
+                    agent_name,
+                    Some(sid),
+                )
+                .join("input");
                 if let Err(e) = std::fs::create_dir_all(&user_input_dir) {
                     tracing::warn!("Failed to create user input dir: {e}");
                 } else {
@@ -682,7 +686,10 @@ pub async fn list_files_tree(
         }
     });
 
-    (StatusCode::OK, Json(serde_json::json!({ "items": items, "base_path": subdir  })))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "items": items, "base_path": subdir  })),
+    )
 }
 
 #[derive(serde::Deserialize)]
@@ -737,7 +744,10 @@ fn mime_for_path(path: &str) -> &'static str {
 /// True if `path` ends with a common image extension (case-insensitive).
 fn is_image_extension(path: &str) -> bool {
     let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
-    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp")
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+    )
 }
 
 /// GET /api/files/view/{agent}/{*path}?sender_id=xxx — Serve file for browser viewing.
@@ -951,7 +961,7 @@ mod tests {
         assert!(!is_public_output_path("input/secret.json")); // input/ non-image stays auth
         assert!(!is_public_output_path("input/document.txt"));
         assert!(is_public_output_path("input/upload.jpg")); // input/ image public (vision)
-        // look-alikes that must NOT be treated as output
+                                                            // look-alikes that must NOT be treated as output
         assert!(!is_public_output_path("Output/x.md")); // case-sensitive
         assert!(!is_public_output_path("outputfile.txt"));
         assert!(!is_public_output_path("output.bin"));

@@ -68,8 +68,8 @@ impl ScoreStore {
                      dropped=EXCLUDED.dropped, reason=EXCLUDED.reason, \
                      computed_at_ms=EXCLUDED.computed_at_ms",
                 &[
-                    &chunk_id, &owner_id, &total, &tc, &uw, &mw, &sw, &iw, &ed, &li,
-                    &reason, &dropped, &reason, &now_ms,
+                    &chunk_id, &owner_id, &total, &tc, &uw, &mw, &sw, &iw, &ed, &li, &reason,
+                    &dropped, &reason, &now_ms,
                 ],
             )
             .await
@@ -159,7 +159,8 @@ impl ScoreStore {
 
     fn row_to_score(row: &tokio_postgres::Row) -> CarrierResult<ScoreRow> {
         let g = |i: usize| -> CarrierResult<f64> {
-            row.try_get(i).map_err(|e| CarrierError::Serialization(e.to_string()))
+            row.try_get(i)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))
         };
         Ok(ScoreRow {
             signals: ScoreSignals {
@@ -189,13 +190,20 @@ mod tests {
 
     async fn setup() -> Option<ScoreStore> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         Some(ScoreStore::new(pool))
     }
 
@@ -221,10 +229,21 @@ mod tests {
             }
         };
         store
-            .write_score("owner_1", "chunk_001", &signals(), 0.75, false, Some("high quality"))
+            .write_score(
+                "owner_1",
+                "chunk_001",
+                &signals(),
+                0.75,
+                false,
+                Some("high quality"),
+            )
             .await
             .unwrap();
-        let row = store.get_score("owner_1", "chunk_001").await.unwrap().unwrap();
+        let row = store
+            .get_score("owner_1", "chunk_001")
+            .await
+            .unwrap()
+            .unwrap();
         assert!((row.total - 0.75).abs() < 0.01);
         assert!(!row.dropped);
         assert_eq!(row.reason, Some("high quality".to_string()));
@@ -255,7 +274,14 @@ mod tests {
             }
         };
         store
-            .write_score("owner_1", "chunk_001", &ScoreSignals::default(), 0.5, false, None)
+            .write_score(
+                "owner_1",
+                "chunk_001",
+                &ScoreSignals::default(),
+                0.5,
+                false,
+                None,
+            )
             .await
             .unwrap();
         store
@@ -281,9 +307,20 @@ mod tests {
             }
         };
         store
-            .write_score("owner_1", "chunk_001", &ScoreSignals::default(), 0.5, false, None)
+            .write_score(
+                "owner_1",
+                "chunk_001",
+                &ScoreSignals::default(),
+                0.5,
+                false,
+                None,
+            )
             .await
             .unwrap();
-        assert!(store.get_score("owner_2", "chunk_001").await.unwrap().is_none());
+        assert!(store
+            .get_score("owner_2", "chunk_001")
+            .await
+            .unwrap()
+            .is_none());
     }
 }

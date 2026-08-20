@@ -3,9 +3,9 @@
 //! Handles connecting to configured MCP servers at boot, periodic health
 //! monitoring, and exponential-backoff reconnection for failed servers.
 
+use runtime::mcp::{McpServerConfig, McpTransport};
 use std::sync::Arc;
 use tracing::{info, warn};
-use runtime::mcp::{McpServerConfig, McpTransport};
 use types::config::McpTransportEntry;
 
 /// Convert a config transport entry to the runtime transport enum.
@@ -136,11 +136,8 @@ impl CarrierKernel {
 
                     let name = conn.name().to_string();
                     let config = conn.config().clone();
-                    let ping = tokio::time::timeout(
-                        std::time::Duration::from_secs(10),
-                        conn.ping(),
-                    )
-                    .await;
+                    let ping =
+                        tokio::time::timeout(std::time::Duration::from_secs(10), conn.ping()).await;
 
                     match ping {
                         Ok(Ok(())) => {
@@ -252,10 +249,8 @@ impl CarrierKernel {
                         .map(|g| *g)
                         .unwrap_or(0);
                     if fail_count > 0 {
-                        let backoff_secs = std::cmp::min(
-                            30 * 2u64.pow(fail_count.saturating_sub(1)),
-                            600,
-                        );
+                        let backoff_secs =
+                            std::cmp::min(30 * 2u64.pow(fail_count.saturating_sub(1)), 600);
                         if backoff_secs > 60 {
                             if fail_count >= 5 && fail_count % 6 == 5 {
                                 warn!(
@@ -289,10 +284,8 @@ impl CarrierKernel {
                         Err(e) => {
                             let new_count = fail_count + 1;
                             kernel.plugins.mcp_reconnect_failures.insert(key, new_count);
-                            let backoff_secs = std::cmp::min(
-                                30 * 2u64.pow(new_count.saturating_sub(1)),
-                                600,
-                            );
+                            let backoff_secs =
+                                std::cmp::min(30 * 2u64.pow(new_count.saturating_sub(1)), 600);
                             warn!(
                                 server = %name,
                                 error = %e,

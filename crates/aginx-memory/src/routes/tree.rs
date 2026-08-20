@@ -9,8 +9,8 @@ use axum::Json;
 use memory::tree::types::SourceKind;
 use serde::Deserialize;
 use types::memory_tree::{
-    DrillDownQueryOwned, EntitySearchOwned, FetchLeavesQueryOwned, GlobalQueryOwned,
-    IngestRequest, IngestResult, QueryResponse, SourceQueryOwned, TopicQueryOwned, TreeSummary,
+    DrillDownQueryOwned, EntitySearchOwned, FetchLeavesQueryOwned, GlobalQueryOwned, IngestRequest,
+    IngestResult, QueryResponse, SourceQueryOwned, TopicQueryOwned, TreeSummary,
 };
 use types::memory_tree::{EntityMatch, TreeKind};
 
@@ -68,9 +68,13 @@ pub async fn query_global(
     State(state): State<AppState>,
     Json(req): Json<GlobalQueryOwned>,
 ) -> Result<Json<QueryResponse>, (axum::http::StatusCode, String)> {
-    let resp =
-        retrieval::global::query_global(&state.pool, &req.owner_id, req.time_window_days, req.limit)
-            .await;
+    let resp = retrieval::global::query_global(
+        &state.pool,
+        &req.owner_id,
+        req.time_window_days,
+        req.limit,
+    )
+    .await;
     to_resp(resp).map(Json)
 }
 

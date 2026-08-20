@@ -53,7 +53,10 @@ pub fn filter_new(home: &Path, app_id: &str, msg_data_id: &str, ids: &[i64]) -> 
         .and_then(|m| m.get(msg_data_id))
         .map(|v| v.as_slice())
         .unwrap_or(&[]);
-    ids.iter().copied().filter(|id| !known.contains(id)).collect()
+    ids.iter()
+        .copied()
+        .filter(|id| !known.contains(id))
+        .collect()
 }
 
 /// Record `ids` as ingested for the article, capping the remembered set at

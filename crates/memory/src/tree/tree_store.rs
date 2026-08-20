@@ -1,9 +1,9 @@
 //! Tree, SummaryNode, and Buffer CRUD operations.
 
-use types::error::{CarrierError, CarrierResult};
-use types::memory_tree::{TreeKind, TreeSummary};
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
+use types::error::{CarrierError, CarrierResult};
+use types::memory_tree::{TreeKind, TreeSummary};
 
 use super::types::{Buffer, SummaryNode, Tree, TreeStatus};
 
@@ -124,8 +124,7 @@ impl TreeTreeStore {
             .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
 
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-            vec![Box::new(owner_id.to_string())];
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(owner_id.to_string())];
 
         let mut sql = "SELECT t.id, t.kind, t.scope, t.status, t.max_level,
                                0 as chunk_count,
@@ -293,8 +292,10 @@ impl TreeTreeStore {
             .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
 
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-            vec![Box::new(owner_id.to_string()), Box::new(tree_id.to_string())];
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+            Box::new(owner_id.to_string()),
+            Box::new(tree_id.to_string()),
+        ];
 
         let mut sql = "SELECT id, tree_id, tree_kind, level, parent_id, child_ids_json,
                               content, token_count, entities_json, topics_json,
@@ -438,11 +439,7 @@ impl TreeTreeStore {
     }
 
     /// List buffers with items older than the cutoff timestamp.
-    pub fn list_stale_buffers(
-        &self,
-        owner_id: &str,
-        cutoff_ms: i64,
-    ) -> CarrierResult<Vec<Buffer>> {
+    pub fn list_stale_buffers(&self, owner_id: &str, cutoff_ms: i64) -> CarrierResult<Vec<Buffer>> {
         let conn = self
             .conn
             .lock()
@@ -460,27 +457,24 @@ impl TreeTreeStore {
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let rows = stmt
-            .query_map(
-                rusqlite::params![owner_id, cutoff_ms],
-                |row| {
-                    let tree_id: String = row.get(0)?;
-                    let level: u32 = row.get(1)?;
-                    let item_ids_json: String = row.get(2)?;
-                    let token_sum: i64 = row.get(3)?;
-                    let oldest_at_ms: Option<i64> = row.get(4)?;
+            .query_map(rusqlite::params![owner_id, cutoff_ms], |row| {
+                let tree_id: String = row.get(0)?;
+                let level: u32 = row.get(1)?;
+                let item_ids_json: String = row.get(2)?;
+                let token_sum: i64 = row.get(3)?;
+                let oldest_at_ms: Option<i64> = row.get(4)?;
 
-                    let item_ids: Vec<String> =
-                        serde_json::from_str(&item_ids_json).unwrap_or_default();
+                let item_ids: Vec<String> =
+                    serde_json::from_str(&item_ids_json).unwrap_or_default();
 
-                    Ok(Buffer {
-                        tree_id,
-                        level,
-                        item_ids,
-                        token_sum,
-                        oldest_at_ms,
-                    })
-                },
-            )
+                Ok(Buffer {
+                    tree_id,
+                    level,
+                    item_ids,
+                    token_sum,
+                    oldest_at_ms,
+                })
+            })
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let mut result = Vec::new();
@@ -535,8 +529,7 @@ impl TreeTreeStore {
         let deleted: i32 = row.get(14)?;
         let embedding_blob: Option<Vec<u8>> = row.get(15)?;
 
-        let embedding = embedding_blob
-            .and_then(|b| serde_json::from_slice::<Vec<f32>>(&b).ok());
+        let embedding = embedding_blob.and_then(|b| serde_json::from_slice::<Vec<f32>>(&b).ok());
 
         Ok(SummaryNode {
             id: row.get(0)?,
@@ -644,10 +637,7 @@ mod tests {
         };
         store.upsert_buffer("owner_1", &buf).unwrap();
 
-        let got = store
-            .get_buffer("owner_1", &tree.id, 0)
-            .unwrap()
-            .unwrap();
+        let got = store.get_buffer("owner_1", &tree.id, 0).unwrap().unwrap();
         assert_eq!(got.item_ids.len(), 2);
         assert_eq!(got.token_sum, 1500);
     }
@@ -667,14 +657,9 @@ mod tests {
             oldest_at_ms: Some(1000),
         };
         store.upsert_buffer("owner_1", &buf).unwrap();
-        store
-            .clear_buffer("owner_1", &tree.id, 0)
-            .unwrap();
+        store.clear_buffer("owner_1", &tree.id, 0).unwrap();
 
-        let got = store
-            .get_buffer("owner_1", &tree.id, 0)
-            .unwrap()
-            .unwrap();
+        let got = store.get_buffer("owner_1", &tree.id, 0).unwrap().unwrap();
         assert!(got.item_ids.is_empty());
         assert_eq!(got.token_sum, 0);
     }
@@ -707,7 +692,10 @@ mod tests {
         };
         store.insert_summary("owner_1", &summary).unwrap();
 
-        let got = store.get_summary("owner_1", None, "sum_001").unwrap().unwrap();
+        let got = store
+            .get_summary("owner_1", None, "sum_001")
+            .unwrap()
+            .unwrap();
         assert_eq!(got.content, "Summary of conversation");
         assert_eq!(got.entities.len(), 1);
     }

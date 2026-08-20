@@ -31,7 +31,10 @@ impl<'de> serde::Deserialize<'de> for PermissionLevel {
             "write" => Ok(Self::Write),
             "execute" | "exec" => Ok(Self::Execute),
             "dangerous" | "danger" => Ok(Self::Dangerous),
-            other => Err(serde::de::Error::unknown_variant(other, &["none", "readonly", "write", "execute", "dangerous"])),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["none", "readonly", "write", "execute", "dangerous"],
+            )),
         }
     }
 }
@@ -328,7 +331,11 @@ fn resolve_refs(obj: &serde_json::Map<String, serde_json::Value>) -> serde_json:
     result.remove("$defs");
 
     // Recursively replace $ref in the schema
-    fn inline_refs(val: &mut serde_json::Value, defs: &serde_json::Map<String, serde_json::Value>, depth: u32) {
+    fn inline_refs(
+        val: &mut serde_json::Value,
+        defs: &serde_json::Map<String, serde_json::Value>,
+        depth: u32,
+    ) {
         if depth > 20 {
             return;
         }
@@ -453,7 +460,9 @@ pub struct PluginToolError {
 
 impl PluginToolError {
     pub fn new(msg: impl Into<String>) -> Self {
-        Self { message: msg.into() }
+        Self {
+            message: msg.into(),
+        }
     }
 
     pub fn tool(msg: impl Into<String>) -> Self {
@@ -492,12 +501,24 @@ impl From<&str> for PluginToolError {
 /// These are the bootstrap tools every agent gets. Other tools are discovered
 /// at runtime via `tool_search` when the LLM needs them.
 pub const CORE_TOOL_NAMES: &[&str] = &[
-    "tool_search", "flow_load", "flow_create", "flow_update",
+    "tool_search",
+    "flow_load",
+    "flow_create",
+    "flow_update",
     "session_summarize",
-    "knowledge_add", "knowledge_read", "knowledge_list",
-    "file_read", "file_list", "web_search", "web_fetch",
-    "kv_get", "kv_set", "kv_list",
-    "cron_create", "cron_list", "cron_cancel",
+    "knowledge_add",
+    "knowledge_read",
+    "knowledge_list",
+    "file_read",
+    "file_list",
+    "web_search",
+    "web_fetch",
+    "kv_get",
+    "kv_set",
+    "kv_list",
+    "cron_create",
+    "cron_list",
+    "cron_cancel",
     "task_plan",
     "image_generate",
     "document_generate",
@@ -510,7 +531,6 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     // save credentials the user provides mid-flow — regressing "一直给 app_secret
     // 一直要". Core = always assembled = always inside every flow's allow-list.
     "user_profile",
-
 ];
 
 #[cfg(test)]
@@ -545,10 +565,19 @@ mod tests {
     fn test_for_tool_clone_lifecycle() {
         // clone_install / clone_publish are Write — callable at clone-creator's
         // max_tool_level=write without flow elevation (no shell_allow on clone-generate).
-        assert_eq!(PermissionLevel::for_tool("clone_install"), PermissionLevel::Write);
-        assert_eq!(PermissionLevel::for_tool("clone_publish"), PermissionLevel::Write);
+        assert_eq!(
+            PermissionLevel::for_tool("clone_install"),
+            PermissionLevel::Write
+        );
+        assert_eq!(
+            PermissionLevel::for_tool("clone_publish"),
+            PermissionLevel::Write
+        );
         // clone_export is read-only manifest listing.
-        assert_eq!(PermissionLevel::for_tool("clone_export"), PermissionLevel::None);
+        assert_eq!(
+            PermissionLevel::for_tool("clone_export"),
+            PermissionLevel::None
+        );
         // toolset-prefixed variants resolve the same way.
         assert_eq!(
             PermissionLevel::for_tool("training__clone_install"),

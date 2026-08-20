@@ -9,13 +9,13 @@
 //! discovered at startup via `WecomState::load_from_dir()`.
 
 use dashmap::DashMap;
-use reqwest::{Client, redirect::Policy};
+use reqwest::{redirect::Policy, Client};
 use serde::{Deserialize, Serialize};
-use types::error::{CarrierError, CarrierResult};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
+use types::error::{CarrierError, CarrierResult};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -103,7 +103,10 @@ impl BotEntry {
             encoding_aes_key,
             callback_token,
             mode: WecomMode::App { agent_id },
-            http: Client::builder().redirect(Policy::none()).build().unwrap_or_else(|_| Client::new()),
+            http: Client::builder()
+                .redirect(Policy::none())
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             cached_token: Mutex::new(None),
             mcp_bot_id,
             mcp_bot_secret,
@@ -133,7 +136,10 @@ impl BotEntry {
             encoding_aes_key,
             callback_token,
             mode: WecomMode::Kf { open_kfid },
-            http: Client::builder().redirect(Policy::none()).build().unwrap_or_else(|_| Client::new()),
+            http: Client::builder()
+                .redirect(Policy::none())
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             cached_token: Mutex::new(None),
             mcp_bot_id,
             mcp_bot_secret,
@@ -151,7 +157,10 @@ impl BotEntry {
             encoding_aes_key: None,
             callback_token: None,
             mode: WecomMode::SmartBot { bot_id, secret },
-            http: Client::builder().redirect(Policy::none()).build().unwrap_or_else(|_| Client::new()),
+            http: Client::builder()
+                .redirect(Policy::none())
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             cached_token: Mutex::new(None),
             mcp_bot_id: None, // SmartBot uses mode's bot_id directly
             mcp_bot_secret: None,
@@ -212,7 +221,9 @@ impl BotEntry {
     /// Returns error for SmartBot mode (no token needed).
     pub fn get_access_token(&self) -> CarrierResult<String> {
         match &self.mode {
-            WecomMode::SmartBot { .. } => Err(CarrierError::InvalidInput("SmartBot mode does not use access tokens".into())),
+            WecomMode::SmartBot { .. } => Err(CarrierError::InvalidInput(
+                "SmartBot mode does not use access tokens".into(),
+            )),
             _ => self.get_or_refresh_token(),
         }
     }
@@ -223,14 +234,21 @@ impl BotEntry {
     /// caller is already on a tokio runtime (e.g. an axum webhook handler).
     pub async fn get_access_token_async(&self) -> CarrierResult<String> {
         match &self.mode {
-            WecomMode::SmartBot { .. } => Err(CarrierError::InvalidInput("SmartBot mode does not use access tokens".into())),
+            WecomMode::SmartBot { .. } => Err(CarrierError::InvalidInput(
+                "SmartBot mode does not use access tokens".into(),
+            )),
             _ => self.fetch_token().await,
         }
     }
 
     fn get_or_refresh_token(&self) -> CarrierResult<String> {
         // Check cache
-        if let Some((token, expires_at)) = self.cached_token.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some((token, expires_at)) = self
+            .cached_token
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
             if Instant::now() < *expires_at {
                 return Ok(token.clone());
             }
@@ -268,12 +286,16 @@ impl BotEntry {
         let errcode = resp["errcode"].as_i64().unwrap_or(-1);
         if errcode != 0 {
             let errmsg = resp["errmsg"].as_str().unwrap_or("unknown");
-            return Err(CarrierError::Network(format!("token error: {errcode} {errmsg}")));
+            return Err(CarrierError::Network(format!(
+                "token error: {errcode} {errmsg}"
+            )));
         }
 
         let token = resp["access_token"]
             .as_str()
-            .ok_or(CarrierError::Serialization("missing access_token".to_string()))?
+            .ok_or(CarrierError::Serialization(
+                "missing access_token".to_string(),
+            ))?
             .to_string();
         let expires_in = resp["expires_in"].as_u64().unwrap_or(7200);
 
@@ -282,7 +304,8 @@ impl BotEntry {
 
         info!(bot = %self.name, "Refreshed WeCom access token");
 
-        *self.cached_token.lock().unwrap_or_else(|e| e.into_inner()) = Some((token.clone(), expires_at));
+        *self.cached_token.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((token.clone(), expires_at));
         Ok(token)
     }
 }
@@ -314,7 +337,9 @@ pub async fn wedoc_post(
     let errcode = resp["errcode"].as_i64().unwrap_or(-1);
     if errcode != 0 {
         let errmsg = resp["errmsg"].as_str().unwrap_or("unknown");
-        return Err(CarrierError::Network(format!("WeCom API error {errcode}: {errmsg}")));
+        return Err(CarrierError::Network(format!(
+            "WeCom API error {errcode}: {errmsg}"
+        )));
     }
 
     Ok(resp)
@@ -324,7 +349,9 @@ pub async fn wedoc_post(
 pub fn send_app_message(bot: &BotEntry, user_id: &str, content: &str) -> CarrierResult<()> {
     let agent_id = bot
         .agent_id()
-        .ok_or(CarrierError::InvalidInput("send_app_message requires App mode".to_string()))?
+        .ok_or(CarrierError::InvalidInput(
+            "send_app_message requires App mode".to_string(),
+        ))?
         .to_string();
     let token = bot.get_access_token()?;
 
@@ -360,7 +387,9 @@ pub fn send_app_message(bot: &BotEntry, user_id: &str, content: &str) -> Carrier
         Ok(Ok(_)) => {}
         Ok(Err(e)) => return Err(e),
         Err(e) => {
-            return Err(CarrierError::Internal(format!("Send thread disconnected: {e}")))
+            return Err(CarrierError::Internal(format!(
+                "Send thread disconnected: {e}"
+            )))
         }
     }
     Ok(())
@@ -370,7 +399,9 @@ pub fn send_app_message(bot: &BotEntry, user_id: &str, content: &str) -> Carrier
 pub fn send_kf_message(bot: &BotEntry, user_id: &str, content: &str) -> CarrierResult<()> {
     let open_kfid = bot
         .open_kfid()
-        .ok_or(CarrierError::InvalidInput("send_kf_message requires Kf mode".to_string()))?
+        .ok_or(CarrierError::InvalidInput(
+            "send_kf_message requires Kf mode".to_string(),
+        ))?
         .to_string();
     let token = bot.get_access_token()?;
 
@@ -406,7 +437,9 @@ pub fn send_kf_message(bot: &BotEntry, user_id: &str, content: &str) -> CarrierR
         Ok(Ok(_)) => {}
         Ok(Err(e)) => return Err(e),
         Err(e) => {
-            return Err(CarrierError::Internal(format!("Send thread disconnected: {e}")))
+            return Err(CarrierError::Internal(format!(
+                "Send thread disconnected: {e}"
+            )))
         }
     }
     Ok(())
@@ -520,7 +553,10 @@ pub async fn bind_kf_customer_unionid(
 
     // Cache result (positive or negative) before the POST so a transient bind
     // failure doesn't cause a batchget storm on the next inbound.
-    UNIONID_CACHE.insert(external_userid.to_string(), (unionid.clone(), Instant::now()));
+    UNIONID_CACHE.insert(
+        external_userid.to_string(),
+        (unionid.clone(), Instant::now()),
+    );
 
     let Some(uid) = unionid else {
         warn!(
@@ -575,11 +611,15 @@ pub async fn upload_kf_media(
         .map_err(|e| CarrierError::Network(format!("media upload request failed: {e}")))?
         .json()
         .await
-        .map_err(|e| CarrierError::Serialization(format!("media upload response parse error: {e}")))?;
+        .map_err(|e| {
+            CarrierError::Serialization(format!("media upload response parse error: {e}"))
+        })?;
     let errcode = resp["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         let errmsg = resp["errmsg"].as_str().unwrap_or("unknown");
-        return Err(CarrierError::Network(format!("media upload error {errcode}: {errmsg}")));
+        return Err(CarrierError::Network(format!(
+            "media upload error {errcode}: {errmsg}"
+        )));
     }
     resp["media_id"]
         .as_str()
@@ -656,11 +696,7 @@ fn filename_from_disposition(header: &str) -> Option<String> {
         }
     }
     let rest = header.split("filename=").nth(1)?;
-    let name = rest
-        .trim()
-        .trim_matches('"')
-        .trim_end_matches(';')
-        .trim();
+    let name = rest.trim().trim_matches('"').trim_end_matches(';').trim();
     if name.is_empty() {
         None
     } else {
@@ -734,7 +770,9 @@ pub async fn send_smartbot_response_async(
     let errcode = resp["errcode"].as_i64().unwrap_or(-1);
     if errcode != 0 {
         let errmsg = resp["errmsg"].as_str().unwrap_or("unknown");
-        return Err(CarrierError::Network(format!("smartbot response error {errcode}: {errmsg}")));
+        return Err(CarrierError::Network(format!(
+            "smartbot response error {errcode}: {errmsg}"
+        )));
     }
 
     Ok(())
@@ -805,7 +843,10 @@ impl WecomState {
     fn new() -> Self {
         Self {
             bots: DashMap::new(),
-            http: Client::builder().redirect(Policy::none()).build().unwrap_or_else(|_| Client::new()),
+            http: Client::builder()
+                .redirect(Policy::none())
+                .build()
+                .unwrap_or_else(|_| Client::new()),
         }
     }
 
@@ -835,7 +876,12 @@ impl WecomState {
                     return None;
                 }
                 let corp_id = sf.corp_id.as_deref().unwrap_or("").to_string();
-                Some(BotEntry::new_smartbot(sf.name.clone(), corp_id, bot_id, secret))
+                Some(BotEntry::new_smartbot(
+                    sf.name.clone(),
+                    corp_id,
+                    bot_id,
+                    secret,
+                ))
             }
             "kf" => {
                 let corp_id = sf.corp_id.as_deref().unwrap_or("").to_string();
@@ -985,10 +1031,8 @@ impl WecomState {
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(
-                            &path,
-                            std::fs::Permissions::from_mode(0o600),
-                        );
+                        let _ =
+                            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
                     }
                 }
             }
@@ -1038,5 +1082,4 @@ impl WecomState {
 }
 
 /// Global singleton for WeCom state management.
-pub static WECOM_STATE: std::sync::LazyLock<WecomState> =
-    std::sync::LazyLock::new(WecomState::new);
+pub static WECOM_STATE: std::sync::LazyLock<WecomState> = std::sync::LazyLock::new(WecomState::new);

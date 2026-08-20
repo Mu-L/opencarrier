@@ -7,17 +7,14 @@ use types::error::CarrierResult;
 
 /// A function that can send a response through a channel.
 /// Used by the bridge to deliver agent replies back to users.
-pub type ChannelSendFn =
-    Arc<dyn Fn(&str, &str, &str, &str) -> CarrierResult<()> + Send + Sync>;
+pub type ChannelSendFn = Arc<dyn Fn(&str, &str, &str, &str) -> CarrierResult<()> + Send + Sync>;
 
 /// A function that delivers rich content through a channel.
 /// `(channel_type, bot_id, user_id, content)` -> result. Used by the bridge to
 /// deliver `[DELIVER:key]` marker content in the highest-fidelity form the
 /// channel supports (falls back to text via `Channel::deliver`'s default).
 pub type ChannelDeliverFn = Arc<
-    dyn Fn(&str, &str, &str, &types::content::ContentDescriptor) -> CarrierResult<()>
-        + Send
-        + Sync,
+    dyn Fn(&str, &str, &str, &types::content::ContentDescriptor) -> CarrierResult<()> + Send + Sync,
 >;
 
 /// A function that reports a channel+bot routing mode.

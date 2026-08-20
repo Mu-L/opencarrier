@@ -3,8 +3,8 @@
 //! Replaces the previous `notify_routes.json` file.
 //! Routes map a notify type (e.g. "urgent", "alarm") to a push target.
 
-use std::sync::{Arc, Mutex};
 use rusqlite::Connection;
+use std::sync::{Arc, Mutex};
 use types::error::{CarrierError, CarrierResult};
 
 /// Serialized form of a notify route.
@@ -31,21 +31,25 @@ impl NotifyRouteStore {
 
     /// Load all routes.
     pub fn load_all(&self) -> CarrierResult<Vec<NotifyRouteRow>> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
-        let mut stmt = conn.prepare(
-            "SELECT name, channel, bot_id, user_id, prefix, recipients FROM notify_routes"
-        ).map_err(|e| CarrierError::Memory(e.to_string()))?;
-        let rows = stmt.query_map([], |row| {
-            Ok(NotifyRouteRow {
-                name: row.get(0)?,
-                channel: row.get(1)?,
-                bot_id: row.get(2)?,
-                user_id: row.get(3)?,
-                prefix: row.get(4)?,
-                recipients: row.get(5)?,
+        let mut stmt = conn
+            .prepare("SELECT name, channel, bot_id, user_id, prefix, recipients FROM notify_routes")
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(NotifyRouteRow {
+                    name: row.get(0)?,
+                    channel: row.get(1)?,
+                    bot_id: row.get(2)?,
+                    user_id: row.get(3)?,
+                    prefix: row.get(4)?,
+                    recipients: row.get(5)?,
+                })
             })
-        }).map_err(|e| CarrierError::Memory(e.to_string()))?;
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let mut routes = Vec::new();
         for row in rows {
@@ -56,7 +60,9 @@ impl NotifyRouteStore {
 
     /// Upsert a single route.
     pub fn upsert(&self, row: &NotifyRouteRow) -> CarrierResult<()> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
         conn.execute(
             "INSERT INTO notify_routes (name, channel, bot_id, user_id, prefix, recipients) \
@@ -64,18 +70,29 @@ impl NotifyRouteStore {
              ON CONFLICT(name) DO UPDATE SET \
                channel=?2, bot_id=?3, user_id=?4, prefix=?5, recipients=?6",
             rusqlite::params![
-                row.name, row.channel, row.bot_id, row.user_id, row.prefix, row.recipients,
+                row.name,
+                row.channel,
+                row.bot_id,
+                row.user_id,
+                row.prefix,
+                row.recipients,
             ],
-        ).map_err(|e| CarrierError::Memory(e.to_string()))?;
+        )
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())
     }
 
     /// Delete a route by name.
     pub fn delete(&self, name: &str) -> CarrierResult<()> {
-        let conn = self.conn.lock()
+        let conn = self
+            .conn
+            .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
-        conn.execute("DELETE FROM notify_routes WHERE name = ?1", rusqlite::params![name])
-            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM notify_routes WHERE name = ?1",
+            rusqlite::params![name],
+        )
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())
     }
 }

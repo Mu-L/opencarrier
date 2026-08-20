@@ -3,11 +3,11 @@
 //! Tools with [tool.cron] are executed on a schedule without involving any
 //! LLM. Results are stored directly to SQLite — zero token cost.
 
-use types::api_tool::{ApiToolDef, ApiCronDef};
-use types::error::{CarrierError, CarrierResult};
 use std::path::PathBuf;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
+use types::api_tool::{ApiCronDef, ApiToolDef};
+use types::error::{CarrierError, CarrierResult};
 
 #[derive(Clone)]
 struct ApiCronEntry {
@@ -24,7 +24,10 @@ pub async fn register_cron_tools(tools: Vec<ApiToolDef>, home_dir: PathBuf) {
     for tool in tools {
         if let Some(ref cron) = tool.cron {
             info!(tool = %tool.name, schedule = %cron.schedule, "Registered API tool cron job");
-            entries.push(ApiCronEntry { tool: tool.clone(), cron: cron.clone() });
+            entries.push(ApiCronEntry {
+                tool: tool.clone(),
+                cron: cron.clone(),
+            });
         }
     }
     if entries.is_empty() {
@@ -72,21 +75,33 @@ async fn execute_cron_api_call(tool: &ApiToolDef, home_dir: &std::path::Path) ->
     for (k, v) in &tool.headers {
         req = req.header(k, v);
     }
-    let resp = req.send().await.map_err(|e| CarrierError::Network(format!("Request: {e}")))?;
-    let body: serde_json::Value = resp.json().await.map_err(|e| CarrierError::Serialization(format!("Parse: {e}")))?;
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| CarrierError::Network(format!("Request: {e}")))?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| CarrierError::Serialization(format!("Parse: {e}")))?;
 
     if let Some(ref check) = tool.error_check {
         let actual = navigate(&body, &check.field)
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .unwrap_or_default();
         if actual != check.expect {
-            return Err(CarrierError::Network(format!("API error: {}='{}'", check.field, actual)));
+            return Err(CarrierError::Network(format!(
+                "API error: {}='{}'",
+                check.field, actual
+            )));
         }
     }
 
     if let Some(save_to) = tool.cron.as_ref().and_then(|c| c.save_to.as_deref()) {
         let db_path = save_to.strip_prefix("sqlite:").unwrap_or(save_to);
-        let table = tool.cron.as_ref().and_then(|c| c.table.clone())
+        let table = tool
+            .cron
+            .as_ref()
+            .and_then(|c| c.table.clone())
             .unwrap_or_else(|| format!("api_cron_{}", tool.name));
         store_to_sqlite(home_dir, db_path, &table, &tool.name, &body)?;
     }
@@ -104,7 +119,11 @@ fn build_cron_url(tool: &ApiToolDef) -> String {
                 url = url.replace(&placeholder, &urlencoding::encode(&val_str));
             }
         } else if let Some(ref default) = param_def.default {
-            query_parts.push(format!("{}={}", urlencoding::encode(name), urlencoding::encode(&json_to_str(default))));
+            query_parts.push(format!(
+                "{}={}",
+                urlencoding::encode(name),
+                urlencoding::encode(&json_to_str(default))
+            ));
         }
     }
     if let (Some(ref auth_env), Some(ref auth_param)) = (&tool.auth_env, &tool.auth_param) {
@@ -112,7 +131,11 @@ fn build_cron_url(tool: &ApiToolDef) -> String {
         // std::env::var alone misses .env-sourced keys.
         if let Some(key) = types::env::get_env(auth_env) {
             if !key.is_empty() {
-                query_parts.push(format!("{}={}", urlencoding::encode(auth_param), urlencoding::encode(&key)));
+                query_parts.push(format!(
+                    "{}={}",
+                    urlencoding::encode(auth_param),
+                    urlencoding::encode(&key)
+                ));
             }
         }
     }
@@ -195,13 +218,20 @@ fn navigate<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_jso
     Some(current)
 }
 
-fn store_to_sqlite(home_dir: &std::path::Path, db_path: &str, table: &str, tool_name: &str, body: &serde_json::Value) -> CarrierResult<()> {
+fn store_to_sqlite(
+    home_dir: &std::path::Path,
+    db_path: &str,
+    table: &str,
+    tool_name: &str,
+    body: &serde_json::Value,
+) -> CarrierResult<()> {
     let full_path = if db_path.starts_with('/') {
         std::path::PathBuf::from(db_path)
     } else {
         home_dir.join(db_path)
     };
-    let conn = rusqlite::Connection::open(&full_path).map_err(|e| CarrierError::Internal(format!("SQLite open: {e}")))?;
+    let conn = rusqlite::Connection::open(&full_path)
+        .map_err(|e| CarrierError::Internal(format!("SQLite open: {e}")))?;
     conn.execute(
         &format!(
             "CREATE TABLE IF NOT EXISTS {} (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, raw_response TEXT, fetched_at TEXT DEFAULT (datetime('now','localtime')))",
@@ -211,8 +241,12 @@ fn store_to_sqlite(home_dir: &std::path::Path, db_path: &str, table: &str, tool_
     ).map_err(|e| CarrierError::Internal(format!("Create table: {e}")))?;
     let raw = serde_json::to_string(body).unwrap_or_default();
     conn.execute(
-        &format!("INSERT INTO {} (tool_name, raw_response) VALUES (?1, ?2)", table),
+        &format!(
+            "INSERT INTO {} (tool_name, raw_response) VALUES (?1, ?2)",
+            table
+        ),
         rusqlite::params![tool_name, raw],
-    ).map_err(|e| CarrierError::Internal(format!("Insert: {e}")))?;
+    )
+    .map_err(|e| CarrierError::Internal(format!("Insert: {e}")))?;
     Ok(())
 }

@@ -56,7 +56,11 @@ impl StepKind {
     pub fn is_executable(&self) -> bool {
         matches!(
             self,
-            Self::AgentLoop | Self::Chat | Self::UserInput | Self::FlowExec | Self::Map
+            Self::AgentLoop
+                | Self::Chat
+                | Self::UserInput
+                | Self::FlowExec
+                | Self::Map
                 | Self::Tool
         )
     }
@@ -127,7 +131,9 @@ pub fn extract_json_span(msg: &str) -> Option<&str> {
 /// The whole report must serialize under [`REPORT_HANDOFF_MAX_CHARS`].
 pub fn validate_step_report(value: &Value) -> Result<(), String> {
     let obj = value.as_object().ok_or("report must be a JSON object")?;
-    let serialized_len = serde_json::to_string(value).map_err(|e| e.to_string())?.len();
+    let serialized_len = serde_json::to_string(value)
+        .map_err(|e| e.to_string())?
+        .len();
     if serialized_len > REPORT_HANDOFF_MAX_CHARS {
         return Err(format!(
             "report is {serialized_len} chars, over the {REPORT_HANDOFF_MAX_CHARS} handoff cap"
@@ -172,7 +178,8 @@ pub fn validate_step_report(value: &Value) -> Result<(), String> {
         .map(str::trim)
         .filter(|s| matches!(*s, "continue" | "complete" | "blocked"))
         .ok_or_else(|| {
-            "field 'status' must be exactly one of \"continue\" | \"complete\" | \"blocked\"".to_string()
+            "field 'status' must be exactly one of \"continue\" | \"complete\" | \"blocked\""
+                .to_string()
         })?
         .to_string();
 
@@ -267,7 +274,10 @@ pub struct StepDef {
 impl StepDef {
     /// Resolved output mode (defaults to [`StepOutputMode::Llm`]).
     pub fn output_mode(&self) -> StepOutputMode {
-        self.output.as_deref().map(StepOutputMode::parse).unwrap_or_default()
+        self.output
+            .as_deref()
+            .map(StepOutputMode::parse)
+            .unwrap_or_default()
     }
 }
 
@@ -536,7 +546,9 @@ pub fn command_matches_shell_allow(command: &str, patterns: &[String]) -> bool {
     if cmd.is_empty() {
         return false;
     }
-    patterns.iter().any(|p| shell_allow_glob_match(p.trim(), cmd))
+    patterns
+        .iter()
+        .any(|p| shell_allow_glob_match(p.trim(), cmd))
 }
 
 /// True if `command` contains a `..` path segment (`../`, `/../`, `/..`, or a
@@ -1018,13 +1030,9 @@ fn apply_step_field(s: &mut StepDef, text: &str) -> Option<String> {
         "over" => s.over = (!v.is_empty()).then_some(v),
         "as" => s.as_name = (!v.is_empty()).then_some(v),
         "parallel" => s.parallel = (!v.is_empty()).then(|| v.parse().ok()).flatten(),
-        "body" => {
-            // Block form (`body:` on its own line) opens a nested step list
-            // collected by `parse_step_list`; inline form is unsupported.
-            if v.is_empty() {
-                return Some("body".into());
-            }
-        }
+        // Block form (`body:` on its own line) opens a nested step list
+        // collected by `parse_step_list`; inline form is unsupported.
+        "body" if v.is_empty() => return Some("body".into()),
         _ => {}
     }
     None
@@ -1042,8 +1050,14 @@ fn split_kv(text: &str) -> (String, String) {
 /// Trim and strip surrounding single/double quotes.
 fn unquote(s: &str) -> String {
     let s = s.trim();
-    let s = s.strip_prefix('"').and_then(|x| x.strip_suffix('"')).unwrap_or(s);
-    let s = s.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')).unwrap_or(s);
+    let s = s
+        .strip_prefix('"')
+        .and_then(|x| x.strip_suffix('"'))
+        .unwrap_or(s);
+    let s = s
+        .strip_prefix('\'')
+        .and_then(|x| x.strip_suffix('\''))
+        .unwrap_or(s);
     s.trim().to_string()
 }
 
@@ -1160,7 +1174,11 @@ body"#;
         };
 
         // shell_exec + shell_allow => elevates
-        assert!(mk(r#"["shell_exec", "file_read"]"#, r#"["python3 flows/t/scripts/*"]"#).elevates());
+        assert!(mk(
+            r#"["shell_exec", "file_read"]"#,
+            r#"["python3 flows/t/scripts/*"]"#
+        )
+        .elevates());
         // process_start also counts
         assert!(mk(r#"["process_start"]"#, r#"["./bin/*"]"#).elevates());
         // shell_exec but empty shell_allow => no elevation (nothing to scope to)
@@ -1234,7 +1252,10 @@ b"#;
         let revise = f.steps.iter().find(|s| s.id == "revise").unwrap();
         assert_eq!(revise.when.as_deref(), Some("review.decision == 'revise'"));
         assert_eq!(revise.output.as_deref(), Some("file:output/script.txt"));
-        assert_eq!(revise.output_mode(), StepOutputMode::File("output/script.txt".into()));
+        assert_eq!(
+            revise.output_mode(),
+            StepOutputMode::File("output/script.txt".into())
+        );
     }
 
     #[test]
@@ -1287,7 +1308,10 @@ b"#;
         let f = parse_flow_def(content);
         let s = &f.steps[0];
         assert_eq!(s.kind, Some(StepKind::FlowExec));
-        assert_eq!(s.with.get("topic").and_then(|v| v.as_str()), Some("{{ input.topic }}"));
+        assert_eq!(
+            s.with.get("topic").and_then(|v| v.as_str()),
+            Some("{{ input.topic }}")
+        );
     }
 
     #[test]
@@ -1305,7 +1329,10 @@ steps:
 b"#;
         let f = parse_flow_def(content);
         let s = &f.steps[0];
-        assert_eq!(s.with.get("topic").and_then(|v| v.as_str()), Some("{{ input.topic }}"));
+        assert_eq!(
+            s.with.get("topic").and_then(|v| v.as_str()),
+            Some("{{ input.topic }}")
+        );
         assert_eq!(s.with.get("count").and_then(|v| v.as_str()), Some("3"));
     }
 
@@ -1482,7 +1509,10 @@ b"#;
         assert_eq!(s.kind, Some(StepKind::FlowExec));
         assert!(s.kind.as_ref().unwrap().is_executable());
         assert_eq!(s.flow.as_deref(), Some("script-writing"));
-        assert_eq!(s.with.get("topic").and_then(|v| v.as_str()), Some("{{ input.user_message }}"));
+        assert_eq!(
+            s.with.get("topic").and_then(|v| v.as_str()),
+            Some("{{ input.user_message }}")
+        );
         assert_eq!(s.with.get("count").and_then(|v| v.as_str()), Some("3"));
     }
 
@@ -1508,7 +1538,10 @@ b"#;
         assert_eq!(s.over.as_deref(), Some("{{ parse_shots }}"));
         assert_eq!(s.as_name.as_deref(), Some("shot"));
         assert_eq!(s.flow.as_deref(), Some("shot-image"));
-        assert_eq!(s.with.get("prompt").and_then(|v| v.as_str()), Some("{{ shot.prompt }}"));
+        assert_eq!(
+            s.with.get("prompt").and_then(|v| v.as_str()),
+            Some("{{ shot.prompt }}")
+        );
     }
 
     #[test]
@@ -1559,7 +1592,10 @@ b"#;
         assert_eq!(body[1].kind, Some(StepKind::UserInput));
         assert_eq!(body[1].depends_on, vec!["write"]);
         assert_eq!(body[1].cancel_keywords, vec!["停止", "stop"]);
-        assert_eq!(body[1].prompt.as_deref(), Some("第{{ep.index}}集写完。继续/停止？"));
+        assert_eq!(
+            body[1].prompt.as_deref(),
+            Some("第{{ep.index}}集写完。继续/停止？")
+        );
     }
 
     #[test]
@@ -1685,17 +1721,18 @@ b"#;
         let patterns = vec!["python3 flows/topic-researcher/scripts/*".to_string()];
 
         // Real temp workspace so canonicalize succeeds.
-        let ws = std::env::temp_dir().join(format!(
-            "flow-cd-test-{}",
-            std::process::id()
-        ));
+        let ws = std::env::temp_dir().join(format!("flow-cd-test-{}", std::process::id()));
         std::fs::create_dir_all(&ws).unwrap();
         // Relative cd target resolves against workspace_root.
         let cmd_rel = format!(
             "cd {} && python3 flows/topic-researcher/scripts/validate.py arg",
             ws.display()
         );
-        assert!(command_matches_flow_shell_allow(&cmd_rel, &patterns, Some(&ws)));
+        assert!(command_matches_flow_shell_allow(
+            &cmd_rel,
+            &patterns,
+            Some(&ws)
+        ));
 
         // cd into a subdir of the workspace is allowed, but REST must still
         // match the pattern (which is workspace-relative). cd-ing into the
@@ -1708,7 +1745,11 @@ b"#;
             "cd {} && python3 flows/topic-researcher/scripts/validate.py",
             ws.display()
         );
-        assert!(command_matches_flow_shell_allow(&cmd_sub, &patterns, Some(&ws)));
+        assert!(command_matches_flow_shell_allow(
+            &cmd_sub,
+            &patterns,
+            Some(&ws)
+        ));
 
         std::fs::remove_dir_all(&ws).ok();
     }
@@ -1716,10 +1757,7 @@ b"#;
     #[test]
     fn flow_shell_allow_rejects_cd_outside_workspace() {
         let patterns = vec!["python3 flows/foo/scripts/*".to_string()];
-        let ws = std::env::temp_dir().join(format!(
-            "flow-cd-out-{}",
-            std::process::id()
-        ));
+        let ws = std::env::temp_dir().join(format!("flow-cd-out-{}", std::process::id()));
         std::fs::create_dir_all(&ws).unwrap();
         // cd to /tmp (outside workspace) → strip_cd_prefix returns None →
         // the raw tiers against the full `cd /tmp && ...` string also fail.
@@ -1740,10 +1778,7 @@ b"#;
     #[test]
     fn flow_shell_allow_rejects_cd_chain_when_rest_unmatched() {
         let patterns = vec!["python3 flows/foo/scripts/*".to_string()];
-        let ws = std::env::temp_dir().join(format!(
-            "flow-cd-rest-{}",
-            std::process::id()
-        ));
+        let ws = std::env::temp_dir().join(format!("flow-cd-rest-{}", std::process::id()));
         std::fs::create_dir_all(&ws).unwrap();
         // REST doesn't match the pattern (cat, not python3 flows/...).
         assert!(!command_matches_flow_shell_allow(
@@ -1794,7 +1829,8 @@ b"#;
         assert!(command_matches_flow_shell_allow(cmd, &patterns, None));
 
         // Multiple env prefixes also stripped.
-        let cmd2 = "A=1 B=../../flows/x python3 ../../flows/outline-writer/scripts/validate_outline.py";
+        let cmd2 =
+            "A=1 B=../../flows/x python3 ../../flows/outline-writer/scripts/validate_outline.py";
         assert!(command_matches_flow_shell_allow(cmd2, &patterns, None));
 
         // Security: env prefix + traversal that escapes is still denied.
@@ -1879,9 +1915,7 @@ mod report_matrix_tests {
     #[test]
     fn continue_requires_next_steps() {
         assert!(validate_step_report(&json!({"status": "continue"})).is_err());
-        assert!(
-            validate_step_report(&json!({"status": "continue", "next_steps": []})).is_err()
-        );
+        assert!(validate_step_report(&json!({"status": "continue", "next_steps": []})).is_err());
         assert!(
             validate_step_report(&json!({"status": "continue", "next_steps": ["  "]})).is_err()
         );
@@ -1895,7 +1929,8 @@ mod report_matrix_tests {
 
     #[test]
     fn complete_ok() {
-        let v = json!({"status": "complete", "evidence": ["output/x.md 已生成", "sha256 校验通过"]});
+        let v =
+            json!({"status": "complete", "evidence": ["output/x.md 已生成", "sha256 校验通过"]});
         assert!(validate_step_report(&v).is_ok());
         // evidence as a plain string is fine too
         assert!(
@@ -1906,9 +1941,7 @@ mod report_matrix_tests {
     #[test]
     fn complete_requires_evidence() {
         assert!(validate_step_report(&json!({"status": "complete"})).is_err());
-        assert!(
-            validate_step_report(&json!({"status": "complete", "evidence": ""})).is_err()
-        );
+        assert!(validate_step_report(&json!({"status": "complete", "evidence": ""})).is_err());
     }
 
     #[test]

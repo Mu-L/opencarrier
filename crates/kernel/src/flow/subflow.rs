@@ -1,6 +1,5 @@
 //! Sub-flow invocation (`flow_exec` / map flow form).
 
-
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -15,14 +14,13 @@ use types::error::CarrierError;
 use types::flow::StepDef;
 use types::message::TokenUsage;
 
-use crate::error::{KernelError, KernelResult};
-use crate::kernel::CarrierKernel;
 use super::template::{flow_contains_user_input, render_template};
 use super::types::*;
 use super::{FLOW_DEPTH, MAX_FLOW_DEPTH};
+use crate::error::{KernelError, KernelResult};
+use crate::kernel::CarrierKernel;
 
 impl CarrierKernel {
-
     /// Execute a `flow_exec` step: invoke the named sub-flow once and return
     /// its final value as this step's output.
     #[allow(clippy::too_many_arguments)]
@@ -42,8 +40,18 @@ impl CarrierKernel {
         agent_name: &str,
     ) -> KernelResult<(Value, TokenUsage, u32)> {
         self.invoke_subflow(
-            step, agent_id, manifest, tools, brain, kernel_handle, sender_id, owner_id,
-            channel_type, outputs, input, agent_name,
+            step,
+            agent_id,
+            manifest,
+            tools,
+            brain,
+            kernel_handle,
+            sender_id,
+            owner_id,
+            channel_type,
+            outputs,
+            input,
+            agent_name,
         )
         .await
     }
@@ -88,8 +96,8 @@ impl CarrierKernel {
                 "flow_exec requires a manifest workspace".into(),
             ))
         })?;
-        let sub_match = crate::prompt_sources::load_flow_by_name(workspace, flow_name)
-            .ok_or_else(|| {
+        let sub_match =
+            crate::prompt_sources::load_flow_by_name(workspace, flow_name).ok_or_else(|| {
                 KernelError::Carrier(CarrierError::Internal(format!(
                     "flow_exec step '{}' references unknown flow '{}'",
                     step.id, flow_name
@@ -161,16 +169,19 @@ impl CarrierKernel {
             .await?;
 
         match outcome {
-            FlowOutcome::Completed { result, final_value } => {
+            FlowOutcome::Completed {
+                result,
+                final_value,
+            } => {
                 let val = final_value.unwrap_or_else(|| Value::String(result.response.clone()));
                 Ok((val, result.total_usage, result.iterations))
             }
-            FlowOutcome::Suspended { .. } => Err(KernelError::Carrier(CarrierError::Internal(
-                format!(
+            FlowOutcome::Suspended { .. } => {
+                Err(KernelError::Carrier(CarrierError::Internal(format!(
                     "flow_exec sub-flow '{}' suspended unexpectedly (should be pre-checked)",
                     flow_name
-                ),
-            ))),
+                ))))
+            }
         }
     }
 }

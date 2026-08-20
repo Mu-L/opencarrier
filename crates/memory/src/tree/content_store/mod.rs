@@ -66,11 +66,7 @@ impl ContentStore {
     }
 
     /// Write a summary node to disk as an Obsidian-compatible .md file.
-    pub fn write_summary(
-        &self,
-        owner_id: &str,
-        summary: &SummaryNode,
-    ) -> CarrierResult<bool> {
+    pub fn write_summary(&self, owner_id: &str, summary: &SummaryNode) -> CarrierResult<bool> {
         let scope_slug = paths::slugify_source_id(
             &self.scope_from_tree_kind(&summary.tree_kind, &summary.tree_id),
         );
@@ -109,12 +105,8 @@ impl ContentStore {
         source_id: &str,
         chunk_id: &str,
     ) -> CarrierResult<String> {
-        let path = paths::chunk_abs_path(
-            &self.owner_root(owner_id),
-            source_kind,
-            source_id,
-            chunk_id,
-        );
+        let path =
+            paths::chunk_abs_path(&self.owner_root(owner_id), source_kind, source_id, chunk_id);
         read::read_body(&path)
     }
 

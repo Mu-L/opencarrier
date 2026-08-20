@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 const MAX_KV_KEY_LEN: usize = 256;
 const MAX_KV_VALUE_SIZE: usize = 65536; // 64KB
-// ---------------------------------------------------------------------------
-// Memory endpoints
-// ---------------------------------------------------------------------------
+                                        // ---------------------------------------------------------------------------
+                                        // Memory endpoints
+                                        // ---------------------------------------------------------------------------
 
 /// GET /api/memory/agents/:id/kv — List KV pairs for an agent.
 pub async fn get_agent_kv(
@@ -51,7 +51,11 @@ pub async fn get_agent_kv_key(
         Err(resp) => return resp,
     };
 
-    match state.kernel.memory.system_kv_get(&agent_id.to_string(), "", "", &key) {
+    match state
+        .kernel
+        .memory
+        .system_kv_get(&agent_id.to_string(), "", "", &key)
+    {
         Ok(Some(val)) => (
             StatusCode::OK,
             Json(serde_json::json!({"key": key, "value": val})),
@@ -83,11 +87,17 @@ pub async fn set_agent_kv_key(
     let value = body.get("value").cloned().unwrap_or(body);
 
     if key.len() > MAX_KV_KEY_LEN {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Key too long (max 256 characters)"})));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Key too long (max 256 characters)"})),
+        );
     }
     let value_str = value.to_string();
     if value_str.len() > MAX_KV_VALUE_SIZE {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Value too large (max 64KB)"})));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Value too large (max 64KB)"})),
+        );
     }
 
     match state
@@ -118,7 +128,11 @@ pub async fn delete_agent_kv_key(
         Err(resp) => return resp,
     };
 
-    match state.kernel.memory.system_kv_delete(&agent_id.to_string(), "", "", &key) {
+    match state
+        .kernel
+        .memory
+        .system_kv_delete(&agent_id.to_string(), "", "", &key)
+    {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "deleted", "key": key})),

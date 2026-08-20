@@ -11,9 +11,9 @@ use crate::kernel_handle::KernelHandle;
 use crate::llm_driver::Brain;
 use crate::text_tool_recovery::strip_tool_call_artifacts;
 use memory::MemorySubstrate;
+use tracing::{debug, info, warn};
 use types::error::CarrierError;
 use types::message::{Message, TokenUsage};
-use tracing::{debug, info, warn};
 
 /// Maximum full messages to retain in session (6 turns × 2 = 12).
 pub(in crate::agent_loop) const MAX_RETAINED_MESSAGES: usize = 12;
@@ -230,8 +230,7 @@ pub(in crate::agent_loop) async fn handle_end_turn(
     let text = response.text();
 
     // Parse reply directives from the streaming response text
-    let (cleaned_text_s, parsed_directives_s) =
-        crate::reply_directives::parse_directives(&text);
+    let (cleaned_text_s, parsed_directives_s) = crate::reply_directives::parse_directives(&text);
     let text = strip_tool_call_artifacts(&cleaned_text_s);
 
     // Intentional silence: `[[silent]]` directive, or whole-text no-reply
@@ -353,8 +352,7 @@ pub(in crate::agent_loop) async fn handle_end_turn(
             "Empty response from LLM  — guard activated"
         );
         if any_tools_executed {
-            "(已执行操作,但这次没能生成回复文字。请稍后重试,或重新说一下你的需求。)"
-                .to_string()
+            "(已执行操作,但这次没能生成回复文字。请稍后重试,或重新说一下你的需求。)".to_string()
         } else {
             "(模型这次没有返回内容,可能是服务繁忙或上下文过长。请稍后重试,或简化一下你的请求。)"
                 .to_string()
@@ -462,8 +460,7 @@ pub(in crate::agent_loop) async fn handle_end_turn(
     // falls back to the raw user message so the turn is never lost.
     let mut tree_turn: Option<(String, String)> = None;
     if let Some(brain_ref) = brain {
-        if let Some(mut summary) =
-            super::helpers::generate_turn_summary(turn_msgs, brain_ref).await
+        if let Some(mut summary) = super::helpers::generate_turn_summary(turn_msgs, brain_ref).await
         {
             summary.turn_number = session.turn_summaries.len() as u32 + 1;
             info!(
@@ -484,7 +481,10 @@ pub(in crate::agent_loop) async fn handle_end_turn(
                 }
             }
 
-            tree_turn = Some((summary.user_intent.clone(), summary.assistant_outcome.clone()));
+            tree_turn = Some((
+                summary.user_intent.clone(),
+                summary.assistant_outcome.clone(),
+            ));
             // P2-3 absorption step 1: the generated turn summary is now also
             // an event — the sessions-row `turn_summaries` blob becomes
             // derivable from the log instead of being the only copy (it is
@@ -506,7 +506,8 @@ pub(in crate::agent_loop) async fn handle_end_turn(
     // Capture new messages BEFORE trim — session_base_len becomes invalid after trim.
     // Also clamp with .min() because prune_heartbeat_turns (line 188) may have removed
     // messages that were counted in session_base_len.
-    let new_msgs: Vec<Message> = session.messages[session_base_len.min(session.messages.len())..].to_vec();
+    let new_msgs: Vec<Message> =
+        session.messages[session_base_len.min(session.messages.len())..].to_vec();
 
     // Trim old messages if over retention threshold
     super::helpers::trim_oldest_turns(&mut session.messages, MAX_RETAINED_MESSAGES);
@@ -621,7 +622,9 @@ mod tests {
         assert!(uuid_tokens("04d7518f-1234-4abc-b3f4-aabbccddegg").is_empty());
 
         // Uppercase hex is valid UUID shape; multiple ids come back in order.
-        let ids = uuid_tokens("AABBCCDD-0011-4052-9FEA-ABCDEF012345 和 04d7518f-1234-4abc-b3f4-aabbccddeeff");
+        let ids = uuid_tokens(
+            "AABBCCDD-0011-4052-9FEA-ABCDEF012345 和 04d7518f-1234-4abc-b3f4-aabbccddeeff",
+        );
         assert_eq!(ids.len(), 2);
         assert_eq!(ids[0], "AABBCCDD-0011-4052-9FEA-ABCDEF012345");
 
@@ -632,9 +635,11 @@ mod tests {
         let ids = uuid_tokens("job 04d7518f12344abcb3f4aabbccddeeff 已建");
         assert_eq!(ids, vec!["04d7518f12344abcb3f4aabbccddeeff".to_string()]);
         let ids = uuid_tokens("job {04d7518f-1234-4abc-b3f4-aabbccddeeff} 已建");
-        assert_eq!(ids, vec!["04d7518f-1234-4abc-b3f4-aabbccddeeff".to_string()]);
+        assert_eq!(
+            ids,
+            vec!["04d7518f-1234-4abc-b3f4-aabbccddeeff".to_string()]
+        );
     }
-
 
     /// Markers must survive the report-gate human-message swap verbatim —
     /// the 6b0b3a4 regression dropped them, so a chain publisher's

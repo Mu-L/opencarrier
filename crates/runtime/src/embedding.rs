@@ -184,7 +184,8 @@ pub fn create_embedding_driver(
 ) -> Result<Box<dyn EmbeddingDriver + Send + Sync>, EmbeddingError> {
     if base_url.is_empty() {
         return Err(EmbeddingError::MissingApiKey(
-            "Embedding base_url is required (configure via brain.json embedding modality)".to_string(),
+            "Embedding base_url is required (configure via brain.json embedding modality)"
+                .to_string(),
         ));
     }
 
@@ -361,33 +362,21 @@ mod tests {
     #[test]
     fn test_create_embedding_driver_custom_url_with_v1() {
         // URL already containing /v1 should be used as-is
-        let driver = create_embedding_driver(
-            "nomic-embed-text",
-            "",
-            "http://192.168.0.1:11434/v1",
-        );
+        let driver = create_embedding_driver("nomic-embed-text", "", "http://192.168.0.1:11434/v1");
         assert!(driver.is_ok());
     }
 
     #[test]
     fn test_create_embedding_driver_custom_url_without_v1() {
         // URL missing /v1 should get it appended
-        let driver = create_embedding_driver(
-            "nomic-embed-text",
-            "",
-            "http://192.168.0.1:11434",
-        );
+        let driver = create_embedding_driver("nomic-embed-text", "", "http://192.168.0.1:11434");
         assert!(driver.is_ok());
     }
 
     #[test]
     fn test_create_embedding_driver_custom_url_trailing_slash() {
         // Trailing slash should be trimmed before appending /v1
-        let driver = create_embedding_driver(
-            "nomic-embed-text",
-            "",
-            "http://192.168.0.1:11434/",
-        );
+        let driver = create_embedding_driver("nomic-embed-text", "", "http://192.168.0.1:11434/");
         assert!(driver.is_ok());
     }
 

@@ -5,14 +5,14 @@
 //! config is found, reqwest fires the HTTP call, and extracted fields are
 //! returned to the agent.
 
-use crate::tools::ToolModule;
 use crate::tool_context::ToolContext;
+use crate::tools::ToolModule;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::api_tool::ApiToolDef;
-use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::collections::HashSet;
+use types::api_tool::ApiToolDef;
+use types::error::{CarrierError, CarrierResult};
+use types::tool::{PermissionLevel, ToolDefinition};
 
 pub struct DeclarativeApiModule {
     tools: Vec<ApiToolDef>,
@@ -58,7 +58,10 @@ impl DeclarativeApiModule {
             Some(i) => &url[i + 3..],
             None => url,
         };
-        let path_start = after_scheme.find('/').map(|i| &after_scheme[i..]).unwrap_or("");
+        let path_start = after_scheme
+            .find('/')
+            .map(|i| &after_scheme[i..])
+            .unwrap_or("");
         match path_start.find('?') {
             Some(i) => path_start[..i].to_string(),
             None => path_start.to_string(),
@@ -70,8 +73,8 @@ impl DeclarativeApiModule {
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
         type HmacSha256 = Hmac<Sha256>;
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-            .expect("HMAC accepts any key length");
+        let mut mac =
+            HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
         mac.update(msg.as_bytes());
         hex::encode(mac.finalize().into_bytes())
     }
@@ -113,10 +116,7 @@ impl DeclarativeApiModule {
                 obj.insert(field.clone(), val.clone());
             }
         }
-        Some(
-            serde_json::to_string(&Value::Object(obj))
-                .unwrap_or_else(|_| "null".to_string()),
-        )
+        Some(serde_json::to_string(&Value::Object(obj)).unwrap_or_else(|_| "null".to_string()))
     }
 
     fn build_url(config: &ApiToolDef, args: &Value) -> String {
@@ -149,7 +149,11 @@ impl DeclarativeApiModule {
                     Value::Bool(b) => b.to_string(),
                     _ => continue,
                 };
-                query_parts.push(format!("{}={}", urlencoding::encode(name), urlencoding::encode(&val_str)));
+                query_parts.push(format!(
+                    "{}={}",
+                    urlencoding::encode(name),
+                    urlencoding::encode(&val_str)
+                ));
             } else if let Some(ref default) = param_def.default {
                 let val_str = match default {
                     Value::String(s) => s.clone(),
@@ -157,13 +161,22 @@ impl DeclarativeApiModule {
                     Value::Bool(b) => b.to_string(),
                     _ => continue,
                 };
-                query_parts.push(format!("{}={}", urlencoding::encode(name), urlencoding::encode(&val_str)));
+                query_parts.push(format!(
+                    "{}={}",
+                    urlencoding::encode(name),
+                    urlencoding::encode(&val_str)
+                ));
             }
         }
 
         // Append auth param
-        if let (Some(auth_key), Some(auth_param)) = (Self::resolve_auth(config), &config.auth_param) {
-            query_parts.push(format!("{}={}", urlencoding::encode(auth_param), urlencoding::encode(&auth_key)));
+        if let (Some(auth_key), Some(auth_param)) = (Self::resolve_auth(config), &config.auth_param)
+        {
+            query_parts.push(format!(
+                "{}={}",
+                urlencoding::encode(auth_param),
+                urlencoding::encode(&auth_key)
+            ));
         }
 
         if query_parts.is_empty() {
@@ -201,13 +214,17 @@ impl DeclarativeApiModule {
         match transform {
             "divide_1000_round1" => {
                 let r = (value / 1000.0 * 10.0).round() / 10.0;
-                Value::from(serde_json::Number::from_f64(r).unwrap_or_else(|| serde_json::Number::from(0)))
+                Value::from(
+                    serde_json::Number::from_f64(r).unwrap_or_else(|| serde_json::Number::from(0)),
+                )
             }
             "divide_60_round" => Value::from((value / 60.0).round() as i64),
             "to_int" => Value::from(value as i64),
             "round1" => {
                 let r = (value * 10.0).round() / 10.0;
-                Value::from(serde_json::Number::from_f64(r).unwrap_or_else(|| serde_json::Number::from(0)))
+                Value::from(
+                    serde_json::Number::from_f64(r).unwrap_or_else(|| serde_json::Number::from(0)),
+                )
             }
             "round0" => Value::from(value.round() as i64),
             _ => Value::from(value as i64),
@@ -218,7 +235,12 @@ impl DeclarativeApiModule {
     /// Resolve parameters that have a [tool.resolve] config.
     /// For each param with a resolve rule, if the condition is met, call the
     /// specified tool to transform the value (e.g. geocode place name → coordinates).
-    async fn resolve_params(&self, config: &ApiToolDef, args: &Value, ctx: &ToolContext<'_>) -> CarrierResult<Value> {
+    async fn resolve_params(
+        &self,
+        config: &ApiToolDef,
+        args: &Value,
+        ctx: &ToolContext<'_>,
+    ) -> CarrierResult<Value> {
         if config.resolve.is_empty() {
             return Ok(args.clone());
         }
@@ -268,11 +290,12 @@ impl DeclarativeApiModule {
                 "resolve: pre-resolving parameter"
             );
 
-            match Box::pin(self.execute_api_call(target_config, &Value::Object(resolve_args), ctx)).await {
+            match Box::pin(self.execute_api_call(target_config, &Value::Object(resolve_args), ctx))
+                .await
+            {
                 Ok(result_str) => {
                     // Extract the specified field from the result
-                    let result: Value = serde_json::from_str(&result_str)
-                        .unwrap_or(Value::Null);
+                    let result: Value = serde_json::from_str(&result_str).unwrap_or(Value::Null);
                     if let Some(extracted) = result.get(&resolve_def.extract) {
                         if let Some(s) = extracted.as_str() {
                             resolved[param_name] = Value::String(s.to_string());
@@ -301,11 +324,19 @@ impl DeclarativeApiModule {
         Ok(resolved)
     }
 
-    async fn execute_api_call(&self, config: &ApiToolDef, args: &Value, ctx: &ToolContext<'_>) -> CarrierResult<String> {
+    async fn execute_api_call(
+        &self,
+        config: &ApiToolDef,
+        args: &Value,
+        ctx: &ToolContext<'_>,
+    ) -> CarrierResult<String> {
         // Validate required params
         for (name, param_def) in &config.params {
             if param_def.required && args.get(name).is_none() && param_def.default.is_none() {
-                return Err(CarrierError::InvalidInput(format!("Missing required parameter: {}", name)));
+                return Err(CarrierError::InvalidInput(format!(
+                    "Missing required parameter: {}",
+                    name
+                )));
             }
         }
 
@@ -408,14 +439,22 @@ impl DeclarativeApiModule {
                 .body(body_str.clone());
         }
 
-        let resp = req.send().await.map_err(|e| CarrierError::Network(format!("{} request failed: {}", config.name, e)))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| CarrierError::Network(format!("{} request failed: {}", config.name, e)))?;
 
         let status = resp.status();
         if !status.is_success() {
-            return Err(CarrierError::Network(format!("{} HTTP error: {}", config.name, status)));
+            return Err(CarrierError::Network(format!(
+                "{} HTTP error: {}",
+                config.name, status
+            )));
         }
 
-        let body: Value = resp.json().await.map_err(|e| CarrierError::Serialization(format!("{} parse error: {}", config.name, e)))?;
+        let body: Value = resp.json().await.map_err(|e| {
+            CarrierError::Serialization(format!("{} parse error: {}", config.name, e))
+        })?;
 
         // Error check. Render the field as a string whether it's a JSON string,
         // number, or bool (e.g. 86bus errcode is a number: 0 == "0").
@@ -429,7 +468,10 @@ impl DeclarativeApiModule {
                 })
                 .unwrap_or_default();
             if actual != check.expect {
-                return Err(CarrierError::Network(format!("{} API error: {}='{}', expected='{}'", config.name, check.field, actual, check.expect)));
+                return Err(CarrierError::Network(format!(
+                    "{} API error: {}='{}', expected='{}'",
+                    config.name, check.field, actual, check.expect
+                )));
             }
         }
 
@@ -459,12 +501,17 @@ impl DeclarativeApiModule {
                         extracted.insert(name.clone(), Self::apply_transform(num, transform));
                     } else if let Some(ref t) = def.r#type {
                         match t.as_str() {
-                            "int" => { extracted.insert(name.clone(), Value::from(num as i64)); }
+                            "int" => {
+                                extracted.insert(name.clone(), Value::from(num as i64));
+                            }
                             "float" => {
-                                let n = serde_json::Number::from_f64(num).unwrap_or_else(|| serde_json::Number::from(0));
+                                let n = serde_json::Number::from_f64(num)
+                                    .unwrap_or_else(|| serde_json::Number::from(0));
                                 extracted.insert(name.clone(), Value::from(n));
                             }
-                            _ => { extracted.insert(name.clone(), raw.clone()); }
+                            _ => {
+                                extracted.insert(name.clone(), raw.clone());
+                            }
                         }
                     } else {
                         extracted.insert(name.clone(), raw.clone());
@@ -485,7 +532,8 @@ impl DeclarativeApiModule {
                         for tier in tiers {
                             if let Some(le) = tier.le {
                                 if num <= le {
-                                    extracted.insert(name.clone(), Value::String(tier.value.clone()));
+                                    extracted
+                                        .insert(name.clone(), Value::String(tier.value.clone()));
                                     break;
                                 }
                             } else {
@@ -506,11 +554,15 @@ impl DeclarativeApiModule {
 #[async_trait]
 impl ToolModule for DeclarativeApiModule {
     fn definitions(&self) -> Vec<ToolDefinition> {
-        self.tools.iter().map(|t| ToolDefinition {
-            name: t.name.clone(),
-            description: t.description.clone(),
-            input_schema: serde_json::from_str(&t.input_schema_json()).unwrap_or(Value::Object(serde_json::Map::new())),
-        }).collect()
+        self.tools
+            .iter()
+            .map(|t| ToolDefinition {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                input_schema: serde_json::from_str(&t.input_schema_json())
+                    .unwrap_or(Value::Object(serde_json::Map::new())),
+            })
+            .collect()
     }
 
     async fn execute(
@@ -528,7 +580,6 @@ impl ToolModule for DeclarativeApiModule {
         PermissionLevel::ReadOnly
     }
 }
-
 
 /// Check if a string looks like coordinates (contains comma, no CJK chars).
 fn is_coordinates(s: &str) -> bool {

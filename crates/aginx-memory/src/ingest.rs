@@ -319,18 +319,29 @@ mod tests {
 
     async fn setup() -> Option<(Pool, TempDir)> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         let dir = TempDir::new().ok()?;
         Some((pool, dir))
     }
 
-    fn chat_request(owner_id: &str, source_id: &str, messages: Vec<(&str, &str, i64)>) -> IngestRequest {
+    fn chat_request(
+        owner_id: &str,
+        source_id: &str,
+        messages: Vec<(&str, &str, i64)>,
+    ) -> IngestRequest {
         IngestRequest {
             owner_id: owner_id.to_string(),
             agent_id: "agent_1".to_string(),
@@ -469,7 +480,10 @@ mod tests {
             .count_pending("owner_1", Some(JobKind::ExtractChunk))
             .await
             .unwrap();
-        assert!(pending >= 1, "extract jobs should be enqueued, got {pending}");
+        assert!(
+            pending >= 1,
+            "extract jobs should be enqueued, got {pending}"
+        );
         assert!(result.chunks_created >= 1);
     }
 }

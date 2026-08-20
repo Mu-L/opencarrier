@@ -40,12 +40,7 @@ pub fn is_no_reply_sentinel(text: &str) -> bool {
     let inner = inner.replace('_', " ");
     matches!(
         inner.as_str(),
-        "no reply needed"
-            | "no reply"
-            | "noreply"
-            | "no reply required"
-            | "无需回复"
-            | "无需答复"
+        "no reply needed" | "no reply" | "noreply" | "no reply required" | "无需回复" | "无需答复"
     )
 }
 
@@ -74,14 +69,45 @@ pub fn sanitize_wechat_text(text: &str) -> String {
             // CJK compatibility, Kangxi radical, Bopomofo, Hiragana, Katakana
             if matches!(c, '\u{F900}'..='\u{FAFF}' | '\u{2F00}'..='\u{2FDF}'
                         | '\u{3100}'..='\u{318F}' | '\u{3040}'..='\u{309F}'
-                        | '\u{30A0}'..='\u{30FF}') {
+                        | '\u{30A0}'..='\u{30FF}')
+            {
                 return true;
             }
             // Common punctuation (general + CJK-specific)
-            if matches!(c, '—' | '–' | '…' | '·' | '×' | '÷' | '°' | '℃'
-                        | '←' | '→' | '↑' | '↓' | '■' | '□' | '▪' | '▶'
-                        | '《' | '》' | '〈' | '〉' | '【' | '】' | '〖' | '〗'
-                        | '「' | '」' | '『' | '』' | '﹏' | '￥' | '＄' | '€') {
+            if matches!(
+                c,
+                '—' | '–'
+                    | '…'
+                    | '·'
+                    | '×'
+                    | '÷'
+                    | '°'
+                    | '℃'
+                    | '←'
+                    | '→'
+                    | '↑'
+                    | '↓'
+                    | '■'
+                    | '□'
+                    | '▪'
+                    | '▶'
+                    | '《'
+                    | '》'
+                    | '〈'
+                    | '〉'
+                    | '【'
+                    | '】'
+                    | '〖'
+                    | '〗'
+                    | '「'
+                    | '」'
+                    | '『'
+                    | '』'
+                    | '﹏'
+                    | '￥'
+                    | '＄'
+                    | '€'
+            ) {
                 return true;
             }
             // Latin-1 Supplement (accented chars, copyright, registered, etc.)

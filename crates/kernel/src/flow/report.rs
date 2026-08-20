@@ -5,9 +5,8 @@ use std::collections::HashMap;
 use serde_json::Value;
 use types::flow::{FlowDef, StepDef};
 
-use crate::error::KernelError;
 use super::template::value_to_string;
-
+use crate::error::KernelError;
 
 /// Build a human-readable progress report when a step fails at runtime (tool
 /// error, LLM error, sub-flow error, ...). Lists completed steps (with a short
@@ -50,4 +49,3 @@ fn truncate_summary(s: &str, max: usize) -> String {
         format!("{truncated}…")
     }
 }
-

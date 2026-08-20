@@ -127,7 +127,10 @@ pub fn merge_identity(
     agent_id: AgentId,
     update: AgentIdentity,
 ) -> AgentIdentity {
-    let current = registry.get(agent_id).map(|e| e.identity).unwrap_or_default();
+    let current = registry
+        .get(agent_id)
+        .map(|e| e.identity)
+        .unwrap_or_default();
     AgentIdentity {
         emoji: update.emoji.or(current.emoji),
         avatar_url: update.avatar_url.or(current.avatar_url),

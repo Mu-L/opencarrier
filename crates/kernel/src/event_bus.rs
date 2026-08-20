@@ -1,12 +1,12 @@
 //! Event bus — pub/sub with pattern matching and history ring buffer.
 
-use types::agent::AgentId;
-use types::event::{Event, EventTarget};
 use dashmap::DashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tracing::debug;
+use types::agent::AgentId;
+use types::event::{Event, EventTarget};
 
 /// Maximum events retained in the history ring buffer.
 const HISTORY_SIZE: usize = 1000;

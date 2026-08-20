@@ -314,9 +314,13 @@ mod tests {
 
     #[test]
     fn test_validate_image_bad_type() {
-        let err = validate_image("image/svg+xml", "data").unwrap_err().to_string();
+        let err = validate_image("image/svg+xml", "data")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("Unsupported image type"));
-        let err = validate_image("text/plain", "data").unwrap_err().to_string();
+        let err = validate_image("text/plain", "data")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("Unsupported image type"));
     }
 

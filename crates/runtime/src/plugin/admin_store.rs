@@ -86,8 +86,8 @@ pub fn read_admins(workspace: &Path) -> AdminsFile {
 /// Atomic write: write to temp file then rename (crash-safe on POSIX).
 fn write_admins_atomic(workspace: &Path, admins: &AdminsFile) -> Result<(), AdminError> {
     let path = workspace.join(ADMINS_FILE);
-    let content =
-        serde_json::to_string_pretty(admins).map_err(|e| AdminError::Io(format!("Serialize error: {e}")))?;
+    let content = serde_json::to_string_pretty(admins)
+        .map_err(|e| AdminError::Io(format!("Serialize error: {e}")))?;
     let tmp_path = path.with_extension("tmp");
     std::fs::write(&tmp_path, &content).map_err(|e| AdminError::Io(format!("Write error: {e}")))?;
     std::fs::rename(&tmp_path, &path).map_err(|e| AdminError::Io(format!("Rename error: {e}")))

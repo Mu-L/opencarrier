@@ -158,7 +158,9 @@ pub async fn download_media(
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
-        .map_err(|e| CarrierError::Network(format!("DingTalk download_media request failed: {e}")))?;
+        .map_err(|e| {
+            CarrierError::Network(format!("DingTalk download_media request failed: {e}"))
+        })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -168,9 +170,7 @@ pub async fn download_media(
         )));
     }
 
-    resp.bytes()
-        .await
-        .map(|b| b.to_vec())
-        .map_err(|e| CarrierError::Serialization(format!("DingTalk download_media read error: {e}")))
+    resp.bytes().await.map(|b| b.to_vec()).map_err(|e| {
+        CarrierError::Serialization(format!("DingTalk download_media read error: {e}"))
+    })
 }
-

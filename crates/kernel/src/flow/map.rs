@@ -1,6 +1,5 @@
 //! Map steps: batch, interactive, and inline body execution.
 
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -15,16 +14,13 @@ use types::error::CarrierError;
 use types::flow::{StepDef, StepKind};
 use types::message::TokenUsage;
 
+use super::dag::partition_flow_steps;
+use super::template::{decide_cancel, eval_when, render_over_array, render_template};
+use super::types::*;
 use crate::error::{KernelError, KernelResult};
 use crate::kernel::CarrierKernel;
-use super::dag::partition_flow_steps;
-use super::template::{
-    decide_cancel, eval_when, render_over_array, render_template,
-};
-use super::types::*;
 
 impl CarrierKernel {
-
     /// Execute a `map` step. Dispatches on the body form:
     /// - `body: [steps]` set -> interactive map (stage E.2): iterate `over`,
     ///   running the inline body per element; a body `user_input` suspends with
@@ -139,8 +135,18 @@ impl CarrierKernel {
                 sub_outputs.insert(as_name.clone(), element);
                 let (val, usage, iters) = self
                     .invoke_subflow(
-                        step, agent_id, manifest, tools, brain, kernel_handle.clone(), sender_id,
-                        owner_id, channel_type, &sub_outputs, input, agent_name,
+                        step,
+                        agent_id,
+                        manifest,
+                        tools,
+                        brain,
+                        kernel_handle.clone(),
+                        sender_id,
+                        owner_id,
+                        channel_type,
+                        &sub_outputs,
+                        input,
+                        agent_name,
                     )
                     .await?;
                 collected.push(val);
@@ -165,14 +171,26 @@ impl CarrierKernel {
                 // inside outlive the future; the `&self`/`&step`/... refs are Copy.
                 async move {
                     self.invoke_subflow(
-                        step, agent_id, manifest, tools, brain, kernel_handle, sender_id,
-                        owner_id, channel_type, &sub_outputs, input, agent_name,
+                        step,
+                        agent_id,
+                        manifest,
+                        tools,
+                        brain,
+                        kernel_handle,
+                        sender_id,
+                        owner_id,
+                        channel_type,
+                        &sub_outputs,
+                        input,
+                        agent_name,
                     )
                     .await
                 }
             });
-            let results: Vec<KernelResult<(Value, TokenUsage, u32)>> =
-                futures::stream::iter(futs).buffered(parallel).collect().await;
+            let results: Vec<KernelResult<(Value, TokenUsage, u32)>> = futures::stream::iter(futs)
+                .buffered(parallel)
+                .collect()
+                .await;
             // First error (in order) aborts; later results are discarded.
             for r in results {
                 let (val, usage, iters) = r?;
@@ -241,7 +259,12 @@ impl CarrierKernel {
                     )
                 } else {
                     // map_context is for a different map step (defensive): fresh.
-                    let over = render_over_array(step, step.over.as_deref().unwrap_or(""), outputs, input)?;
+                    let over = render_over_array(
+                        step,
+                        step.over.as_deref().unwrap_or(""),
+                        outputs,
+                        input,
+                    )?;
                     (over, 0usize, Vec::new(), HashMap::new(), false)
                 }
             } else {
@@ -441,7 +464,11 @@ impl CarrierKernel {
             collected = collected.len(),
             "interactive map step completed"
         );
-        Ok(MapOutcome::Done(Value::Array(collected), acc_usage, acc_iters))
+        Ok(MapOutcome::Done(
+            Value::Array(collected),
+            acc_usage,
+            acc_iters,
+        ))
     }
 
     /// Execute one element's inline body steps (the `body: [steps]` of an
@@ -537,8 +564,12 @@ impl CarrierKernel {
                 })?;
                 if !matches!(
                     kind,
-                    StepKind::AgentLoop | StepKind::Chat | StepKind::UserInput | StepKind::Tool
-                        | StepKind::FlowExec | StepKind::Map
+                    StepKind::AgentLoop
+                        | StepKind::Chat
+                        | StepKind::UserInput
+                        | StepKind::Tool
+                        | StepKind::FlowExec
+                        | StepKind::Map
                 ) {
                     return Err(KernelError::Carrier(CarrierError::Internal(format!(
                         "body step '{}' kind '{:?}' not yet supported in map body",

@@ -52,14 +52,8 @@ impl CarrierKernel {
             }
 
             tracing::info!(plugin = %plugin_name, "Downloading missing plugin from Hub...");
-            match clone::hub::install_plugin(
-                &hub_url,
-                &api_key,
-                plugin_name,
-                None,
-                &plugins_dir,
-            )
-            .await
+            match clone::hub::install_plugin(&hub_url, &api_key, plugin_name, None, &plugins_dir)
+                .await
             {
                 Ok(_) => {
                     tracing::info!(plugin = %plugin_name, "Plugin installed successfully");

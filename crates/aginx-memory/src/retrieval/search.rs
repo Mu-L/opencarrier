@@ -22,7 +22,11 @@ pub async fn search_entities(
     kind: Option<EntityKind>,
     limit: usize,
 ) -> CarrierResult<Vec<EntityMatch>> {
-    let limit = if limit == 0 { DEFAULT_LIMIT } else { limit.min(MAX_LIMIT) };
+    let limit = if limit == 0 {
+        DEFAULT_LIMIT
+    } else {
+        limit.min(MAX_LIMIT)
+    };
     let query = query.trim();
     if query.is_empty() {
         return Ok(Vec::new());
@@ -42,13 +46,20 @@ mod tests {
 
     async fn setup() -> Option<Pool> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()
+        deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()
     }
 
     #[tokio::test]
@@ -60,7 +71,9 @@ mod tests {
                 return;
             }
         };
-        let result = search_entities(&pool, "owner_1", None, "", None, 10).await.unwrap();
+        let result = search_entities(&pool, "owner_1", None, "", None, 10)
+            .await
+            .unwrap();
         assert!(result.is_empty());
     }
 
@@ -85,9 +98,14 @@ mod tests {
             tree_id: None,
             user_id: "",
         };
-        entity_store.upsert_entity_index("owner_1", &entry).await.unwrap();
+        entity_store
+            .upsert_entity_index("owner_1", &entry)
+            .await
+            .unwrap();
 
-        let result = search_entities(&pool, "owner_1", None, "alice", None, 10).await.unwrap();
+        let result = search_entities(&pool, "owner_1", None, "alice", None, 10)
+            .await
+            .unwrap();
         assert!(!result.is_empty());
         assert!(result[0].canonical_id.contains("alice"));
     }

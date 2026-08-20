@@ -1,8 +1,8 @@
 //! Job queue store for background tree memory tasks.
 
-use types::error::{CarrierError, CarrierResult};
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
+use types::error::{CarrierError, CarrierResult};
 
 use super::types::{Job, JobKind, JobStatus, NewJob};
 
@@ -86,27 +86,29 @@ impl JobStore {
         let locked_until = now_ms + LOCK_DURATION_MS;
 
         let sql = match owner_id {
-            Some(_) => "SELECT id, owner_id, kind, payload_json, dedupe_key, status,
+            Some(_) => {
+                "SELECT id, owner_id, kind, payload_json, dedupe_key, status,
                                attempts, max_attempts, available_at_ms, locked_until_ms,
                                last_error, created_at_ms, started_at_ms, completed_at_ms
                         FROM mem_tree_jobs
                         WHERE owner_id = ?1 AND status = 'ready' AND available_at_ms <= ?2
-                        ORDER BY created_at_ms ASC LIMIT 1",
-            None => "SELECT id, owner_id, kind, payload_json, dedupe_key, status,
+                        ORDER BY created_at_ms ASC LIMIT 1"
+            }
+            None => {
+                "SELECT id, owner_id, kind, payload_json, dedupe_key, status,
                             attempts, max_attempts, available_at_ms, locked_until_ms,
                             last_error, created_at_ms, started_at_ms, completed_at_ms
                      FROM mem_tree_jobs
                      WHERE status = 'ready' AND available_at_ms <= ?1
-                     ORDER BY created_at_ms ASC LIMIT 1",
+                     ORDER BY created_at_ms ASC LIMIT 1"
+            }
         };
 
         let result = match owner_id {
             Some(oid) => conn.query_row(sql, rusqlite::params![oid, now_ms], |row| {
                 Self::row_to_job(row)
             }),
-            None => conn.query_row(sql, rusqlite::params![now_ms], |row| {
-                Self::row_to_job(row)
-            }),
+            None => conn.query_row(sql, rusqlite::params![now_ms], Self::row_to_job),
         };
 
         match result {
@@ -466,14 +468,18 @@ mod tests {
     fn test_check_and_mark_ingested() {
         let store = setup();
 
-        assert!(!store.check_ingested("owner_1", "document", "doc_1").unwrap());
+        assert!(!store
+            .check_ingested("owner_1", "document", "doc_1")
+            .unwrap());
 
-        store
-            .mark_ingested("owner_1", "document", "doc_1")
-            .unwrap();
+        store.mark_ingested("owner_1", "document", "doc_1").unwrap();
 
-        assert!(store.check_ingested("owner_1", "document", "doc_1").unwrap());
-        assert!(!store.check_ingested("owner_2", "document", "doc_1").unwrap());
+        assert!(store
+            .check_ingested("owner_1", "document", "doc_1")
+            .unwrap());
+        assert!(!store
+            .check_ingested("owner_2", "document", "doc_1")
+            .unwrap());
     }
 
     #[test]

@@ -62,8 +62,11 @@ impl InboundDedup {
         self.seen.insert(key.to_string(), now);
         // Bound growth: drop oldest entries when over capacity.
         if self.seen.len() > self.max_entries {
-            let mut entries: Vec<(String, Instant)> =
-                self.seen.iter().map(|e| (e.key().clone(), *e.value())).collect();
+            let mut entries: Vec<(String, Instant)> = self
+                .seen
+                .iter()
+                .map(|e| (e.key().clone(), *e.value()))
+                .collect();
             entries.sort_by_key(|(_, t)| *t);
             let drop_count = entries.len().saturating_sub(self.max_entries);
             for (k, _) in entries.into_iter().take(drop_count) {
@@ -123,8 +126,8 @@ where
 
     // Cache miss / expired → fetch a fresh token (lock released during I/O).
     let (token, expire_secs) = fetch().await?;
-    let expires_at = Instant::now()
-        + Duration::from_secs(expire_secs.saturating_sub(refresh_ahead.as_secs()));
+    let expires_at =
+        Instant::now() + Duration::from_secs(expire_secs.saturating_sub(refresh_ahead.as_secs()));
 
     {
         let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
@@ -320,7 +323,10 @@ impl<B: ChannelBot> BotRegistry<B> {
     }
 
     /// Get a bot session by key.
-    pub fn get_session(&self, key: &str) -> Option<dashmap::mapref::one::Ref<'_, String, B::Entry>> {
+    pub fn get_session(
+        &self,
+        key: &str,
+    ) -> Option<dashmap::mapref::one::Ref<'_, String, B::Entry>> {
         self.bots.get(key)
     }
 
@@ -438,7 +444,8 @@ mod tests {
     impl TempHome {
         fn new(tag: &str) -> Self {
             let guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            let dir = std::env::temp_dir().join(format!("oc-botreg-{}-{}", std::process::id(), tag));
+            let dir =
+                std::env::temp_dir().join(format!("oc-botreg-{}-{}", std::process::id(), tag));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             std::env::set_var("OPENCARRIER_HOME", &dir);

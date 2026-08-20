@@ -42,12 +42,17 @@ fn derive_reconstructs_surface_from_log_alone() {
     // Turn 1: user asks, assistant calls a tool, tool result rides in a
     // user-role message, assistant answers.
     assert_eq!(msgs[0].role, Role::User);
-    assert!(same(&msgs[0].content, &MessageContent::Text("帮我查下月票".to_string())));
+    assert!(same(
+        &msgs[0].content,
+        &MessageContent::Text("帮我查下月票".to_string())
+    ));
 
     assert_eq!(msgs[1].role, Role::Assistant);
     match &msgs[1].content {
         MessageContent::Blocks(blocks) => match &blocks[0] {
-            ContentBlock::ToolUse { id, name, input, .. } => {
+            ContentBlock::ToolUse {
+                id, name, input, ..
+            } => {
                 assert_eq!(id, "tu_1");
                 assert_eq!(name, "bus_query_order");
                 assert_eq!(input["order_no"], "M123");
@@ -152,7 +157,9 @@ async fn substrate_save_appends_events_matching_batches() {
         .await
         .unwrap();
 
-    let events = sub.session_events_read("gold-agent", &sid.0.to_string()).unwrap();
+    let events = sub
+        .session_events_read("gold-agent", &sid.0.to_string())
+        .unwrap();
     let derived = derive_messages(&events);
     // Batches concatenated, System messages dropped: 3 surface messages.
     assert_eq!(derived.len(), 3);

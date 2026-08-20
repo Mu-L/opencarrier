@@ -7,11 +7,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use tokio::sync::mpsc;
+use tracing::{info, warn};
 use types::channel::{Channel, RoutingMode};
 use types::error::{CarrierError, CarrierResult};
 use types::plugin::PluginMessage;
-use tokio::sync::mpsc;
-use tracing::{info, warn};
 
 pub mod aibot_gateway;
 pub mod channel;
@@ -253,7 +253,10 @@ impl Channel for SessionWatcher {
             token::WecomMode::Kf { .. } => {
                 token::send_kf_message(&session.entry, user_id, text)?;
             }
-            token::WecomMode::SmartBot { bot_id: sb_id, secret } => {
+            token::WecomMode::SmartBot {
+                bot_id: sb_id,
+                secret,
+            } => {
                 // SmartBot: reply via response_url inside callback context;
                 // otherwise proactive push through the aibot gateway
                 // (relationship-gated, best-effort — same doctrine as iLink).
@@ -294,8 +297,9 @@ impl Channel for SessionWatcher {
                     };
                     let _ = tx.send(result);
                 });
-                rx.recv()
-                    .map_err(|e| CarrierError::Internal(format!("SmartBot send thread disconnected: {e}")))??;
+                rx.recv().map_err(|e| {
+                    CarrierError::Internal(format!("SmartBot send thread disconnected: {e}"))
+                })??;
             }
         }
 
@@ -324,9 +328,7 @@ impl Channel for SessionWatcher {
                         .ok_or_else(|| {
                             CarrierError::InvalidInput("kf session missing open_kfid".into())
                         })?;
-                    let token = session
-                        .entry
-                        .get_access_token()?;
+                    let token = session.entry.get_access_token()?;
                     Some((session.entry.http.clone(), token, open_kfid))
                 }
                 _ => None,
@@ -353,7 +355,11 @@ impl Channel for SessionWatcher {
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
+    fn start_sender(
+        &self,
+        sender_id: &str,
+        sender: mpsc::Sender<PluginMessage>,
+    ) -> CarrierResult<()> {
         token::WECOM_STATE.load_new_from_dir();
         spawn_bot_by_id(sender_id, &sender);
         info!(sender_id = %sender_id, "WeCom: started new sender");
@@ -405,11 +411,7 @@ fn spawn_single_bot(
                     .build()
                     .expect("Failed to create tokio runtime for SmartBot");
                 rt.block_on(async {
-                    let mut ch = smartbot::SmartBotChannel::new(
-                        bot_name.clone(),
-                        bot_id,
-                        secret,
-                    );
+                    let mut ch = smartbot::SmartBotChannel::new(bot_name.clone(), bot_id, secret);
                     if let Err(e) = ch.start(tx) {
                         warn!(bot = %bot_name, "SmartBot channel start error: {e}");
                     }

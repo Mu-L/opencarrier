@@ -5,7 +5,10 @@
 
 use anyhow::Result;
 use mcp_common::cookie::make_cookie;
-use mcp_common::{define_params, impl_cookie, json::{error_response, json_to_string}};
+use mcp_common::{
+    define_params, impl_cookie,
+    json::{error_response, json_to_string},
+};
 use reqwest::Method;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::{tool, tool_router, transport::stdio as stdio_transport, ServiceExt};
@@ -96,7 +99,10 @@ impl ZhihuServer {
     async fn zhihu_question(&self, Parameters(params): Parameters<QuestionParams>) -> String {
         let limit = params.limit.unwrap_or(5);
         let query = format!("limit={limit}&offset=0&sort_by=default&include=data[*].content,voteup_count,comment_count,author");
-        let path = format!("/api/v4/questions/{}/answers", urlencoding::encode(&params.question_id));
+        let path = format!(
+            "/api/v4/questions/{}/answers",
+            urlencoding::encode(&params.question_id)
+        );
         match api::zhihu_api(&make_cookie(&params), Method::GET, &path, Some(&query)).await {
             Ok(resp) => {
                 let items = resp

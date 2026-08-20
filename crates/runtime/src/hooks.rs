@@ -7,10 +7,10 @@
 //! - `BeforePromptBuild`: Fires before system prompt construction. Observe-only.
 //! - `AgentLoopEnd`: Fires after the agent loop completes. Observe-only.
 
-use types::agent::HookEvent;
-use types::error::CarrierResult;
 use dashmap::DashMap;
 use std::sync::Arc;
+use types::agent::HookEvent;
+use types::error::CarrierResult;
 
 /// Context passed to hook handlers.
 pub struct HookContext<'a> {

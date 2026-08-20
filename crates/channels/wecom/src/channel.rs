@@ -6,12 +6,12 @@ use axum::extract::Query;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Router;
-use types::channel::Channel;
-use types::error::{CarrierError, CarrierResult};
-use types::plugin::{PluginContent, PluginMessage};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
+use types::channel::Channel;
+use types::error::{CarrierError, CarrierResult};
+use types::plugin::{PluginContent, PluginMessage};
 
 use crate::crypto;
 use crate::token;
@@ -88,14 +88,7 @@ impl Channel for WeComChannel {
                 .build()
                 .expect("Failed to create tokio runtime for WeCom webhook");
             rt.block_on(async move {
-                run_webhook_server(
-                    bot_id,
-                    encoding_aes_key,
-                    callback_token,
-                    port,
-                    sender,
-                )
-                .await;
+                run_webhook_server(bot_id, encoding_aes_key, callback_token, port, sender).await;
             });
         });
 
@@ -122,7 +115,8 @@ impl Channel for WeComChannel {
             }
             token::WecomMode::SmartBot { .. } => {
                 return Err(CarrierError::InvalidInput(
-                    "SmartBot mode does not support send via channel (use response_url)".to_string(),
+                    "SmartBot mode does not support send via channel (use response_url)"
+                        .to_string(),
                 ));
             }
         }
@@ -344,22 +338,32 @@ async fn webhook_post(
             } else {
                 None
             };
-            PluginContent::Image { url: pic_url, caption: None, data: image_data }
+            PluginContent::Image {
+                url: pic_url,
+                caption: None,
+                data: image_data,
+            }
         }
         "voice" => {
             let recognition = fields.get("Recognition").cloned().unwrap_or_default();
             if recognition.is_empty() {
-                PluginContent::Voice { url: String::new(), duration_seconds: 0 }
+                PluginContent::Voice {
+                    url: String::new(),
+                    duration_seconds: 0,
+                }
             } else {
                 PluginContent::Text(recognition)
             }
         }
-        "video" | "shortvideo" => {
-            PluginContent::Video { url: String::new(), duration_seconds: None, caption: None }
-        }
-        "event" if event == "subscribe" || event == "enter_agent" => {
-            PluginContent::Command { name: event.to_string(), args: vec![] }
-        }
+        "video" | "shortvideo" => PluginContent::Video {
+            url: String::new(),
+            duration_seconds: None,
+            caption: None,
+        },
+        "event" if event == "subscribe" || event == "enter_agent" => PluginContent::Command {
+            name: event.to_string(),
+            args: vec![],
+        },
         "event" if event == "kf_msg_or_event" => {
             // WeCom 微信客服: the callback carries only Token + OpenKfId (NO
             // message body). Pull the real messages via sync_msg in a spawned
@@ -369,19 +373,24 @@ async fn webhook_post(
             let tx = state.tx.clone();
             let bot_id = state.bot_id.clone();
             // Extract owned data before spawning — DashMap Ref isn't Send.
-            let (http, access_token, bind_wecom_url) = match token::WECOM_STATE.get_session_for_send(&bot_id) {
-                Some(bot) => match bot.entry.get_access_token_async().await {
-                    Ok(tok) => (bot.entry.http.clone(), tok, bot.entry.bind_wecom_url.clone()),
-                    Err(e) => {
-                        warn!(bot = %bot_id, error = %e, "kf: get_access_token failed");
+            let (http, access_token, bind_wecom_url) =
+                match token::WECOM_STATE.get_session_for_send(&bot_id) {
+                    Some(bot) => match bot.entry.get_access_token_async().await {
+                        Ok(tok) => (
+                            bot.entry.http.clone(),
+                            tok,
+                            bot.entry.bind_wecom_url.clone(),
+                        ),
+                        Err(e) => {
+                            warn!(bot = %bot_id, error = %e, "kf: get_access_token failed");
+                            return "success";
+                        }
+                    },
+                    None => {
+                        warn!(bot = %bot_id, "kf callback: bot session not found");
                         return "success";
                     }
-                },
-                None => {
-                    warn!(bot = %bot_id, "kf callback: bot session not found");
-                    return "success";
-                }
-            };
+                };
             tokio::spawn(async move {
                 let mut cursor = token::get_kf_cursor(&bot_id);
                 loop {
@@ -417,8 +426,7 @@ async fn webhook_post(
                         if m["origin"].as_i64() != Some(3) {
                             continue;
                         }
-                        let Some(content) =
-                            materialize_kf_inbound(&http, &access_token, m).await
+                        let Some(content) = materialize_kf_inbound(&http, &access_token, m).await
                         else {
                             continue;
                         };
@@ -598,14 +606,10 @@ fn parse_kf_inbound(m: &serde_json::Value) -> Option<KfInbound> {
             KfInbound::Ready(PluginContent::Text(format!("[菜单消息] {head}")))
         }
         "channels" | "channels_shop_product" | "channels_shop_order" => {
-            KfInbound::Ready(PluginContent::Text(format!(
-                "[视频号] {msgtype}\n{m}"
-            )))
+            KfInbound::Ready(PluginContent::Text(format!("[视频号] {msgtype}\n{m}")))
         }
         "merged_msg" => KfInbound::Ready(PluginContent::Text("[聊天记录]".into())),
-        "meeting" | "schedule" => {
-            KfInbound::Ready(PluginContent::Text(format!("[{msgtype}]")))
-        }
+        "meeting" | "schedule" => KfInbound::Ready(PluginContent::Text(format!("[{msgtype}]"))),
         "event" => {
             let ev = json_str(m, &["event", "event_type"]);
             let ev = if ev.is_empty() { "event" } else { ev };

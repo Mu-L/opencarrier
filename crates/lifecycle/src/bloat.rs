@@ -511,7 +511,7 @@ pub fn find_compress_candidates(workspace: &Path, target_bytes: u64) -> Result<V
     }
 
     // Sort by size descending — largest first
-    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.sort_by_key(|f| std::cmp::Reverse(f.1));
     Ok(files)
 }
 

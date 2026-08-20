@@ -145,13 +145,7 @@ impl AgentMode {
         match self {
             Self::Observe => vec![],
             Self::Assist => {
-                let read_only = [
-                    "file_read",
-                    "file_list",
-                    "web_fetch",
-                    
-                    "agent_list",
-                ];
+                let read_only = ["file_read", "file_list", "web_fetch", "agent_list"];
                 tools
                     .into_iter()
                     .filter(|t| read_only.contains(&t.name.as_str()))
@@ -278,7 +272,9 @@ impl ToolProfile {
         let has_net = tools.iter().any(|t| t.starts_with("web_") || t == "*");
         let has_shell = tools.iter().any(|t| t == "shell_exec" || t == "*");
         let has_agent = tools.iter().any(|t| t.starts_with("agent_") || t == "*");
-        let has_memory = tools.iter().any(|t| t.starts_with("system_kv_") || t == "*");
+        let has_memory = tools
+            .iter()
+            .any(|t| t.starts_with("system_kv_") || t == "*");
         ManifestCapabilities {
             tools,
             network: if has_net { vec!["*".into()] } else { vec![] },
@@ -372,7 +368,11 @@ pub struct AgentManifest {
     #[serde(default, deserialize_with = "crate::serde_compat::map_lenient")]
     pub tools: HashMap<String, ToolConfig>,
     /// Installed flow references (empty = all flows available). Alias `skills` for backward compat.
-    #[serde(default, alias = "skills", deserialize_with = "crate::serde_compat::vec_lenient")]
+    #[serde(
+        default,
+        alias = "skills",
+        deserialize_with = "crate::serde_compat::vec_lenient"
+    )]
     pub flows: Vec<String>,
     /// MCP server allowlist (empty = all connected MCP servers available).
     #[serde(default, deserialize_with = "crate::serde_compat::vec_lenient")]
@@ -481,7 +481,9 @@ pub struct SubagentConfig {
 
 /// Build tool definitions for delegate_{name} tools from subagent configs.
 /// Each subagent becomes a single tool the parent agent can call to delegate work.
-pub fn build_subagent_tool_definitions(subagents: &[SubagentConfig]) -> Vec<crate::tool::ToolDefinition> {
+pub fn build_subagent_tool_definitions(
+    subagents: &[SubagentConfig],
+) -> Vec<crate::tool::ToolDefinition> {
     subagents
         .iter()
         .map(|sa| crate::tool::ToolDefinition {
@@ -760,7 +762,7 @@ mod tests {
             clone_source: None,
             knowledge_files: Vec::new(),
             plugins: Vec::new(),
-                subagents: Vec::new(),
+            subagents: Vec::new(),
         };
         let json = serde_json::to_string(&manifest).unwrap();
         let deserialized: AgentManifest = serde_json::from_str(&json).unwrap();

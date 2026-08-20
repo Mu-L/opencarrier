@@ -10,13 +10,13 @@ use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
 use super::instance::PluginInstance;
+use libloading::Library;
+use tokio::sync::mpsc;
+use tracing::{info, warn};
 use types::error::{CarrierError, CarrierResult};
 use types::plugin::{
     BotConfig, ChannelDescriptor, FfiJsonCallback, PluginConfig, PluginToolDef, PLUGIN_ABI_VERSION,
 };
-use libloading::Library;
-use tokio::sync::mpsc;
-use tracing::{info, warn};
 
 /// Maximum size for tool execution result buffer.
 const TOOL_RESULT_BUF_SIZE: u32 = 64 * 1024;
@@ -240,9 +240,7 @@ impl LoadedPlugin {
         unsafe {
             let user_data = *self.user_data.get();
             if !user_data.is_null() {
-                let _ = Box::from_raw(
-                    user_data as *mut mpsc::Sender<types::plugin::PluginMessage>,
-                );
+                let _ = Box::from_raw(user_data as *mut mpsc::Sender<types::plugin::PluginMessage>);
                 *self.user_data.get() = std::ptr::null_mut();
             }
         }
@@ -506,7 +504,10 @@ impl PluginLoader {
 
         // 4. Find shared library
         let lib_path = Self::find_shared_library(plugin_dir).ok_or_else(|| {
-            CarrierError::Internal(format!("No shared library found in {}", plugin_dir.display()))
+            CarrierError::Internal(format!(
+                "No shared library found in {}",
+                plugin_dir.display()
+            ))
         })?;
 
         // 4. dlopen

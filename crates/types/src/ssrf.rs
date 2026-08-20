@@ -32,7 +32,9 @@ pub fn check_ssrf(url: &str) -> CarrierResult<()> {
 /// preventing DNS rebinding (TOCTOU) attacks.
 pub fn check_ssrf_with_ip(url: &str) -> CarrierResult<IpAddr> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(CarrierError::Network("Only http:// and https:// URLs are allowed".to_string()));
+        return Err(CarrierError::Network(
+            "Only http:// and https:// URLs are allowed".to_string(),
+        ));
     }
 
     let host = extract_host(url);
@@ -56,7 +58,9 @@ pub fn check_ssrf_with_ip(url: &str) -> CarrierResult<IpAddr> {
         "[::1]",
     ];
     if blocked.contains(&hostname) {
-        return Err(CarrierError::Network(format!("SSRF blocked: {hostname} is a restricted hostname")));
+        return Err(CarrierError::Network(format!(
+            "SSRF blocked: {hostname} is a restricted hostname"
+        )));
     }
 
     // Allowlisted hostnames bypass private-IP checks. Still must resolve.
@@ -66,11 +70,15 @@ pub fn check_ssrf_with_ip(url: &str) -> CarrierResult<IpAddr> {
     let socket_addr = format!("{hostname}:{port}");
     let addrs: Vec<std::net::SocketAddr> = socket_addr
         .to_socket_addrs()
-        .map_err(|e| CarrierError::Network(format!("SSRF blocked: cannot resolve {hostname}: {e}")))?
+        .map_err(|e| {
+            CarrierError::Network(format!("SSRF blocked: cannot resolve {hostname}: {e}"))
+        })?
         .collect();
 
     if addrs.is_empty() {
-        return Err(CarrierError::Network(format!("SSRF: no DNS results for {hostname}")));
+        return Err(CarrierError::Network(format!(
+            "SSRF: no DNS results for {hostname}"
+        )));
     }
 
     if !allowlisted {
@@ -197,6 +205,9 @@ mod tests {
     #[test]
     fn extract_host_regular() {
         assert_eq!(extract_host("https://example.com/path"), "example.com:443");
-        assert_eq!(extract_host("http://example.com:8080/path"), "example.com:8080");
+        assert_eq!(
+            extract_host("http://example.com:8080/path"),
+            "example.com:8080"
+        );
     }
 }

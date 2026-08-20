@@ -4,5 +4,6 @@
 //! mentioning that entity, regardless of source. Topic trees are spawned
 //! lazily when an entity's hotness crosses a threshold.
 
-
-pub use crate::tree::types::{TOPIC_ARCHIVE_THRESHOLD, TOPIC_CREATION_THRESHOLD, TOPIC_RECHECK_EVERY};
+pub use crate::tree::types::{
+    TOPIC_ARCHIVE_THRESHOLD, TOPIC_CREATION_THRESHOLD, TOPIC_RECHECK_EVERY,
+};

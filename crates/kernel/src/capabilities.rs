@@ -1,9 +1,9 @@
 //! Capability manager — enforces capability-based security.
 
-use types::agent::AgentId;
-use types::capability::{capability_matches, Capability, CapabilityCheck};
 use dashmap::DashMap;
 use tracing::debug;
+use types::agent::AgentId;
+use types::capability::{capability_matches, Capability, CapabilityCheck};
 
 /// Manages capability grants for all agents.
 pub struct CapabilityManager {

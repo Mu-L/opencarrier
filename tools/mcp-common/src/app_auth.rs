@@ -22,7 +22,9 @@ pub trait AppCredentials {
     fn app_secret(&self) -> &str;
 }
 
-type TokenFetcher = dyn Fn(&reqwest::Client, &str, &str) -> tokio::task::JoinHandle<Result<TokenResult, String>> + Send + Sync;
+type TokenFetcher = dyn Fn(&reqwest::Client, &str, &str) -> tokio::task::JoinHandle<Result<TokenResult, String>>
+    + Send
+    + Sync;
 
 /// Generic multi-tenant token cache keyed by `app_id`.
 ///
@@ -75,8 +77,7 @@ impl TokenCache {
         {
             let guard = self.tokens.lock().await;
             if let Some(cached) = guard.get(app_id) {
-                if cached.secret == app_secret
-                    && cached.expires_at > Instant::now() + EXPIRY_MARGIN
+                if cached.secret == app_secret && cached.expires_at > Instant::now() + EXPIRY_MARGIN
                 {
                     return Ok(cached.access_token.clone());
                 }
@@ -176,7 +177,10 @@ pub async fn api_get(
         .map_err(|e| format!("API read body failed: {e}"))?;
 
     if !status.is_success() {
-        return Err(format!("API HTTP {status}: {}", &text[..text.len().min(500)]));
+        return Err(format!(
+            "API HTTP {status}: {}",
+            &text[..text.len().min(500)]
+        ));
     }
 
     serde_json::from_str(&text).map_err(|e| format!("API JSON parse error: {e}"))
@@ -208,7 +212,10 @@ pub async fn api_post(
         .map_err(|e| format!("API read body failed: {e}"))?;
 
     if !status.is_success() {
-        return Err(format!("API HTTP {status}: {}", &text[..text.len().min(500)]));
+        return Err(format!(
+            "API HTTP {status}: {}",
+            &text[..text.len().min(500)]
+        ));
     }
 
     serde_json::from_str(&text).map_err(|e| format!("API JSON parse error: {e}"))
@@ -259,7 +266,10 @@ pub async fn api_request(
         .map_err(|e| format!("API read body failed: {e}"))?;
 
     if !status.is_success() {
-        return Err(format!("API HTTP {status}: {}", &text[..text.len().min(500)]));
+        return Err(format!(
+            "API HTTP {status}: {}",
+            &text[..text.len().min(500)]
+        ));
     }
 
     serde_json::from_str(&text).map_err(|e| format!("API JSON parse error: {e}"))

@@ -1,6 +1,5 @@
 //! Single-step runners: agent_loop, chat, tool.
 
-
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -23,12 +22,11 @@ use types::flow::StepDef;
 use types::message::{Message, TokenUsage};
 use types::tool::ToolResult;
 
+use super::template::{render_template, render_value, select_output};
 use crate::error::{KernelError, KernelResult};
 use crate::kernel::CarrierKernel;
-use super::template::{render_template, render_value, select_output};
 
 impl CarrierKernel {
-
     /// Run a single `agent_loop` step in its own fresh session and return its
     /// output value + usage. Shared by `run_flow` (top-level) and
     /// `exec_body_steps` (map body). Resolves the driver + memory handle here
@@ -116,7 +114,10 @@ impl CarrierKernel {
             .as_deref()
             .map(|t| render_template(t, outputs, input))
             .unwrap_or_else(|| step_user_msg.to_string());
-        let system = format!("{base_system_prompt}\n\n## 当前步骤: {}\n{task_text}", step.id);
+        let system = format!(
+            "{base_system_prompt}\n\n## 当前步骤: {}\n{task_text}",
+            step.id
+        );
         let req = CompletionRequest {
             model: String::new(),
             messages: vec![Message::user(step_user_msg.to_string())],

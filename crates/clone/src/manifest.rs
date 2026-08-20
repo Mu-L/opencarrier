@@ -207,7 +207,10 @@ pub fn ensure_template_version(files: &mut BTreeMap<String, Vec<u8>>) -> bool {
     if obj.contains_key("version") {
         return false;
     }
-    obj.insert("version".to_string(), serde_json::Value::String("1".to_string()));
+    obj.insert(
+        "version".to_string(),
+        serde_json::Value::String("1".to_string()),
+    );
     match serde_json::to_vec_pretty(&tj) {
         Ok(new_bytes) => {
             *bytes = new_bytes;
@@ -314,8 +317,7 @@ pub fn write_files_to_workspace(
         .with_context(|| format!("canonicalize {}", workspace.display()))?;
     for (rel, content) in files {
         let p = Path::new(rel);
-        if p
-            .components()
+        if p.components()
             .any(|c| matches!(c, Component::ParentDir | Component::RootDir))
         {
             anyhow::bail!("path traversal denied: {rel}");
@@ -464,9 +466,16 @@ mod tests {
         assert!(manifest.files.contains_key("flows/t/flow.md"));
         assert!(manifest.files.contains_key("flows/t/scripts/v.py"));
         assert!(
-            !manifest.files.keys().any(|p| p.contains("__pycache__") || p.ends_with(".pyc")),
+            !manifest
+                .files
+                .keys()
+                .any(|p| p.contains("__pycache__") || p.ends_with(".pyc")),
             "bytecode leaked into manifest: {:?}",
-            manifest.files.keys().filter(|p| p.contains("pycache") || p.ends_with(".pyc")).collect::<Vec<_>>()
+            manifest
+                .files
+                .keys()
+                .filter(|p| p.contains("pycache") || p.ends_with(".pyc"))
+                .collect::<Vec<_>>()
         );
 
         // Inbound: a stale manifest carrying .pyc entries is skipped with a
@@ -474,7 +483,10 @@ mod tests {
         // the not-written assertion can't pass on a setup artifact.)
         std::fs::remove_file(tmp.join("flows/t/loose.pyc")).unwrap();
         let mut files = BTreeMap::new();
-        files.insert("flows/t/flow.md".to_string(), b"---\nname: t\n---\nb2".to_vec());
+        files.insert(
+            "flows/t/flow.md".to_string(),
+            b"---\nname: t\n---\nb2".to_vec(),
+        );
         files.insert(
             "flows/t/__pycache__/v.cpython-310.pyc".to_string(),
             b"\x00 bytecode".to_vec(),
@@ -488,7 +500,10 @@ mod tests {
         );
         assert!(!tmp.join("flows/t/__pycache__").exists());
         assert!(!tmp.join("flows/t/loose.pyc").exists());
-        assert_eq!(std::fs::read(tmp.join("flows/t/flow.md")).unwrap(), b"---\nname: t\n---\nb2");
+        assert_eq!(
+            std::fs::read(tmp.join("flows/t/flow.md")).unwrap(),
+            b"---\nname: t\n---\nb2"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -560,7 +575,10 @@ mod tests {
             b"---\nname: write\nversion: 1\n---\nbody".to_vec(),
         );
         let errs = validate_install_format(&files).unwrap();
-        assert!(errs.len() == 1 && errs[0].contains("description"), "{errs:?}");
+        assert!(
+            errs.len() == 1 && errs[0].contains("description"),
+            "{errs:?}"
+        );
 
         // YAML block scalar reads as literal "|" -> rejected.
         let mut files = BTreeMap::new();
@@ -575,7 +593,9 @@ mod tests {
         let mut files = BTreeMap::new();
         files.insert(
             "flows/write/flow.md".to_string(),
-            "---\nname: write\ndescription: 写文章流程\nversion: 2\n---\nbody".as_bytes().to_vec(),
+            "---\nname: write\ndescription: 写文章流程\nversion: 2\n---\nbody"
+                .as_bytes()
+                .to_vec(),
         );
         files.insert("template.json".to_string(), b"{}".to_vec());
         assert!(validate_install_format(&files).unwrap().is_empty());

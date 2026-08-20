@@ -7,21 +7,21 @@
 
 use std::sync::Arc;
 
-use types::channel::RoutingMode;
-use types::error::CarrierError;
-use types::plugin::{PluginContent, PluginMessage};
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+use types::channel::RoutingMode;
+use types::error::CarrierError;
+use types::plugin::{PluginContent, PluginMessage};
 
 use super::router::SenderRouter;
 use crate::kernel_handle::KernelHandle;
 // Re-export outbound types and marker APIs so existing
 // `runtime::plugin::bridge::…` imports keep compiling.
 pub use crate::outbound::{
+    is_no_reply_sentinel, prepare_outbound, process_deliver_markers_pub, process_publish_markers,
     ChannelDeliverFn, ChannelSendFn, ContentRegistry, NotifyTarget, OutboundCtx, OutboundResult,
-    RoutingModeFn, is_no_reply_sentinel, prepare_outbound, process_deliver_markers_pub,
-    process_publish_markers,
+    RoutingModeFn,
 };
 
 // ---------------------------------------------------------------------------
@@ -97,7 +97,10 @@ impl PluginBridgeManager {
     }
 
     /// Set notify routing (enables `[NOTIFY:type]content[/NOTIFY] markers → cross-channel push).
-    pub fn set_notify_routes(&mut self, routes: Arc<std::collections::HashMap<String, NotifyTarget>>) {
+    pub fn set_notify_routes(
+        &mut self,
+        routes: Arc<std::collections::HashMap<String, NotifyTarget>>,
+    ) {
         self.notify_routes = Some(routes);
     }
 
@@ -140,7 +143,10 @@ impl PluginBridgeManager {
                     return plugin.channel_send(channel, bot_id, user_id, text);
                 }
             }
-            Err(CarrierError::InvalidInput(format!("No plugin channel found for type: {}", channel_type)))
+            Err(CarrierError::InvalidInput(format!(
+                "No plugin channel found for type: {}",
+                channel_type
+            )))
         });
 
         // If no send fn set yet, use this one. Otherwise, chain them.
@@ -233,7 +239,9 @@ impl PluginBridgeManager {
         // stranded their buffered notifications (buffer side already keys by
         // user id, so drain must match).
         if let Some(ref cron_delivery) = self.cron_delivery {
-            if let Err(e) = cron_delivery.touch_sender_channel(&msg.sender_id, &msg.channel_type, &msg.bot_id) {
+            if let Err(e) =
+                cron_delivery.touch_sender_channel(&msg.sender_id, &msg.channel_type, &msg.bot_id)
+            {
                 tracing::warn!(error = %e, "Failed to touch sender channel");
             }
         }
@@ -268,86 +276,93 @@ impl PluginBridgeManager {
             // 1. Check if route is in naming flow
             if let Some((_, agent_id)) = self.pending_naming.remove(&rk) {
                 let name = text.trim().to_string();
-            if !name.is_empty() {
-                if let Some(ref router) = self.sender_router {
-                    router.set_alias(&rk, &name, &agent_id);
-                }
-                let confirm = format!("好的，我现在叫{name}。以后叫我{name}我就出来啦！");
-                self.send_response(&msg, &confirm).await;
-            } else {
-                // Empty name, keep in pending
-                self.pending_naming.insert(rk.clone(), agent_id);
-                self.send_response(&msg, "名字不能为空哦，请再告诉我你想叫我什么？").await;
-            }
-            return;
-        }
-
-        // 2. Detect rename requests (e.g. "以后叫我小趣", "改名叫小趣")
-        if let Some(ref router) = self.sender_router {
-            if let Some(new_name) = Self::parse_rename(&text) {
-                if let Some(agent_id) = router.get_route(&rk) {
-                    router.set_alias(&rk, &new_name, &agent_id);
-                    let confirm = format!("好的，我以后叫{new_name}啦！叫我{new_name}我就出来。");
+                if !name.is_empty() {
+                    if let Some(ref router) = self.sender_router {
+                        router.set_alias(&rk, &name, &agent_id);
+                    }
+                    let confirm = format!("好的，我现在叫{name}。以后叫我{name}我就出来啦！");
                     self.send_response(&msg, &confirm).await;
-                    return;
+                } else {
+                    // Empty name, keep in pending
+                    self.pending_naming.insert(rk.clone(), agent_id);
+                    self.send_response(&msg, "名字不能为空哦，请再告诉我你想叫我什么？")
+                        .await;
                 }
+                return;
             }
-        }
 
-        // 3. Try name-based routing (message starts with an alias)
-        if let Some((agent_id, remaining)) = self.try_route_by_name(&text, &rk) {
-            info!(
-                channel = %msg.channel_type,
-                bot = %msg.bot_id,
-                agent = %agent_id,
-                route_key = %rk,
-                "Routing by name to agent"
-            );
-
-            // Update default route to this agent
+            // 2. Detect rename requests (e.g. "以后叫我小趣", "改名叫小趣")
             if let Some(ref router) = self.sender_router {
-                router.set_route(&rk, &agent_id);
-            }
-
-            let msg_text = if remaining.is_empty() { "你好".to_string() } else { remaining };
-            match self
-                .kernel
-                .send_to_agent(
-                    &agent_id,
-                    &msg_text,
-                    Some(&msg.sender_id),
-                    Some(&msg.sender_name),
-                    None,
-                    Some(&rk),
-                    Some(&msg.channel_type),
-                )
-                .await
-            {
-                Ok(response) => {
-                    if response.trim().is_empty() {
-                        // Sender-gate Merged outcome: this message was
-                        // coalesced into an earlier combined turn whose reply
-                        // already went to this recipient — sending here would
-                        // duplicate it.
-                        debug!(agent = %agent_id, "empty response (merged into a prior turn) — no send");
-                    } else {
-                        self.send_response(&msg, &response).await;
+                if let Some(new_name) = Self::parse_rename(&text) {
+                    if let Some(agent_id) = router.get_route(&rk) {
+                        router.set_alias(&rk, &new_name, &agent_id);
+                        let confirm =
+                            format!("好的，我以后叫{new_name}啦！叫我{new_name}我就出来。");
+                        self.send_response(&msg, &confirm).await;
+                        return;
                     }
                 }
-                Err(e) => {
-                    error!(agent = %agent_id, error = %e, "Failed to send message to agent");
-                    self.send_response(&msg, "抱歉，处理消息时遇到了问题，请稍后再试。").await;
-                }
             }
-            return;
-        }
 
-        // 4. /list command
-        if text.trim().eq_ignore_ascii_case("/list") {
-            let response = self.format_agent_list(&rk);
-            self.send_response(&msg, &response).await;
-            return;
-        }
+            // 3. Try name-based routing (message starts with an alias)
+            if let Some((agent_id, remaining)) = self.try_route_by_name(&text, &rk) {
+                info!(
+                    channel = %msg.channel_type,
+                    bot = %msg.bot_id,
+                    agent = %agent_id,
+                    route_key = %rk,
+                    "Routing by name to agent"
+                );
+
+                // Update default route to this agent
+                if let Some(ref router) = self.sender_router {
+                    router.set_route(&rk, &agent_id);
+                }
+
+                let msg_text = if remaining.is_empty() {
+                    "你好".to_string()
+                } else {
+                    remaining
+                };
+                match self
+                    .kernel
+                    .send_to_agent(
+                        &agent_id,
+                        &msg_text,
+                        Some(&msg.sender_id),
+                        Some(&msg.sender_name),
+                        None,
+                        Some(&rk),
+                        Some(&msg.channel_type),
+                    )
+                    .await
+                {
+                    Ok(response) => {
+                        if response.trim().is_empty() {
+                            // Sender-gate Merged outcome: this message was
+                            // coalesced into an earlier combined turn whose reply
+                            // already went to this recipient — sending here would
+                            // duplicate it.
+                            debug!(agent = %agent_id, "empty response (merged into a prior turn) — no send");
+                        } else {
+                            self.send_response(&msg, &response).await;
+                        }
+                    }
+                    Err(e) => {
+                        error!(agent = %agent_id, error = %e, "Failed to send message to agent");
+                        self.send_response(&msg, "抱歉，处理消息时遇到了问题，请稍后再试。")
+                            .await;
+                    }
+                }
+                return;
+            }
+
+            // 4. /list command
+            if text.trim().eq_ignore_ascii_case("/list") {
+                let response = self.format_agent_list(&rk);
+                self.send_response(&msg, &response).await;
+                return;
+            }
         } // end multi-clone pipeline (!direct_bind)
 
         // 5. Default routing via route_key
@@ -365,14 +380,15 @@ impl PluginBridgeManager {
         // 6. Check if this agent needs a name (SenderBased only — DirectBind
         // channels have a fixed agent that never needs naming)
         if !direct_bind {
-        if let Some(ref router) = self.sender_router {
-            if router.needs_naming(&rk) {
-                info!(route_key = %rk, agent = %agent_id, "Agent needs naming, entering naming flow");
-                self.pending_naming.insert(rk.clone(), agent_id.clone());
-                self.send_response(&msg, "请给我取个名字吧！以后叫这个名字我就会出来。").await;
-                return;
+            if let Some(ref router) = self.sender_router {
+                if router.needs_naming(&rk) {
+                    info!(route_key = %rk, agent = %agent_id, "Agent needs naming, entering naming flow");
+                    self.pending_naming.insert(rk.clone(), agent_id.clone());
+                    self.send_response(&msg, "请给我取个名字吧！以后叫这个名字我就会出来。")
+                        .await;
+                    return;
+                }
             }
-        }
         } // end needs-naming check (!direct_bind)
 
         info!(
@@ -387,28 +403,43 @@ impl PluginBridgeManager {
         if !msg.sender_id.is_empty() {
             if let Some(ws) = self.kernel.resolve_agent_workspace(&agent_id) {
                 let ws_path = std::path::Path::new(&ws);
-                match crate::plugin::admin_store::auto_assign_creator(ws_path, &msg.sender_id, &msg.sender_name) {
-                    Ok(true) => info!(agent = %agent_id, sender = %msg.sender_id, "Auto-assigned creator admin"),
+                match crate::plugin::admin_store::auto_assign_creator(
+                    ws_path,
+                    &msg.sender_id,
+                    &msg.sender_name,
+                ) {
+                    Ok(true) => {
+                        info!(agent = %agent_id, sender = %msg.sender_id, "Auto-assigned creator admin")
+                    }
                     Ok(false) => {}
-                    Err(e) => warn!(agent = %agent_id, error = %e, "Failed to auto-assign creator admin"),
+                    Err(e) => {
+                        warn!(agent = %agent_id, error = %e, "Failed to auto-assign creator admin")
+                    }
                 }
             }
         }
 
         // Intercept admin permission request
         let trimmed = text.trim();
-        if trimmed == "申请管理权限" || trimmed == "申请管理员" || trimmed == "申请管理员权限" {
+        if trimmed == "申请管理权限" || trimmed == "申请管理员" || trimmed == "申请管理员权限"
+        {
             if let Some(ws) = self.kernel.resolve_agent_workspace(&agent_id) {
                 let ws_path = std::path::Path::new(&ws);
-                match crate::plugin::admin_store::add_pending(ws_path, &msg.sender_id, &msg.sender_name) {
+                match crate::plugin::admin_store::add_pending(
+                    ws_path,
+                    &msg.sender_id,
+                    &msg.sender_name,
+                ) {
                     Ok(()) => {
-                        self.send_response(&msg, "已收到您的管理权限申请，请等待管理员审批。").await;
+                        self.send_response(&msg, "已收到您的管理权限申请，请等待管理员审批。")
+                            .await;
                     }
                     Err(crate::plugin::admin_store::AdminError::AlreadyAdmin) => {
                         self.send_response(&msg, "您已经是管理员了。").await;
                     }
                     Err(crate::plugin::admin_store::AdminError::AlreadyPending) => {
-                        self.send_response(&msg, "您已提交过申请，请耐心等待审批。").await;
+                        self.send_response(&msg, "您已提交过申请，请耐心等待审批。")
+                            .await;
                     }
                     Err(_) => {
                         self.send_response(&msg, "申请提交失败，请稍后再试。").await;
@@ -426,8 +457,7 @@ impl PluginBridgeManager {
         // Runs after the system interactions (naming / rename / @name / /list
         // / admin request) so those keep their meaning even when a keyword
         // rule would also match the same text.
-        if msg.channel_type == "weixin"
-            && self.weixin_automation_gate(&msg, &agent_id, &text).await
+        if msg.channel_type == "weixin" && self.weixin_automation_gate(&msg, &agent_id, &text).await
         {
             return;
         }
@@ -480,7 +510,8 @@ impl PluginBridgeManager {
                     error = %e,
                     "Failed to send message to agent"
                 );
-                self.send_response(&msg, "抱歉，处理消息时遇到了问题，请稍后再试。").await;
+                self.send_response(&msg, "抱歉，处理消息时遇到了问题，请稍后再试。")
+                    .await;
             }
         }
     }
@@ -695,7 +726,15 @@ impl PluginBridgeManager {
             if text_lower.starts_with(name.as_str()) && name.len() > best_len {
                 // Name must be followed by a separator or end of text
                 let rest = &text_lower[name.len()..];
-                if rest.is_empty() || rest.starts_with('，') || rest.starts_with(',') || rest.starts_with(' ') || rest.starts_with('！') || rest.starts_with('!') || rest.starts_with('？') || rest.starts_with('?') {
+                if rest.is_empty()
+                    || rest.starts_with('，')
+                    || rest.starts_with(',')
+                    || rest.starts_with(' ')
+                    || rest.starts_with('！')
+                    || rest.starts_with('!')
+                    || rest.starts_with('？')
+                    || rest.starts_with('?')
+                {
                     best_name = Some(name);
                     best_agent_id = Some(agent_id.clone());
                     best_len = name.len();
@@ -866,7 +905,9 @@ impl PluginBridgeManager {
                             "Vision model described image via URL"
                         );
                         let path_hint = saved_rel
-                            .and_then(|r| r.rsplit_once("/input/").map(|(_, f)| format!("input/{f}")))
+                            .and_then(|r| {
+                                r.rsplit_once("/input/").map(|(_, f)| format!("input/{f}"))
+                            })
                             .unwrap_or_default();
                         if path_hint.is_empty() {
                             return format!("[用户发送了一张图片]\n视觉描述：{desc}");
@@ -905,7 +946,11 @@ impl PluginBridgeManager {
                     .unwrap_or_default();
                 format!("[用户发送了一张图片{}]: {}", cap, url)
             }
-            PluginContent::File { url, filename, data } => {
+            PluginContent::File {
+                url,
+                filename,
+                data,
+            } => {
                 if data.is_some() {
                     format!("[用户发送了一个文件]: {}", filename)
                 } else if !url.is_empty() {
@@ -920,7 +965,11 @@ impl PluginBridgeManager {
             } => {
                 format!("[用户发送了一段{}秒的语音]: {}", duration_seconds, url)
             }
-            PluginContent::Video { url, duration_seconds, caption } => {
+            PluginContent::Video {
+                url,
+                duration_seconds,
+                caption,
+            } => {
                 let dur = duration_seconds
                     .map(|d| format!("{}秒", d))
                     .unwrap_or_default();
@@ -942,9 +991,18 @@ impl PluginBridgeManager {
 
     /// Save media data (files and images) to the agent's workspace input/ directory.
     /// Returns the workspace-relative path if saved, None otherwise.
-    async fn save_media_to_input(&self, msg: &PluginMessage, agent_id: &str, rk: &str) -> Option<String> {
+    async fn save_media_to_input(
+        &self,
+        msg: &PluginMessage,
+        agent_id: &str,
+        rk: &str,
+    ) -> Option<String> {
         let (data, filename) = match &msg.content {
-            PluginContent::File { data: Some(d), filename, .. } => (d.clone(), filename.clone()),
+            PluginContent::File {
+                data: Some(d),
+                filename,
+                ..
+            } => (d.clone(), filename.clone()),
             PluginContent::Image { data: Some(d), .. } => {
                 let ext = types::media::detect_image_mime(d)
                     .strip_prefix("image/")
@@ -1144,4 +1202,3 @@ mod automation_gate_tests {
         ));
     }
 }
-

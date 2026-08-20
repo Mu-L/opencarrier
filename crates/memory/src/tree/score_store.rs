@@ -1,8 +1,8 @@
 //! Score store for chunk admission scoring.
 
-use types::error::{CarrierError, CarrierResult};
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
+use types::error::{CarrierError, CarrierResult};
 
 use super::types::ScoreSignals;
 
@@ -70,11 +70,7 @@ impl ScoreStore {
     }
 
     /// Get the score for a chunk.
-    pub fn get_score(
-        &self,
-        owner_id: &str,
-        chunk_id: &str,
-    ) -> CarrierResult<Option<ScoreRow>> {
+    pub fn get_score(&self, owner_id: &str, chunk_id: &str) -> CarrierResult<Option<ScoreRow>> {
         let conn = self
             .conn
             .lock()
@@ -189,7 +185,14 @@ mod tests {
         };
 
         store
-            .write_score("owner_1", "chunk_001", &signals, 0.75, false, Some("high quality"))
+            .write_score(
+                "owner_1",
+                "chunk_001",
+                &signals,
+                0.75,
+                false,
+                Some("high quality"),
+            )
             .unwrap();
 
         let row = store.get_score("owner_1", "chunk_001").unwrap().unwrap();

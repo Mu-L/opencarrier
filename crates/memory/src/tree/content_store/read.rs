@@ -29,10 +29,7 @@ pub fn parse_md(content: &str) -> CarrierResult<ParsedMd> {
         let frontmatter = rest[..end_pos].to_string();
         let after_closing = &rest[end_pos + 4..]; // skip \n---
         let body = after_closing.trim_start_matches(['\r', '\n']).to_string();
-        Ok(ParsedMd {
-            frontmatter,
-            body,
-        })
+        Ok(ParsedMd { frontmatter, body })
     } else {
         Err(CarrierError::Internal(
             "Markdown file has opening --- but no closing ---".to_string(),

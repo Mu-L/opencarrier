@@ -5,11 +5,11 @@
 //! if the limit has been hit too many times consecutively.
 
 use super::*;
-use crate::llm_driver::StreamEvent;
 use crate::hooks::HookRegistry;
+use crate::llm_driver::StreamEvent;
 use memory::MemorySubstrate;
-use types::message::{Message, TokenUsage};
 use tracing::warn;
+use types::message::{Message, TokenUsage};
 
 /// Maximum consecutive MaxTokens continuations before returning partial response.
 /// Raised from 3 to 5 to allow longer-form generation.
@@ -73,8 +73,7 @@ pub(in crate::agent_loop) async fn handle_max_tokens(
         }
         warn!(
             iteration,
-            consecutive_max_tokens,
-            "Max continuations reached , returning partial response"
+            consecutive_max_tokens, "Max continuations reached , returning partial response"
         );
         // Fire AgentLoopEnd hook
         if let Some(hook_reg) = hooks {

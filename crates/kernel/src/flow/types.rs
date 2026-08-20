@@ -22,7 +22,8 @@ pub(crate) const MAX_FLOW_DEPTH: u32 = 5;
 /// (e.g. 402 Insufficient Balance), so keyword matching -- not an LLM parse --
 /// is the most robust trigger. Case-insensitive substring match (see
 /// [`decide_cancel`]).
-pub(crate) const FAILURE_CANCEL_KEYWORDS: &[&str] = &["取消", "cancel", "放弃", "abort", "算了", "不要了"];
+pub(crate) const FAILURE_CANCEL_KEYWORDS: &[&str] =
+    &["取消", "cancel", "放弃", "abort", "算了", "不要了"];
 
 /// Outcome of a `run_flow` invocation. A flow either runs to completion
 /// (`Completed`) or suspends at a `user_input` step awaiting the human's reply
@@ -120,4 +121,3 @@ pub(crate) struct ResumeState {
     pub cancel_keywords: Vec<String>,
     pub map_context: Option<MapContext>,
 }
-

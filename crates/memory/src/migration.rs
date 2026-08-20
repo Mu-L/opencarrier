@@ -70,7 +70,10 @@ pub fn run_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
     ) {
         Ok(deleted) => {
             if deleted > 0 {
-                tracing::info!(deleted, "kv_history cleanup: removed entries older than 30 days");
+                tracing::info!(
+                    deleted,
+                    "kv_history cleanup: removed entries older than 30 days"
+                );
             }
         }
         Err(e) => {
@@ -844,9 +847,7 @@ fn migrate_v17(conn: &Connection) -> Result<(), rusqlite::Error> {
 /// Version 18: Add active_skill_name column to sessions.
 fn migrate_v18(conn: &Connection) -> Result<(), rusqlite::Error> {
     if !column_exists(conn, "sessions", "active_skill_name") {
-        conn.execute_batch(
-            "ALTER TABLE sessions ADD COLUMN active_skill_name TEXT DEFAULT NULL",
-        )?;
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN active_skill_name TEXT DEFAULT NULL")?;
     }
 
     conn.execute(
@@ -920,18 +921,42 @@ fn migrate_v21(conn: &Connection) -> Result<(), rusqlite::Error> {
                 for meta_val in &metas {
                     if let Some(job_val) = meta_val.get("job") {
                         let id = job_val.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                        let agent_id = job_val.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
+                        let agent_id = job_val
+                            .get("agent_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         let owner_id = job_val.get("owner_id").and_then(|v| v.as_str());
                         let sender_id = job_val.get("sender_id").and_then(|v| v.as_str());
                         let name = job_val.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let enabled = job_val.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-                        let schedule = job_val.get("schedule").map(|v| v.to_string()).unwrap_or_default();
-                        let action = job_val.get("action").map(|v| v.to_string()).unwrap_or_default();
-                        let delivery = job_val.get("delivery").map(|v| v.to_string()).unwrap_or_else(|| "{\"kind\":\"none\"}".to_string());
-                        let one_shot = meta_val.get("one_shot").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let enabled = job_val
+                            .get("enabled")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true);
+                        let schedule = job_val
+                            .get("schedule")
+                            .map(|v| v.to_string())
+                            .unwrap_or_default();
+                        let action = job_val
+                            .get("action")
+                            .map(|v| v.to_string())
+                            .unwrap_or_default();
+                        let delivery = job_val
+                            .get("delivery")
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "{\"kind\":\"none\"}".to_string());
+                        let one_shot = meta_val
+                            .get("one_shot")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
                         let last_status = meta_val.get("last_status").and_then(|v| v.as_str());
-                        let consecutive_errors = meta_val.get("consecutive_errors").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let created_at = job_val.get("created_at").and_then(|v| v.as_str()).unwrap_or("");
+                        let consecutive_errors = meta_val
+                            .get("consecutive_errors")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let created_at = job_val
+                            .get("created_at")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         let last_run = job_val.get("last_run").and_then(|v| v.as_str());
                         let next_run = job_val.get("next_run").and_then(|v| v.as_str());
 
@@ -1004,10 +1029,14 @@ fn migrate_v22(conn: &Connection) -> Result<(), rusqlite::Error> {
                 let bot_id = json.get("bot_id").and_then(|v| v.as_str()).unwrap_or("");
                 let bot_token = json.get("bot_token").and_then(|v| v.as_str()).unwrap_or("");
                 let baseurl = json.get("baseurl").and_then(|v| v.as_str()).unwrap_or("");
-                let ilink_bot_id = json.get("ilink_bot_id").and_then(|v| v.as_str()).unwrap_or("");
+                let ilink_bot_id = json
+                    .get("ilink_bot_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 let expires_at = json.get("expires_at").and_then(|v| v.as_i64()).unwrap_or(0);
                 let bind_agent = json.get("bind_agent").and_then(|v| v.as_str());
-                let context_tokens = json.get("context_tokens")
+                let context_tokens = json
+                    .get("context_tokens")
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "{}".to_string());
 

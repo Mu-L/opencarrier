@@ -3,30 +3,30 @@
 //! Composes the system KV store, session store, cron delivery store,
 //! and tree memory behind a single API.
 
-use crate::cron_delivery::CronDeliveryStore;
-use crate::cron_store::CronJobStore;
-use crate::follower_store::FollowerStore;
 use crate::automation_store::AutomationRuleStore;
 use crate::chain_resume_store::ChainResumeStore;
+use crate::cron_delivery::CronDeliveryStore;
+use crate::cron_store::CronJobStore;
 use crate::flow_run::FlowRunStore;
-use crate::weixin_store::WeixinSessionStore;
-use crate::notify_store::NotifyRouteStore;
+use crate::follower_store::FollowerStore;
 use crate::migration::run_migrations;
+use crate::notify_store::NotifyRouteStore;
 use crate::session::{Session, SessionStore};
 use crate::system_kv::SystemKV;
 use crate::tree::ingest::IngestPipeline;
 use crate::tree::retrieval;
 use crate::tree::types::SourceKind;
 use crate::usage::UsageStore;
+use crate::weixin_store::WeixinSessionStore;
 
 use types::agent::{AgentEntry, AgentId, SessionId};
 use types::automation::AutomationRule;
 use types::error::{CarrierError, CarrierResult};
-use types::message::Message;
 use types::memory_tree::{
-    EntityMatch, IngestRequest, IngestResult, QueryResponse, TreeSummary,
-    DrillDownQuery, EntitySearch, FetchLeavesQuery, GlobalQuery, SourceQuery, TopicQuery,
+    DrillDownQuery, EntityMatch, EntitySearch, FetchLeavesQuery, GlobalQuery, IngestRequest,
+    IngestResult, QueryResponse, SourceQuery, TopicQuery, TreeSummary,
 };
+use types::message::Message;
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -64,12 +64,14 @@ impl MemorySubstrate {
         let shared = Arc::new(Mutex::new(conn));
 
         // Default content root: sibling to the db file
-        let content_root = db_path.parent()
+        let content_root = db_path
+            .parent()
             .unwrap_or(Path::new("."))
             .join("memory_tree")
             .join("content");
         // Event log lives beside the db, kernel-owned (not per-workspace).
-        let events_root = db_path.parent()
+        let events_root = db_path
+            .parent()
             .unwrap_or(Path::new("."))
             .join("session-events");
 
@@ -112,10 +114,8 @@ impl MemorySubstrate {
             // Tests share a per-process dir so cross-instance seq continuity
             // is exercised without touching the real db location.
             session_events: crate::session_events::SessionEventLog::new(
-                std::env::temp_dir().join(format!(
-                    "opencarrier-session-events-{}",
-                    std::process::id()
-                )),
+                std::env::temp_dir()
+                    .join(format!("opencarrier-session-events-{}", std::process::id())),
             ),
         })
     }
@@ -206,20 +206,34 @@ impl MemorySubstrate {
         scene: Option<&str>,
     ) -> CarrierResult<()> {
         let store = self.followers.clone();
-        let (channel, app_id, openid) = (channel.to_string(), app_id.to_string(), openid.to_string());
+        let (channel, app_id, openid) =
+            (channel.to_string(), app_id.to_string(), openid.to_string());
         let (unionid, scene) = (unionid.map(str::to_string), scene.map(str::to_string));
         let now = chrono::Utc::now().to_rfc3339();
         tokio::task::spawn_blocking(move || {
-            store.record_follow(&channel, &app_id, &openid, unionid.as_deref(), scene.as_deref(), &now)
+            store.record_follow(
+                &channel,
+                &app_id,
+                &openid,
+                unionid.as_deref(),
+                scene.as_deref(),
+                &now,
+            )
         })
         .await
         .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
 
     /// Refresh `last_seen` on any inbound message (creates the row if missing).
-    pub async fn follower_touch(&self, channel: &str, app_id: &str, openid: &str) -> CarrierResult<()> {
+    pub async fn follower_touch(
+        &self,
+        channel: &str,
+        app_id: &str,
+        openid: &str,
+    ) -> CarrierResult<()> {
         let store = self.followers.clone();
-        let (channel, app_id, openid) = (channel.to_string(), app_id.to_string(), openid.to_string());
+        let (channel, app_id, openid) =
+            (channel.to_string(), app_id.to_string(), openid.to_string());
         let now = chrono::Utc::now().to_rfc3339();
         tokio::task::spawn_blocking(move || store.touch(&channel, &app_id, &openid, &now))
             .await
@@ -234,7 +248,8 @@ impl MemorySubstrate {
         openid: &str,
     ) -> CarrierResult<()> {
         let store = self.followers.clone();
-        let (channel, app_id, openid) = (channel.to_string(), app_id.to_string(), openid.to_string());
+        let (channel, app_id, openid) =
+            (channel.to_string(), app_id.to_string(), openid.to_string());
         let now = chrono::Utc::now().to_rfc3339();
         tokio::task::spawn_blocking(move || store.mark_unfollowed(&channel, &app_id, &openid, &now))
             .await
@@ -249,7 +264,11 @@ impl MemorySubstrate {
         since_rfc3339: &str,
     ) -> CarrierResult<Vec<String>> {
         let store = self.followers.clone();
-        let (channel, app_id, since) = (channel.to_string(), app_id.to_string(), since_rfc3339.to_string());
+        let (channel, app_id, since) = (
+            channel.to_string(),
+            app_id.to_string(),
+            since_rfc3339.to_string(),
+        );
         tokio::task::spawn_blocking(move || store.list_pushable_since(&channel, &app_id, &since))
             .await
             .map_err(|e| CarrierError::Internal(e.to_string()))?
@@ -270,11 +289,9 @@ impl MemorySubstrate {
             since_rfc3339.to_string(),
             push_window_since_rfc3339.to_string(),
         );
-        tokio::task::spawn_blocking(move || {
-            store.stats_since(&channel, &app_id, &s1, &s2)
-        })
-        .await
-        .map_err(|e| CarrierError::Internal(e.to_string()))?
+        tokio::task::spawn_blocking(move || store.stats_since(&channel, &app_id, &s1, &s2))
+            .await
+            .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
 
     // -----------------------------------------------------------------
@@ -282,7 +299,11 @@ impl MemorySubstrate {
     // -----------------------------------------------------------------
 
     /// User statistics: total users, active users, new users.
-    pub fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> CarrierResult<serde_json::Value> {
+    pub fn analytics_user_stats(
+        &self,
+        agent_id: &str,
+        active_days: u32,
+    ) -> CarrierResult<serde_json::Value> {
         let users = self.sessions.list_agent_users(agent_id)?;
         let total_users = users.len() as u32;
         let active_users = self.sessions.count_active_users(agent_id, active_days)?;
@@ -296,7 +317,11 @@ impl MemorySubstrate {
     }
 
     /// Per-user lookup: session count, last active, recent conversation summary.
-    pub fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> CarrierResult<serde_json::Value> {
+    pub fn analytics_user_lookup(
+        &self,
+        agent_id: &str,
+        sender_id: &str,
+    ) -> CarrierResult<serde_json::Value> {
         let user_sessions = self.sessions.list_user_sessions(agent_id, sender_id)?;
         let total_sessions = user_sessions.len();
         let mut total_messages = 0;
@@ -310,7 +335,9 @@ impl MemorySubstrate {
         if let Some((_last_id, last_msgs)) = user_sessions.last() {
             let mut count = 0;
             for msg in last_msgs.iter().rev() {
-                if count >= 3 { break; }
+                if count >= 3 {
+                    break;
+                }
                 let text = msg.content.text_content();
                 if !text.is_empty() && msg.role != types::message::Role::System {
                     let role_str = match msg.role {
@@ -338,10 +365,16 @@ impl MemorySubstrate {
         }
 
         // Get last_active from list_agent_users for this sender
-        let last_active = self.sessions.list_agent_users(agent_id)?
+        let last_active = self
+            .sessions
+            .list_agent_users(agent_id)?
             .into_iter()
             .find(|u| u.get("sender_id").and_then(|v| v.as_str()) == Some(sender_id))
-            .and_then(|u| u.get("last_active").and_then(|v| v.as_str()).map(String::from))
+            .and_then(|u| {
+                u.get("last_active")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
             .unwrap_or_default();
 
         Ok(serde_json::json!({
@@ -382,13 +415,16 @@ impl MemorySubstrate {
     }
 
     /// Recent conversations list (metadata only, no message content).
-    pub fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> CarrierResult<serde_json::Value> {
+    pub fn analytics_recent_conversations(
+        &self,
+        agent_id: &str,
+        limit: u32,
+    ) -> CarrierResult<serde_json::Value> {
         let sessions = self.sessions.recent_sessions(agent_id, limit)?;
         Ok(serde_json::json!({
             "conversations": sessions,
         }))
     }
-
 
     /// Create a new UsageStore from the shared connection.
     pub fn usage(&self) -> UsageStore {
@@ -532,7 +568,14 @@ impl MemorySubstrate {
             crate::session_events::message_events(new_messages),
         );
         self.sessions
-            .save_session_append(session_id, agent_id, new_messages, context_window_tokens, label, turn_summaries)
+            .save_session_append(
+                session_id,
+                agent_id,
+                new_messages,
+                context_window_tokens,
+                label,
+                turn_summaries,
+            )
             .await
     }
 
@@ -694,8 +737,14 @@ impl MemorySubstrate {
         home_dir: Option<&Path>,
         agent_name: Option<&str>,
     ) -> Result<(), std::io::Error> {
-        self.sessions
-            .write_jsonl_mirror(session, sessions_dir, owner_id, sender_id, home_dir, agent_name)
+        self.sessions.write_jsonl_mirror(
+            session,
+            sessions_dir,
+            owner_id,
+            sender_id,
+            home_dir,
+            agent_name,
+        )
     }
 
     // -----------------------------------------------------------------
@@ -741,12 +790,7 @@ impl MemorySubstrate {
 
     /// Query global tree summaries.
     pub fn tree_query_global(&self, req: &GlobalQuery<'_>) -> CarrierResult<QueryResponse> {
-        retrieval::global::query_global(
-            &self.conn,
-            req.owner_id,
-            req.time_window_days,
-            req.limit,
-        )
+        retrieval::global::query_global(&self.conn, req.owner_id, req.time_window_days, req.limit)
     }
 
     /// Query topic tree by entity.
@@ -763,7 +807,9 @@ impl MemorySubstrate {
 
     /// Search entities by substring.
     pub fn tree_search_entities(&self, req: &EntitySearch<'_>) -> CarrierResult<Vec<EntityMatch>> {
-        let kind = req.kind.map(crate::tree::entity_store::EntityStore::parse_entity_kind);
+        let kind = req
+            .kind
+            .map(crate::tree::entity_store::EntityStore::parse_entity_kind);
         retrieval::search::search_entities(
             &self.conn,
             req.owner_id,
@@ -822,7 +868,10 @@ impl MemorySubstrate {
     }
 
     /// Async wrapper for tree_query_source (runs in blocking thread).
-    pub async fn tree_query_source_async(&self, req: SourceQuery<'_>) -> CarrierResult<QueryResponse> {
+    pub async fn tree_query_source_async(
+        &self,
+        req: SourceQuery<'_>,
+    ) -> CarrierResult<QueryResponse> {
         let conn = Arc::clone(&self.conn);
         let owner_id = req.owner_id.to_string();
         let user_id = req.user_id.map(String::from);
@@ -854,26 +903,27 @@ impl MemorySubstrate {
     }
 
     /// Async wrapper for tree_query_global (runs in blocking thread).
-    pub async fn tree_query_global_async(&self, req: GlobalQuery<'_>) -> CarrierResult<QueryResponse> {
+    pub async fn tree_query_global_async(
+        &self,
+        req: GlobalQuery<'_>,
+    ) -> CarrierResult<QueryResponse> {
         let conn = Arc::clone(&self.conn);
         let owner_id = req.owner_id.to_string();
         let time_window_days = req.time_window_days;
         let _query = req.query.map(String::from);
         let limit = req.limit;
         tokio::task::spawn_blocking(move || {
-            retrieval::global::query_global(
-                &conn,
-                &owner_id,
-                time_window_days,
-                limit,
-            )
+            retrieval::global::query_global(&conn, &owner_id, time_window_days, limit)
         })
         .await
         .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
 
     /// Async wrapper for tree_query_topic (runs in blocking thread).
-    pub async fn tree_query_topic_async(&self, req: TopicQuery<'_>) -> CarrierResult<QueryResponse> {
+    pub async fn tree_query_topic_async(
+        &self,
+        req: TopicQuery<'_>,
+    ) -> CarrierResult<QueryResponse> {
         let conn = Arc::clone(&self.conn);
         let owner_id = req.owner_id.to_string();
         let user_id = req.user_id.map(String::from);
@@ -896,7 +946,10 @@ impl MemorySubstrate {
     }
 
     /// Async wrapper for tree_search_entities (runs in blocking thread).
-    pub async fn tree_search_entities_async(&self, req: EntitySearch<'_>) -> CarrierResult<Vec<EntityMatch>> {
+    pub async fn tree_search_entities_async(
+        &self,
+        req: EntitySearch<'_>,
+    ) -> CarrierResult<Vec<EntityMatch>> {
         let conn = Arc::clone(&self.conn);
         let owner_id = req.owner_id.to_string();
         let user_id = req.user_id.map(String::from);
@@ -904,7 +957,9 @@ impl MemorySubstrate {
         let kind = req.kind.map(String::from);
         let limit = req.limit;
         tokio::task::spawn_blocking(move || {
-            let parsed_kind = kind.as_deref().map(crate::tree::entity_store::EntityStore::parse_entity_kind);
+            let parsed_kind = kind
+                .as_deref()
+                .map(crate::tree::entity_store::EntityStore::parse_entity_kind);
             retrieval::search::search_entities(
                 &conn,
                 &owner_id,
@@ -919,7 +974,10 @@ impl MemorySubstrate {
     }
 
     /// Async wrapper for tree_drill_down (runs in blocking thread).
-    pub async fn tree_drill_down_async(&self, req: DrillDownQuery<'_>) -> CarrierResult<QueryResponse> {
+    pub async fn tree_drill_down_async(
+        &self,
+        req: DrillDownQuery<'_>,
+    ) -> CarrierResult<QueryResponse> {
         let conn = Arc::clone(&self.conn);
         let owner_id = req.owner_id.to_string();
         let user_id = req.user_id.map(String::from);
@@ -948,20 +1006,17 @@ impl MemorySubstrate {
     }
 
     /// Async wrapper for tree_fetch_leaves (runs in blocking thread).
-    pub async fn tree_fetch_leaves_async(&self, req: FetchLeavesQuery<'_>) -> CarrierResult<QueryResponse> {
+    pub async fn tree_fetch_leaves_async(
+        &self,
+        req: FetchLeavesQuery<'_>,
+    ) -> CarrierResult<QueryResponse> {
         let conn = Arc::clone(&self.conn);
         let owner_id = req.owner_id.to_string();
         let user_id = req.user_id.map(String::from);
         let chunk_ids = req.chunk_ids.clone();
         let limit = req.limit;
         tokio::task::spawn_blocking(move || {
-            retrieval::fetch::fetch_leaves(
-                &conn,
-                &owner_id,
-                user_id.as_deref(),
-                &chunk_ids,
-                limit,
-            )
+            retrieval::fetch::fetch_leaves(&conn, &owner_id, user_id.as_deref(), &chunk_ids, limit)
         })
         .await
         .map_err(|e| CarrierError::Internal(e.to_string()))?
@@ -981,7 +1036,8 @@ impl MemorySubstrate {
             use types::memory_tree::TreeKind;
             let tree_store = crate::tree::tree_store::TreeTreeStore::new(Arc::clone(&conn));
             // Owner-level listing (no user filter) — metadata only.
-            let mut trees = tree_store.list_trees(&owner_id, None, Some(TreeKind::Source), limit)?;
+            let mut trees =
+                tree_store.list_trees(&owner_id, None, Some(TreeKind::Source), limit)?;
             if let Some(ref sk) = source_kind {
                 trees.retain(|t| t.scope.starts_with(&format!("{sk}:")));
             }

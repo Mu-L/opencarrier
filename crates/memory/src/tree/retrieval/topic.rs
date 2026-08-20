@@ -65,7 +65,8 @@ pub fn query_topic(
     for (node_id, _node_kind) in &index_rows {
         // Try as summary first
         if let Some(node) = tree_store.get_summary(owner_id, user_id, node_id)? {
-            let scope = tree_store.get_tree(owner_id, user_id, &node.tree_id)?
+            let scope = tree_store
+                .get_tree(owner_id, user_id, &node.tree_id)?
                 .map(|t| t.scope)
                 .unwrap_or_default();
             hits.push(RetrievalHit {
@@ -118,7 +119,7 @@ pub fn query_topic(
     }
 
     let total = hits.len();
-    hits.sort_by(|a, b| b.time_range_end_ms.cmp(&a.time_range_end_ms));
+    hits.sort_by_key(|h| std::cmp::Reverse(h.time_range_end_ms));
     hits.truncate(limit);
 
     Ok(QueryResponse {

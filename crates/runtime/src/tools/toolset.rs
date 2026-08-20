@@ -3,8 +3,8 @@
 use crate::tool_context::ToolContext;
 use crate::tools::ToolModule;
 use async_trait::async_trait;
-use types::error::CarrierResult;
 use serde_json::Value;
+use types::error::CarrierResult;
 use types::tool::ToolDefinition;
 
 pub struct ToolSearchTools;
@@ -37,10 +37,7 @@ impl ToolModule for ToolSearchTools {
         if name != "tool_search" {
             return None;
         }
-        let query = input
-            .get("query")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
 
         let mut results = if let Some(kernel) = ctx.kernel {
             kernel.search_tools(query, 10, ctx.max_tool_level)
@@ -67,7 +64,11 @@ impl ToolModule for ToolSearchTools {
             return Some(Ok("No additional tools found matching your query — all available tools are already loaded. Do NOT call tool_search again. Use the tools you already have to accomplish the task.".to_string()));
         }
 
-        let mut out = format!("Found {} tool(s) matching \"{}\":\n\n", results.len(), query);
+        let mut out = format!(
+            "Found {} tool(s) matching \"{}\":\n\n",
+            results.len(),
+            query
+        );
         for (_ts_name, def) in &results {
             // Char-boundary-safe truncation: a raw `&def.description[..197]`
             // panics when the byte cut lands inside a multi-byte UTF-8 char —
@@ -76,7 +77,10 @@ impl ToolModule for ToolSearchTools {
             out.push_str(&format!("## {}\n{}\n\n", def.name, desc_preview));
             // Include input_schema so LLM knows how to call the tool
             if !def.input_schema.is_null() {
-                out.push_str(&format!("Parameters: {}\n\n", serde_json::to_string(&def.input_schema).unwrap_or_default()));
+                out.push_str(&format!(
+                    "Parameters: {}\n\n",
+                    serde_json::to_string(&def.input_schema).unwrap_or_default()
+                ));
             }
         }
         out.push_str(&format!(

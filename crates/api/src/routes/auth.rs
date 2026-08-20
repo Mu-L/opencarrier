@@ -9,9 +9,9 @@ use axum::response::IntoResponse;
 use axum::Json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::Mutex;
-use std::sync::Arc;
 use std::time::Instant;
 
 static LOGIN_FAILURES: LazyLock<Mutex<HashMap<String, (u32, Instant)>>> =
@@ -125,7 +125,10 @@ pub async fn auth_login(
     let client_ip = extract_client_ip(&parts, &state.kernel.config.auth);
 
     {
-        let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| { tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering"); e.into_inner() });
+        let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| {
+            tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering");
+            e.into_inner()
+        });
         if let Some((count, first_fail)) = failures.get(&client_ip) {
             if *count >= MAX_LOGIN_FAILURES && first_fail.elapsed().as_secs() < LOGIN_BAN_SECS {
                 return (
@@ -143,8 +146,13 @@ pub async fn auth_login(
     if username != auth_config.username {
         // On credential failure, record the attempt
         {
-            let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| { tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering"); e.into_inner() });
-            let entry = failures.entry(client_ip.clone()).or_insert((0, Instant::now()));
+            let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| {
+                tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering");
+                e.into_inner()
+            });
+            let entry = failures
+                .entry(client_ip.clone())
+                .or_insert((0, Instant::now()));
             entry.0 += 1;
             if entry.1.elapsed().as_secs() >= LOGIN_BAN_SECS {
                 *entry = (1, Instant::now());
@@ -161,8 +169,13 @@ pub async fn auth_login(
         session_auth::PasswordResult::Invalid => {
             // On credential failure, record the attempt
             {
-                let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| { tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering"); e.into_inner() });
-                let entry = failures.entry(client_ip.clone()).or_insert((0, Instant::now()));
+                let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| {
+                    tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering");
+                    e.into_inner()
+                });
+                let entry = failures
+                    .entry(client_ip.clone())
+                    .or_insert((0, Instant::now()));
                 entry.0 += 1;
                 if entry.1.elapsed().as_secs() >= LOGIN_BAN_SECS {
                     *entry = (1, Instant::now());
@@ -195,7 +208,10 @@ pub async fn auth_login(
 
     // Clear rate limit on successful login
     {
-        let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| { tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering"); e.into_inner() });
+        let mut failures = LOGIN_FAILURES.lock().unwrap_or_else(|e| {
+            tracing::warn!("LOGIN_FAILURES Mutex poisoned, recovering");
+            e.into_inner()
+        });
         failures.remove(&client_ip);
     }
 
@@ -235,9 +251,10 @@ pub async fn auth_login(
         "opencarrier_session={}; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age={max_age_secs}",
         token
     );
-    response
-        .headers_mut()
-        .insert(axum::http::header::SET_COOKIE, cookie_value.parse().unwrap());
+    response.headers_mut().insert(
+        axum::http::header::SET_COOKIE,
+        cookie_value.parse().unwrap(),
+    );
 
     response
 }
@@ -276,11 +293,10 @@ pub async fn change_credentials(
     // Require a valid session — prevents credential changes via API key alone
     {
         let cookie_str = parts.headers.get("cookie").and_then(|v| v.to_str().ok());
-        let session_token = cookie_str
-            .and_then(|cs| {
-                cs.split(';')
-                    .find_map(|part| part.trim().strip_prefix("opencarrier_session="))
-            });
+        let session_token = cookie_str.and_then(|cs| {
+            cs.split(';')
+                .find_map(|part| part.trim().strip_prefix("opencarrier_session="))
+        });
         match session_token {
             Some(token) => {
                 match session_auth::verify_session_token(token, &state.kernel.config.api_key) {
@@ -472,9 +488,10 @@ pub async fn change_credentials(
         "opencarrier_session={}; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age={max_age_secs}",
         token
     );
-    response
-        .headers_mut()
-        .insert(axum::http::header::SET_COOKIE, cookie_value.parse().unwrap());
+    response.headers_mut().insert(
+        axum::http::header::SET_COOKIE,
+        cookie_value.parse().unwrap(),
+    );
 
     response
 }
@@ -496,7 +513,10 @@ pub fn router() -> axum::Router<std::sync::Arc<AppState>> {
 /// If `trusted_proxy` is configured, only trust x-real-ip/x-forwarded-for
 /// when the direct connection comes from a trusted proxy IP.
 /// Otherwise (empty trusted_proxy), always trust the headers (legacy behavior).
-fn extract_client_ip(parts: &axum::http::request::Parts, auth_config: &types::config::AuthConfig) -> String {
+fn extract_client_ip(
+    parts: &axum::http::request::Parts,
+    auth_config: &types::config::AuthConfig,
+) -> String {
     let direct_ip = parts
         .extensions
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
@@ -525,13 +545,7 @@ fn extract_client_ip(parts: &axum::http::request::Parts, auth_config: &types::co
             .get("x-real-ip")
             .or_else(|| parts.headers.get("x-forwarded-for"))
             .and_then(|v| v.to_str().ok())
-            .map(|v| {
-                v.split(',')
-                    .next()
-                    .unwrap_or(&direct_ip)
-                    .trim()
-                    .to_string()
-            })
+            .map(|v| v.split(',').next().unwrap_or(&direct_ip).trim().to_string())
             .unwrap_or(direct_ip)
     } else {
         direct_ip

@@ -126,7 +126,10 @@ mod tests {
         .unwrap();
 
         assert!(load_account(&home, "wxAAA").is_some());
-        assert!(load_account(&home, "wxBBB").is_none(), "wrong channel rejected");
+        assert!(
+            load_account(&home, "wxBBB").is_none(),
+            "wrong channel rejected"
+        );
         assert!(load_account(&home, "wxNONE").is_none(), "missing file");
         let _ = std::fs::remove_dir_all(&home);
     }

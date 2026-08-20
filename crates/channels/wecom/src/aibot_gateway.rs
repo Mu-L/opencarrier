@@ -158,7 +158,8 @@ async fn bootstrap_token(http: &Client, bot_id: &str, secret: &str) -> CarrierRe
 
 fn cache_token(bot_id: &str, token: &str) {
     let map = TOKENS.get_or_init(|| Mutex::new(HashMap::new()));
-    map.lock().unwrap_or_else(|e| e.into_inner())
+    map.lock()
+        .unwrap_or_else(|e| e.into_inner())
         .insert(bot_id.to_string(), token.to_string());
 }
 
@@ -188,12 +189,11 @@ fn unwrap_gateway_value(mut v: serde_json::Value) -> Result<serde_json::Value, G
             });
         }
         let next = if let Some(s) = v.get("result").and_then(|x| x.as_str()) {
-            serde_json::from_str::<serde_json::Value>(s)
-                .map_err(|e| GatewayError {
-                    errcode: 0,
-                    errmsg: format!("result unwrap parse: {e}"),
-                    help_message: None,
-                })?
+            serde_json::from_str::<serde_json::Value>(s).map_err(|e| GatewayError {
+                errcode: 0,
+                errmsg: format!("result unwrap parse: {e}"),
+                help_message: None,
+            })?
         } else if let Some(s) = v.get("results_json").and_then(|x| x.as_str()) {
             serde_json::from_str::<serde_json::Value>(s).map_err(|e| GatewayError {
                 errcode: 0,
@@ -264,7 +264,9 @@ pub async fn gateway_call(
             warn!(bot_id, "aibot token expired, re-bootstrapping");
             let t = bootstrap_token(http, bot_id, secret).await?;
             cache_token(bot_id, &t);
-            call_with_token(http, &t, path, payload).await.map_err(Into::into)
+            call_with_token(http, &t, path, payload)
+                .await
+                .map_err(Into::into)
         }
         Err(e) => {
             debug!(bot_id, path, errcode = e.errcode, "aibot gateway error");
@@ -295,7 +297,14 @@ pub async fn list_sessions(
     bot_id: &str,
     secret: &str,
 ) -> CarrierResult<Vec<AibotSession>> {
-    let v = gateway_call(http, bot_id, secret, "/message/aibot/sessions/list", &serde_json::json!({})).await?;
+    let v = gateway_call(
+        http,
+        bot_id,
+        secret,
+        "/message/aibot/sessions/list",
+        &serde_json::json!({}),
+    )
+    .await?;
     #[derive(Deserialize)]
     struct Rsp {
         #[serde(default)]
@@ -571,7 +580,10 @@ mod tests {
         // Unix 0 = 1970-01-01 08:00:00 CST → 朴素基准 28800
         assert_eq!(parse_cst_time("1970-01-01 08:00:00"), Some(28_800));
         assert_eq!(parse_cst_time("1970-01-01 00:00:00"), Some(0));
-        assert_eq!(parse_cst_time("2026-08-19 20:54:49"), Some(20_684 * 86_400 + 20 * 3600 + 54 * 60 + 49));
+        assert_eq!(
+            parse_cst_time("2026-08-19 20:54:49"),
+            Some(20_684 * 86_400 + 20 * 3600 + 54 * 60 + 49)
+        );
         assert_eq!(parse_cst_time("garbage"), None);
     }
 

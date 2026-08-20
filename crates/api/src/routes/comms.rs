@@ -6,9 +6,9 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use runtime::kernel_handle::KernelHandle;
 use std::collections::HashMap;
 use std::sync::Arc;
-use runtime::kernel_handle::KernelHandle;
 // ---------------------------------------------------------------------------
 // Agent Communication (Comms) endpoints
 // ---------------------------------------------------------------------------
@@ -190,18 +190,12 @@ fn audit_to_comms_event(
         }
         "AgentSpawn" => (
             CommsEventKind::AgentSpawned,
-            format!(
-                "Agent spawned: {}",
-                types::truncate_str(&entry.detail, 100)
-            ),
+            format!("Agent spawned: {}", types::truncate_str(&entry.detail, 100)),
             "",
         ),
         "AgentKill" => (
             CommsEventKind::AgentTerminated,
-            format!(
-                "Agent killed: {}",
-                types::truncate_str(&entry.detail, 100)
-            ),
+            format!("Agent killed: {}", types::truncate_str(&entry.detail, 100)),
             "",
         ),
         _ => return None,

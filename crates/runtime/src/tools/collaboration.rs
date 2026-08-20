@@ -5,10 +5,10 @@ use super::ToolModule;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::Arc;
+use types::error::{CarrierError, CarrierResult};
+use types::tool::{PermissionLevel, ToolDefinition};
 
 // ---------------------------------------------------------------------------
 // Collaboration tools
@@ -20,11 +20,9 @@ fn tool_agent_find(
     _caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
     let kh = crate::tools::require_kernel(kernel)?;
-    let query = input["query"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput(
-            "Missing 'query' parameter".to_string(),
-        ))?;
+    let query = input["query"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'query' parameter".to_string(),
+    ))?;
     let agents = kh.find_agents(query);
     if agents.is_empty() {
         return Ok(format!("No agents found matching '{query}'."));
@@ -52,11 +50,9 @@ async fn tool_task_post(
     caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
     let kh = crate::tools::require_kernel(kernel)?;
-    let title = input["title"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput(
-            "Missing 'title' parameter".to_string(),
-        ))?;
+    let title = input["title"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'title' parameter".to_string(),
+    ))?;
     let description = input["description"]
         .as_str()
         .ok_or(CarrierError::InvalidInput(
@@ -70,16 +66,12 @@ async fn tool_task_post(
 }
 
 fn tool_task_plan(input: &serde_json::Value) -> CarrierResult<String> {
-    let title = input["title"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput(
-            "Missing 'title' parameter".to_string(),
-        ))?;
-    let steps = input["steps"]
-        .as_array()
-        .ok_or(CarrierError::InvalidInput(
-            "Missing 'steps' parameter".to_string(),
-        ))?;
+    let title = input["title"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'title' parameter".to_string(),
+    ))?;
+    let steps = input["steps"].as_array().ok_or(CarrierError::InvalidInput(
+        "Missing 'steps' parameter".to_string(),
+    ))?;
     if steps.is_empty() {
         return Err(CarrierError::InvalidInput(
             "Steps array must not be empty".to_string(),
@@ -122,7 +114,11 @@ fn tool_task_plan(input: &serde_json::Value) -> CarrierResult<String> {
             }
         }
     }
-    Ok(format!("Plan '{}' accepted with {} steps. Execution will begin now.", title, steps.len()))
+    Ok(format!(
+        "Plan '{}' accepted with {} steps. Execution will begin now.",
+        title,
+        steps.len()
+    ))
 }
 
 async fn tool_task_claim(
@@ -134,9 +130,8 @@ async fn tool_task_claim(
         "Missing caller agent identity".to_string(),
     ))?;
     match kh.task_claim(agent_id).await? {
-        Some(task) => {
-            serde_json::to_string_pretty(&task).map_err(|e| CarrierError::Serialization(e.to_string()))
-        }
+        Some(task) => serde_json::to_string_pretty(&task)
+            .map_err(|e| CarrierError::Serialization(e.to_string())),
         None => Ok("No tasks available.".to_string()),
     }
 }
@@ -147,16 +142,12 @@ async fn tool_task_complete(
     _caller_agent_id: Option<&str>,
 ) -> CarrierResult<String> {
     let kh = crate::tools::require_kernel(kernel)?;
-    let task_id = input["task_id"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput(
-            "Missing 'task_id' parameter".to_string(),
-        ))?;
-    let result = input["result"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput(
-            "Missing 'result' parameter".to_string(),
-        ))?;
+    let task_id = input["task_id"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'task_id' parameter".to_string(),
+    ))?;
+    let result = input["result"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'result' parameter".to_string(),
+    ))?;
     kh.task_complete(task_id, result).await?;
     Ok(format!("Task {task_id} marked as completed."))
 }
@@ -335,7 +326,9 @@ impl ToolModule for CollaborationTools {
     fn permission_level(&self, tool_name: &str) -> PermissionLevel {
         match tool_name {
             "agent_find" | "task_list" => PermissionLevel::None,
-            "task_post" | "task_claim" | "task_complete" | "task_plan" | "event_publish" => PermissionLevel::Write,
+            "task_post" | "task_claim" | "task_complete" | "task_plan" | "event_publish" => {
+                PermissionLevel::Write
+            }
             _ => PermissionLevel::Dangerous,
         }
     }

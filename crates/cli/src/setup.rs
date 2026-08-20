@@ -47,9 +47,8 @@ pub fn run_first_time_setup(carrier_dir: &Path, hub_url: &str) -> Result<(String
     println!("  {} Registering with {}...", "-".bright_yellow(), hub_url);
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let api_key: String = rt.block_on(async {
-        register_and_get_key(hub_url, &username, &email, &password).await
-    })?;
+    let api_key: String =
+        rt.block_on(async { register_and_get_key(hub_url, &username, &email, &password).await })?;
 
     // Save API key to .env
     let env_path = carrier_dir.join(".env");
@@ -204,5 +203,8 @@ async fn login_and_get_key(
 /// Check for updates on Hub. Returns the latest version string if newer than current.
 pub async fn check_for_update(hub_url: &str) -> Option<String> {
     let current = env!("CARGO_PKG_VERSION");
-    clone::hub::check_update(hub_url, current).await.ok().flatten()
+    clone::hub::check_update(hub_url, current)
+        .await
+        .ok()
+        .flatten()
 }

@@ -13,12 +13,12 @@
 use crate::llm_driver::{CompletionRequest, LlmDriver};
 use crate::str_utils::safe_truncate_str;
 use memory::session::Session;
-use types::error::{CarrierError, CarrierResult};
-use types::message::{ContentBlock, Message, MessageContent, Role};
-use types::tool::ToolDefinition;
 use serde::Serialize;
 use std::sync::Arc;
 use tracing::{info, warn};
+use types::error::{CarrierError, CarrierResult};
+use types::message::{ContentBlock, Message, MessageContent, Role};
+use types::tool::ToolDefinition;
 
 /// Configuration for session compaction.
 #[derive(Debug, Clone)]
@@ -580,15 +580,13 @@ fn parse_summary_and_facts(text: &str) -> (String, Vec<String>) {
         }
         match section {
             Some("summary") => summary_lines.push(trimmed),
-            Some("facts") => {
-                if !trimmed.eq_ignore_ascii_case("NONE") {
-                    facts.extend(
-                        trimmed
-                            .split(',')
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty()),
-                    );
-                }
+            Some("facts") if !trimmed.eq_ignore_ascii_case("NONE") => {
+                facts.extend(
+                    trimmed
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty()),
+                );
             }
             _ => {}
         }
@@ -630,7 +628,12 @@ async fn summarize_in_chunks(
     for (i, chunk) in messages.chunks(chunk_size).enumerate() {
         match summarize_messages(driver.clone(), model, chunk, config).await {
             Ok((summary, facts)) => {
-                info!(chunk = i, summary_len = summary.len(), facts = facts.len(), "Chunk summarized");
+                info!(
+                    chunk = i,
+                    summary_len = summary.len(),
+                    facts = facts.len(),
+                    "Chunk summarized"
+                );
                 summaries.push(summary);
                 for f in facts {
                     if !all_facts.contains(&f) {
@@ -662,7 +665,9 @@ async fn summarize_in_chunks(
     }
 
     if summaries.is_empty() {
-        return Err(CarrierError::Internal("No chunks were summarized".to_string()));
+        return Err(CarrierError::Internal(
+            "No chunks were summarized".to_string(),
+        ));
     }
 
     if summaries.len() == 1 {
@@ -1219,7 +1224,9 @@ mod tests {
         let messages: Vec<Message> = (0..30)
             .flat_map(|i| {
                 let mut v = vec![Message::user(format!("Message {i}"))];
-                if i < 29 { v.push(Message::assistant(format!("Reply {i}"))); }
+                if i < 29 {
+                    v.push(Message::assistant(format!("Reply {i}")));
+                }
                 v
             })
             .collect();
@@ -1357,7 +1364,15 @@ mod tests {
         // Multi-line facts list
         let (s, f) = parse_summary_and_facts("SUMMARY:\nx\nFACTS:\na, b\nc, d");
         assert_eq!(s, "x");
-        assert_eq!(f, vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()]);
+        assert_eq!(
+            f,
+            vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string()
+            ]
+        );
     }
 
     #[tokio::test]

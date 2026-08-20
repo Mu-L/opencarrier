@@ -37,8 +37,16 @@ pub async fn install_hub_template(
     Path(name): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let sender_id = body.get("sender_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
-    let alias = body.get("alias").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|s| s.to_string());
+    let sender_id = body
+        .get("sender_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let alias = body
+        .get("alias")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
     let hub_url = state.kernel.config.hub.url.clone();
     let hub_api_key = match clone::hub::read_api_key(&state.kernel.config.hub.api_key_env) {
         Ok(k) => k,
@@ -92,9 +100,12 @@ pub async fn install_hub_template(
                 }
             }
             let serial = allocate_serial_number(&state.kernel.config.data_dir);
-            let share_url = state.kernel.config.external_url.as_ref().map(|url| {
-                format!("{}/share?clone={}", url.trim_end_matches('/'), agent_name)
-            });
+            let share_url = state
+                .kernel
+                .config
+                .external_url
+                .as_ref()
+                .map(|url| format!("{}/share?clone={}", url.trim_end_matches('/'), agent_name));
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!({
@@ -130,5 +141,8 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
     use axum::routing;
     axum::Router::new()
         .route("/api/hub/templates", routing::get(list_hub_templates))
-        .route("/api/hub/templates/{name}/install", routing::post(install_hub_template))
+        .route(
+            "/api/hub/templates/{name}/install",
+            routing::post(install_hub_template),
+        )
 }

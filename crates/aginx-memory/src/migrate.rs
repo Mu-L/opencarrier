@@ -27,7 +27,10 @@ pub async fn run_migration(
     macro_rules! run_table {
         ($pg:expr, $sqlite:expr, $name:expr, $f:expr) => {
             if $pg
-                .query_opt("SELECT 1 FROM migration_progress WHERE table_name=$1", &[&$name])
+                .query_opt(
+                    "SELECT 1 FROM migration_progress WHERE table_name=$1",
+                    &[&$name],
+                )
                 .await
                 .map_err(|e| CarrierError::Memory(e.to_string()))?
                 .is_none()
@@ -55,8 +58,18 @@ pub async fn run_migration(
     run_table!(pg, sqlite, "mem_tree_summaries", migrate_summaries);
     run_table!(pg, sqlite, "mem_tree_buffers", migrate_buffers);
     run_table!(pg, sqlite, "mem_tree_entity_index", migrate_entity_index);
-    run_table!(pg, sqlite, "mem_tree_entity_hotness", migrate_entity_hotness);
-    run_table!(pg, sqlite, "mem_tree_ingested_sources", migrate_ingested_sources);
+    run_table!(
+        pg,
+        sqlite,
+        "mem_tree_entity_hotness",
+        migrate_entity_hotness
+    );
+    run_table!(
+        pg,
+        sqlite,
+        "mem_tree_ingested_sources",
+        migrate_ingested_sources
+    );
     Ok(())
 }
 
@@ -107,9 +120,14 @@ fn value_blob_to_jsonb(row: &Row, idx: usize) -> rusqlite::Result<Option<Value>>
 
 // ── per-table migrations ──────────────────────────────────────────────────
 
-pub(crate) async fn migrate_kv_store(sqlite: &rusqlite::Connection, pg: &mut tokio_postgres::Client) -> CarrierResult<usize> {
+pub(crate) async fn migrate_kv_store(
+    sqlite: &rusqlite::Connection,
+    pg: &mut tokio_postgres::Client,
+) -> CarrierResult<usize> {
     let mut stmt = sqlite
-        .prepare("SELECT agent_id, owner_id, user_id, key, value, version, updated_at FROM kv_store")
+        .prepare(
+            "SELECT agent_id, owner_id, user_id, key, value, version, updated_at FROM kv_store",
+        )
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
     let mut n = 0usize;
     let rows = stmt
@@ -125,7 +143,10 @@ pub(crate) async fn migrate_kv_store(sqlite: &rusqlite::Connection, pg: &mut tok
             ))
         })
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
-    let mut tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    let mut tx = pg
+        .transaction()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     for row in rows {
         let (agent_id, owner_id, user_id, key, value, version, updated_at) =
             row.map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -138,24 +159,40 @@ pub(crate) async fn migrate_kv_store(sqlite: &rusqlite::Connection, pg: &mut tok
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         n += 1;
         if n.is_multiple_of(BATCH_SIZE) {
-            tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
-            tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx = pg
+                .transaction()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
         }
     }
-    tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     Ok(n)
 }
 
-pub(crate) async fn migrate_kv_history(sqlite: &rusqlite::Connection, pg: &mut tokio_postgres::Client) -> CarrierResult<usize> {
+pub(crate) async fn migrate_kv_history(
+    sqlite: &rusqlite::Connection,
+    pg: &mut tokio_postgres::Client,
+) -> CarrierResult<usize> {
     // kv_history may not exist on very old DBs; treat missing as 0 rows.
     let exists = sqlite
-        .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='kv_history'", [], |_| Ok(()))
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kv_history'",
+            [],
+            |_| Ok(()),
+        )
         .is_ok();
     if !exists {
         return Ok(0);
     }
     let mut stmt = sqlite
-        .prepare("SELECT agent_id, owner_id, user_id, key, value, version, archived_at FROM kv_history")
+        .prepare(
+            "SELECT agent_id, owner_id, user_id, key, value, version, archived_at FROM kv_history",
+        )
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
     let mut n = 0usize;
     let rows = stmt
@@ -171,7 +208,10 @@ pub(crate) async fn migrate_kv_history(sqlite: &rusqlite::Connection, pg: &mut t
             ))
         })
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
-    let mut tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    let mut tx = pg
+        .transaction()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     for row in rows {
         let (agent_id, owner_id, user_id, key, value, version, archived_at) =
             row.map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -184,15 +224,25 @@ pub(crate) async fn migrate_kv_history(sqlite: &rusqlite::Connection, pg: &mut t
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         n += 1;
         if n.is_multiple_of(BATCH_SIZE) {
-            tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
-            tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx = pg
+                .transaction()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
         }
     }
-    tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     Ok(n)
 }
 
-pub(crate) async fn migrate_trees(sqlite: &rusqlite::Connection, pg: &mut tokio_postgres::Client) -> CarrierResult<usize> {
+pub(crate) async fn migrate_trees(
+    sqlite: &rusqlite::Connection,
+    pg: &mut tokio_postgres::Client,
+) -> CarrierResult<usize> {
     let mut stmt = sqlite
         .prepare("SELECT id, owner_id, user_id, kind, scope, root_id, max_level, status, created_at_ms, last_sealed_at_ms FROM mem_tree_trees")
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -213,10 +263,23 @@ pub(crate) async fn migrate_trees(sqlite: &rusqlite::Connection, pg: &mut tokio_
             ))
         })
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
-    let mut tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    let mut tx = pg
+        .transaction()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     for row in rows {
-        let (id, owner_id, user_id, kind, scope, root_id, max_level, status, created_at_ms, last_sealed_at_ms) =
-            row.map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let (
+            id,
+            owner_id,
+            user_id,
+            kind,
+            scope,
+            root_id,
+            max_level,
+            status,
+            created_at_ms,
+            last_sealed_at_ms,
+        ) = row.map_err(|e| CarrierError::Memory(e.to_string()))?;
         tx.execute(
             "INSERT INTO mem_tree_trees (id, owner_id, user_id, kind, scope, root_id, max_level, status, created_at_ms, last_sealed_at_ms) \
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO NOTHING",
@@ -226,15 +289,25 @@ pub(crate) async fn migrate_trees(sqlite: &rusqlite::Connection, pg: &mut tokio_
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         n += 1;
         if n.is_multiple_of(BATCH_SIZE) {
-            tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
-            tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx = pg
+                .transaction()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
         }
     }
-    tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     Ok(n)
 }
 
-pub(crate) async fn migrate_chunks(sqlite: &rusqlite::Connection, pg: &mut tokio_postgres::Client) -> CarrierResult<usize> {
+pub(crate) async fn migrate_chunks(
+    sqlite: &rusqlite::Connection,
+    pg: &mut tokio_postgres::Client,
+) -> CarrierResult<usize> {
     // user_id may be absent on pre-v27 DBs; COALESCE to ''.
     let mut stmt = sqlite
         .prepare("SELECT id, owner_id, COALESCE(user_id,''), agent_id, source_kind, source_id, source_ref, timestamp_ms, time_range_start_ms, time_range_end_ms, tags_json, content, token_count, seq_in_source, partial_message, lifecycle_status, created_at_ms FROM mem_tree_chunks")
@@ -263,10 +336,30 @@ pub(crate) async fn migrate_chunks(sqlite: &rusqlite::Connection, pg: &mut tokio
             ))
         })
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
-    let mut tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    let mut tx = pg
+        .transaction()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     for row in rows {
-        let (id, owner_id, user_id, agent_id, source_kind, source_id, source_ref, timestamp_ms, trs, tre, tags_json, content, tc, sq, partial, lifecycle, created_at_ms) =
-            row.map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let (
+            id,
+            owner_id,
+            user_id,
+            agent_id,
+            source_kind,
+            source_id,
+            source_ref,
+            timestamp_ms,
+            trs,
+            tre,
+            tags_json,
+            content,
+            tc,
+            sq,
+            partial,
+            lifecycle,
+            created_at_ms,
+        ) = row.map_err(|e| CarrierError::Memory(e.to_string()))?;
         tx.execute(
             "INSERT INTO mem_tree_chunks (id, owner_id, user_id, agent_id, source_kind, source_id, source_ref, timestamp_ms, time_range_start_ms, time_range_end_ms, tags_json, content, token_count, seq_in_source, partial_message, lifecycle_status, created_at_ms) \
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (id) DO NOTHING",
@@ -276,15 +369,25 @@ pub(crate) async fn migrate_chunks(sqlite: &rusqlite::Connection, pg: &mut tokio
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         n += 1;
         if n.is_multiple_of(BATCH_SIZE) {
-            tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
-            tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx = pg
+                .transaction()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
         }
     }
-    tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     Ok(n)
 }
 
-pub(crate) async fn migrate_score(sqlite: &rusqlite::Connection, pg: &mut tokio_postgres::Client) -> CarrierResult<usize> {
+pub(crate) async fn migrate_score(
+    sqlite: &rusqlite::Connection,
+    pg: &mut tokio_postgres::Client,
+) -> CarrierResult<usize> {
     let mut stmt = sqlite
         .prepare("SELECT chunk_id, owner_id, total, token_count_signal, unique_words_signal, metadata_weight, source_weight, interaction_weight, entity_density, llm_importance, llm_importance_reason, dropped, reason, computed_at_ms FROM mem_tree_score")
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -309,10 +412,27 @@ pub(crate) async fn migrate_score(sqlite: &rusqlite::Connection, pg: &mut tokio_
             ))
         })
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
-    let mut tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    let mut tx = pg
+        .transaction()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     for row in rows {
-        let (chunk_id, owner_id, total, tcs, uws, mw, sw, iw, ed, li, lir, dropped, reason, computed_at_ms) =
-            row.map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let (
+            chunk_id,
+            owner_id,
+            total,
+            tcs,
+            uws,
+            mw,
+            sw,
+            iw,
+            ed,
+            li,
+            lir,
+            dropped,
+            reason,
+            computed_at_ms,
+        ) = row.map_err(|e| CarrierError::Memory(e.to_string()))?;
         tx.execute(
             "INSERT INTO mem_tree_score (chunk_id, owner_id, total, token_count_signal, unique_words_signal, metadata_weight, source_weight, interaction_weight, entity_density, llm_importance, llm_importance_reason, dropped, reason, computed_at_ms) \
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT (chunk_id) DO NOTHING",
@@ -322,15 +442,25 @@ pub(crate) async fn migrate_score(sqlite: &rusqlite::Connection, pg: &mut tokio_
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         n += 1;
         if n.is_multiple_of(BATCH_SIZE) {
-            tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
-            tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx = pg
+                .transaction()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
         }
     }
-    tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     Ok(n)
 }
 
-pub(crate) async fn migrate_summaries(sqlite: &rusqlite::Connection, pg: &mut tokio_postgres::Client) -> CarrierResult<usize> {
+pub(crate) async fn migrate_summaries(
+    sqlite: &rusqlite::Connection,
+    pg: &mut tokio_postgres::Client,
+) -> CarrierResult<usize> {
     let mut stmt = sqlite
         .prepare("SELECT id, owner_id, COALESCE(user_id,''), tree_id, tree_kind, level, parent_id, child_ids_json, content, token_count, entities_json, topics_json, time_range_start_ms, time_range_end_ms, score, sealed_at_ms, deleted, embedding FROM mem_tree_summaries")
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -359,10 +489,31 @@ pub(crate) async fn migrate_summaries(sqlite: &rusqlite::Connection, pg: &mut to
             ))
         })
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
-    let mut tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    let mut tx = pg
+        .transaction()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     for row in rows {
-        let (id, owner_id, user_id, tree_id, tree_kind, level, parent_id, child_ids_json, content, tc, entities_json, topics_json, trs, tre, score, sealed_at_ms, deleted, embedding) =
-            row.map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let (
+            id,
+            owner_id,
+            user_id,
+            tree_id,
+            tree_kind,
+            level,
+            parent_id,
+            child_ids_json,
+            content,
+            tc,
+            entities_json,
+            topics_json,
+            trs,
+            tre,
+            score,
+            sealed_at_ms,
+            deleted,
+            embedding,
+        ) = row.map_err(|e| CarrierError::Memory(e.to_string()))?;
         tx.execute(
             "INSERT INTO mem_tree_summaries (id, owner_id, user_id, tree_id, tree_kind, level, parent_id, child_ids_json, content, token_count, entities_json, topics_json, time_range_start_ms, time_range_end_ms, score, sealed_at_ms, deleted, embedding) \
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) ON CONFLICT (id) DO NOTHING",
@@ -372,15 +523,25 @@ pub(crate) async fn migrate_summaries(sqlite: &rusqlite::Connection, pg: &mut to
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         n += 1;
         if n.is_multiple_of(BATCH_SIZE) {
-            tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
-            tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx = pg
+                .transaction()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
         }
     }
-    tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     Ok(n)
 }
 
-pub(crate) async fn migrate_buffers(sqlite: &rusqlite::Connection, pg: &mut tokio_postgres::Client) -> CarrierResult<usize> {
+pub(crate) async fn migrate_buffers(
+    sqlite: &rusqlite::Connection,
+    pg: &mut tokio_postgres::Client,
+) -> CarrierResult<usize> {
     let mut stmt = sqlite
         .prepare("SELECT tree_id, level, owner_id, item_ids_json, token_sum, oldest_at_ms, updated_at_ms FROM mem_tree_buffers")
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -398,7 +559,10 @@ pub(crate) async fn migrate_buffers(sqlite: &rusqlite::Connection, pg: &mut toki
             ))
         })
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
-    let mut tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    let mut tx = pg
+        .transaction()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     for row in rows {
         let (tree_id, level, owner_id, item_ids_json, token_sum, oldest_at_ms, updated_at_ms) =
             row.map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -411,15 +575,25 @@ pub(crate) async fn migrate_buffers(sqlite: &rusqlite::Connection, pg: &mut toki
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         n += 1;
         if n.is_multiple_of(BATCH_SIZE) {
-            tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
-            tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx = pg
+                .transaction()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
         }
     }
-    tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     Ok(n)
 }
 
-pub(crate) async fn migrate_entity_index(sqlite: &rusqlite::Connection, pg: &mut tokio_postgres::Client) -> CarrierResult<usize> {
+pub(crate) async fn migrate_entity_index(
+    sqlite: &rusqlite::Connection,
+    pg: &mut tokio_postgres::Client,
+) -> CarrierResult<usize> {
     let mut stmt = sqlite
         .prepare("SELECT entity_id, node_id, node_kind, owner_id, COALESCE(user_id,''), entity_kind, surface, score, timestamp_ms, tree_id FROM mem_tree_entity_index")
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -440,10 +614,23 @@ pub(crate) async fn migrate_entity_index(sqlite: &rusqlite::Connection, pg: &mut
             ))
         })
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
-    let mut tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    let mut tx = pg
+        .transaction()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     for row in rows {
-        let (entity_id, node_id, node_kind, owner_id, user_id, entity_kind, surface, score, timestamp_ms, tree_id) =
-            row.map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let (
+            entity_id,
+            node_id,
+            node_kind,
+            owner_id,
+            user_id,
+            entity_kind,
+            surface,
+            score,
+            timestamp_ms,
+            tree_id,
+        ) = row.map_err(|e| CarrierError::Memory(e.to_string()))?;
         tx.execute(
             "INSERT INTO mem_tree_entity_index (entity_id, node_id, node_kind, owner_id, user_id, entity_kind, surface, score, timestamp_ms, tree_id) \
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (owner_id, entity_id, node_id) DO NOTHING",
@@ -453,15 +640,25 @@ pub(crate) async fn migrate_entity_index(sqlite: &rusqlite::Connection, pg: &mut
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         n += 1;
         if n.is_multiple_of(BATCH_SIZE) {
-            tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
-            tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx = pg
+                .transaction()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
         }
     }
-    tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     Ok(n)
 }
 
-pub(crate) async fn migrate_entity_hotness(sqlite: &rusqlite::Connection, pg: &mut tokio_postgres::Client) -> CarrierResult<usize> {
+pub(crate) async fn migrate_entity_hotness(
+    sqlite: &rusqlite::Connection,
+    pg: &mut tokio_postgres::Client,
+) -> CarrierResult<usize> {
     let mut stmt = sqlite
         .prepare("SELECT entity_id, owner_id, mention_count_30d, distinct_sources, last_seen_ms, query_hits_30d, graph_centrality, ingests_since_check, last_hotness, last_updated_ms FROM mem_tree_entity_hotness")
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -482,7 +679,10 @@ pub(crate) async fn migrate_entity_hotness(sqlite: &rusqlite::Connection, pg: &m
             ))
         })
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
-    let mut tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    let mut tx = pg
+        .transaction()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     for row in rows {
         let (entity_id, owner_id, mc, ds, last_seen_ms, qh, gc, isc, lh, lum) =
             row.map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -495,23 +695,38 @@ pub(crate) async fn migrate_entity_hotness(sqlite: &rusqlite::Connection, pg: &m
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         n += 1;
         if n.is_multiple_of(BATCH_SIZE) {
-            tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
-            tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx = pg
+                .transaction()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
         }
     }
-    tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     Ok(n)
 }
 
-pub(crate) async fn migrate_ingested_sources(sqlite: &rusqlite::Connection, pg: &mut tokio_postgres::Client) -> CarrierResult<usize> {
+pub(crate) async fn migrate_ingested_sources(
+    sqlite: &rusqlite::Connection,
+    pg: &mut tokio_postgres::Client,
+) -> CarrierResult<usize> {
     let mut stmt = sqlite
         .prepare("SELECT source_kind, source_id, owner_id, ingested_at_ms FROM mem_tree_ingested_sources")
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
     let mut n = 0usize;
     let rows = stmt
-        .query_map([], |r| Ok((txt(r, 0)?, txt(r, 1)?, txt(r, 2)?, i64c(r, 3)?)))
+        .query_map([], |r| {
+            Ok((txt(r, 0)?, txt(r, 1)?, txt(r, 2)?, i64c(r, 3)?))
+        })
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
-    let mut tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    let mut tx = pg
+        .transaction()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     for row in rows {
         let (source_kind, source_id, owner_id, ingested_at_ms) =
             row.map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -524,11 +739,18 @@ pub(crate) async fn migrate_ingested_sources(sqlite: &rusqlite::Connection, pg: 
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         n += 1;
         if n.is_multiple_of(BATCH_SIZE) {
-            tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
-            tx = pg.transaction().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
+            tx = pg
+                .transaction()
+                .await
+                .map_err(|e| CarrierError::Memory(e.to_string()))?;
         }
     }
-    tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| CarrierError::Memory(e.to_string()))?;
     Ok(n)
 }
 
@@ -543,7 +765,10 @@ mod tests {
     /// every type conversion), migrate it to PG, and verify row counts + types.
     #[tokio::test(flavor = "multi_thread")]
     async fn migrate_synthetic_db() {
-        let Some(url) = std::env::var("AGINX_MEMORY_TEST_PG").ok().filter(|s| !s.is_empty()) else {
+        let Some(url) = std::env::var("AGINX_MEMORY_TEST_PG")
+            .ok()
+            .filter(|s| !s.is_empty())
+        else {
             eprintln!("skip (set AGINX_MEMORY_TEST_PG)");
             return;
         };
@@ -602,26 +827,53 @@ mod tests {
         .unwrap();
 
         // Reset PG to a clean schema.
-        let (mut pg_reset, reset_conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.unwrap();
-        tokio::spawn(async move { let _ = reset_conn.await; });
+        let (mut pg_reset, reset_conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            let _ = reset_conn.await;
+        });
         crate::pg::reset_and_migrate(&mut pg_reset).await;
         drop(pg_reset);
 
         // Connect a fresh client, ensure schema, run migration.
-        let (mut pg, conn_pg) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.unwrap();
-        tokio::spawn(async move { let _ = conn_pg.await; });
-        crate::migrations::runner().run_async(&mut pg).await.unwrap();
+        let (mut pg, conn_pg) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            let _ = conn_pg.await;
+        });
+        crate::migrations::runner()
+            .run_async(&mut pg)
+            .await
+            .unwrap();
 
         run_migration(&conn, &mut pg).await.unwrap();
 
         // Verify counts.
-        let kv: i64 = pg.query_one("SELECT COUNT(*) FROM kv_store", &[]).await.unwrap().get(0);
+        let kv: i64 = pg
+            .query_one("SELECT COUNT(*) FROM kv_store", &[])
+            .await
+            .unwrap()
+            .get(0);
         assert_eq!(kv, 1, "kv_store");
-        let chunks: i64 = pg.query_one("SELECT COUNT(*) FROM mem_tree_chunks", &[]).await.unwrap().get(0);
+        let chunks: i64 = pg
+            .query_one("SELECT COUNT(*) FROM mem_tree_chunks", &[])
+            .await
+            .unwrap()
+            .get(0);
         assert_eq!(chunks, 1, "mem_tree_chunks");
-        let sums: i64 = pg.query_one("SELECT COUNT(*) FROM mem_tree_summaries", &[]).await.unwrap().get(0);
+        let sums: i64 = pg
+            .query_one("SELECT COUNT(*) FROM mem_tree_summaries", &[])
+            .await
+            .unwrap()
+            .get(0);
         assert_eq!(sums, 1, "mem_tree_summaries");
-        let scores: i64 = pg.query_one("SELECT COUNT(*) FROM mem_tree_score", &[]).await.unwrap().get(0);
+        let scores: i64 = pg
+            .query_one("SELECT COUNT(*) FROM mem_tree_score", &[])
+            .await
+            .unwrap()
+            .get(0);
         assert_eq!(scores, 1, "mem_tree_score");
 
         // Verify type conversions: kv value (BLOB->JSONB), chunk partial_message (1->bool), summary score (f64).
@@ -632,7 +884,10 @@ mod tests {
             .get(0);
         assert_eq!(val, json!({"theme":"dark"}));
         let partial: bool = pg
-            .query_one("SELECT partial_message FROM mem_tree_chunks WHERE id='c1'", &[])
+            .query_one(
+                "SELECT partial_message FROM mem_tree_chunks WHERE id='c1'",
+                &[],
+            )
             .await
             .unwrap()
             .get(0);
@@ -645,19 +900,34 @@ mod tests {
         assert!((score - 0.85).abs() < 1e-9);
         // embedding round-trips as BYTEA (serde_json Vec<f32> bytes).
         let emb_back: Option<Vec<u8>> = pg
-            .query_one("SELECT embedding FROM mem_tree_summaries WHERE id='s1'", &[])
+            .query_one(
+                "SELECT embedding FROM mem_tree_summaries WHERE id='s1'",
+                &[],
+            )
             .await
             .unwrap()
             .get(0);
         assert_eq!(emb_back.unwrap(), emb);
 
         // Resume: re-running is a no-op (progress recorded).
-        let before: i64 = pg.query_one("SELECT COUNT(*) FROM migration_progress", &[]).await.unwrap().get(0);
+        let before: i64 = pg
+            .query_one("SELECT COUNT(*) FROM migration_progress", &[])
+            .await
+            .unwrap()
+            .get(0);
         drop(pg);
-        let (mut pg2, conn2) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.unwrap();
-        tokio::spawn(async move { let _ = conn2.await; });
+        let (mut pg2, conn2) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            let _ = conn2.await;
+        });
         run_migration(&conn, &mut pg2).await.unwrap();
-        let after: i64 = pg2.query_one("SELECT COUNT(*) FROM migration_progress", &[]).await.unwrap().get(0);
+        let after: i64 = pg2
+            .query_one("SELECT COUNT(*) FROM migration_progress", &[])
+            .await
+            .unwrap()
+            .get(0);
         assert_eq!(before, after, "resume skips already-done tables");
     }
 }

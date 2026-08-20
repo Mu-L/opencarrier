@@ -7,8 +7,8 @@
 //!
 //! **Restart required**: api_listen, api_key, network, memory.
 
-use types::config::{KernelConfig, ReloadMode};
 use tracing::{info, warn};
+use types::config::{KernelConfig, ReloadMode};
 
 // ---------------------------------------------------------------------------
 // HotAction — what can be changed at runtime without restart

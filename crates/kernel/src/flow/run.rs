@@ -1,6 +1,5 @@
 //! Multi-step flow DAG main loop (`run_flow`).
 
-
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -16,13 +15,13 @@ use types::error::CarrierError;
 use types::flow::{FlowDef, StepKind};
 use types::message::{Message, TokenUsage};
 
-use crate::error::{KernelError, KernelResult};
-use crate::kernel::CarrierKernel;
 use super::dag::partition_flow_steps;
 use super::report::build_failure_report;
 use super::template::{decide_cancel, eval_when, render_template, value_to_string};
 use super::types::*;
 use super::FAILURE_CANCEL_KEYWORDS;
+use crate::error::{KernelError, KernelResult};
+use crate::kernel::CarrierKernel;
 
 impl CarrierKernel {
     /// Execute a multi-step flow as a DAG. Returns the final step's output as an
@@ -57,8 +56,14 @@ impl CarrierKernel {
         // sub-flow invoked via `flow_exec`/`map`, `input_overrides` carries the
         // rendered `with` params (e.g. `topic`) so `{{ input.topic }}` resolves.
         let mut input_map = serde_json::Map::new();
-        input_map.insert("user_message".into(), Value::String(user_message.to_string()));
-        input_map.insert("user_id".into(), Value::String(sender_id.unwrap_or("").to_string()));
+        input_map.insert(
+            "user_message".into(),
+            Value::String(user_message.to_string()),
+        );
+        input_map.insert(
+            "user_id".into(),
+            Value::String(sender_id.unwrap_or("").to_string()),
+        );
         if let Some(overrides) = input_overrides {
             for (k, v) in overrides {
                 input_map.insert(k.clone(), v.clone());
@@ -176,15 +181,18 @@ impl CarrierKernel {
                             // Failure-pause resume: interpret the reply with the
                             // fixed failure-cancel keywords (a failed step has
                             // no per-step `cancel_keywords`).
-                            let keywords: Vec<String> =
-                                FAILURE_CANCEL_KEYWORDS.iter().map(|s| s.to_string()).collect();
+                            let keywords: Vec<String> = FAILURE_CANCEL_KEYWORDS
+                                .iter()
+                                .map(|s| s.to_string())
+                                .collect();
                             if decide_cancel(&r.user_reply, &keywords) {
-                                let completed = serde_json::to_string(&outputs)
-                                    .unwrap_or_else(|_| "{}".into());
-                                let _ = self
-                                    .memory
-                                    .flow_runs()
-                                    .update_status(&run_id, "cancelled", &completed);
+                                let completed =
+                                    serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into());
+                                let _ = self.memory.flow_runs().update_status(
+                                    &run_id,
+                                    "cancelled",
+                                    &completed,
+                                );
                                 info!(
                                     flow = %flow.name,
                                     step = %step.id,
@@ -398,8 +406,8 @@ impl CarrierKernel {
                                     Some(&map_context_json),
                                     expires_at.as_deref(),
                                 );
-                                let completed = serde_json::to_string(&outputs)
-                                    .unwrap_or_else(|_| "{}".into());
+                                let completed =
+                                    serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into());
                                 let _ = self
                                     .memory
                                     .flow_runs()
@@ -456,7 +464,8 @@ impl CarrierKernel {
                             layer = layer_idx,
                             "flow step completed"
                         );
-                        let completed = serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into());
+                        let completed =
+                            serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into());
                         let _ = self
                             .memory
                             .flow_runs()
@@ -518,8 +527,7 @@ impl CarrierKernel {
         }
 
         if let Some(e) = failed {
-            let completed =
-                serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into());
+            let completed = serde_json::to_string(&outputs).unwrap_or_else(|_| "{}".into());
             let _ = self
                 .memory
                 .flow_runs()
@@ -539,10 +547,7 @@ impl CarrierKernel {
             .and_then(|id| outputs.get(id))
             .map(value_to_string)
             .unwrap_or_default();
-        let final_value = final_id
-            .as_deref()
-            .and_then(|id| outputs.get(id))
-            .cloned();
+        let final_value = final_id.as_deref().and_then(|id| outputs.get(id)).cloned();
 
         // Align with agent-loop silence contract: whole-text no-reply sentinels
         // become silent=true + empty channel response; session still records a

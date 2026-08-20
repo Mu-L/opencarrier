@@ -80,16 +80,30 @@ mod tests {
 
     async fn setup() -> Option<Pool> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()
+        deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()
     }
 
-    async fn insert_chunk(pool: &Pool, owner_id: &str, id: &str, seq: u32, content: &str, user_id: &str) {
+    async fn insert_chunk(
+        pool: &Pool,
+        owner_id: &str,
+        id: &str,
+        seq: u32,
+        content: &str,
+        user_id: &str,
+    ) {
         let chunk = Chunk {
             id: id.to_string(),
             owner_id: owner_id.to_string(),
@@ -109,7 +123,10 @@ mod tests {
             lifecycle_status: "admitted".to_string(),
             created_at_ms: 1_700_000_000_000,
         };
-        ChunkStore::new(pool.clone()).upsert_chunks(&[chunk]).await.unwrap();
+        ChunkStore::new(pool.clone())
+            .upsert_chunks(&[chunk])
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -194,9 +211,19 @@ mod tests {
         };
         let ids: Vec<String> = (0..25).map(|i| format!("chunk_cap_{i}")).collect();
         for i in 0..25 {
-            insert_chunk(&pool, "owner_1", &format!("chunk_cap_{i}"), i, "content", "").await;
+            insert_chunk(
+                &pool,
+                "owner_1",
+                &format!("chunk_cap_{i}"),
+                i,
+                "content",
+                "",
+            )
+            .await;
         }
-        let resp = fetch_leaves(&pool, "owner_1", None, &ids, 100).await.unwrap();
+        let resp = fetch_leaves(&pool, "owner_1", None, &ids, 100)
+            .await
+            .unwrap();
         assert!(resp.hits.len() <= MAX_FETCH_BATCH);
         assert!(resp.truncated);
     }
@@ -234,7 +261,15 @@ mod tests {
                 return;
             }
         };
-        insert_chunk(&pool, "owner_1", "chunk_alice", 0, "alice's secret", "alice").await;
+        insert_chunk(
+            &pool,
+            "owner_1",
+            "chunk_alice",
+            0,
+            "alice's secret",
+            "alice",
+        )
+        .await;
         insert_chunk(&pool, "owner_1", "chunk_shared", 0, "shared", "").await;
 
         // bob requests both ids - only the owner-shared one is returned.

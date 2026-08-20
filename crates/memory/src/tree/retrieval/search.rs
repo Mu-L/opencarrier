@@ -24,7 +24,11 @@ pub fn search_entities(
     kind: Option<EntityKind>,
     limit: usize,
 ) -> CarrierResult<Vec<EntityMatch>> {
-    let limit = if limit == 0 { DEFAULT_LIMIT } else { limit.min(MAX_LIMIT) };
+    let limit = if limit == 0 {
+        DEFAULT_LIMIT
+    } else {
+        limit.min(MAX_LIMIT)
+    };
     let query = query.trim();
     if query.is_empty() {
         return Ok(Vec::new());

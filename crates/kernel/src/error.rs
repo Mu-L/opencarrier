@@ -1,7 +1,7 @@
 //! Kernel-specific error types.
 
-use types::error::CarrierError;
 use thiserror::Error;
+use types::error::CarrierError;
 
 /// Kernel error type wrapping CarrierError with kernel-specific context.
 #[derive(Error, Debug)]

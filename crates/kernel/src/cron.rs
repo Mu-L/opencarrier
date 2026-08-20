@@ -7,9 +7,6 @@
 //! them to a JSON file on disk, and exposes methods for the kernel tick loop
 //! to query due jobs and record outcomes.
 
-use types::agent::AgentId;
-use types::error::{CarrierError, CarrierResult};
-use types::scheduler::{CronJob, CronJobId, CronSchedule};
 use chrono::{Duration, Utc};
 use dashmap::DashMap;
 use memory::cron_store::JobMeta;
@@ -18,6 +15,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+use types::agent::AgentId;
+use types::error::{CarrierError, CarrierResult};
+use types::scheduler::{CronJob, CronJobId, CronSchedule};
 
 /// Maximum consecutive errors before a job is auto-disabled.
 const MAX_CONSECUTIVE_ERRORS: u32 = 5;
@@ -301,7 +301,8 @@ impl CronScheduler {
                     continue;
                 }
                 meta.job.next_run = next;
-                meta.running.store(true, std::sync::atomic::Ordering::Release);
+                meta.running
+                    .store(true, std::sync::atomic::Ordering::Release);
                 due.push(meta.job.clone());
             }
         }
@@ -355,10 +356,7 @@ impl CronScheduler {
         let should_remove = {
             if let Some(mut meta) = self.jobs.get_mut(&id) {
                 meta.job.last_run = Some(Utc::now());
-                meta.last_status = Some(format!(
-                    "error: {}",
-                    types::truncate_str(error_msg, 256)
-                ));
+                meta.last_status = Some(format!("error: {}", types::truncate_str(error_msg, 256)));
                 meta.consecutive_errors += 1;
                 if meta.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                     warn!(
@@ -518,8 +516,8 @@ pub fn compute_next_run_after(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use types::scheduler::{CronAction, CronDelivery};
     use chrono::{Duration, Timelike};
+    use types::scheduler::{CronAction, CronDelivery};
 
     /// Build a minimal valid `CronJob` with an `Every` schedule.
     fn make_job(agent_id: AgentId) -> CronJob {

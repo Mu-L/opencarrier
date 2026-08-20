@@ -72,7 +72,9 @@ impl KvStore {
                 "INSERT INTO kv_history \
                     (agent_id, owner_id, user_id, key, value, version, archived_at) \
                  VALUES ($1,$2,$3,$4,$5,$6,$7)",
-                &[&agent_id, &owner_id, &user_id, &key, &old_val, &old_ver, &now],
+                &[
+                    &agent_id, &owner_id, &user_id, &key, &old_val, &old_ver, &now,
+                ],
             )
             .await
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -88,7 +90,9 @@ impl KvStore {
         .await
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
-        tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())
     }
 
@@ -121,7 +125,9 @@ impl KvStore {
                 "INSERT INTO kv_history \
                     (agent_id, owner_id, user_id, key, value, version, archived_at) \
                  VALUES ($1,$2,$3,$4,$5,$6,$7)",
-                &[&agent_id, &owner_id, &user_id, &key, &old_val, &old_ver, &now],
+                &[
+                    &agent_id, &owner_id, &user_id, &key, &old_val, &old_ver, &now,
+                ],
             )
             .await
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
@@ -135,7 +141,9 @@ impl KvStore {
         .await
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
-        tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())
     }
 
@@ -178,14 +186,21 @@ mod tests {
         // Migrate via a direct connection: refinery's `run_async` needs
         // `&mut tokio_postgres::Client` (impl `AsyncMigrate`), but deadpool's
         // `Object` derefs to a `ClientWrapper` that doesn't impl it.
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         // KvStore uses a deadpool pool for concurrent queries.
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = deadpool_postgres::Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         Some(KvStore::new(pool))
     }
 
@@ -202,7 +217,10 @@ mod tests {
             .set("a", "o", "u", "k", json!("test_value"))
             .await
             .unwrap();
-        assert_eq!(store.get("a", "o", "u", "k").await.unwrap(), Some(json!("test_value")));
+        assert_eq!(
+            store.get("a", "o", "u", "k").await.unwrap(),
+            Some(json!("test_value"))
+        );
     }
 
     #[tokio::test]
@@ -242,7 +260,10 @@ mod tests {
         };
         store.set("a", "o", "u", "k", json!("v1")).await.unwrap();
         store.set("a", "o", "u", "k", json!("v2")).await.unwrap();
-        assert_eq!(store.get("a", "o", "u", "k").await.unwrap(), Some(json!("v2")));
+        assert_eq!(
+            store.get("a", "o", "u", "k").await.unwrap(),
+            Some(json!("v2"))
+        );
     }
 
     #[tokio::test]
@@ -254,8 +275,14 @@ mod tests {
                 return;
             }
         };
-        store.set("a", "owner", "user_a", "pref", json!("dark")).await.unwrap();
-        store.set("a", "owner", "user_b", "pref", json!("light")).await.unwrap();
+        store
+            .set("a", "owner", "user_a", "pref", json!("dark"))
+            .await
+            .unwrap();
+        store
+            .set("a", "owner", "user_b", "pref", json!("light"))
+            .await
+            .unwrap();
         assert_eq!(
             store.get("a", "owner", "user_a", "pref").await.unwrap(),
             Some(json!("dark"))
@@ -264,7 +291,13 @@ mod tests {
             store.get("a", "owner", "user_b", "pref").await.unwrap(),
             Some(json!("light"))
         );
-        assert_eq!(store.list_kv("a", "owner", "user_a").await.unwrap().len(), 1);
-        assert_eq!(store.list_kv("a", "owner", "user_b").await.unwrap().len(), 1);
+        assert_eq!(
+            store.list_kv("a", "owner", "user_a").await.unwrap().len(),
+            1
+        );
+        assert_eq!(
+            store.list_kv("a", "owner", "user_b").await.unwrap().len(),
+            1
+        );
     }
 }

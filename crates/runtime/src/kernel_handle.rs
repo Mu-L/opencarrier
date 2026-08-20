@@ -113,7 +113,9 @@ pub trait KernelHandle: Send + Sync {
         job_json: serde_json::Value,
     ) -> CarrierResult<String> {
         let _ = (agent_id, owner_id, sender_id, job_json);
-        Err(CarrierError::Internal("Cron scheduler not available".into()))
+        Err(CarrierError::Internal(
+            "Cron scheduler not available".into(),
+        ))
     }
 
     /// List cron jobs for the calling agent, optionally filtered by owner_id.
@@ -123,13 +125,17 @@ pub trait KernelHandle: Send + Sync {
         owner_id: Option<&str>,
     ) -> CarrierResult<Vec<serde_json::Value>> {
         let _ = (agent_id, owner_id);
-        Err(CarrierError::Internal("Cron scheduler not available".into()))
+        Err(CarrierError::Internal(
+            "Cron scheduler not available".into(),
+        ))
     }
 
     /// Cancel a cron job by ID.
     async fn cron_cancel(&self, job_id: &str) -> CarrierResult<()> {
         let _ = job_id;
-        Err(CarrierError::Internal("Cron scheduler not available".into()))
+        Err(CarrierError::Internal(
+            "Cron scheduler not available".into(),
+        ))
     }
 
     /// List automation rules for (channel, app_id), highest priority first.
@@ -139,7 +145,9 @@ pub trait KernelHandle: Send + Sync {
         app_id: &str,
     ) -> CarrierResult<Vec<types::automation::AutomationRule>> {
         let _ = (channel, app_id);
-        Err(CarrierError::Internal("Automation rule store not available".into()))
+        Err(CarrierError::Internal(
+            "Automation rule store not available".into(),
+        ))
     }
 
     /// Insert or update an automation rule.
@@ -148,13 +156,17 @@ pub trait KernelHandle: Send + Sync {
         rule: types::automation::AutomationRule,
     ) -> CarrierResult<()> {
         let _ = rule;
-        Err(CarrierError::Internal("Automation rule store not available".into()))
+        Err(CarrierError::Internal(
+            "Automation rule store not available".into(),
+        ))
     }
 
     /// Delete an automation rule by id.
     async fn automation_rule_delete(&self, id: &str) -> CarrierResult<()> {
         let _ = id;
-        Err(CarrierError::Internal("Automation rule store not available".into()))
+        Err(CarrierError::Internal(
+            "Automation rule store not available".into(),
+        ))
     }
 
     /// Unified push: deliver a `ContentDescriptor` to any target (user_id or
@@ -200,10 +212,7 @@ pub trait KernelHandle: Send + Sync {
     /// Rebuild the available tool list for an agent.
     /// Query a toolset from the registry and return its tools.
     /// Stateless — does not modify any session or agent state.
-    fn get_toolset_tools(
-        &self,
-        _toolset_name: &str,
-    ) -> Option<Vec<types::tool::ToolDefinition>> {
+    fn get_toolset_tools(&self, _toolset_name: &str) -> Option<Vec<types::tool::ToolDefinition>> {
         None
     }
 
@@ -240,11 +249,7 @@ pub trait KernelHandle: Send + Sync {
     /// Used by the reliable publish handler (AI+API path) to produce a cover
     /// image deterministically, without the agent driving a tool chain. Returns
     /// the saved file path on success.
-    async fn generate_image_to_file(
-        &self,
-        _prompt: &str,
-        _out_dir: &str,
-    ) -> CarrierResult<String> {
+    async fn generate_image_to_file(&self, _prompt: &str, _out_dir: &str) -> CarrierResult<String> {
         Err(CarrierError::Internal(
             "image generation not available on this kernel".into(),
         ))
@@ -318,5 +323,4 @@ pub trait KernelHandle: Send + Sync {
     fn clone_hub_config(&self) -> Option<(String, String)> {
         None
     }
-
 }

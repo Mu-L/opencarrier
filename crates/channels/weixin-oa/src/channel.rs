@@ -253,25 +253,23 @@ fn build_message_text(msg: &OaMessage) -> String {
             // Plain text message
             msg.content.clone()
         }
-        "event" => {
-            match msg.event.as_str() {
-                "subscribe" => {
-                    if msg.event_key.is_empty() {
-                        "[关注事件] 用户关注了服务号".to_string()
-                    } else {
-                        let scene = msg.event_key.trim_start_matches("qrscene_");
-                        format!("[扫码关注] 场景值: {scene}")
-                    }
+        "event" => match msg.event.as_str() {
+            "subscribe" => {
+                if msg.event_key.is_empty() {
+                    "[关注事件] 用户关注了服务号".to_string()
+                } else {
+                    let scene = msg.event_key.trim_start_matches("qrscene_");
+                    format!("[扫码关注] 场景值: {scene}")
                 }
-                "unsubscribe" => "[取关事件] 用户取消了关注".to_string(),
-                "CLICK" => format!("[菜单点击] 菜单key: {}", msg.event_key),
-                "SCAN" => format!("[扫码事件] 场景值: {}", msg.event_key),
-                _ => format!(
-                    "[事件] type={} event={} key={}",
-                    msg_type, msg.event, msg.event_key
-                ),
             }
-        }
+            "unsubscribe" => "[取关事件] 用户取消了关注".to_string(),
+            "CLICK" => format!("[菜单点击] 菜单key: {}", msg.event_key),
+            "SCAN" => format!("[扫码事件] 场景值: {}", msg.event_key),
+            _ => format!(
+                "[事件] type={} event={} key={}",
+                msg_type, msg.event, msg.event_key
+            ),
+        },
         "image" => "[图片消息]".to_string(),
         "voice" => {
             if !msg.recognition.is_empty() {
@@ -316,7 +314,8 @@ async fn resolve_oa_media_id(
         } else {
             types::config::home_dir().join(fp)
         };
-        std::fs::read(&resolved).map_err(|e| CarrierError::Network(format!("read media {resolved:?}: {e}")))?
+        std::fs::read(&resolved)
+            .map_err(|e| CarrierError::Network(format!("read media {resolved:?}: {e}")))?
     } else {
         return Err(CarrierError::InvalidInput(
             "media has no media_id, url, or file_path".to_string(),
@@ -484,7 +483,8 @@ async fn deliver_oa(
         };
     }
     Err(CarrierError::InvalidInput(
-        "weixin-oa: content has no miniprogram, template, image, or text representation".to_string(),
+        "weixin-oa: content has no miniprogram, template, image, or text representation"
+            .to_string(),
     ))
 }
 
@@ -498,8 +498,14 @@ async fn template_fallback(
     original_err: CarrierError,
 ) -> CarrierResult<()> {
     let (Some(template_id), Some(field)) = (
-        account.fallback_template_id.as_deref().filter(|s| !s.is_empty()),
-        account.fallback_template_field.as_deref().filter(|s| !s.is_empty()),
+        account
+            .fallback_template_id
+            .as_deref()
+            .filter(|s| !s.is_empty()),
+        account
+            .fallback_template_field
+            .as_deref()
+            .filter(|s| !s.is_empty()),
     ) else {
         warn!(
             app_id = %account.app_id,
@@ -511,7 +517,17 @@ async fn template_fallback(
     };
     let data = serde_json::json!({ field: { "value": fallback_summary(text) } });
     let token = account.get_token().await?;
-    match api::template_send(&account.http, &token, openid, template_id, None, None, &data).await {
+    match api::template_send(
+        &account.http,
+        &token,
+        openid,
+        template_id,
+        None,
+        None,
+        &data,
+    )
+    .await
+    {
         Ok(_) => {
             info!(app_id = %account.app_id, openid, template_id, "45015 fallback delivered via template message");
             Ok(())
@@ -578,20 +594,12 @@ impl Channel for SessionWatcher {
         RoutingMode::DirectBind
     }
 
-    fn start(
-        &mut self,
-        _sender: mpsc::Sender<PluginMessage>,
-    ) -> CarrierResult<()> {
+    fn start(&mut self, _sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
         info!("weixin-oa: channel started (webhook mode, no polling)");
         Ok(())
     }
 
-    fn send(
-        &self,
-        bot_id: &str,
-        user_id: &str,
-        text: &str,
-    ) -> CarrierResult<()> {
+    fn send(&self, bot_id: &str, user_id: &str, text: &str) -> CarrierResult<()> {
         let account = self
             .get_account(bot_id)
             .ok_or_else(|| CarrierError::InvalidInput(bot_id.to_string()))?;
@@ -626,8 +634,7 @@ impl Channel for SessionWatcher {
                 // reply text to request image sends without needing a discoverable tool.
                 let (media_ids, text_only) = extract_image_markers(&text);
                 for media_id in &media_ids {
-                    if let Err(e) =
-                        api::custom_send_image(&http, &token, &user_id, media_id).await
+                    if let Err(e) = api::custom_send_image(&http, &token, &user_id, media_id).await
                     {
                         warn!(%app_id, %user_id, error=%e, "weixin-oa: image send failed");
                     } else {
@@ -660,7 +667,9 @@ impl Channel for SessionWatcher {
         let content = content.clone();
         // Dedicated thread + runtime: safe from Tokio workers / spawn_blocking.
         // Returning the real Result lets the marker handler fall back to text.
-        types::channel::block_on_detached(async move { deliver_oa(&account, &openid, &content).await })
+        types::channel::block_on_detached(
+            async move { deliver_oa(&account, &openid, &content).await },
+        )
     }
 
     fn stop(&mut self) {
@@ -673,7 +682,10 @@ impl Channel for SessionWatcher {
         sender_id: &str,
         _sender: mpsc::Sender<PluginMessage>,
     ) -> CarrierResult<()> {
-        info!(sender_id, "weixin-oa: start_sender called (no dynamic spawn needed)");
+        info!(
+            sender_id,
+            "weixin-oa: start_sender called (no dynamic spawn needed)"
+        );
         Ok(())
     }
 
@@ -691,7 +703,12 @@ mod tests {
         // Menu→mini-program click: no conversational intent — must NOT burn an
         // agent turn (2026-08-16: five such turns each spent a reasoning-model
         // call to answer "[no reply needed]").
-        for ev in ["VIEW", "view_miniprogram", "unsubscribe", "TEMPLATESENDJOBFINISH"] {
+        for ev in [
+            "VIEW",
+            "view_miniprogram",
+            "unsubscribe",
+            "TEMPLATESENDJOBFINISH",
+        ] {
             let msg = OaMessage {
                 msg_type: "event".into(),
                 event: ev.into(),

@@ -46,7 +46,12 @@ pub fn chunk_messages(input: &ChunkInput) -> Vec<Chunk> {
         if unit_tokens > input.max_tokens {
             if !accumulator.is_empty() {
                 chunks.push(make_chunk(
-                    input, &accumulator, &tags_json, seq, false, created_at_ms,
+                    input,
+                    &accumulator,
+                    &tags_json,
+                    seq,
+                    false,
+                    created_at_ms,
                 ));
                 seq += 1;
                 accumulator.clear();
@@ -54,13 +59,23 @@ pub fn chunk_messages(input: &ChunkInput) -> Vec<Chunk> {
             }
             for piece in split_by_token_budget(&unit, max_chars) {
                 chunks.push(make_chunk(
-                    input, &piece, &tags_json, seq, true, created_at_ms,
+                    input,
+                    &piece,
+                    &tags_json,
+                    seq,
+                    true,
+                    created_at_ms,
                 ));
                 seq += 1;
             }
         } else if acc_tokens + unit_tokens > input.max_tokens {
             chunks.push(make_chunk(
-                input, &accumulator, &tags_json, seq, false, created_at_ms,
+                input,
+                &accumulator,
+                &tags_json,
+                seq,
+                false,
+                created_at_ms,
             ));
             seq += 1;
             accumulator = unit;
@@ -76,7 +91,12 @@ pub fn chunk_messages(input: &ChunkInput) -> Vec<Chunk> {
 
     if !accumulator.is_empty() {
         chunks.push(make_chunk(
-            input, &accumulator, &tags_json, seq, false, created_at_ms,
+            input,
+            &accumulator,
+            &tags_json,
+            seq,
+            false,
+            created_at_ms,
         ));
     }
 
@@ -92,7 +112,13 @@ fn make_chunk(
     created_at_ms: i64,
 ) -> Chunk {
     let token_count = approx_token_count(content);
-    let id = compute_chunk_id(input.owner_id, input.source_kind, input.source_id, seq, content);
+    let id = compute_chunk_id(
+        input.owner_id,
+        input.source_kind,
+        input.source_id,
+        seq,
+        content,
+    );
 
     Chunk {
         id,
@@ -288,8 +314,8 @@ fn hard_split(text: &str, max_chars: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::DEFAULT_CHUNK_MAX_TOKENS;
+    use super::*;
 
     #[test]
     fn test_approx_token_count() {
@@ -356,7 +382,10 @@ mod tests {
             timestamp_ms: 1000,
             max_tokens: DEFAULT_CHUNK_MAX_TOKENS,
         });
-        assert!(chunks.len() > 1, "Long messages should be split into multiple chunks");
+        assert!(
+            chunks.len() > 1,
+            "Long messages should be split into multiple chunks"
+        );
     }
 
     #[test]

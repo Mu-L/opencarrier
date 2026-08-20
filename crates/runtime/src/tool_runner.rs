@@ -4,9 +4,9 @@
 
 use crate::mcp;
 use crate::tool_context::ToolContext;
+use tracing::{debug, warn};
 use types::tool::{ToolDefinition, ToolResult};
 use types::tool_compat::normalize_tool_name;
-use tracing::{debug, warn};
 
 tokio::task_local! {
     /// Tracks the current inter-agent call depth within a task.
@@ -92,7 +92,10 @@ pub async fn execute_tool(
     // Flow deny_tools (e.g. image_generate on template poster flows).
     if let Some(denied) = flow_deny_tools {
         if denied.iter().any(|d| d == tool_name) {
-            warn!(tool_name, "Permission denied: tool blocked by flow deny_tools");
+            warn!(
+                tool_name,
+                "Permission denied: tool blocked by flow deny_tools"
+            );
             return ToolResult {
                 tool_use_id: tool_use_id.to_string(),
                 content: format!(
@@ -131,7 +134,10 @@ pub async fn execute_tool(
     // the shared flow's `tools:` (e.g. office-xlsx shell_exec).
     // See docs/ADMIN-MECHANISM.md and docs/OFFICE-SYSTEM-FLOWS.md.
     if !is_clone_admin && types::tool::is_admin_gated(tool_name) && !flow_elevated {
-        warn!(tool_name, "Permission denied: admin-gated tool, caller is not a clone admin");
+        warn!(
+            tool_name,
+            "Permission denied: admin-gated tool, caller is not a clone admin"
+        );
         return ToolResult {
             tool_use_id: tool_use_id.to_string(),
             content: format!(
@@ -146,7 +152,8 @@ pub async fn execute_tool(
         if let Some(patterns) = flow_shell_allow {
             if !patterns.is_empty() {
                 let command = input_ref["command"].as_str().unwrap_or("");
-                if !types::flow::command_matches_flow_shell_allow(command, patterns, workspace_root) {
+                if !types::flow::command_matches_flow_shell_allow(command, patterns, workspace_root)
+                {
                     warn!(
                         tool_name,
                         command = %crate::str_utils::safe_truncate_str(command, 80),
@@ -175,7 +182,12 @@ pub async fn execute_tool(
         if module.definitions().iter().any(|d| d.name == tool_name) {
             let level = module.permission_level(tool_name);
             if level > max_tool_level && !flow_elevated {
-                warn!(tool_name, ?level, ?max_tool_level, "Permission denied: tool exceeds max level");
+                warn!(
+                    tool_name,
+                    ?level,
+                    ?max_tool_level,
+                    "Permission denied: tool exceeds max level"
+                );
                 return ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content: format!(
@@ -204,7 +216,12 @@ pub async fn execute_tool(
                 "media" => " Did you mean image_generate or text_to_speech?",
                 _ => "",
             };
-            warn!(tool_name, ?level, ?max_tool_level, "Permission denied: non-builtin tool exceeds max level");
+            warn!(
+                tool_name,
+                ?level,
+                ?max_tool_level,
+                "Permission denied: non-builtin tool exceeds max level"
+            );
             return ToolResult {
                 tool_use_id: tool_use_id.to_string(),
                 content: format!(
@@ -291,8 +308,7 @@ pub async fn execute_tool(
         if mcp::is_mcp_tool(tool_name) {
             if let Some(mcp_conns) = mcp_connections {
                 // Collect known server keys from DashMap for name resolution
-                let known_keys: Vec<String> =
-                    mcp_conns.iter().map(|e| e.key().clone()).collect();
+                let known_keys: Vec<String> = mcp_conns.iter().map(|e| e.key().clone()).collect();
                 let known_refs: Vec<&str> = known_keys.iter().map(|s| s.as_str()).collect();
                 if let Some(server_key) = mcp::extract_mcp_server_from_known(tool_name, &known_refs)
                 {
@@ -334,7 +350,7 @@ pub async fn execute_tool(
                 content: format!("Error: {err}"),
                 is_error: true,
             }
-        },
+        }
     }
 }
 
@@ -366,16 +382,21 @@ fn truncate_tool_result(tool_name: &str, content: String) -> String {
     if deduped.len() <= max {
         let saved = original_len.saturating_sub(deduped.len());
         if saved > 0 {
-            return format!("{deduped}\n\n[compressed: {:.1} KB → {:.1} KB]",
-                original_len as f64 / 1024.0, deduped.len() as f64 / 1024.0);
+            return format!(
+                "{deduped}\n\n[compressed: {:.1} KB → {:.1} KB]",
+                original_len as f64 / 1024.0,
+                deduped.len() as f64 / 1024.0
+            );
         }
         return deduped;
     }
 
     // Stage 2: keep head + tail lines
     let result = smart_truncate(&deduped, max);
-    format!("{result}\n\n[compressed: {:.1} KB → {:.1} KB]",
-        original_len as f64 / 1024.0, result.len() as f64 / 1024.0,
+    format!(
+        "{result}\n\n[compressed: {:.1} KB → {:.1} KB]",
+        original_len as f64 / 1024.0,
+        result.len() as f64 / 1024.0,
     )
 }
 
@@ -435,7 +456,9 @@ fn smart_truncate(content: &str, max_chars: usize) -> String {
 }
 
 /// Get definitions for all built-in tools.
-pub fn builtin_tool_definitions(cli_exec_config: types::config::CliExecConfig) -> Vec<ToolDefinition> {
+pub fn builtin_tool_definitions(
+    cli_exec_config: types::config::CliExecConfig,
+) -> Vec<ToolDefinition> {
     // All built-in tool definitions come from ToolModules now.
     crate::tools::builtin_modules(cli_exec_config)
         .into_iter()
@@ -508,7 +531,9 @@ mod tests {
         // Not a permission deny (admin/level/shell_allow). May fail on spawn.
         assert!(
             !result.content.contains("需要管理员权限")
-                && !result.content.contains("not allowed by system flow shell_allow")
+                && !result
+                    .content
+                    .contains("not allowed by system flow shell_allow")
                 && !result.content.contains("requires Dangerous level"),
             "unexpected permission deny: {}",
             result.content
@@ -808,7 +833,9 @@ mod tests {
         assert!(result.is_error);
         // Unknown tools are rejected by permission check (for_tool defaults to Dangerous)
         // before reaching the "Unknown tool" error path. Both outcomes are correct.
-        assert!(result.content.contains("Permission denied") || result.content.contains("Unknown tool"));
+        assert!(
+            result.content.contains("Permission denied") || result.content.contains("Unknown tool")
+        );
     }
 
     #[tokio::test]
@@ -817,7 +844,8 @@ mod tests {
             execute_tool("test-id", "agent_list", &serde_json::json!({}), &noop_ctx()).await;
         assert!(result.is_error, "expected error, got: {}", result.content);
         assert!(
-            result.content.contains("Kernel handle not available") || result.content.contains("memory"),
+            result.content.contains("Kernel handle not available")
+                || result.content.contains("memory"),
             "expected kernel/memory error, got: {}",
             result.content
         );

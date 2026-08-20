@@ -28,8 +28,7 @@ struct IdentityEntry {
 }
 
 /// Global identity cache, keyed by sender_id (openid_sa).
-static WECHAT_IDENTITY: LazyLock<DashMap<String, IdentityEntry>> =
-    LazyLock::new(DashMap::new);
+static WECHAT_IDENTITY: LazyLock<DashMap<String, IdentityEntry>> = LazyLock::new(DashMap::new);
 
 /// Cached unionid per openid_sa, so `cgi-bin/user/info` is queried at most once
 /// per user. An empty string means "queried, no resolvable unionid" (so we don't
@@ -53,9 +52,7 @@ pub fn set(sender_id: &str, role: &str) {
 /// Returns `None` when there is no entry (unknown / not a weixin-oa user),
 /// and `Some("")` when the user was identified as a regular user.
 pub fn get(sender_id: &str) -> Option<String> {
-    WECHAT_IDENTITY
-        .get(sender_id)
-        .map(|e| e.role.clone())
+    WECHAT_IDENTITY.get(sender_id).map(|e| e.role.clone())
 }
 
 /// Whether the cached entry is stale or absent and should be refreshed.

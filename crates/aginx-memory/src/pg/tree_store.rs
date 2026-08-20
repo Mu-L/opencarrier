@@ -227,11 +227,24 @@ impl TreeStore {
                      sealed_at_ms=EXCLUDED.sealed_at_ms, deleted=EXCLUDED.deleted, \
                      embedding=EXCLUDED.embedding",
                 &[
-                    &summary.id, &owner_id, &summary.user_id, &summary.tree_id, &tree_kind,
-                    &level, &summary.parent_id, &child_ids_json, &summary.content,
-                    &token_count, &entities_json, &topics_json,
-                    &summary.time_range_start_ms, &summary.time_range_end_ms,
-                    &score, &summary.sealed_at_ms, &summary.deleted, &embedding,
+                    &summary.id,
+                    &owner_id,
+                    &summary.user_id,
+                    &summary.tree_id,
+                    &tree_kind,
+                    &level,
+                    &summary.parent_id,
+                    &child_ids_json,
+                    &summary.content,
+                    &token_count,
+                    &entities_json,
+                    &topics_json,
+                    &summary.time_range_start_ms,
+                    &summary.time_range_end_ms,
+                    &score,
+                    &summary.sealed_at_ms,
+                    &summary.deleted,
+                    &embedding,
                 ],
             )
             .await
@@ -390,7 +403,12 @@ impl TreeStore {
     }
 
     /// Clear a buffer (remove all items) after a seal.
-    pub async fn clear_buffer(&self, owner_id: &str, tree_id: &str, level: u32) -> CarrierResult<()> {
+    pub async fn clear_buffer(
+        &self,
+        owner_id: &str,
+        tree_id: &str,
+        level: u32,
+    ) -> CarrierResult<()> {
         let client = self.client().await?;
         let lvl = level as i32;
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -461,20 +479,33 @@ impl TreeStore {
             .try_get(6)
             .map_err(|e| CarrierError::Serialization(e.to_string()))?;
         Ok(Tree {
-            id: row.try_get(0).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            owner_id: row.try_get(1).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            id: row
+                .try_get(0)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            owner_id: row
+                .try_get(1)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             kind: Self::parse_kind(&kind_str),
-            scope: row.try_get(3).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            root_id: row.try_get(4).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            scope: row
+                .try_get(3)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            root_id: row
+                .try_get(4)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             max_level: row
                 .try_get::<_, i32>(5)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as u32,
             status: Self::parse_status(&status_str),
-            created_at_ms: row.try_get(7).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            created_at_ms: row
+                .try_get(7)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             last_sealed_at_ms: row
                 .try_get(8)
                 .map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            user_id: row.try_get(9).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            user_id: row
+                .try_get(9)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
         })
     }
 
@@ -494,22 +525,30 @@ impl TreeStore {
         let embedding_blob: Option<Vec<u8>> = row
             .try_get(15)
             .map_err(|e| CarrierError::Serialization(e.to_string()))?;
-        let embedding = embedding_blob
-            .and_then(|b| serde_json::from_slice::<Vec<f32>>(&b).ok());
+        let embedding = embedding_blob.and_then(|b| serde_json::from_slice::<Vec<f32>>(&b).ok());
 
         Ok(SummaryNode {
-            id: row.try_get(0).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            tree_id: row.try_get(1).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            id: row
+                .try_get(0)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            tree_id: row
+                .try_get(1)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             tree_kind: Self::parse_kind(&tree_kind_str),
             level: row
                 .try_get::<_, i32>(3)
                 .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
-            parent_id: row.try_get(4).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            parent_id: row
+                .try_get(4)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             child_ids: serde_json::from_str(&child_ids_json).unwrap_or_default(),
-            content: row.try_get(6).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            content: row
+                .try_get(6)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             token_count: row
                 .try_get::<_, i32>(7)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as u32,
             entities: serde_json::from_str(&entities_json).unwrap_or_default(),
             topics: serde_json::from_str(&topics_json).unwrap_or_default(),
             time_range_start_ms: row
@@ -524,27 +563,42 @@ impl TreeStore {
             sealed_at_ms: row
                 .try_get(13)
                 .map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            deleted: row.try_get(14).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            deleted: row
+                .try_get(14)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             embedding,
-            user_id: row.try_get(16).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            user_id: row
+                .try_get(16)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
         })
     }
 
     fn row_to_tree_summary(row: &tokio_postgres::Row) -> CarrierResult<TreeSummary> {
         Ok(TreeSummary {
-            tree_id: row.try_get(0).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            kind: row.try_get(1).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            scope: row.try_get(2).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            status: row.try_get(3).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            tree_id: row
+                .try_get(0)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            kind: row
+                .try_get(1)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            scope: row
+                .try_get(2)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            status: row
+                .try_get(3)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             max_level: row
                 .try_get::<_, i32>(4)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as u32,
             chunk_count: row
                 .try_get::<_, i64>(5)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as usize,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as usize,
             summary_count: row
                 .try_get::<_, i64>(6)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as usize,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as usize,
             last_sealed_at_ms: row
                 .try_get(7)
                 .map_err(|e| CarrierError::Serialization(e.to_string()))?,
@@ -556,14 +610,17 @@ impl TreeStore {
             .try_get(2)
             .map_err(|e| CarrierError::Serialization(e.to_string()))?;
         Ok(Buffer {
-            tree_id: row.try_get(0).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            tree_id: row
+                .try_get(0)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             level: row
                 .try_get::<_, i32>(1)
                 .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
             item_ids: serde_json::from_str(&item_ids_json).unwrap_or_default(),
             token_sum: row
                 .try_get::<_, i32>(3)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as i64,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as i64,
             oldest_at_ms: row
                 .try_get(4)
                 .map_err(|e| CarrierError::Serialization(e.to_string()))?,
@@ -578,13 +635,20 @@ mod tests {
 
     async fn setup() -> Option<TreeStore> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         Some(TreeStore::new(pool))
     }
 
@@ -726,7 +790,11 @@ mod tests {
         let summary = make_summary(&tree.id, "sum_001", 1, None);
         store.insert_summary("owner_1", &summary).await.unwrap();
 
-        let got = store.get_summary("owner_1", None, "sum_001").await.unwrap().unwrap();
+        let got = store
+            .get_summary("owner_1", None, "sum_001")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got.content, "Summary sum_001");
         assert_eq!(got.entities.len(), 1);
         assert_eq!(got.tree_kind, TreeKind::Source);
@@ -786,11 +854,17 @@ mod tests {
             .await
             .unwrap();
         store
-            .insert_summary("owner_1", &make_summary(&tree.id, "sum_l2a", 2, Some("sum_l1")))
+            .insert_summary(
+                "owner_1",
+                &make_summary(&tree.id, "sum_l2a", 2, Some("sum_l1")),
+            )
             .await
             .unwrap();
         store
-            .insert_summary("owner_1", &make_summary(&tree.id, "sum_l2b", 2, Some("sum_l1")))
+            .insert_summary(
+                "owner_1",
+                &make_summary(&tree.id, "sum_l2b", 2, Some("sum_l1")),
+            )
             .await
             .unwrap();
 
@@ -834,7 +908,11 @@ mod tests {
             .unwrap();
         assert!(listed.is_empty());
         // But get_summary (write-path, no deleted filter) still finds it.
-        let got = store.get_summary("owner_1", None, "sum_del").await.unwrap().unwrap();
+        let got = store
+            .get_summary("owner_1", None, "sum_del")
+            .await
+            .unwrap()
+            .unwrap();
         assert!(got.deleted);
     }
 
@@ -860,7 +938,11 @@ mod tests {
         };
         store.upsert_buffer("owner_1", &buf).await.unwrap();
 
-        let got = store.get_buffer("owner_1", &tree.id, 0).await.unwrap().unwrap();
+        let got = store
+            .get_buffer("owner_1", &tree.id, 0)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got.item_ids.len(), 2);
         assert_eq!(got.token_sum, 1500);
         assert_eq!(got.oldest_at_ms, Some(1000));
@@ -889,7 +971,11 @@ mod tests {
         store.upsert_buffer("owner_1", &buf).await.unwrap();
         store.clear_buffer("owner_1", &tree.id, 0).await.unwrap();
 
-        let got = store.get_buffer("owner_1", &tree.id, 0).await.unwrap().unwrap();
+        let got = store
+            .get_buffer("owner_1", &tree.id, 0)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(got.item_ids.is_empty());
         assert_eq!(got.token_sum, 0);
         assert_eq!(got.oldest_at_ms, None);
@@ -956,7 +1042,11 @@ mod tests {
             .await
             .unwrap();
         // Before any seal: no root, max_level 0.
-        let before = store.get_tree("owner_1", None, &tree.id).await.unwrap().unwrap();
+        let before = store
+            .get_tree("owner_1", None, &tree.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(before.root_id, None);
         assert_eq!(before.max_level, 0);
 
@@ -970,7 +1060,11 @@ mod tests {
             .await
             .unwrap();
 
-        let after = store.get_tree("owner_1", None, &tree.id).await.unwrap().unwrap();
+        let after = store
+            .get_tree("owner_1", None, &tree.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(after.max_level, 1);
         assert_eq!(after.last_sealed_at_ms, Some(9000));
         // root_id backfilled to the highest-level summary.

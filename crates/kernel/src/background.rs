@@ -5,13 +5,13 @@
 //! - **Periodic**: Agent wakes on a simplified cron schedule (e.g. "every 5m").
 //! - **Proactive**: Agent wakes when matching events fire.
 
-use types::agent::{AgentId, ScheduleMode};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
+use types::agent::{AgentId, ScheduleMode};
 
 /// Maximum number of concurrent background LLM calls across all agents.
 const MAX_CONCURRENT_BG_LLM: usize = 20;

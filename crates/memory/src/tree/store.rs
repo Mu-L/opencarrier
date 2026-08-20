@@ -1,8 +1,8 @@
 //! Chunk CRUD operations for tree memory.
 
-use types::error::{CarrierError, CarrierResult};
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
+use types::error::{CarrierError, CarrierResult};
 
 use super::types::{Chunk, SourceKind, CHUNK_STATUS_ADMITTED};
 
@@ -91,7 +91,8 @@ impl ChunkStore {
                     timestamp_ms, time_range_start_ms, time_range_end_ms,
                     tags_json, content, token_count, seq_in_source,
                     partial_message, lifecycle_status, created_at_ms
-             FROM mem_tree_chunks WHERE owner_id = ?1 AND id = ?2".to_string();
+             FROM mem_tree_chunks WHERE owner_id = ?1 AND id = ?2"
+            .to_string();
 
         if let Some(u) = user_id {
             sql.push_str(" AND (user_id = ? OR user_id = '')");
@@ -125,14 +126,14 @@ impl ChunkStore {
             .lock()
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
 
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-            vec![Box::new(owner_id.to_string())];
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(owner_id.to_string())];
 
         let mut sql = "SELECT id, owner_id, user_id, agent_id, source_kind, source_id, source_ref,
                     timestamp_ms, time_range_start_ms, time_range_end_ms,
                     tags_json, content, token_count, seq_in_source,
                     partial_message, lifecycle_status, created_at_ms
-             FROM mem_tree_chunks WHERE owner_id = ?1".to_string();
+             FROM mem_tree_chunks WHERE owner_id = ?1"
+            .to_string();
 
         if let Some(u) = user_id {
             sql.push_str(" AND (user_id = ? OR user_id = '')");
@@ -232,7 +233,9 @@ impl ChunkStore {
             .map_err(|e| CarrierError::Internal(e.to_string()))?;
 
         let sql = match lifecycle_status {
-            Some(_) => "SELECT COUNT(*) FROM mem_tree_chunks WHERE owner_id = ?1 AND lifecycle_status = ?2",
+            Some(_) => {
+                "SELECT COUNT(*) FROM mem_tree_chunks WHERE owner_id = ?1 AND lifecycle_status = ?2"
+            }
             None => "SELECT COUNT(*) FROM mem_tree_chunks WHERE owner_id = ?1",
         };
 
@@ -337,7 +340,10 @@ mod tests {
         store.upsert_chunks(&[chunk]).unwrap();
 
         // Different owner should not see owner_1's chunk
-        assert!(store.get_chunk("owner_2", None, "chunk_001").unwrap().is_none());
+        assert!(store
+            .get_chunk("owner_2", None, "chunk_001")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -350,14 +356,26 @@ mod tests {
         store.upsert_chunks(&[alice]).unwrap();
 
         // bob cannot see alice's chunk; alice can
-        assert!(store.get_chunk("owner_1", Some("bob"), "chunk_alice").unwrap().is_none());
-        assert!(store.get_chunk("owner_1", Some("alice"), "chunk_alice").unwrap().is_some());
+        assert!(store
+            .get_chunk("owner_1", Some("bob"), "chunk_alice")
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_chunk("owner_1", Some("alice"), "chunk_alice")
+            .unwrap()
+            .is_some());
 
         // owner-shared chunk (user_id = "") is visible to every user
         let shared = make_chunk("owner_1", "shared", 0);
         store.upsert_chunks(&[shared]).unwrap();
-        assert!(store.get_chunk("owner_1", Some("alice"), "chunk_shared").unwrap().is_some());
-        assert!(store.get_chunk("owner_1", Some("bob"), "chunk_shared").unwrap().is_some());
+        assert!(store
+            .get_chunk("owner_1", Some("alice"), "chunk_shared")
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_chunk("owner_1", Some("bob"), "chunk_shared")
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -389,7 +407,10 @@ mod tests {
             .update_lifecycle("owner_1", "chunk_001", "admitted")
             .unwrap();
 
-        let got = store.get_chunk("owner_1", None, "chunk_001").unwrap().unwrap();
+        let got = store
+            .get_chunk("owner_1", None, "chunk_001")
+            .unwrap()
+            .unwrap();
         assert_eq!(got.lifecycle_status, "admitted");
     }
 
@@ -397,16 +418,18 @@ mod tests {
     fn test_count_chunks() {
         let store = setup();
         store
-            .upsert_chunks(&[make_chunk("owner_1", "001", 0), make_chunk("owner_1", "002", 1)])
+            .upsert_chunks(&[
+                make_chunk("owner_1", "001", 0),
+                make_chunk("owner_1", "002", 1),
+            ])
             .unwrap();
 
         assert_eq!(store.count_chunks("owner_1", None).unwrap(), 2);
+        assert_eq!(store.count_chunks("owner_1", Some("admitted")).unwrap(), 2);
         assert_eq!(
-            store.count_chunks("owner_1", Some("admitted")).unwrap(),
-            2
-        );
-        assert_eq!(
-            store.count_chunks("owner_1", Some("pending_extraction")).unwrap(),
+            store
+                .count_chunks("owner_1", Some("pending_extraction"))
+                .unwrap(),
             0
         );
     }

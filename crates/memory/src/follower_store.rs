@@ -227,11 +227,22 @@ mod tests {
     fn follow_touch_unfollow_lifecycle() {
         let store = test_store();
         store
-            .record_follow("weixin-oa", "wx1", "oA", Some("uA"), Some("qrscene_bus"), "2026-08-17T01:00:00Z")
+            .record_follow(
+                "weixin-oa",
+                "wx1",
+                "oA",
+                Some("uA"),
+                Some("qrscene_bus"),
+                "2026-08-17T01:00:00Z",
+            )
             .unwrap();
-        store.record_follow("weixin-oa", "wx1", "oB", None, None, "2026-08-17T02:00:00Z").unwrap();
+        store
+            .record_follow("weixin-oa", "wx1", "oB", None, None, "2026-08-17T02:00:00Z")
+            .unwrap();
         // Later interaction refreshes last_seen only.
-        store.touch("weixin-oa", "wx1", "oA", "2026-08-17T03:00:00Z").unwrap();
+        store
+            .touch("weixin-oa", "wx1", "oA", "2026-08-17T03:00:00Z")
+            .unwrap();
 
         let pushable = store
             .list_pushable_since("weixin-oa", "wx1", "2026-08-17T02:30:00Z")
@@ -249,7 +260,12 @@ mod tests {
             .all(|x| x != "oA"));
 
         let stats = store
-            .stats_since("weixin-oa", "wx1", "2026-08-17T00:00:00Z", "2026-08-17T03:30:00Z")
+            .stats_since(
+                "weixin-oa",
+                "wx1",
+                "2026-08-17T00:00:00Z",
+                "2026-08-17T03:30:00Z",
+            )
             .unwrap();
         assert_eq!(stats.new_followers, 2);
         assert_eq!(stats.unfollows, 1);
@@ -261,7 +277,12 @@ mod tests {
             .record_follow("weixin-oa", "wx1", "oA", None, None, "2026-08-17T05:00:00Z")
             .unwrap();
         let stats = store
-            .stats_since("weixin-oa", "wx1", "2026-08-17T05:00:00Z", "2026-08-17T00:00:00Z")
+            .stats_since(
+                "weixin-oa",
+                "wx1",
+                "2026-08-17T05:00:00Z",
+                "2026-08-17T00:00:00Z",
+            )
             .unwrap();
         assert_eq!(stats.active, 2);
     }
@@ -271,7 +292,9 @@ mod tests {
         let store = test_store();
         // A user who messages without a recorded subscribe still gets a row
         // (OA only allows followers to message — the follow event was missed).
-        store.touch("weixin-oa", "wx1", "oC", "2026-08-17T06:00:00Z").unwrap();
+        store
+            .touch("weixin-oa", "wx1", "oC", "2026-08-17T06:00:00Z")
+            .unwrap();
         let pushable = store
             .list_pushable_since("weixin-oa", "wx1", "2026-08-17T00:00:00Z")
             .unwrap();

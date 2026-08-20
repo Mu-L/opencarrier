@@ -13,7 +13,6 @@ use crate::flow::template::*;
 use crate::flow::types::*;
 use crate::flow::FAILURE_CANCEL_KEYWORDS;
 
-
 fn step(id: &str, deps: &[&str]) -> StepDef {
     StepDef {
         id: id.into(),
@@ -58,7 +57,11 @@ fn render_outputs_and_input() {
     let mut outputs = HashMap::new();
     outputs.insert("draft".into(), Value::String("hello".into()));
     let input = serde_json::json!({"user_message": "hi"});
-    let r = render_template("{{ outputs.draft }} | {{ input.user_message }}", &outputs, &input);
+    let r = render_template(
+        "{{ outputs.draft }} | {{ input.user_message }}",
+        &outputs,
+        &input,
+    );
     assert_eq!(r, "hello | hi");
 }
 
@@ -74,7 +77,10 @@ fn render_bare_is_outputs() {
 fn render_unresolved_kept() {
     let outputs = HashMap::new();
     let input = serde_json::json!({});
-    assert_eq!(render_template("{{ outputs.missing }}", &outputs, &input), "{{ outputs.missing }}");
+    assert_eq!(
+        render_template("{{ outputs.missing }}", &outputs, &input),
+        "{{ outputs.missing }}"
+    );
 }
 
 #[test]
@@ -132,7 +138,11 @@ fn render_default_filter_nested_path() {
     let input = serde_json::json!({});
     // Present subfield resolves.
     assert_eq!(
-        render_template("{{ review.decision | default('cancel') }}", &outputs, &input),
+        render_template(
+            "{{ review.decision | default('cancel') }}",
+            &outputs,
+            &input
+        ),
         "proceed"
     );
     // Missing subfield -> default.
@@ -145,10 +155,7 @@ fn render_default_filter_nested_path() {
 #[test]
 fn when_eq_true() {
     let mut outputs = HashMap::new();
-    outputs.insert(
-        "review".into(),
-        serde_json::json!({"decision": "revise"}),
-    );
+    outputs.insert("review".into(), serde_json::json!({"decision": "revise"}));
     let input = serde_json::json!({});
     assert!(eval_when("review.decision == 'revise'", &outputs, &input));
     assert!(!eval_when("review.decision == 'proceed'", &outputs, &input));
@@ -365,7 +372,10 @@ fn partition_handles_map_with_body() {
 fn map_context_roundtrip() {
     let mc = MapContext {
         map_step_id: "per_ep".into(),
-        over: vec![serde_json::json!({"index": 1}), serde_json::json!({"index": 2})],
+        over: vec![
+            serde_json::json!({"index": 1}),
+            serde_json::json!({"index": 2}),
+        ],
         current_index: 1,
         collected: vec![serde_json::json!({"decision": "proceed"})],
         body_completed: {
@@ -444,9 +454,7 @@ fn build_failure_report_lists_all_steps() {
     let mut outputs = HashMap::new();
     outputs.insert("draft".into(), Value::String("a draft about cats".into()));
     let failed = &flow.steps[1];
-    let err = KernelError::Carrier(CarrierError::Internal(
-        "file '/tmp/x' not found".into(),
-    ));
+    let err = KernelError::Carrier(CarrierError::Internal("file '/tmp/x' not found".into()));
     let report = build_failure_report(&flow, failed, &err, &outputs);
 
     // Completed step shows id + truncated summary.
@@ -492,10 +500,7 @@ fn build_failure_report_truncates_long_summary() {
     let err = KernelError::Carrier(CarrierError::Internal("boom".into()));
     let report = build_failure_report(&flow, failed, &err, &outputs);
     // Summary capped at 50 chars + ellipsis.
-    let big_line = report
-        .lines()
-        .find(|l| l.starts_with("✅ big"))
-        .unwrap();
+    let big_line = report.lines().find(|l| l.starts_with("✅ big")).unwrap();
     let summary = big_line.strip_prefix("✅ big  ").unwrap();
     assert_eq!(summary.chars().count(), 51); // 50 + …
     assert!(summary.ends_with('…'));
@@ -504,7 +509,10 @@ fn build_failure_report_truncates_long_summary() {
 #[test]
 fn failure_cancel_keywords_match() {
     // decide_cancel against FAILURE_CANCEL_KEYWORDS.
-    let kw: Vec<String> = FAILURE_CANCEL_KEYWORDS.iter().map(|s| s.to_string()).collect();
+    let kw: Vec<String> = FAILURE_CANCEL_KEYWORDS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     assert!(decide_cancel("取消", &kw));
     assert!(decide_cancel("please cancel now", &kw));
     assert!(decide_cancel("算了吧", &kw));

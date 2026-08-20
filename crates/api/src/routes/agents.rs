@@ -8,9 +8,9 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use kernel::KernelHandle;
-use types::agent::{AgentIdentity, AgentManifest};
 use std::path::PathBuf;
 use std::sync::Arc;
+use types::agent::{AgentIdentity, AgentManifest};
 
 // ---------------------------------------------------------------------------
 // Request types
@@ -452,7 +452,9 @@ pub async fn patch_agent(
         if name.len() > MAX_NAME_LEN {
             return (
                 StatusCode::PAYLOAD_TOO_LARGE,
-                Json(serde_json::json!({"error": format!("Name exceeds max length ({MAX_NAME_LEN} chars)")})),
+                Json(
+                    serde_json::json!({"error": format!("Name exceeds max length ({MAX_NAME_LEN} chars)")}),
+                ),
             );
         }
     }
@@ -460,7 +462,9 @@ pub async fn patch_agent(
         if desc.len() > MAX_DESC_LEN {
             return (
                 StatusCode::PAYLOAD_TOO_LARGE,
-                Json(serde_json::json!({"error": format!("Description exceeds max length ({MAX_DESC_LEN} chars)")})),
+                Json(
+                    serde_json::json!({"error": format!("Description exceeds max length ({MAX_DESC_LEN} chars)")}),
+                ),
             );
         }
     }
@@ -468,7 +472,9 @@ pub async fn patch_agent(
         if prompt.len() > MAX_PROMPT_LEN {
             return (
                 StatusCode::PAYLOAD_TOO_LARGE,
-                Json(serde_json::json!({"error": format!("System prompt exceeds max length ({MAX_PROMPT_LEN} chars)")})),
+                Json(
+                    serde_json::json!({"error": format!("System prompt exceeds max length ({MAX_PROMPT_LEN} chars)")}),
+                ),
             );
         }
     }
@@ -1197,14 +1203,16 @@ pub async fn share_list_agents(State(state): State<Arc<AppState>>) -> impl IntoR
     // Routes store the agent *name* (sometimes a UUID for legacy hub-installed
     // binds), so normalize each route value to its canonical agent_id here -
     // otherwise the lookup below (by e.id) never matches and every agent shows 0.
-    let mut install_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut install_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     if let Some(ref cm) = state.channel_manager {
         let cm = cm.lock().await;
         for (_sender_id, agent_ref) in cm.list_sender_routes() {
-            let key = match crate::routes::common::resolve_agent_id(&agent_ref, &state.kernel.registry) {
-                Ok((id, _)) => id.to_string(),
-                Err(_) => agent_ref, // stale/unresolvable route - count under raw value
-            };
+            let key =
+                match crate::routes::common::resolve_agent_id(&agent_ref, &state.kernel.registry) {
+                    Ok((id, _)) => id.to_string(),
+                    Err(_) => agent_ref, // stale/unresolvable route - count under raw value
+                };
             *install_counts.entry(key).or_insert(0) += 1;
         }
     }
@@ -1236,7 +1244,13 @@ pub async fn share_list_agents(State(state): State<Arc<AppState>>) -> impl IntoR
         .collect();
 
     // Also fetch Hub templates
-    let hub_url = state.kernel.config.hub.url.trim_end_matches('/').to_string();
+    let hub_url = state
+        .kernel
+        .config
+        .hub
+        .url
+        .trim_end_matches('/')
+        .to_string();
     if !hub_url.is_empty() {
         let url = format!("{}/api/templates?limit=50&visibility=public", hub_url);
         match reqwest::Client::new().get(&url).send().await {
@@ -1245,7 +1259,10 @@ pub async fn share_list_agents(State(state): State<Arc<AppState>>) -> impl IntoR
                     if let Some(templates) = data.get("templates").and_then(|t| t.as_array()) {
                         for t in templates {
                             if t.get("visibility").and_then(|v| v.as_str()) == Some("public") {
-                                let downloads = t.get("download_count").and_then(|v| v.as_i64()).unwrap_or(0);
+                                let downloads = t
+                                    .get("download_count")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(0);
                                 agents.push(serde_json::json!({
                                     "name": t.get("name").and_then(|v| v.as_str()).unwrap_or(""),
                                     "display_name": t.get("display_name").and_then(|v| v.as_str())
@@ -1299,7 +1316,10 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/agents/{id}/mode", routing::put(set_agent_mode))
         .route("/api/agents/{id}/model", routing::put(set_model))
         .route("/api/agents/{id}/restart", routing::post(restart_agent))
-        .route("/api/agents/{id}/reset-session", routing::post(reset_agent_session))
+        .route(
+            "/api/agents/{id}/reset-session",
+            routing::post(reset_agent_session),
+        )
         .route("/api/agents/{id}/start", routing::post(restart_agent))
         .route("/api/agents/{id}/stop", routing::post(stop_agent))
         .route("/api/agents/{id}/suspend", routing::post(suspend_agent))

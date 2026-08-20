@@ -75,7 +75,10 @@ pub fn compose_summary_md(input: &SummaryMdInput) -> String {
     let child_count = input.child_ids.len();
     let scope_slug = slugify_source_id(input.tree_scope);
 
-    let mut tags = vec![format!("{tree_kind}/{scope_slug}", tree_kind = input.tree_kind)];
+    let mut tags = vec![format!(
+        "{tree_kind}/{scope_slug}",
+        tree_kind = input.tree_kind
+    )];
     tags.extend(input.topics.iter().map(|t| format!("topic/{t}")));
     let tags_yaml = format_yaml_list(&tags);
 
@@ -170,8 +173,7 @@ fn format_wikilink_list(ids: &[String]) -> String {
 }
 
 fn sanitize_wikilink(id: &str) -> String {
-    id.replace(['|', '#'], "-")
-        .replace(['[', ']'], "")
+    id.replace(['|', '#'], "-").replace(['[', ']'], "")
 }
 
 /// Convert epoch milliseconds to ISO 8601 string.

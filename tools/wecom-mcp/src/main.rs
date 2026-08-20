@@ -422,7 +422,9 @@ define_wecom_mcp_params!(WecomGetScheduleDetailParams {
 });
 
 define_wecom_mcp_params!(WecomCreateScheduleParams {
-    #[schemars(description = "日程信息，包含 start_time, end_time, summary, description, location, is_whole_day, attendees, reminders")]
+    #[schemars(
+        description = "日程信息，包含 start_time, end_time, summary, description, location, is_whole_day, attendees, reminders"
+    )]
     schedule: Value,
 });
 
@@ -488,7 +490,12 @@ impl WecomServer {
         match self
             .proxy
             .client()
-            .api_post(&params.corp_id, &params.secret, "/cgi-bin/message/send", &body)
+            .api_post(
+                &params.corp_id,
+                &params.secret,
+                "/cgi-bin/message/send",
+                &body,
+            )
             .await
         {
             Ok(resp) => json_to_string(&resp),
@@ -510,7 +517,12 @@ impl WecomServer {
         match self
             .proxy
             .client()
-            .api_post(&params.corp_id, &params.secret, "/cgi-bin/kf/send_msg", &body)
+            .api_post(
+                &params.corp_id,
+                &params.secret,
+                "/cgi-bin/kf/send_msg",
+                &body,
+            )
             .await
         {
             Ok(resp) => json_to_string(&resp),
@@ -534,14 +546,10 @@ impl WecomServer {
     }
 
     #[tool(description = "轮询 AI 对话生成结果")]
-    async fn wecom_bot_poll(
-        &self,
-        Parameters(params): Parameters<WecomBotPollParams>,
-    ) -> String {
+    async fn wecom_bot_poll(&self, Parameters(params): Parameters<WecomBotPollParams>) -> String {
         let url = format!(
             "{}/ai/qc/query_result?scode={}",
-            "https://work.weixin.qq.com",
-            params.scode
+            "https://work.weixin.qq.com", params.scode
         );
         match self.proxy.client().http_get_json(&url).await {
             Ok(resp) => json_to_string(&resp),
@@ -550,10 +558,7 @@ impl WecomServer {
     }
 
     #[tool(description = "生成二维码图片 URL")]
-    async fn wecom_qrcode(
-        &self,
-        Parameters(params): Parameters<WecomQrcodeParams>,
-    ) -> String {
+    async fn wecom_qrcode(&self, Parameters(params): Parameters<WecomQrcodeParams>) -> String {
         let encoded = mcp_common::json::url_encode(&params.url);
         let qr_url = format!(
             "https://api.qrserver.com/v1/create-qr-code/?size=300x300&format=png&data={}",
@@ -609,9 +614,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "get_doc_content", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "get_doc_content",
+                &arguments,
             )
             .await
         {
@@ -632,9 +640,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "create_doc", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "create_doc",
+                &arguments,
             )
             .await
         {
@@ -661,9 +672,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "edit_doc_content", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "edit_doc_content",
+                &arguments,
             )
             .await
         {
@@ -689,9 +703,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartpage_export_task", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartpage_export_task",
+                &arguments,
             )
             .await
         {
@@ -711,9 +728,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartpage_get_export_result", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartpage_get_export_result",
+                &arguments,
             )
             .await
         {
@@ -733,9 +753,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartsheet_get_sheet", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartsheet_get_sheet",
+                &arguments,
             )
             .await
         {
@@ -756,9 +779,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartsheet_add_sheet", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartsheet_add_sheet",
+                &arguments,
             )
             .await
         {
@@ -779,9 +805,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartsheet_update_sheet", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartsheet_update_sheet",
+                &arguments,
             )
             .await
         {
@@ -802,9 +831,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartsheet_delete_sheet", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartsheet_delete_sheet",
+                &arguments,
             )
             .await
         {
@@ -825,9 +857,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartsheet_get_fields", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartsheet_get_fields",
+                &arguments,
             )
             .await
         {
@@ -849,9 +884,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartsheet_add_fields", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartsheet_add_fields",
+                &arguments,
             )
             .await
         {
@@ -873,9 +911,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartsheet_update_fields", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartsheet_update_fields",
+                &arguments,
             )
             .await
         {
@@ -897,9 +938,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartsheet_delete_fields", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartsheet_delete_fields",
+                &arguments,
             )
             .await
         {
@@ -923,9 +967,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartsheet_get_records", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartsheet_get_records",
+                &arguments,
             )
             .await
         {
@@ -947,9 +994,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartsheet_add_records", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartsheet_add_records",
+                &arguments,
             )
             .await
         {
@@ -974,9 +1024,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartsheet_update_records", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartsheet_update_records",
+                &arguments,
             )
             .await
         {
@@ -998,9 +1051,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "smartsheet_delete_records", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "smartsheet_delete_records",
+                &arguments,
             )
             .await
         {
@@ -1031,9 +1087,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "get_msg_chat_list", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "get_msg_chat_list",
+                &arguments,
             )
             .await
         {
@@ -1063,9 +1122,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "get_message", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "get_message",
+                &arguments,
             )
             .await
         {
@@ -1090,9 +1152,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "send_message", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "send_message",
+                &arguments,
             )
             .await
         {
@@ -1132,9 +1197,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "get_todo_list", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "get_todo_list",
+                &arguments,
             )
             .await
         {
@@ -1154,9 +1222,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "get_todo_detail", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "get_todo_detail",
+                &arguments,
             )
             .await
         {
@@ -1182,9 +1253,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "create_todo", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "create_todo",
+                &arguments,
             )
             .await
         {
@@ -1216,9 +1290,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "update_todo", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "update_todo",
+                &arguments,
             )
             .await
         {
@@ -1238,9 +1315,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "delete_todo", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "delete_todo",
+                &arguments,
             )
             .await
         {
@@ -1261,9 +1341,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "change_todo_user_status", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "change_todo_user_status",
+                &arguments,
             )
             .await
         {
@@ -1301,9 +1384,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "create_meeting", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "create_meeting",
+                &arguments,
             )
             .await
         {
@@ -1330,9 +1416,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "list_user_meetings", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "list_user_meetings",
+                &arguments,
             )
             .await
         {
@@ -1358,9 +1447,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "get_meeting_info", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "get_meeting_info",
+                &arguments,
             )
             .await
         {
@@ -1380,9 +1472,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "cancel_meeting", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "cancel_meeting",
+                &arguments,
             )
             .await
         {
@@ -1403,9 +1498,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "set_invite_meeting_members", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "set_invite_meeting_members",
+                &arguments,
             )
             .await
         {
@@ -1430,9 +1528,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "get_schedule_list_by_range", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "get_schedule_list_by_range",
+                &arguments,
             )
             .await
         {
@@ -1452,9 +1553,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "get_schedule_detail", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "get_schedule_detail",
+                &arguments,
             )
             .await
         {
@@ -1474,9 +1578,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "create_schedule", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "create_schedule",
+                &arguments,
             )
             .await
         {
@@ -1496,9 +1603,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "update_schedule", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "update_schedule",
+                &arguments,
             )
             .await
         {
@@ -1518,9 +1628,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "cancel_schedule", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "cancel_schedule",
+                &arguments,
             )
             .await
         {
@@ -1541,9 +1654,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "add_schedule_attendees", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "add_schedule_attendees",
+                &arguments,
             )
             .await
         {
@@ -1564,9 +1680,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "del_schedule_attendees", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "del_schedule_attendees",
+                &arguments,
             )
             .await
         {
@@ -1588,9 +1707,12 @@ impl WecomServer {
         match self
             .proxy
             .call_mcp_tool(
-                &params.corp_id, &params.secret,
-                &params.bot_id, &params.bot_secret,
-                "check_availability", &arguments,
+                &params.corp_id,
+                &params.secret,
+                &params.bot_id,
+                &params.bot_secret,
+                "check_availability",
+                &arguments,
             )
             .await
         {

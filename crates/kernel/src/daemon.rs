@@ -2,13 +2,13 @@
 //!
 //! All methods live on `CarrierKernel` but are organized here for clarity.
 
-use types::agent::{AgentId, AgentState, ScheduleMode};
-use types::error::{CarrierError, CarrierResult};
 use super::handle::SYSTEM_AGENT_ID;
-use types::event::*;
-use types::scheduler::CronJob;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+use types::agent::{AgentId, AgentState, ScheduleMode};
+use types::error::{CarrierError, CarrierResult};
+use types::event::*;
+use types::scheduler::CronJob;
 
 use crate::kernel::CarrierKernel;
 use runtime::kernel_handle::KernelHandle;
@@ -67,7 +67,10 @@ fn slugify(name: &str) -> String {
         if c.is_control() {
             continue;
         }
-        if matches!(c, '/' | '\\' | ':' | ' ' | '.' | '<' | '>' | '"' | '|' | '?' | '*') {
+        if matches!(
+            c,
+            '/' | '\\' | ':' | ' ' | '.' | '<' | '>' | '"' | '|' | '?' | '*'
+        ) {
             s.push('-');
         } else {
             s.push(c);
@@ -170,8 +173,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                 chrono::Local::now().format("%Y%m%d")
             );
             tracing::info!(job = %job_name, task_id = %task_id, "Cron: generated task_id");
-            let kh: std::sync::Arc<dyn runtime::kernel_handle::KernelHandle> =
-                kernel.clone();
+            let kh: std::sync::Arc<dyn runtime::kernel_handle::KernelHandle> = kernel.clone();
             // timeout_s == 0 means "no backstop" - run unbounded (rely on stuck
             // detection + per-LLM-call stall timeout). Otherwise wrap in the
             // wall-clock backstop.
@@ -200,12 +202,9 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
             let outcome = if timeout_s == 0 {
                 Some(turn_fut.await)
             } else {
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(timeout_s),
-                    turn_fut,
-                )
-                .await
-                .ok()
+                tokio::time::timeout(std::time::Duration::from_secs(timeout_s), turn_fut)
+                    .await
+                    .ok()
             };
             match outcome {
                 Some(Ok(result)) => {
@@ -301,10 +300,8 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                             // its resume budgets are never needed again.
                             if let Some(c) = &job.chain {
                                 if c.is_tail() {
-                                    if let Err(e) = kernel
-                                        .memory
-                                        .chain_resume()
-                                        .clear_chain(&c.chain_id)
+                                    if let Err(e) =
+                                        kernel.memory.chain_resume().clear_chain(&c.chain_id)
                                     {
                                         tracing::warn!(
                                             chain_id = %c.chain_id,
@@ -329,10 +326,7 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                     tracing::warn!(job = %job_name, error = %err_msg, "Cron job failed");
                     kernel.cron_scheduler.record_failure(job_id, &err_msg);
                     let failure = Err(err_msg.clone());
-                    let notice = format!(
-                        "⚠️ 定时任务「{}」执行失败：{}",
-                        job_name, err_msg
-                    );
+                    let notice = format!("⚠️ 定时任务「{}」执行失败：{}", job_name, err_msg);
                     if let Err(de) = cron_deliver_response(
                         kernel,
                         agent_id,
@@ -352,10 +346,9 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                 }
                 None => {
                     tracing::warn!(job = %job_name, timeout_s, "Cron job timed out");
-                    kernel.cron_scheduler.record_failure(
-                        job_id,
-                        &format!("timed out after {timeout_s}s"),
-                    );
+                    kernel
+                        .cron_scheduler
+                        .record_failure(job_id, &format!("timed out after {timeout_s}s"));
                     let notice = format!(
                         "⚠️ 定时任务「{}」执行超时（{}秒未完成）",
                         job_name, timeout_s
@@ -471,7 +464,10 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                 .map(|t| t.to_rfc3339())
                 .unwrap_or_else(|| (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339());
             let push_since = (chrono::Utc::now() - chrono::Duration::hours(44)).to_rfc3339();
-            let stats = match kernel.follower_stats(channel, bot_id, &since, &push_since).await {
+            let stats = match kernel
+                .follower_stats(channel, bot_id, &since, &push_since)
+                .await
+            {
                 Ok(s) => s,
                 Err(e) => {
                     let msg = format!("follower stats lookup failed: {e}");
@@ -521,8 +517,8 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
             let home = kernel.config.home_dir.clone();
             let pending_ids = wechat_oa::publish_tracker::pending(&home, bot_id);
             if pending_ids.is_empty() {
-                let streak = wechat_oa::publish_tracker::bump_streak(&home, bot_id)
-                    .unwrap_or_default();
+                let streak =
+                    wechat_oa::publish_tracker::bump_streak(&home, bot_id).unwrap_or_default();
                 if streak >= 3 {
                     let _ = kernel.cron_scheduler.remove_job(job_id);
                     let _ = kernel.cron_scheduler.persist();
@@ -545,7 +541,9 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
             };
             let http = reqwest::Client::new();
             let token = match wechat_oa::token::get_token(
-                &http, &account.app_id, &account.app_secret,
+                &http,
+                &account.app_id,
+                &account.app_secret,
             )
             .await
             {
@@ -642,7 +640,9 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
 
             let http = reqwest::Client::new();
             let token = match wechat_oa::token::get_token(
-                &http, &account.app_id, &account.app_secret,
+                &http,
+                &account.app_id,
+                &account.app_secret,
             )
             .await
             {
@@ -656,18 +656,15 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
 
             // Enumerate published articles (first page caps the blast radius;
             // total_count is small in practice).
-            let articles = match wechat_oa::api::freepublish_batchget(
-                &http, &token, 0, 20, true,
-            )
-            .await
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    let msg = format!("comment pull freepublish_batchget failed: {e}");
-                    kernel.cron_scheduler.record_failure(job_id, &msg);
-                    return Err(msg);
-                }
-            };
+            let articles =
+                match wechat_oa::api::freepublish_batchget(&http, &token, 0, 20, true).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let msg = format!("comment pull freepublish_batchget failed: {e}");
+                        kernel.cron_scheduler.record_failure(job_id, &msg);
+                        return Err(msg);
+                    }
+                };
 
             let now_local = chrono::Local::now();
             let mut sections: Vec<String> = Vec::new();
@@ -681,20 +678,17 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                     continue;
                 };
                 let title = truncate_chars(news["title"].as_str().unwrap_or("（无标题）"), 30);
-                let comments = match wechat_oa::api::comment_list(
-                    &http, &token, mid, 0, 0, 0, 50,
-                )
-                .await
-                {
-                    Ok(v) => v,
-                    Err(e) => {
-                        // Per-article soft-fail: e.g. articles whose comment
-                        // section was never opened error out — skip, not fail.
-                        tracing::debug!(job = %job_name, mid, error = %e,
+                let comments =
+                    match wechat_oa::api::comment_list(&http, &token, mid, 0, 0, 0, 50).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            // Per-article soft-fail: e.g. articles whose comment
+                            // section was never opened error out — skip, not fail.
+                            tracing::debug!(job = %job_name, mid, error = %e,
                             "CommentPull: comment_list failed (skipped article)");
-                        continue;
-                    }
-                };
+                            continue;
+                        }
+                    };
                 let raw = comments["comment"].as_array().cloned().unwrap_or_default();
                 let all_ids: Vec<i64> = raw
                     .iter()
@@ -708,7 +702,9 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                 let ingested: Vec<(i64, i64, String, String, i64)> = raw
                     .iter()
                     .filter(|c| {
-                        c["user_comment_id"].as_i64().is_some_and(|id| new_ids.contains(&id))
+                        c["user_comment_id"]
+                            .as_i64()
+                            .is_some_and(|id| new_ids.contains(&id))
                     })
                     .filter_map(|c| {
                         Some((
@@ -725,12 +721,9 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                 }
                 total_new += ingested.len();
                 sections.push(comment_section(&now_local, &title, &ingested));
-                if let Err(e) = wechat_oa::comment_state::mark_seen(
-                    &home,
-                    bot_id,
-                    &mid.to_string(),
-                    &new_ids,
-                ) {
+                if let Err(e) =
+                    wechat_oa::comment_state::mark_seen(&home, bot_id, &mid.to_string(), &new_ids)
+                {
                     tracing::warn!(job = %job_name, mid, error = %e,
                         "CommentPull: mark_seen failed (comments may re-ingest next run)");
                 }
@@ -779,7 +772,11 @@ fn comment_section(
     let mut out = format!("\n## {}《{}》\n", now.format("%m-%d %H:%M"), title);
     for (_id, ctype, content, openid, ts) in comments {
         let time = chrono::DateTime::from_timestamp(*ts, 0)
-            .map(|t| t.with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string())
+            .map(|t| {
+                t.with_timezone(&chrono::Local)
+                    .format("%m-%d %H:%M")
+                    .to_string()
+            })
             .unwrap_or_default();
         let who = if openid.len() >= 6 {
             format!("…{}", &openid[openid.len() - 6..])
@@ -874,7 +871,10 @@ fn build_follower_report(
             format!("{base}当前关注 {total} 人（官方总数）。")
         }
         OfficialTotal::FallbackFailed => {
-            format!("{base}当前关注 {} 人（台账数，官方总数获取失败）。", stats.active)
+            format!(
+                "{base}当前关注 {} 人（台账数，官方总数获取失败）。",
+                stats.active
+            )
         }
         OfficialTotal::NotApplicable => {
             format!("{base}当前关注 {} 人。", stats.active)
@@ -959,12 +959,9 @@ pub(super) async fn cron_deliver_response(
         .ok()
         .and_then(|g| g.clone());
     let agent_name = outbound_agent_key(kernel, agent_id);
-    let content = kernel
-        .resolve_agent_workspace(&agent_name)
-        .and_then(|ws| {
-            runtime::outbound::ContentRegistry::global()
-                .load(&agent_name, std::path::Path::new(&ws))
-        });
+    let content = kernel.resolve_agent_workspace(&agent_name).and_then(|ws| {
+        runtime::outbound::ContentRegistry::global().load(&agent_name, std::path::Path::new(&ws))
+    });
     let kh: std::sync::Arc<dyn runtime::kernel_handle::KernelHandle> = kernel.clone();
     let out = runtime::outbound::prepare_outbound(
         response,
@@ -993,7 +990,9 @@ pub(super) async fn cron_deliver_response(
         CronDelivery::None => Ok(()),
         CronDelivery::LastChannel => {
             let sender_id = owner_id.ok_or_else(|| {
-                CarrierError::Config("LastChannel delivery requires owner_id on the cron job".to_string())
+                CarrierError::Config(
+                    "LastChannel delivery requires owner_id on the cron job".to_string(),
+                )
             })?;
             deliver_via_last_channel(kernel, agent_id, sender_id, response).await
         }
@@ -1060,9 +1059,7 @@ pub(super) async fn cron_deliver_response(
 /// have completed, only the closing prose was lost.
 fn cron_turn_degenerate(response: &str) -> bool {
     let t = response.trim();
-    t.is_empty()
-        || t == "[no response]"
-        || t.contains("模型这次没有返回内容")
+    t.is_empty() || t == "[no response]" || t.contains("模型这次没有返回内容")
 }
 
 /// Max silent auto-resumes per `(chain_id, step)` before the daemon stops
@@ -1079,11 +1076,7 @@ const MAX_AUTO_RESUMES: u32 = 2;
 /// and a resume note appended to the turn message. The note matters for the
 /// "step finished its work but never scheduled the successor" case — the
 /// re-fired turn should verify-and-link, not redo the work.
-fn build_resume_job(
-    orig: &CronJob,
-    attempts: u32,
-    now: chrono::DateTime<chrono::Utc>,
-) -> CronJob {
+fn build_resume_job(orig: &CronJob, attempts: u32, now: chrono::DateTime<chrono::Utc>) -> CronJob {
     let suffix = format!("-r{attempts}");
     // validate() caps names at 128 chars — truncate the base, keep the
     // attempt suffix intact (it is the forensic marker).
@@ -1145,18 +1138,18 @@ fn is_stranded(
 fn cron_publish_followup_target(
     kernel: &Arc<CarrierKernel>,
     sender_id: &str,
-) -> (String, String, Option<runtime::plugin::bridge::ChannelSendFn>) {
+) -> (
+    String,
+    String,
+    Option<runtime::plugin::bridge::ChannelSendFn>,
+) {
     let last = kernel
         .memory
         .cron_delivery()
         .get_last_channel(sender_id)
         .ok()
         .flatten();
-    let send_fn = kernel
-        .channel_send_fn
-        .read()
-        .ok()
-        .and_then(|g| g.clone());
+    let send_fn = kernel.channel_send_fn.read().ok().and_then(|g| g.clone());
     match last {
         Some(c) => (c.channel_type, c.bot_id, send_fn),
         None => (String::new(), String::new(), send_fn),
@@ -1230,7 +1223,9 @@ async fn deliver_via_last_channel(
     let send_fn = match send_fn {
         Some(f) => f,
         None => {
-            return Err(CarrierError::Config("channel_send_fn not configured".into()));
+            return Err(CarrierError::Config(
+                "channel_send_fn not configured".into(),
+            ));
         }
     };
 
@@ -1293,10 +1288,7 @@ impl CarrierKernel {
             "<!-- clone-format-spec {} (system-seeded; do not edit) -->",
             clone::CLONE_FORMAT_SPEC_VERSION
         );
-        let desired = format!(
-            "{marker}\n{}",
-            clone::CLONE_FORMAT_SPEC
-        );
+        let desired = format!("{marker}\n{}", clone::CLONE_FORMAT_SPEC);
         for entry in self.registry.list() {
             if entry.manifest.clone_source.is_none() {
                 continue;
@@ -1334,7 +1326,12 @@ impl CarrierKernel {
     /// already removed (or is about to remove) the triggering job, so no
     /// detection path can re-trigger. Silent under budget — provider noise
     /// stays out of the chat (absorb, don't leak).
-    async fn maybe_resume_chain(&self, job: &CronJob, job_id: types::scheduler::CronJobId, reason: &str) {
+    async fn maybe_resume_chain(
+        &self,
+        job: &CronJob,
+        job_id: types::scheduler::CronJobId,
+        reason: &str,
+    ) {
         let Some(chain) = &job.chain else { return };
         if !self.config.chain_resume_enabled {
             return;
@@ -1545,8 +1542,9 @@ impl CarrierKernel {
             } else {
                 "自主成长。mode=learn".to_string()
             };
-            let desired_schedule =
-                types::scheduler::CronSchedule::Every { every_secs: interval_secs };
+            let desired_schedule = types::scheduler::CronSchedule::Every {
+                every_secs: interval_secs,
+            };
             let desired_action = types::scheduler::CronAction::AgentTurn {
                 message: message.clone(),
                 model_override: None,
@@ -1691,8 +1689,7 @@ impl CarrierKernel {
                 continue;
             };
 
-            let config =
-                lifecycle::evolution_config::read_evolution_config(workspace.as_path());
+            let config = lifecycle::evolution_config::read_evolution_config(workspace.as_path());
 
             if matches!(
                 config.evolution_mode,
@@ -1737,21 +1734,22 @@ impl CarrierKernel {
                             driver.complete(request),
                         )
                         .await
-                        .map_err(|_| anyhow::anyhow!("knowledge watcher LLM call timed out after 60s"))
+                        .map_err(|_| {
+                            anyhow::anyhow!("knowledge watcher LLM call timed out after 60s")
+                        })
                         .and_then(|r| r.map(|r| r.text()).map_err(|e| anyhow::anyhow!("{e}")));
                         let _ = tx.send(result);
                     });
                     rx.recv_timeout(std::time::Duration::from_secs(65))
-                        .map_err(|_| anyhow::anyhow!("knowledge watcher LLM call channel closed or timed out"))?
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "knowledge watcher LLM call channel closed or timed out"
+                            )
+                        })?
                 },
             );
 
-            match lifecycle::watcher::spawn_watcher(
-                workspace.clone(),
-                config,
-                llm_call,
-                None,
-            ) {
+            match lifecycle::watcher::spawn_watcher(workspace.clone(), config, llm_call, None) {
                 Ok(handle) => {
                     info!(agent = %entry.name, "Started knowledge file watcher");
                     if let Ok(mut handles) = kernel.runtime.watcher_handles.lock() {
@@ -1969,16 +1967,20 @@ impl CarrierKernel {
                         // Periodically purge expired pending notifications.
                         match kernel.memory.cron_delivery().purge_expired() {
                             Ok(0) => {}
-                            Ok(n) => tracing::debug!(deleted = n, "Purged expired pending notifications"),
+                            Ok(n) => {
+                                tracing::debug!(deleted = n, "Purged expired pending notifications")
+                            }
                             Err(e) => tracing::warn!("Purge expired notifications failed: {e}"),
                         }
                         // Abandoned cap-circuited chains must not accumulate.
-                        let cutoff =
-                            (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+                        let cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
                         match kernel.memory.chain_resume().purge_stale(&cutoff) {
                             Ok(0) => {}
                             Ok(n) => {
-                                tracing::debug!(deleted = n, "Purged stale chain-resume ledger rows")
+                                tracing::debug!(
+                                    deleted = n,
+                                    "Purged stale chain-resume ledger rows"
+                                )
                             }
                             Err(e) => tracing::warn!("Chain-resume ledger purge failed: {e}"),
                         }
@@ -2024,11 +2026,11 @@ impl CarrierKernel {
                         Ok(rows) => {
                             for r in rows {
                                 let completed = r.completed_steps.clone();
-                                match kernel
-                                    .memory
-                                    .flow_runs()
-                                    .update_status(&r.run_id, "timed_out", &completed)
-                                {
+                                match kernel.memory.flow_runs().update_status(
+                                    &r.run_id,
+                                    "timed_out",
+                                    &completed,
+                                ) {
                                     Ok(()) => info!(
                                         run_id = %r.run_id,
                                         flow = %r.flow_name,
@@ -2056,7 +2058,10 @@ impl CarrierKernel {
                 tokio::spawn(async move {
                     let discovered = runtime::a2a::discover_external_agents(&agents).await;
                     if let Ok(mut store) = kernel.a2a.a2a_external_agents.lock() {
-                        *store = discovered.into_iter().map(|(url, card)| (url, card, std::time::Instant::now())).collect();
+                        *store = discovered
+                            .into_iter()
+                            .map(|(url, card)| (url, card, std::time::Instant::now()))
+                            .collect();
                     }
                 });
             }
@@ -2213,12 +2218,12 @@ impl CarrierKernel {
                     // Background ticks are agent-autonomous (no user/sender); give
                     // them an explicit `task:autonomous` label so the session is
                     // traceable instead of falling back to an unlabeled orphan.
-                    let handle: Option<std::sync::Arc<dyn runtime::kernel_handle::KernelHandle>> = k
-                        .coordination
-                        .self_handle
-                        .get()
-                        .and_then(|w| w.upgrade())
-                        .map(|a| a as std::sync::Arc<dyn runtime::kernel_handle::KernelHandle>);
+                    let handle: Option<std::sync::Arc<dyn runtime::kernel_handle::KernelHandle>> =
+                        k.coordination
+                            .self_handle
+                            .get()
+                            .and_then(|w| w.upgrade())
+                            .map(|a| a as std::sync::Arc<dyn runtime::kernel_handle::KernelHandle>);
                     match k
                         .send_message_with_handle(
                             aid,
@@ -2277,9 +2282,7 @@ mod tests {
                 metadata: HashMap::new(),
                 tags: vec![],
                 autonomous: None,
-                workspace: Some(std::path::PathBuf::from(format!(
-                    "/tmp/workspaces/{name}"
-                ))),
+                workspace: Some(std::path::PathBuf::from(format!("/tmp/workspaces/{name}"))),
                 generate_identity_files: true,
                 exec_policy: None,
                 cli_exec: None,
@@ -2350,7 +2353,9 @@ mod tests {
             "(模型这次没有返回内容,可能是服务繁忙或上下文过长。请稍后重试,或简化一下你的请求。)"
         ));
         // Healthy: real prose, even short
-        assert!(!cron_turn_degenerate("✅ Step 4 排版完成，正文.html 已落盘。"));
+        assert!(!cron_turn_degenerate(
+            "✅ Step 4 排版完成，正文.html 已落盘。"
+        ));
         assert!(!cron_turn_degenerate("无新知。"));
         // Tools ran, closing prose lost — NOT a chain-breaker
         assert!(!cron_turn_degenerate(
@@ -2392,7 +2397,8 @@ mod tests {
     /// verbatim identity + attempt suffix + At(+2min) + self-heal note.
     #[test]
     fn build_resume_job_copies_breakpoint_with_note_and_suffix() {
-        let orig = chained_agent_turn_job("article-writer-test-chain", "写正文。流水线ID = test-chain");
+        let orig =
+            chained_agent_turn_job("article-writer-test-chain", "写正文。流水线ID = test-chain");
         let now = Utc::now();
         let resume = build_resume_job(&orig, 1, now);
 
@@ -2409,13 +2415,21 @@ mod tests {
         match resume.schedule {
             types::scheduler::CronSchedule::At { at } => {
                 let delta = (at - now).num_seconds();
-                assert!((110..=130).contains(&delta), "At should be ~+2min, got {delta}s");
+                assert!(
+                    (110..=130).contains(&delta),
+                    "At should be ~+2min, got {delta}s"
+                );
             }
             other => panic!("resume schedule must be At, got {other:?}"),
         }
         // Message = original + self-heal note (verify-and-link, don't redo).
         match &resume.action {
-            types::scheduler::CronAction::AgentTurn { message, active_flow, session_label, .. } => {
+            types::scheduler::CronAction::AgentTurn {
+                message,
+                active_flow,
+                session_label,
+                ..
+            } => {
                 assert!(message.starts_with("写正文。流水线ID = test-chain"));
                 assert!(message.contains("链自愈重试 第1次"));
                 assert!(message.contains("不要重做"));
@@ -2518,8 +2532,20 @@ mod tests {
             &now,
             "新白广城际时刻表上线",
             &[
-                (3, 1, "实际买票没有直达的".into(), "oOPNNv7AGbXMsG3kQ".into(), 1_785_460_120),
-                (4, 2, "终于等到了".into(), "oOPNNvabc123".into(), 1_785_460_200),
+                (
+                    3,
+                    1,
+                    "实际买票没有直达的".into(),
+                    "oOPNNv7AGbXMsG3kQ".into(),
+                    1_785_460_120,
+                ),
+                (
+                    4,
+                    2,
+                    "终于等到了".into(),
+                    "oOPNNvabc123".into(),
+                    1_785_460_200,
+                ),
             ],
         );
         write_comment_ledger(&path, &[s1]).unwrap();
@@ -2527,15 +2553,26 @@ mod tests {
         assert!(first.starts_with("---\n"), "frontmatter head: {first}");
         assert!(first.contains("# 读者留言（自动抽取 2026-08）"), "{first}");
         assert!(first.contains("《新白广城际时刻表上线》"), "{first}");
-        assert!(first.contains("读者(…MsG3kQ)：实际买票没有直达的"), "{first}");
+        assert!(
+            first.contains("读者(…MsG3kQ)：实际买票没有直达的"),
+            "{first}"
+        );
         assert!(first.contains("[精选]：终于等到了"), "{first}");
         assert_eq!(first.matches("读者留言（自动抽取").count(), 1);
 
         // Second run appends — no second frontmatter/header.
-        let s2 = comment_section(&now, "司机使用指南", &[(9, 1, "很实用".into(), "oXyz987".into(), 0)]);
+        let s2 = comment_section(
+            &now,
+            "司机使用指南",
+            &[(9, 1, "很实用".into(), "oXyz987".into(), 0)],
+        );
         write_comment_ledger(&path, &[s2]).unwrap();
         let second = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(second.matches("---\nname: 读者留言").count(), 1, "header must not duplicate");
+        assert_eq!(
+            second.matches("---\nname: 读者留言").count(),
+            1,
+            "header must not duplicate"
+        );
         assert!(second.contains("《司机使用指南》"), "{second}");
         assert!(second.len() > first.len());
         let _ = std::fs::remove_dir_all(&dir);
@@ -2578,14 +2615,25 @@ mod tests {
             pushable: 40,
         };
         // Official total wins over the (2-day-old, event-window) ledger count.
-        let t = build_follower_report("86bus", "2026-08-18T13:00:00Z", &stats, OfficialTotal::Official(80330));
+        let t = build_follower_report(
+            "86bus",
+            "2026-08-18T13:00:00Z",
+            &stats,
+            OfficialTotal::Official(80330),
+        );
         assert!(t.contains("新增关注 12 人"), "{t}");
         assert!(t.contains("当前关注 80330 人（官方总数）"), "{t}");
-        assert!(!t.contains("1095"), "ledger active must not read as 当前关注: {t}");
+        assert!(
+            !t.contains("1095"),
+            "ledger active must not read as 当前关注: {t}"
+        );
 
         // weixin-oa API failure: ledger count + a visible regression marker.
         let t = build_follower_report("86bus", "s", &stats, OfficialTotal::FallbackFailed);
-        assert!(t.contains("当前关注 1095 人（台账数，官方总数获取失败）"), "{t}");
+        assert!(
+            t.contains("当前关注 1095 人（台账数，官方总数获取失败）"),
+            "{t}"
+        );
 
         // Non-weixin channel: ledger is the truth, no misleading failure note.
         let t = build_follower_report("ilink-bot", "s", &stats, OfficialTotal::NotApplicable);

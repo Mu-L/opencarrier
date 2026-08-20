@@ -36,7 +36,8 @@ pub fn query_source(
             continue;
         }
         for level in 1..=tree.max_level {
-            let summaries = tree_store.list_summaries(owner_id, user_id, &tree.tree_id, Some(level), 100)?;
+            let summaries =
+                tree_store.list_summaries(owner_id, user_id, &tree.tree_id, Some(level), 100)?;
             for node in summaries {
                 hits.push(RetrievalHit {
                     node_id: node.id,
@@ -65,7 +66,7 @@ pub fn query_source(
     let total = hits.len();
 
     // Sort newest-first
-    hits.sort_by(|a, b| b.time_range_end_ms.cmp(&a.time_range_end_ms));
+    hits.sort_by_key(|h| std::cmp::Reverse(h.time_range_end_ms));
     hits.truncate(limit);
 
     Ok(QueryResponse {
@@ -104,10 +105,17 @@ fn scope_matches_kind(scope: &str, kind_prefix: &str) -> bool {
     }
     // Platform-specific prefix mapping
     const PLATFORM_KINDS: &[(&str, &str)] = &[
-        ("wechat", "chat"), ("feishu", "chat"), ("wecom", "chat"),
-        ("dingtalk", "chat"), ("slack", "chat"), ("api", "chat"),
-        ("imap", "email"), ("gmail", "email"), ("outlook", "email"),
-        ("notion", "document"), ("drive", "document"),
+        ("wechat", "chat"),
+        ("feishu", "chat"),
+        ("wecom", "chat"),
+        ("dingtalk", "chat"),
+        ("slack", "chat"),
+        ("api", "chat"),
+        ("imap", "email"),
+        ("gmail", "email"),
+        ("outlook", "email"),
+        ("notion", "document"),
+        ("drive", "document"),
     ];
     PLATFORM_KINDS
         .iter()
@@ -127,9 +135,9 @@ mod tests {
     use super::*;
     use crate::migration::run_migrations;
     use crate::tree::bucket_seal::BucketSealEngine;
+    use crate::tree::store::ChunkStore;
     use crate::tree::summariser::inert::InertSummariser;
     use crate::tree::types::{Chunk, SourceKind};
-    use crate::tree::store::ChunkStore;
     use tempfile::TempDir;
 
     fn setup() -> (Arc<Mutex<Connection>>, TempDir) {
@@ -154,7 +162,8 @@ mod tests {
         let tree_store = TreeTreeStore::new(conn.clone());
         let chunk_store = ChunkStore::new(conn.clone());
 
-        let tree = tree_store.get_or_create_tree("owner_1", "", TreeKind::Source, "wechat:test:sender")?;
+        let tree =
+            tree_store.get_or_create_tree("owner_1", "", TreeKind::Source, "wechat:test:sender")?;
 
         // Insert enough chunks and force seal
         for i in 0..10 {
@@ -180,13 +189,32 @@ mod tests {
             chunk_store.upsert_chunks(&[chunk])?;
         }
 
-        let seal_engine = BucketSealEngine::new(conn.clone(), _dir.path().to_path_buf(), Arc::new(InertSummariser));
+        let seal_engine = BucketSealEngine::new(
+            conn.clone(),
+            _dir.path().to_path_buf(),
+            Arc::new(InertSummariser),
+        );
         for i in 0..10 {
-            seal_engine.append_to_buffer("owner_1", &tree.id, 0, &format!("chunk_src_{i}"), 6000, 1_700_000_000_000)?;
+            seal_engine.append_to_buffer(
+                "owner_1",
+                &tree.id,
+                0,
+                &format!("chunk_src_{i}"),
+                6000,
+                1_700_000_000_000,
+            )?;
         }
         seal_engine.cascade_seals("owner_1", &tree, 0, false)?;
 
-        let resp = query_source(&conn, "owner_1", None, Some("wechat:test:sender"), None, None, 10)?;
+        let resp = query_source(
+            &conn,
+            "owner_1",
+            None,
+            Some("wechat:test:sender"),
+            None,
+            None,
+            10,
+        )?;
         assert!(!resp.hits.is_empty());
         assert_eq!(resp.hits[0].tree_scope, "wechat:test:sender");
         Ok(())
@@ -208,8 +236,14 @@ mod tests {
         let tree_store = TreeTreeStore::new(conn.clone());
 
         // Two source trees under the SAME owner, different users.
-        let tree_a = tree_store.get_or_create_tree("owner_1", "alice", TreeKind::Source, "wechat:gh:alice")?;
-        let tree_b = tree_store.get_or_create_tree("owner_1", "bob", TreeKind::Source, "wechat:gh:bob")?;
+        let tree_a = tree_store.get_or_create_tree(
+            "owner_1",
+            "alice",
+            TreeKind::Source,
+            "wechat:gh:alice",
+        )?;
+        let tree_b =
+            tree_store.get_or_create_tree("owner_1", "bob", TreeKind::Source, "wechat:gh:bob")?;
 
         // Seed one L1 summary into each tree, tagged with the tree's user_id.
         for (tree, user) in [(&tree_a, "alice"), (&tree_b, "bob")] {
@@ -241,7 +275,8 @@ mod tests {
         assert!(!resp.hits.is_empty(), "alice should see her own summaries");
         assert!(
             resp.hits.iter().all(|h| h.tree_scope == "wechat:gh:alice"),
-            "alice must not see bob's summaries: {:?}", resp.hits
+            "alice must not see bob's summaries: {:?}",
+            resp.hits
         );
 
         // Bob likewise sees only his own.

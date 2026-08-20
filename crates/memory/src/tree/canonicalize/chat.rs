@@ -59,7 +59,12 @@ pub fn canonicalise(
     let mut md = String::new();
     for msg in &messages {
         let ts_iso = ms_to_iso(msg.timestamp_ms);
-        md.push_str(&format!("## {} — {}\n{}\n\n", ts_iso, msg.author, msg.text.trim()));
+        md.push_str(&format!(
+            "## {} — {}\n{}\n\n",
+            ts_iso,
+            msg.author,
+            msg.text.trim()
+        ));
     }
 
     let source_ref = normalize_source_ref(messages.first().and_then(|m| m.source_ref.clone()));

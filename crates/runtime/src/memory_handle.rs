@@ -116,14 +116,26 @@ pub trait MemoryHandle: Send + Sync {
     // -----------------------------------------------------------------
 
     /// User statistics: total users, active users, new users.
-    fn analytics_user_stats(&self, agent_id: &str, active_days: u32) -> CarrierResult<serde_json::Value>;
+    fn analytics_user_stats(
+        &self,
+        agent_id: &str,
+        active_days: u32,
+    ) -> CarrierResult<serde_json::Value>;
 
     /// Per-user lookup: session count, last active, recent conversation summary.
-    fn analytics_user_lookup(&self, agent_id: &str, sender_id: &str) -> CarrierResult<serde_json::Value>;
+    fn analytics_user_lookup(
+        &self,
+        agent_id: &str,
+        sender_id: &str,
+    ) -> CarrierResult<serde_json::Value>;
 
     /// Usage analytics: token consumption, daily trends, per-model breakdown.
     fn analytics_usage(&self, agent_id: &str, days: u32) -> CarrierResult<serde_json::Value>;
 
     /// Recent conversations list (metadata only, no message content).
-    fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> CarrierResult<serde_json::Value>;
+    fn analytics_recent_conversations(
+        &self,
+        agent_id: &str,
+        limit: u32,
+    ) -> CarrierResult<serde_json::Value>;
 }

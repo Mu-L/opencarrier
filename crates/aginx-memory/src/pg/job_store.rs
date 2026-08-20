@@ -59,8 +59,14 @@ impl JobStore {
                      WHERE dedupe_key IS NOT NULL AND status IN ('ready','running') \
                  DO NOTHING",
                 &[
-                    &job_id, &job.owner_id, &kind, &job.payload_json, &job.dedupe_key,
-                    &max_attempts, &available_at_ms, &now_ms,
+                    &job_id,
+                    &job.owner_id,
+                    &kind,
+                    &job.payload_json,
+                    &job.dedupe_key,
+                    &max_attempts,
+                    &available_at_ms,
+                    &now_ms,
                 ],
             )
             .await
@@ -132,7 +138,9 @@ impl JobStore {
                 )
                 .await
                 .map_err(|e| CarrierError::Memory(e.to_string()))?;
-                tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+                tx.commit()
+                    .await
+                    .map_err(|e| CarrierError::Memory(e.to_string()))?;
                 Ok(Some(Job {
                     status: JobStatus::Running,
                     attempts: job.attempts + 1,
@@ -143,7 +151,9 @@ impl JobStore {
             }
             None => {
                 // Nothing to claim; commit the empty txn (releases the snapshot).
-                tx.commit().await.map_err(|e| CarrierError::Memory(e.to_string()))?;
+                tx.commit()
+                    .await
+                    .map_err(|e| CarrierError::Memory(e.to_string()))?;
                 Ok(None)
             }
         }
@@ -208,8 +218,10 @@ impl JobStore {
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
         let (attempts, max_attempts): (i32, i32) = match row {
             Some(r) => (
-                r.try_get(0).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-                r.try_get(1).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+                r.try_get(0)
+                    .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+                r.try_get(1)
+                    .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             ),
             // Job gone OR no longer owned by this worker (locked_until mismatch
             // after recover_stale_locks / re-claim) - treat as no-op.
@@ -301,7 +313,11 @@ impl JobStore {
     }
 
     /// Count pending jobs by kind for an owner.
-    pub async fn count_pending(&self, owner_id: &str, kind: Option<JobKind>) -> CarrierResult<usize> {
+    pub async fn count_pending(
+        &self,
+        owner_id: &str,
+        kind: Option<JobKind>,
+    ) -> CarrierResult<usize> {
         let client = self.client().await?;
         let count: i64 = match kind {
             Some(k) => {
@@ -413,18 +429,28 @@ impl JobStore {
             .try_get(5)
             .map_err(|e| CarrierError::Serialization(e.to_string()))?;
         Ok(Job {
-            id: row.try_get(0).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            owner_id: row.try_get(1).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            id: row
+                .try_get(0)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            owner_id: row
+                .try_get(1)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             kind: Self::parse_kind(&kind_str),
-            payload_json: row.try_get(3).map_err(|e| CarrierError::Serialization(e.to_string()))?,
-            dedupe_key: row.try_get(4).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            payload_json: row
+                .try_get(3)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            dedupe_key: row
+                .try_get(4)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             status: Self::parse_status(&status_str),
             attempts: row
                 .try_get::<_, i32>(6)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as u32,
             max_attempts: row
                 .try_get::<_, i32>(7)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as u32,
             available_at_ms: row
                 .try_get(8)
                 .map_err(|e| CarrierError::Serialization(e.to_string()))?,
@@ -454,13 +480,20 @@ mod tests {
 
     async fn setup() -> Option<JobStore> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         Some(JobStore::new(pool))
     }
 
@@ -471,7 +504,9 @@ mod tests {
         let (client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
             .await
             .unwrap();
-        tokio::spawn(async move { let _ = conn.await; });
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         client
     }
 
@@ -495,7 +530,11 @@ mod tests {
                 return;
             }
         };
-        let job_id = store.enqueue(&new_job("owner_1", Some("seal:tree_1:0"))).await.unwrap().unwrap();
+        let job_id = store
+            .enqueue(&new_job("owner_1", Some("seal:tree_1:0")))
+            .await
+            .unwrap()
+            .unwrap();
         assert!(!job_id.is_empty());
 
         let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
@@ -514,10 +553,16 @@ mod tests {
                 return;
             }
         };
-        let first = store.enqueue(&new_job("owner_1", Some("seal:tree_1:0"))).await.unwrap();
+        let first = store
+            .enqueue(&new_job("owner_1", Some("seal:tree_1:0")))
+            .await
+            .unwrap();
         assert!(first.is_some());
         // Same dedupe_key with an active (ready) job -> suppressed.
-        let second = store.enqueue(&new_job("owner_1", Some("seal:tree_1:0"))).await.unwrap();
+        let second = store
+            .enqueue(&new_job("owner_1", Some("seal:tree_1:0")))
+            .await
+            .unwrap();
         assert!(second.is_none());
     }
 
@@ -530,11 +575,21 @@ mod tests {
                 return;
             }
         };
-        let job_id = store.enqueue(&new_job("owner_1", Some("seal:tree_1:0"))).await.unwrap().unwrap();
+        let job_id = store
+            .enqueue(&new_job("owner_1", Some("seal:tree_1:0")))
+            .await
+            .unwrap()
+            .unwrap();
         let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
-        store.mark_done(&job_id, claimed.locked_until_ms).await.unwrap();
+        store
+            .mark_done(&job_id, claimed.locked_until_ms)
+            .await
+            .unwrap();
         // Done jobs don't count as active -> re-enqueue allowed.
-        let again = store.enqueue(&new_job("owner_1", Some("seal:tree_1:0"))).await.unwrap();
+        let again = store
+            .enqueue(&new_job("owner_1", Some("seal:tree_1:0")))
+            .await
+            .unwrap();
         assert!(again.is_some());
     }
 
@@ -561,9 +616,16 @@ mod tests {
                 return;
             }
         };
-        let job_id = store.enqueue(&new_job("owner_1", None)).await.unwrap().unwrap();
+        let job_id = store
+            .enqueue(&new_job("owner_1", None))
+            .await
+            .unwrap()
+            .unwrap();
         let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
-        store.mark_done(&job_id, claimed.locked_until_ms).await.unwrap();
+        store
+            .mark_done(&job_id, claimed.locked_until_ms)
+            .await
+            .unwrap();
         assert!(store.claim_next(Some("owner_1")).await.unwrap().is_none());
     }
 
@@ -580,7 +642,10 @@ mod tests {
         job.max_attempts = Some(3);
         let job_id = store.enqueue(&job).await.unwrap().unwrap();
         let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
-        store.mark_failed(&job_id, "timeout", claimed.locked_until_ms).await.unwrap();
+        store
+            .mark_failed(&job_id, "timeout", claimed.locked_until_ms)
+            .await
+            .unwrap();
 
         // Re-queued for retry with attempts incremented.
         let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
@@ -601,7 +666,10 @@ mod tests {
         let job_id = store.enqueue(&job).await.unwrap().unwrap();
         let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
         // attempts (1) >= max_attempts (1) -> permanent fail, not retried.
-        store.mark_failed(&job_id, "boom", claimed.locked_until_ms).await.unwrap();
+        store
+            .mark_failed(&job_id, "boom", claimed.locked_until_ms)
+            .await
+            .unwrap();
         assert!(store.claim_next(Some("owner_1")).await.unwrap().is_none());
     }
 
@@ -629,10 +697,22 @@ mod tests {
                 return;
             }
         };
-        assert!(!store.check_ingested("owner_1", "document", "doc_1").await.unwrap());
-        store.mark_ingested("owner_1", "document", "doc_1").await.unwrap();
-        assert!(store.check_ingested("owner_1", "document", "doc_1").await.unwrap());
-        assert!(!store.check_ingested("owner_2", "document", "doc_1").await.unwrap());
+        assert!(!store
+            .check_ingested("owner_1", "document", "doc_1")
+            .await
+            .unwrap());
+        store
+            .mark_ingested("owner_1", "document", "doc_1")
+            .await
+            .unwrap();
+        assert!(store
+            .check_ingested("owner_1", "document", "doc_1")
+            .await
+            .unwrap());
+        assert!(!store
+            .check_ingested("owner_2", "document", "doc_1")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -644,14 +724,21 @@ mod tests {
                 return;
             }
         };
-        let job_id = store.enqueue(&new_job("owner_1", None)).await.unwrap().unwrap();
+        let job_id = store
+            .enqueue(&new_job("owner_1", None))
+            .await
+            .unwrap()
+            .unwrap();
         let _ = store.claim_next(Some("owner_1")).await.unwrap();
 
         // Age the lock out-of-band (claim set locked_until = now+5min).
         let conn = direct_connect().await;
-        conn.execute("UPDATE mem_tree_jobs SET locked_until_ms=1 WHERE id=$1", &[&job_id])
-            .await
-            .unwrap();
+        conn.execute(
+            "UPDATE mem_tree_jobs SET locked_until_ms=1 WHERE id=$1",
+            &[&job_id],
+        )
+        .await
+        .unwrap();
 
         let recovered = store.recover_stale_locks().await.unwrap();
         assert_eq!(recovered, 1);
@@ -674,15 +761,22 @@ mod tests {
                 return;
             }
         };
-        let job_id = store.enqueue(&new_job("owner_1", None)).await.unwrap().unwrap();
+        let job_id = store
+            .enqueue(&new_job("owner_1", None))
+            .await
+            .unwrap()
+            .unwrap();
         let a = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
         let a_deadline = a.locked_until_ms;
 
         // Age A's lock + recover -> row back to ready, locked_until_ms=NULL.
         let conn = direct_connect().await;
-        conn.execute("UPDATE mem_tree_jobs SET locked_until_ms=1 WHERE id=$1", &[&job_id])
-            .await
-            .unwrap();
+        conn.execute(
+            "UPDATE mem_tree_jobs SET locked_until_ms=1 WHERE id=$1",
+            &[&job_id],
+        )
+        .await
+        .unwrap();
         let recovered = store.recover_stale_locks().await.unwrap();
         assert_eq!(recovered, 1);
 
@@ -711,16 +805,30 @@ mod tests {
             }
         };
         // A done job (aged) + a ready job. Reaper should delete only the done one.
-        let done_id = store.enqueue(&new_job("owner_1", None)).await.unwrap().unwrap();
+        let done_id = store
+            .enqueue(&new_job("owner_1", None))
+            .await
+            .unwrap()
+            .unwrap();
         let claimed = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
-        store.mark_done(&done_id, claimed.locked_until_ms).await.unwrap();
-        // Age the done row's completed_at_ms into the past.
-        let conn = direct_connect().await;
-        conn.execute("UPDATE mem_tree_jobs SET completed_at_ms=1 WHERE id=$1", &[&done_id])
+        store
+            .mark_done(&done_id, claimed.locked_until_ms)
             .await
             .unwrap();
+        // Age the done row's completed_at_ms into the past.
+        let conn = direct_connect().await;
+        conn.execute(
+            "UPDATE mem_tree_jobs SET completed_at_ms=1 WHERE id=$1",
+            &[&done_id],
+        )
+        .await
+        .unwrap();
         // A ready job that must NOT be reaped.
-        let ready_id = store.enqueue(&new_job("owner_1", None)).await.unwrap().unwrap();
+        let ready_id = store
+            .enqueue(&new_job("owner_1", None))
+            .await
+            .unwrap()
+            .unwrap();
 
         let now_ms = chrono::Utc::now().timestamp_millis();
         let n = store.delete_settled_before(now_ms).await.unwrap();
@@ -744,8 +852,16 @@ mod tests {
                 return;
             }
         };
-        let j1 = store.enqueue(&new_job("owner_1", None)).await.unwrap().unwrap();
-        let _j2 = store.enqueue(&new_job("owner_1", None)).await.unwrap().unwrap();
+        let j1 = store
+            .enqueue(&new_job("owner_1", None))
+            .await
+            .unwrap()
+            .unwrap();
+        let _j2 = store
+            .enqueue(&new_job("owner_1", None))
+            .await
+            .unwrap()
+            .unwrap();
 
         let a = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
         let b = store.claim_next(Some("owner_1")).await.unwrap().unwrap();
@@ -768,7 +884,19 @@ mod tests {
         j2.kind = JobKind::ExtractChunk;
         store.enqueue(&j2).await.unwrap();
         assert_eq!(store.count_pending("owner_1", None).await.unwrap(), 2);
-        assert_eq!(store.count_pending("owner_1", Some(JobKind::Seal)).await.unwrap(), 1);
-        assert_eq!(store.count_pending("owner_1", Some(JobKind::ExtractChunk)).await.unwrap(), 1);
+        assert_eq!(
+            store
+                .count_pending("owner_1", Some(JobKind::Seal))
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            store
+                .count_pending("owner_1", Some(JobKind::ExtractChunk))
+                .await
+                .unwrap(),
+            1
+        );
     }
 }

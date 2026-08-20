@@ -141,4 +141,3 @@ pub fn cdn_download_url(encrypt_query_param: &str) -> String {
         urlencoding::encode(encrypt_query_param)
     )
 }
-

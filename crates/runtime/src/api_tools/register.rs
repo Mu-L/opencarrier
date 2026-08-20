@@ -4,14 +4,14 @@
 //! written to the workspace's api_tools.toml, and registered in the global
 //! registry so it's immediately available to all agents on the next turn.
 
-use crate::tools::ToolModule;
 use crate::tool_context::ToolContext;
+use crate::tools::ToolModule;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::api_tool::{ApiToolDef, ApiToolsConfig};
-use types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 use std::sync::RwLock;
+use types::api_tool::{ApiToolDef, ApiToolsConfig};
+use types::error::{CarrierError, CarrierResult};
+use types::tool::{PermissionLevel, ToolDefinition};
 
 /// Global registry of dynamically registered API tools.
 /// Written by api_tool_register, read by DeclarativeApiModule + messaging.rs.
@@ -66,7 +66,11 @@ impl ToolModule for ApiToolRegisterModule {
 
         let definition = match input["definition"].as_str() {
             Some(s) => s,
-            None => return Some(Err(CarrierError::InvalidInput("Missing 'definition' parameter (TOML string)".to_string()))),
+            None => {
+                return Some(Err(CarrierError::InvalidInput(
+                    "Missing 'definition' parameter (TOML string)".to_string(),
+                )))
+            }
         };
 
         let global = input["global"].as_bool().unwrap_or(false);
@@ -74,24 +78,36 @@ impl ToolModule for ApiToolRegisterModule {
         // Parse and validate the TOML definition
         let config: ApiToolsConfig = match toml::from_str(definition) {
             Ok(c) => c,
-            Err(e) => return Some(Err(CarrierError::Serialization(format!("Invalid TOML: {e}")))),
+            Err(e) => {
+                return Some(Err(CarrierError::Serialization(format!(
+                    "Invalid TOML: {e}"
+                ))))
+            }
         };
 
         if config.tool.is_empty() {
-            return Some(Err(CarrierError::InvalidInput("No [[tool]] block found in definition".to_string())));
+            return Some(Err(CarrierError::InvalidInput(
+                "No [[tool]] block found in definition".to_string(),
+            )));
         }
 
         let tool_def = &config.tool[0];
 
         // Basic validation
         if tool_def.name.is_empty() {
-            return Some(Err(CarrierError::InvalidInput("Tool name is required".to_string())));
+            return Some(Err(CarrierError::InvalidInput(
+                "Tool name is required".to_string(),
+            )));
         }
         if tool_def.url.is_empty() {
-            return Some(Err(CarrierError::InvalidInput("Tool url is required".to_string())));
+            return Some(Err(CarrierError::InvalidInput(
+                "Tool url is required".to_string(),
+            )));
         }
         if !tool_def.url.starts_with("https://") && !tool_def.url.starts_with("http://") {
-            return Some(Err(CarrierError::InvalidInput("Tool url must start with http:// or https://".to_string())));
+            return Some(Err(CarrierError::InvalidInput(
+                "Tool url must start with http:// or https://".to_string(),
+            )));
         }
 
         let tool_name = tool_def.name.clone();
@@ -104,15 +120,17 @@ impl ToolModule for ApiToolRegisterModule {
         };
 
         if let Err(e) = write_result {
-            return Some(Err(CarrierError::Internal(format!("Failed to write api_tools.toml: {e}"))));
+            return Some(Err(CarrierError::Internal(format!(
+                "Failed to write api_tools.toml: {e}"
+            ))));
         }
 
         // Register in the dynamic registry so it's available immediately
         {
             let mut tools = match DYNAMIC_TOOLS.write() {
-            Ok(t) => t,
-            Err(e) => return Some(Err(CarrierError::Internal(format!("Registry lock: {e}")))),
-        };
+                Ok(t) => t,
+                Err(e) => return Some(Err(CarrierError::Internal(format!("Registry lock: {e}")))),
+            };
             // Remove existing tool with same name
             tools.retain(|t| t.name != tool_name);
             tools.push(config.tool[0].clone());
@@ -134,8 +152,13 @@ impl ToolModule for ApiToolRegisterModule {
 }
 
 /// Append a tool definition to the workspace's api_tools.toml.
-fn write_to_workspace_toml(tool: &ApiToolDef, workspace_root: Option<&std::path::Path>) -> CarrierResult<()> {
-    let ws = workspace_root.ok_or(CarrierError::Internal("No workspace root available".to_string()))?;
+fn write_to_workspace_toml(
+    tool: &ApiToolDef,
+    workspace_root: Option<&std::path::Path>,
+) -> CarrierResult<()> {
+    let ws = workspace_root.ok_or(CarrierError::Internal(
+        "No workspace root available".to_string(),
+    ))?;
     let toml_path = ws.join("api_tools.toml");
 
     let serialized = serialize_tool(tool);
@@ -177,7 +200,10 @@ fn serialize_tool(tool: &ApiToolDef) -> String {
     let mut out = String::new();
     out.push_str("[[tool]]\n");
     out.push_str(&format!("name = \"{}\"\n", tool.name));
-    out.push_str(&format!("description = \"{}\"\n", tool.description.replace('"', "\\\"")));
+    out.push_str(&format!(
+        "description = \"{}\"\n",
+        tool.description.replace('"', "\\\"")
+    ));
     out.push_str(&format!("url = \"{}\"\n", tool.url));
     out.push_str(&format!("method = \"{}\"\n", tool.method));
 
@@ -198,7 +224,10 @@ fn serialize_tool(tool: &ApiToolDef) -> String {
             }
             parts.push(format!("type = \"{}\"", param.r#type));
             if !param.description.is_empty() {
-                parts.push(format!("description = \"{}\"", param.description.replace('"', "\\\"")));
+                parts.push(format!(
+                    "description = \"{}\"",
+                    param.description.replace('"', "\\\"")
+                ));
             }
             if let Some(ref default) = param.default {
                 match default {
@@ -233,12 +262,13 @@ fn serialize_tool(tool: &ApiToolDef) -> String {
                 parts.push(format!("from = \"{}\"", from));
             }
             if let Some(ref tiers) = def.tiers {
-                let tier_strs: Vec<String> = tiers.iter().map(|t| {
-                    match t.le {
+                let tier_strs: Vec<String> = tiers
+                    .iter()
+                    .map(|t| match t.le {
                         Some(le) => format!("{{ le = {}, value = \"{}\" }}", le, t.value),
                         None => format!("{{ value = \"{}\" }}", t.value),
-                    }
-                }).collect();
+                    })
+                    .collect();
                 parts.push(format!("tiers = [\n  {},\n]", tier_strs.join(",\n  ")));
             }
             out.push_str(&format!("{} = {{ {} }}\n", name, parts.join(", ")));
@@ -276,12 +306,19 @@ fn serialize_tool(tool: &ApiToolDef) -> String {
         out.push_str("\n[tool.hmac]\n");
         out.push_str(&format!("key_id_env = \"{}\"\n", hmac.key_id_env));
         out.push_str(&format!("secret_env = \"{}\"\n", hmac.secret_env));
-        out.push_str(&format!("sign_template = \"{}\"\n", escape_toml_string(&hmac.sign_template)));
+        out.push_str(&format!(
+            "sign_template = \"{}\"\n",
+            escape_toml_string(&hmac.sign_template)
+        ));
         out.push_str(&format!("algorithm = \"{}\"\n", hmac.algorithm));
         if !hmac.headers.is_empty() {
             out.push_str("\n[tool.hmac.headers]\n");
             for (k, v) in &hmac.headers {
-                out.push_str(&format!("\"{}\" = \"{}\"\n", escape_toml_string(k), escape_toml_string(v)));
+                out.push_str(&format!(
+                    "\"{}\" = \"{}\"\n",
+                    escape_toml_string(k),
+                    escape_toml_string(v)
+                ));
             }
         }
     }
@@ -295,7 +332,11 @@ fn serialize_tool(tool: &ApiToolDef) -> String {
                 out.push_str(&format!("channel = \"{}\"\n", ch));
             }
             if !rule.only_if_absent.is_empty() {
-                let fs: Vec<String> = rule.only_if_absent.iter().map(|f| format!("\"{}\"", f)).collect();
+                let fs: Vec<String> = rule
+                    .only_if_absent
+                    .iter()
+                    .map(|f| format!("\"{}\"", f))
+                    .collect();
                 out.push_str(&format!("only_if_absent = [{}]\n", fs.join(", ")));
             }
         }

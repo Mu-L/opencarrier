@@ -834,10 +834,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "创建飞书群聊")]
-    async fn feishu_create_chat(
-        &self,
-        Parameters(params): Parameters<CreateChatParams>,
-    ) -> String {
+    async fn feishu_create_chat(&self, Parameters(params): Parameters<CreateChatParams>) -> String {
         let path = "open-apis/im/v1/chats";
         let mut body = serde_json::json!({
             "name": params.name,
@@ -865,10 +862,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "更新飞书群聊信息")]
-    async fn feishu_update_chat(
-        &self,
-        Parameters(params): Parameters<UpdateChatParams>,
-    ) -> String {
+    async fn feishu_update_chat(&self, Parameters(params): Parameters<UpdateChatParams>) -> String {
         let path = format!("open-apis/im/v1/chats/{}", params.chat_id);
         let mut body = serde_json::json!({});
         if let Some(name) = &params.name {
@@ -895,10 +889,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书群聊列表")]
-    async fn feishu_list_chats(
-        &self,
-        Parameters(params): Parameters<ListChatsParams>,
-    ) -> String {
+    async fn feishu_list_chats(&self, Parameters(params): Parameters<ListChatsParams>) -> String {
         let path = "open-apis/im/v1/chats";
         let mut query = serde_json::json!({});
         if let Some(page_size) = params.page_size {
@@ -942,10 +933,7 @@ impl FeishuServer {
     // ==== Doc (6 tools) ====
 
     #[tool(description = "创建飞书文档")]
-    async fn feishu_create_doc(
-        &self,
-        Parameters(params): Parameters<CreateDocParams>,
-    ) -> String {
+    async fn feishu_create_doc(&self, Parameters(params): Parameters<CreateDocParams>) -> String {
         let path = "open-apis/docx/v1/documents";
         let mut body = serde_json::json!({
             "title": params.title,
@@ -964,14 +952,8 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书文档内容和块列表")]
-    async fn feishu_get_doc(
-        &self,
-        Parameters(params): Parameters<GetDocParams>,
-    ) -> String {
-        let path = format!(
-            "open-apis/docx/v1/documents/{}/blocks",
-            params.document_id
-        );
+    async fn feishu_get_doc(&self, Parameters(params): Parameters<GetDocParams>) -> String {
+        let path = format!("open-apis/docx/v1/documents/{}/blocks", params.document_id);
         let mut query = serde_json::json!({});
         if let Some(page_size) = params.page_size {
             query["page_size"] = Value::Number(page_size.into());
@@ -990,10 +972,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "批量更新飞书文档块")]
-    async fn feishu_update_doc(
-        &self,
-        Parameters(params): Parameters<UpdateDocParams>,
-    ) -> String {
+    async fn feishu_update_doc(&self, Parameters(params): Parameters<UpdateDocParams>) -> String {
         let path = format!(
             "open-apis/docx/v1/documents/{}/blocks/batch_update",
             params.document_id
@@ -1019,10 +998,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "搜索飞书文档")]
-    async fn feishu_search_docs(
-        &self,
-        Parameters(params): Parameters<SearchDocsParams>,
-    ) -> String {
+    async fn feishu_search_docs(&self, Parameters(params): Parameters<SearchDocsParams>) -> String {
         let path = "open-apis/suite/docs/search";
         let mut body = serde_json::json!({
             "search_key": params.search_key,
@@ -1050,10 +1026,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书旧版文档原始内容")]
-    async fn feishu_get_doc_raw(
-        &self,
-        Parameters(params): Parameters<GetDocRawParams>,
-    ) -> String {
+    async fn feishu_get_doc_raw(&self, Parameters(params): Parameters<GetDocRawParams>) -> String {
         let path = format!("open-apis/doc/v2/documents/{}", params.document_id);
         match self
             .client
@@ -1109,10 +1082,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "读取飞书电子表格数据")]
-    async fn feishu_read_sheet(
-        &self,
-        Parameters(params): Parameters<ReadSheetParams>,
-    ) -> String {
+    async fn feishu_read_sheet(&self, Parameters(params): Parameters<ReadSheetParams>) -> String {
         let path = format!(
             "open-apis/sheets/v2/spreadsheets/{}/values/{}",
             params.spreadsheet_token, params.range
@@ -1128,10 +1098,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "写入飞书电子表格数据")]
-    async fn feishu_write_sheet(
-        &self,
-        Parameters(params): Parameters<WriteSheetParams>,
-    ) -> String {
+    async fn feishu_write_sheet(&self, Parameters(params): Parameters<WriteSheetParams>) -> String {
         let path = format!(
             "open-apis/sheets/v2/spreadsheets/{}/values",
             params.spreadsheet_token
@@ -1231,10 +1198,7 @@ impl FeishuServer {
     // ==== Base/Bitable (8 tools) ====
 
     #[tool(description = "获取飞书多维表格数据表列表")]
-    async fn feishu_list_tables(
-        &self,
-        Parameters(params): Parameters<ListTablesParams>,
-    ) -> String {
+    async fn feishu_list_tables(&self, Parameters(params): Parameters<ListTablesParams>) -> String {
         let path = format!("open-apis/bitable/v1/apps/{}/tables", params.app_token);
         let mut query = serde_json::json!({});
         if let Some(page_size) = params.page_size {
@@ -1273,10 +1237,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书多维表格字段列表")]
-    async fn feishu_list_fields(
-        &self,
-        Parameters(params): Parameters<ListFieldsParams>,
-    ) -> String {
+    async fn feishu_list_fields(&self, Parameters(params): Parameters<ListFieldsParams>) -> String {
         let path = format!(
             "open-apis/bitable/v1/apps/{}/tables/{}/fields",
             params.app_token, params.table_id
@@ -1470,10 +1431,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书日历事件详情")]
-    async fn feishu_get_event(
-        &self,
-        Parameters(params): Parameters<GetEventParams>,
-    ) -> String {
+    async fn feishu_get_event(&self, Parameters(params): Parameters<GetEventParams>) -> String {
         let path = format!(
             "open-apis/calendar/v4/calendars/{}/events/{}",
             params.calendar_id, params.event_id
@@ -1489,10 +1447,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书日历事件列表")]
-    async fn feishu_list_events(
-        &self,
-        Parameters(params): Parameters<ListEventsParams>,
-    ) -> String {
+    async fn feishu_list_events(&self, Parameters(params): Parameters<ListEventsParams>) -> String {
         let path = format!(
             "open-apis/calendar/v4/calendars/{}/events",
             params.calendar_id
@@ -1557,10 +1512,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "查询飞书日历忙闲信息")]
-    async fn feishu_freebusy(
-        &self,
-        Parameters(params): Parameters<FreebusyParams>,
-    ) -> String {
+    async fn feishu_freebusy(&self, Parameters(params): Parameters<FreebusyParams>) -> String {
         let path = "open-apis/calendar/v4/freebusy/list";
         let mut body = serde_json::json!({
             "time_min": params.time_min,
@@ -1607,10 +1559,7 @@ impl FeishuServer {
     // ==== Drive (6 tools) ====
 
     #[tool(description = "上传飞书云文档文件")]
-    async fn feishu_upload_file(
-        &self,
-        Parameters(params): Parameters<UploadFileParams>,
-    ) -> String {
+    async fn feishu_upload_file(&self, Parameters(params): Parameters<UploadFileParams>) -> String {
         let path = "open-apis/drive/v1/files/upload_all";
         let mut body = serde_json::json!({
             "parent_node": params.parent_node,
@@ -1704,10 +1653,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "移动飞书云文档文件")]
-    async fn feishu_move_file(
-        &self,
-        Parameters(params): Parameters<MoveFileParams>,
-    ) -> String {
+    async fn feishu_move_file(&self, Parameters(params): Parameters<MoveFileParams>) -> String {
         let path = format!("open-apis/drive/v1/files/{}/move", params.file_token);
         let mut body = serde_json::json!({
             "folder_token": params.folder_token,
@@ -1726,10 +1672,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "删除飞书云文档文件")]
-    async fn feishu_delete_file(
-        &self,
-        Parameters(params): Parameters<DeleteFileParams>,
-    ) -> String {
+    async fn feishu_delete_file(&self, Parameters(params): Parameters<DeleteFileParams>) -> String {
         let path = format!("open-apis/drive/v1/files/{}", params.file_token);
         let mut query = serde_json::json!({});
         if let Some(file_type) = &params.file_type {
@@ -1755,10 +1698,7 @@ impl FeishuServer {
     // ==== Contact (2 tools) ====
 
     #[tool(description = "搜索飞书用户")]
-    async fn feishu_search_user(
-        &self,
-        Parameters(params): Parameters<SearchUserParams>,
-    ) -> String {
+    async fn feishu_search_user(&self, Parameters(params): Parameters<SearchUserParams>) -> String {
         let path = "open-apis/search/v2/user";
         let mut body = serde_json::json!({
             "query": params.query,
@@ -1777,10 +1717,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书用户信息")]
-    async fn feishu_get_user(
-        &self,
-        Parameters(params): Parameters<GetUserParams>,
-    ) -> String {
+    async fn feishu_get_user(&self, Parameters(params): Parameters<GetUserParams>) -> String {
         let path = format!("open-apis/contact/v3/users/{}", params.user_id);
         let mut query = serde_json::json!({});
         if let Some(user_id_type) = &params.user_id_type {
@@ -1799,10 +1736,7 @@ impl FeishuServer {
     // ==== Task (6 tools) ====
 
     #[tool(description = "创建飞书任务")]
-    async fn feishu_create_task(
-        &self,
-        Parameters(params): Parameters<CreateTaskParams>,
-    ) -> String {
+    async fn feishu_create_task(&self, Parameters(params): Parameters<CreateTaskParams>) -> String {
         let path = "open-apis/task/v2/tasks";
         let mut body = serde_json::json!({
             "summary": params.summary,
@@ -1827,10 +1761,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书任务详情")]
-    async fn feishu_get_task(
-        &self,
-        Parameters(params): Parameters<GetTaskParams>,
-    ) -> String {
+    async fn feishu_get_task(&self, Parameters(params): Parameters<GetTaskParams>) -> String {
         let path = format!("open-apis/task/v2/tasks/{}", params.task_id);
         match self
             .client
@@ -1843,10 +1774,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "更新飞书任务")]
-    async fn feishu_update_task(
-        &self,
-        Parameters(params): Parameters<UpdateTaskParams>,
-    ) -> String {
+    async fn feishu_update_task(&self, Parameters(params): Parameters<UpdateTaskParams>) -> String {
         let path = format!("open-apis/task/v2/tasks/{}", params.task_id);
         let mut body = serde_json::json!({});
         if let Some(summary) = &params.summary {
@@ -1949,10 +1877,7 @@ impl FeishuServer {
     // ==== Mail (6 tools) ====
 
     #[tool(description = "发送飞书邮件")]
-    async fn feishu_send_mail(
-        &self,
-        Parameters(params): Parameters<SendMailParams>,
-    ) -> String {
+    async fn feishu_send_mail(&self, Parameters(params): Parameters<SendMailParams>) -> String {
         let path = format!(
             "open-apis/mail/v1/user_mailboxes/{}/drafts",
             params.mailbox_id
@@ -1982,10 +1907,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书邮件列表")]
-    async fn feishu_list_mail(
-        &self,
-        Parameters(params): Parameters<ListMailParams>,
-    ) -> String {
+    async fn feishu_list_mail(&self, Parameters(params): Parameters<ListMailParams>) -> String {
         let path = format!(
             "open-apis/mail/v1/user_mailboxes/{}/messages",
             params.mailbox_id
@@ -2011,10 +1933,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书邮件详情")]
-    async fn feishu_get_mail(
-        &self,
-        Parameters(params): Parameters<GetMailParams>,
-    ) -> String {
+    async fn feishu_get_mail(&self, Parameters(params): Parameters<GetMailParams>) -> String {
         let path = format!(
             "open-apis/mail/v1/user_mailboxes/{}/messages/{}",
             params.mailbox_id, params.message_id
@@ -2030,10 +1949,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "回复飞书邮件")]
-    async fn feishu_reply_mail(
-        &self,
-        Parameters(params): Parameters<ReplyMailParams>,
-    ) -> String {
+    async fn feishu_reply_mail(&self, Parameters(params): Parameters<ReplyMailParams>) -> String {
         let path = format!(
             "open-apis/mail/v1/user_mailboxes/{}/drafts",
             params.mailbox_id
@@ -2082,10 +1998,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "快速浏览飞书邮件(分诊)")]
-    async fn feishu_triage_mail(
-        &self,
-        Parameters(params): Parameters<TriageMailParams>,
-    ) -> String {
+    async fn feishu_triage_mail(&self, Parameters(params): Parameters<TriageMailParams>) -> String {
         let path = format!(
             "open-apis/mail/v1/user_mailboxes/{}/messages",
             params.mailbox_id
@@ -2129,10 +2042,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书会议详情")]
-    async fn feishu_get_meeting(
-        &self,
-        Parameters(params): Parameters<GetMeetingParams>,
-    ) -> String {
+    async fn feishu_get_meeting(&self, Parameters(params): Parameters<GetMeetingParams>) -> String {
         let path = format!("open-apis/vc/v1/meetings/{}", params.meeting_id);
         match self
             .client
@@ -2149,10 +2059,7 @@ impl FeishuServer {
         &self,
         Parameters(params): Parameters<GetRecordingParams>,
     ) -> String {
-        let path = format!(
-            "open-apis/vc/v1/meetings/{}/recording",
-            params.meeting_id
-        );
+        let path = format!("open-apis/vc/v1/meetings/{}/recording", params.meeting_id);
         match self
             .client
             .api_get(&params.app_id, &params.app_secret, &path, None)
@@ -2166,10 +2073,7 @@ impl FeishuServer {
     // ==== Wiki (3 tools) ====
 
     #[tool(description = "获取飞书知识库空间列表")]
-    async fn feishu_list_spaces(
-        &self,
-        Parameters(params): Parameters<ListSpacesParams>,
-    ) -> String {
+    async fn feishu_list_spaces(&self, Parameters(params): Parameters<ListSpacesParams>) -> String {
         let path = "open-apis/wiki/v2/spaces";
         let mut query = serde_json::json!({});
         if let Some(page_size) = params.page_size {
@@ -2189,10 +2093,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "创建飞书知识库节点")]
-    async fn feishu_create_node(
-        &self,
-        Parameters(params): Parameters<CreateNodeParams>,
-    ) -> String {
+    async fn feishu_create_node(&self, Parameters(params): Parameters<CreateNodeParams>) -> String {
         let path = format!("open-apis/wiki/v2/spaces/{}/nodes", params.space_id);
         let mut body = serde_json::json!({
             "node_type": params.node_type,
@@ -2212,10 +2113,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书知识库节点信息")]
-    async fn feishu_get_node(
-        &self,
-        Parameters(params): Parameters<GetNodeParams>,
-    ) -> String {
+    async fn feishu_get_node(&self, Parameters(params): Parameters<GetNodeParams>) -> String {
         let path = "open-apis/wiki/v2/spaces/get_node";
         let query = serde_json::json!({
             "token": params.token,
@@ -2237,10 +2135,7 @@ impl FeishuServer {
         &self,
         Parameters(params): Parameters<GetApprovalParams>,
     ) -> String {
-        let path = format!(
-            "open-apis/approval/v4/instances/{}",
-            params.instance_id
-        );
+        let path = format!("open-apis/approval/v4/instances/{}", params.instance_id);
         let mut query = serde_json::json!({});
         if let Some(user_id_type) = &params.user_id_type {
             query["user_id_type"] = Value::String(user_id_type.clone());
@@ -2279,10 +2174,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "驳回飞书审批任务")]
-    async fn feishu_reject_task(
-        &self,
-        Parameters(params): Parameters<RejectTaskParams>,
-    ) -> String {
+    async fn feishu_reject_task(&self, Parameters(params): Parameters<RejectTaskParams>) -> String {
         let path = "open-apis/approval/v4/tasks/reject";
         let mut body = serde_json::json!({
             "task_id": params.task_id,
@@ -2358,10 +2250,7 @@ impl FeishuServer {
         &self,
         Parameters(params): Parameters<GetOkrDetailParams>,
     ) -> String {
-        let path = format!(
-            "open-apis/okr/v1/cycles/{}/objectives",
-            params.cycle_id
-        );
+        let path = format!("open-apis/okr/v1/cycles/{}/objectives", params.cycle_id);
         let mut query = serde_json::json!({});
         if let Some(user_id) = &params.user_id {
             query["user_id"] = Value::String(user_id.clone());
@@ -2473,10 +2362,7 @@ impl FeishuServer {
     }
 
     #[tool(description = "获取飞书妙记详情")]
-    async fn feishu_get_minutes(
-        &self,
-        Parameters(params): Parameters<GetMinutesParams>,
-    ) -> String {
+    async fn feishu_get_minutes(&self, Parameters(params): Parameters<GetMinutesParams>) -> String {
         let path = format!("open-apis/minutes/v1/minutes/{}", params.minutes_id);
         match self
             .client

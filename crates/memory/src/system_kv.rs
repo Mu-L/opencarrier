@@ -1,10 +1,10 @@
 //! SQLite system KV store for agent persistence and system key-value pairs.
 
-use types::agent::{AgentEntry, AgentId};
-use types::error::{CarrierError, CarrierResult};
 use chrono::Utc;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
+use types::agent::{AgentEntry, AgentId};
+use types::error::{CarrierError, CarrierResult};
 
 /// System KV store backed by SQLite for agent entries and system key-value storage.
 #[derive(Clone)]
@@ -35,13 +35,10 @@ impl SystemKV {
                 "SELECT value FROM kv_store WHERE agent_id = ?1 AND owner_id = ?2 AND user_id = ?3 AND key = ?4",
             )
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
-        let result = stmt.query_row(
-            rusqlite::params![agent_id, owner_id, user_id, key],
-            |row| {
-                let blob: Vec<u8> = row.get(0)?;
-                Ok(blob)
-            },
-        );
+        let result = stmt.query_row(rusqlite::params![agent_id, owner_id, user_id, key], |row| {
+            let blob: Vec<u8> = row.get(0)?;
+            Ok(blob)
+        });
         match result {
             Ok(blob) => {
                 let value: serde_json::Value = serde_json::from_slice(&blob)
@@ -116,7 +113,13 @@ impl SystemKV {
     ///
     /// **Immutability guarantee**: the value is archived to `kv_history`
     /// before deletion, so no memory is ever truly lost.
-    pub fn delete(&self, agent_id: &str, owner_id: &str, user_id: &str, key: &str) -> CarrierResult<()> {
+    pub fn delete(
+        &self,
+        agent_id: &str,
+        owner_id: &str,
+        user_id: &str,
+        key: &str,
+    ) -> CarrierResult<()> {
         let conn = self
             .conn
             .lock()
@@ -178,15 +181,12 @@ impl SystemKV {
             )
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
         let rows = stmt
-            .query_map(
-                rusqlite::params![agent_id, owner_id, user_id, key],
-                |row| {
-                    let blob: Vec<u8> = row.get(0)?;
-                    let version: i64 = row.get(1)?;
-                    let archived_at: String = row.get(2)?;
-                    Ok((blob, version, archived_at))
-                },
-            )
+            .query_map(rusqlite::params![agent_id, owner_id, user_id, key], |row| {
+                let blob: Vec<u8> = row.get(0)?;
+                let version: i64 = row.get(1)?;
+                let archived_at: String = row.get(2)?;
+                Ok((blob, version, archived_at))
+            })
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let mut history = Vec::new();
@@ -218,14 +218,11 @@ impl SystemKV {
             .prepare("SELECT key, value FROM kv_store WHERE agent_id = ?1 AND owner_id = ?2 AND user_id = ?3 ORDER BY key")
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
         let rows = stmt
-            .query_map(
-                rusqlite::params![agent_id, owner_id, user_id],
-                |row| {
-                    let key: String = row.get(0)?;
-                    let blob: Vec<u8> = row.get(1)?;
-                    Ok((key, blob))
-                },
-            )
+            .query_map(rusqlite::params![agent_id, owner_id, user_id], |row| {
+                let key: String = row.get(0)?;
+                let blob: Vec<u8> = row.get(1)?;
+                Ok((key, blob))
+            })
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let mut pairs = Vec::new();
@@ -449,9 +446,8 @@ impl SystemKV {
                 }
             };
 
-            let manifest: types::agent::AgentManifest = match rmp_serde::from_slice(
-                &manifest_blob,
-            ) {
+            let manifest: types::agent::AgentManifest = match rmp_serde::from_slice(&manifest_blob)
+            {
                 Ok(m) => m,
                 Err(e) => {
                     tracing::warn!(
@@ -626,7 +622,9 @@ mod tests {
     fn test_kv_get_missing() {
         let store = setup();
         let agent_id = "test-agent".to_string();
-        let value = store.get(&agent_id, "user1", "user1", "nonexistent").unwrap();
+        let value = store
+            .get(&agent_id, "user1", "user1", "nonexistent")
+            .unwrap();
         assert!(value.is_none());
     }
 
@@ -635,9 +633,17 @@ mod tests {
         let store = setup();
         let agent_id = "test-agent".to_string();
         store
-            .set(&agent_id, "user1", "user1", "to_delete", serde_json::json!(42))
+            .set(
+                &agent_id,
+                "user1",
+                "user1",
+                "to_delete",
+                serde_json::json!(42),
+            )
             .unwrap();
-        store.delete(&agent_id, "user1", "user1", "to_delete").unwrap();
+        store
+            .delete(&agent_id, "user1", "user1", "to_delete")
+            .unwrap();
         let value = store.get(&agent_id, "user1", "user1", "to_delete").unwrap();
         assert!(value.is_none());
     }
@@ -675,7 +681,9 @@ mod tests {
         assert_eq!(value, Some(serde_json::json!("v3")));
 
         // History preserves all old values
-        let history = store.get_history(&agent_id, "user1", "user1", "key").unwrap();
+        let history = store
+            .get_history(&agent_id, "user1", "user1", "key")
+            .unwrap();
         assert_eq!(history.len(), 2, "should have 2 archived entries (v1, v2)");
         assert_eq!(history[0].0, serde_json::json!("v1"));
         assert_eq!(history[1].0, serde_json::json!("v2"));
@@ -686,7 +694,13 @@ mod tests {
         let store = setup();
         let agent_id = "test-agent".to_string();
         store
-            .set(&agent_id, "user1", "user1", "key", serde_json::json!("important"))
+            .set(
+                &agent_id,
+                "user1",
+                "user1",
+                "key",
+                serde_json::json!("important"),
+            )
             .unwrap();
         store.delete(&agent_id, "user1", "user1", "key").unwrap();
 
@@ -695,7 +709,9 @@ mod tests {
         assert!(value.is_none());
 
         // But history preserves it
-        let history = store.get_history(&agent_id, "user1", "user1", "key").unwrap();
+        let history = store
+            .get_history(&agent_id, "user1", "user1", "key")
+            .unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].0, serde_json::json!("important"));
     }
@@ -705,10 +721,22 @@ mod tests {
         let store = setup();
         let agent_id = "test-agent".to_string();
         store
-            .set(&agent_id, "user_a", "user_a", "pref", serde_json::json!("dark mode"))
+            .set(
+                &agent_id,
+                "user_a",
+                "user_a",
+                "pref",
+                serde_json::json!("dark mode"),
+            )
             .unwrap();
         store
-            .set(&agent_id, "user_b", "user_b", "pref", serde_json::json!("light mode"))
+            .set(
+                &agent_id,
+                "user_b",
+                "user_b",
+                "pref",
+                serde_json::json!("light mode"),
+            )
             .unwrap();
 
         // Each user sees their own value

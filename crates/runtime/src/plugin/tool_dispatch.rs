@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
+use dashmap::DashMap;
 use types::error::{CarrierError, CarrierResult};
 use types::plugin::{PluginToolContext, PluginToolDef};
 use types::tool::ToolDefinition;
-use dashmap::DashMap;
 
 use super::instance::PluginInstance;
 
@@ -89,9 +89,10 @@ impl PluginToolDispatcher {
         args: &serde_json::Value,
         context: &PluginToolContext,
     ) -> CarrierResult<String> {
-        let entry = self.tools.get(tool_name).ok_or_else(|| {
-            CarrierError::Internal(format!("Unknown plugin tool: {}", tool_name))
-        })?;
+        let entry = self
+            .tools
+            .get(tool_name)
+            .ok_or_else(|| CarrierError::Internal(format!("Unknown plugin tool: {}", tool_name)))?;
 
         let args_json =
             serde_json::to_string(args).map_err(|e| CarrierError::Serialization(e.to_string()))?;

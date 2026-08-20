@@ -99,7 +99,8 @@ impl SenderRouter {
         let mut migrated = 0usize;
 
         // Collect routes that need migration
-        let to_migrate: Vec<(String, String)> = self.routes
+        let to_migrate: Vec<(String, String)> = self
+            .routes
             .iter()
             .filter_map(|entry| {
                 let val = entry.value();
@@ -117,7 +118,8 @@ impl SenderRouter {
         }
 
         // Also migrate clones map keys
-        let clone_migrations: Vec<(String, Vec<(String, String)>)> = self.clones
+        let clone_migrations: Vec<(String, Vec<(String, String)>)> = self
+            .clones
             .iter()
             .filter_map(|entry| {
                 let clones_map = entry.value();
@@ -131,7 +133,11 @@ impl SenderRouter {
                         }
                     })
                     .collect();
-                if keys.is_empty() { None } else { Some((entry.key().clone(), keys)) }
+                if keys.is_empty() {
+                    None
+                } else {
+                    Some((entry.key().clone(), keys))
+                }
             })
             .collect();
 
@@ -151,11 +157,15 @@ impl SenderRouter {
                 self.persist_config(sender_id);
             }
             // Check for orphaned routes (UUID that couldn't be resolved)
-            let orphaned = self.routes
+            let orphaned = self
+                .routes
                 .iter()
                 .filter(|e| uuid::Uuid::parse_str(e.value()).is_ok())
                 .count();
-            info!(migrated, orphaned, "Migrated sender routes from UUID to agent name");
+            info!(
+                migrated,
+                orphaned, "Migrated sender routes from UUID to agent name"
+            );
         }
     }
 
@@ -276,8 +286,7 @@ impl SenderRouter {
         let config: SenderConfig = serde_json::from_str(&content).ok()?;
         self.routes
             .insert(sender_id.to_string(), config.default.clone());
-        self.clones
-            .insert(sender_id.to_string(), config.clones);
+        self.clones.insert(sender_id.to_string(), config.clones);
         Some(config.default)
     }
 
@@ -372,11 +381,7 @@ impl SenderRouter {
             .get(sender_id)
             .map(|c| c.value().clone())
             .unwrap_or_default();
-        let created_at = clones
-            .values()
-            .map(|e| e.installed_at)
-            .min()
-            .unwrap_or(0);
+        let created_at = clones.values().map(|e| e.installed_at).min().unwrap_or(0);
 
         let config = SenderConfig {
             default,
@@ -489,10 +494,7 @@ impl SenderRouter {
             .as_secs() as i64;
 
         {
-            let mut clones_map = self
-                .clones
-                .entry(sender_id.to_string())
-                .or_default();
+            let mut clones_map = self.clones.entry(sender_id.to_string()).or_default();
             if let Some(entry) = clones_map.get_mut(agent_id) {
                 entry.alias = name.to_string();
             } else {

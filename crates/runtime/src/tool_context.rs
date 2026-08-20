@@ -2,16 +2,16 @@
 
 use crate::kernel_handle::KernelHandle;
 use crate::llm_driver::Brain;
-use crate::memory_handle::MemoryHandle;
 use crate::mcp::McpConnection;
+use crate::memory_handle::MemoryHandle;
 use crate::process_manager::ProcessManager;
 use crate::web_fetch::WebFetchEngine;
-use types::agent::SubagentConfig;
-use types::config::ExecPolicy;
-use types::tool::PermissionLevel;
 use dashmap::DashMap;
 use std::path::Path;
 use std::sync::Arc;
+use types::agent::SubagentConfig;
+use types::config::ExecPolicy;
+use types::tool::PermissionLevel;
 
 /// Environment context passed to every tool execution.
 ///

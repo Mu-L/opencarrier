@@ -62,7 +62,7 @@ pub async fn query_global(
     }
 
     let total = hits.len();
-    hits.sort_by(|a, b| b.time_range_end_ms.cmp(&a.time_range_end_ms));
+    hits.sort_by_key(|h| std::cmp::Reverse(h.time_range_end_ms));
     hits.truncate(limit);
 
     Ok(QueryResponse {
@@ -80,13 +80,20 @@ mod tests {
 
     async fn setup() -> Option<Pool> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         let _ = TempDir::new(); // keep parity with source setup signature
         Some(pool)
     }

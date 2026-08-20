@@ -212,8 +212,11 @@ pub async fn run_daemon(
 
     // SECURITY: Refuse to start without API key on non-loopback addresses
     if kernel.config.api_key.trim().is_empty() && !addr.ip().is_loopback() {
-        return Err("API key must be set when listening on non-loopback address. \
-                     Set api_key in config.toml or bind to 127.0.0.1".into());
+        return Err(
+            "API key must be set when listening on non-loopback address. \
+                     Set api_key in config.toml or bind to 127.0.0.1"
+                .into(),
+        );
     }
 
     let kernel = Arc::new(kernel);
@@ -222,20 +225,19 @@ pub async fn run_daemon(
 
     // ── Channel loading ──────────────────────────────────────────────
     let channel_manager = {
-        let kernel_handle: Arc<dyn runtime::kernel_handle::KernelHandle> =
-            kernel.clone();
+        let kernel_handle: Arc<dyn runtime::kernel_handle::KernelHandle> = kernel.clone();
         let mut cm = ChannelManager::new(kernel_handle);
 
         // Always create sender-based router (auto-assigns first agent for new senders)
         {
-            let router = std::sync::Arc::new(
-                runtime::plugin::router::SenderRouter::new(&kernel.config.home_dir),
-            );
+            let router = std::sync::Arc::new(runtime::plugin::router::SenderRouter::new(
+                &kernel.config.home_dir,
+            ));
             // Migrate any routes stored as UUIDs to agent names
             router.migrate_uuid_to_names(|uuid| {
-                uuid.parse::<types::agent::AgentId>().ok().and_then(|id| {
-                    kernel.registry.get(id).map(|e| e.manifest.name.clone())
-                })
+                uuid.parse::<types::agent::AgentId>()
+                    .ok()
+                    .and_then(|id| kernel.registry.get(id).map(|e| e.manifest.name.clone()))
             });
             cm.set_sender_router(router);
             info!("Sender-based routing enabled");
@@ -290,7 +292,10 @@ pub async fn run_daemon(
             cm.register("wecom", Box::new(watcher));
         }
         cm.register("weixin", Box::new(channel_weixin::SessionWatcher::new()));
-        cm.register("dingtalk", Box::new(channel_dingtalk::SessionWatcher::new()));
+        cm.register(
+            "dingtalk",
+            Box::new(channel_dingtalk::SessionWatcher::new()),
+        );
 
         // weixin-oa: webhook-based WeChat Official Account channel.
         // Loads senders/{app_id}/session.json files and exposes the OA reply
@@ -364,26 +369,28 @@ pub async fn run_daemon(
         // always took the JSON path — the DB table existed but was never read on boot.
         {
             let store = kernel.memory.weixin_store().clone();
-            let persist_fn: channel_weixin::token::SessionPersistFn = std::sync::Arc::new(move |tf| {
-                let row = memory::weixin_store::WeixinSessionRow {
-                    channel: tf.channel.clone(),
-                    sender_key: tf.sender_key.clone(),
-                    bot_id: tf.bot_id.clone(),
-                    bot_token: tf.bot_token.clone(),
-                    baseurl: tf.baseurl.clone(),
-                    ilink_bot_id: tf.ilink_bot_id.clone(),
-                    user_id: tf.user_id.clone(),
-                    expires_at: tf.expires_at,
-                    bind_agent: tf.bind_agent.clone(),
-                    context_tokens: serde_json::to_string(&tf.context_tokens).unwrap_or_default(),
-                };
-                if let Err(e) = store.upsert(&row) {
-                    tracing::warn!("Failed to persist weixin session to DB: {e}");
-                }
-            });
+            let persist_fn: channel_weixin::token::SessionPersistFn =
+                std::sync::Arc::new(move |tf| {
+                    let row = memory::weixin_store::WeixinSessionRow {
+                        channel: tf.channel.clone(),
+                        sender_key: tf.sender_key.clone(),
+                        bot_id: tf.bot_id.clone(),
+                        bot_token: tf.bot_token.clone(),
+                        baseurl: tf.baseurl.clone(),
+                        ilink_bot_id: tf.ilink_bot_id.clone(),
+                        user_id: tf.user_id.clone(),
+                        expires_at: tf.expires_at,
+                        bind_agent: tf.bind_agent.clone(),
+                        context_tokens: serde_json::to_string(&tf.context_tokens)
+                            .unwrap_or_default(),
+                    };
+                    if let Err(e) = store.upsert(&row) {
+                        tracing::warn!("Failed to persist weixin session to DB: {e}");
+                    }
+                });
             let store2 = kernel.memory.weixin_store().clone();
-            let load_fn: channel_weixin::token::SessionsLoadFn = std::sync::Arc::new(move || {
-                match store2.load_all() {
+            let load_fn: channel_weixin::token::SessionsLoadFn =
+                std::sync::Arc::new(move || match store2.load_all() {
                     Ok(rows) => rows
                         .into_iter()
                         .map(|r| {
@@ -407,8 +414,7 @@ pub async fn run_daemon(
                         tracing::warn!("Failed to load weixin sessions from DB: {e}");
                         Vec::new()
                     }
-                }
-            });
+                });
             channel_weixin::token::WEIXIN_STATE.set_persist_fns(persist_fn, load_fn);
             info!("WeixinState DB persistence callbacks installed");
         }
@@ -435,7 +441,11 @@ pub async fn run_daemon(
         // Inject tool dispatcher into kernel
         {
             let dispatcher = cm.tool_dispatcher();
-            let mut guard = kernel.plugins.plugin_tool_dispatcher.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = kernel
+                .plugins
+                .plugin_tool_dispatcher
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             *guard = Some(dispatcher);
         }
 
@@ -450,16 +460,19 @@ pub async fn run_daemon(
                             continue;
                         }
                         if let Ok(content) = std::fs::read_to_string(&path) {
-                            if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content)
-                            {
+                            if let Ok(tf) = serde_json::from_str::<serde_json::Value>(&content) {
                                 if let (Some(bot_id), Some(agent)) = (
                                     tf.get("bot_id").and_then(|v| v.as_str()),
                                     tf.get("bind_agent").and_then(|v| v.as_str()),
                                 ) {
                                     if !agent.is_empty() {
                                         // Resolve UUID bind_agent to agent name
-                                        let agent_ref = if let Ok(id) = agent.parse::<types::agent::AgentId>() {
-                                            kernel.registry.get(id)
+                                        let agent_ref = if let Ok(id) =
+                                            agent.parse::<types::agent::AgentId>()
+                                        {
+                                            kernel
+                                                .registry
+                                                .get(id)
                                                 .map(|e| e.manifest.name.clone())
                                                 .unwrap_or_else(|| agent.to_string())
                                         } else {
@@ -468,8 +481,7 @@ pub async fn run_daemon(
                                         if let Some(uid) =
                                             tf.get("user_id").and_then(|v| v.as_str())
                                         {
-                                            if !uid.is_empty()
-                                                && cm.get_sender_route(uid).is_none()
+                                            if !uid.is_empty() && cm.get_sender_route(uid).is_none()
                                             {
                                                 cm.set_sender_route(uid, &agent_ref);
                                                 info!(

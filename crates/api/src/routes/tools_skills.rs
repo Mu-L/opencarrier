@@ -86,16 +86,17 @@ pub async fn list_mcp_servers(State(state): State<Arc<AppState>>) -> impl IntoRe
 
 /// GET /api/tools — List all tool definitions (built-in + MCP).
 pub async fn list_tools(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let mut tools: Vec<serde_json::Value> = builtin_tool_definitions(state.kernel.config.cli_exec.clone())
-        .iter()
-        .map(|t| {
-            serde_json::json!({
-                "name": t.name,
-                "description": t.description,
-                "input_schema": t.input_schema,
+    let mut tools: Vec<serde_json::Value> =
+        builtin_tool_definitions(state.kernel.config.cli_exec.clone())
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.input_schema,
+                })
             })
-        })
-        .collect();
+            .collect();
 
     // Include MCP tools so they're visible in Settings -> Tools
     if let Ok(mcp_tools) = state.kernel.plugins.mcp_tools.lock() {
@@ -113,7 +114,6 @@ pub async fn list_tools(State(state): State<Arc<AppState>>) -> impl IntoResponse
 }
 
 // ── Capability catalog (for clone-creator / generate / upgrade) ──────────
-
 
 // ── MCP HTTP Endpoint ───────────────────────────────────────────────────
 
@@ -211,10 +211,8 @@ pub async fn mcp_http(
             flow_deny_tools: None,
             flow_allowed_tools: None,
         };
-        let result = runtime::tool_runner::execute_tool(
-            "mcp-http", tool_name, &arguments, &tool_ctx,
-        )
-        .await;
+        let result =
+            runtime::tool_runner::execute_tool("mcp-http", tool_name, &arguments, &tool_ctx).await;
 
         return Json(serde_json::json!({
             "jsonrpc": "2.0",

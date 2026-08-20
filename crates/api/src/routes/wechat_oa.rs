@@ -117,12 +117,10 @@ pub async fn freepublish_get(
         );
     };
     match resolve_token(&state, &app_id).await {
-        Ok(token) => {
-            match wechat_oa::api::freepublish_get(&HTTP, &token, publish_id).await {
-                Ok(v) => (StatusCode::OK, Json(v)),
-                Err(e) => wechat_error(e),
-            }
-        }
+        Ok(token) => match wechat_oa::api::freepublish_get(&HTTP, &token, publish_id).await {
+            Ok(v) => (StatusCode::OK, Json(v)),
+            Err(e) => wechat_error(e),
+        },
         Err(resp) => resp,
     }
 }
@@ -168,12 +166,10 @@ pub async fn template_list(
     Path(app_id): Path<String>,
 ) -> impl IntoResponse {
     match resolve_token(&state, &app_id).await {
-        Ok(token) => {
-            match wechat_oa::api::get_all_private_template(&HTTP, &token).await {
-                Ok(v) => (StatusCode::OK, Json(v)),
-                Err(e) => wechat_error(e),
-            }
-        }
+        Ok(token) => match wechat_oa::api::get_all_private_template(&HTTP, &token).await {
+            Ok(v) => (StatusCode::OK, Json(v)),
+            Err(e) => wechat_error(e),
+        },
         Err(resp) => resp,
     }
 }
@@ -204,7 +200,13 @@ pub async fn template_send(
     match resolve_token(&state, &app_id).await {
         Ok(token) => {
             match wechat_oa::api::template_send(
-                &HTTP, &token, touser, template_id, url, miniprogram, &data,
+                &HTTP,
+                &token,
+                touser,
+                template_id,
+                url,
+                miniprogram,
+                &data,
             )
             .await
             {
@@ -255,12 +257,10 @@ pub async fn comment_open(
         Err(resp) => return resp,
     };
     match resolve_token(&state, &app_id).await {
-        Ok(token) => {
-            match wechat_oa::api::comment_open(&HTTP, &token, msg_data_id, index).await {
-                Ok(v) => (StatusCode::OK, Json(v)),
-                Err(e) => wechat_error(e),
-            }
-        }
+        Ok(token) => match wechat_oa::api::comment_open(&HTTP, &token, msg_data_id, index).await {
+            Ok(v) => (StatusCode::OK, Json(v)),
+            Err(e) => wechat_error(e),
+        },
         Err(resp) => resp,
     }
 }
@@ -277,12 +277,10 @@ pub async fn comment_close(
         Err(resp) => return resp,
     };
     match resolve_token(&state, &app_id).await {
-        Ok(token) => {
-            match wechat_oa::api::comment_close(&HTTP, &token, msg_data_id, index).await {
-                Ok(v) => (StatusCode::OK, Json(v)),
-                Err(e) => wechat_error(e),
-            }
-        }
+        Ok(token) => match wechat_oa::api::comment_close(&HTTP, &token, msg_data_id, index).await {
+            Ok(v) => (StatusCode::OK, Json(v)),
+            Err(e) => wechat_error(e),
+        },
         Err(resp) => resp,
     }
 }
@@ -305,7 +303,13 @@ pub async fn comment_list(
     match resolve_token(&state, &app_id).await {
         Ok(token) => {
             match wechat_oa::api::comment_list(
-                &HTTP, &token, msg_data_id, index, comment_type, begin, count,
+                &HTTP,
+                &token,
+                msg_data_id,
+                index,
+                comment_type,
+                begin,
+                count,
             )
             .await
             {
@@ -365,7 +369,11 @@ pub async fn comment_unmark_elect(
     match resolve_token(&state, &app_id).await {
         Ok(token) => {
             match wechat_oa::api::comment_unmark_elect(
-                &HTTP, &token, msg_data_id, index, comment_id,
+                &HTTP,
+                &token,
+                msg_data_id,
+                index,
+                comment_id,
             )
             .await
             {
@@ -433,7 +441,12 @@ pub async fn comment_reply(
     match resolve_token(&state, &app_id).await {
         Ok(token) => {
             match wechat_oa::api::comment_reply_add(
-                &HTTP, &token, msg_data_id, index, comment_id, content,
+                &HTTP,
+                &token,
+                msg_data_id,
+                index,
+                comment_id,
+                content,
             )
             .await
             {
@@ -471,7 +484,12 @@ pub async fn comment_reply_delete(
     match resolve_token(&state, &app_id).await {
         Ok(token) => {
             match wechat_oa::api::comment_reply_delete(
-                &HTTP, &token, msg_data_id, index, comment_id, reply_id,
+                &HTTP,
+                &token,
+                msg_data_id,
+                index,
+                comment_id,
+                reply_id,
             )
             .await
             {
@@ -497,11 +515,9 @@ pub async fn datacube_article(
     Path(app_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let Some(date) = body["date"]
-        .as_str()
-        .map(str::trim)
-        .filter(|s| s.len() == 10 && s.as_bytes().get(4) == Some(&b'-') && s.as_bytes().get(7) == Some(&b'-'))
-    else {
+    let Some(date) = body["date"].as_str().map(str::trim).filter(|s| {
+        s.len() == 10 && s.as_bytes().get(4) == Some(&b'-') && s.as_bytes().get(7) == Some(&b'-')
+    }) else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
@@ -530,9 +546,18 @@ pub async fn datacube_summary(
     Path(app_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let date = body["date"].as_str().map(str::trim).filter(|s| !s.is_empty());
-    let begin = body["begin_date"].as_str().map(str::trim).filter(|s| !s.is_empty());
-    let end = body["end_date"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let date = body["date"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let begin = body["begin_date"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let end = body["end_date"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     // date == single-day shorthand; begin/end == explicit range.
     let (begin, end) = match (date, begin, end) {
         (Some(d), _, _) => (d.to_string(), d.to_string()),
@@ -560,8 +585,14 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
     use axum::routing::{get, post};
     axum::Router::new()
         .route("/api/wechat-oa/{app_id}/user/get", get(user_get))
-        .route("/api/wechat-oa/{app_id}/freepublish/get", post(freepublish_get))
-        .route("/api/wechat-oa/{app_id}/draft/batchget", post(draft_batchget))
+        .route(
+            "/api/wechat-oa/{app_id}/freepublish/get",
+            post(freepublish_get),
+        )
+        .route(
+            "/api/wechat-oa/{app_id}/draft/batchget",
+            post(draft_batchget),
+        )
         .route("/api/wechat-oa/{app_id}/draft/count", post(draft_count))
         .route("/api/wechat-oa/{app_id}/template/list", get(template_list))
         .route(
@@ -593,10 +624,7 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
             "/api/wechat-oa/{app_id}/comment/delete",
             post(comment_delete),
         )
-        .route(
-            "/api/wechat-oa/{app_id}/comment/reply",
-            post(comment_reply),
-        )
+        .route("/api/wechat-oa/{app_id}/comment/reply", post(comment_reply))
         .route(
             "/api/wechat-oa/{app_id}/comment/reply/delete",
             post(comment_reply_delete),

@@ -349,11 +349,7 @@ impl BilibiliServer {
                     .and_then(|l| l.as_array())
                     .cloned()
                     .unwrap_or_default();
-                let result: Vec<_> = items
-                    .iter()
-                    .take(20)
-                    .map(parse_video)
-                    .collect();
+                let result: Vec<_> = items.iter().take(20).map(parse_video).collect();
                 api::truncate_result(json!(result).to_string())
             }
             Err(e) => json!({"error": e}).to_string(),

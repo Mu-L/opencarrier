@@ -310,7 +310,12 @@ mod tests {
             key,
             true,
         ));
-        assert!(request_is_authenticated(&hdrs(&[]), Some("secret-key"), key, true));
+        assert!(request_is_authenticated(
+            &hdrs(&[]),
+            Some("secret-key"),
+            key,
+            true
+        ));
     }
 
     #[test]
@@ -321,20 +326,31 @@ mod tests {
 
     #[test]
     fn missing_credential_rejected_when_auth_enabled() {
-        assert!(!request_is_authenticated(&hdrs(&[]), None, "secret-key", true));
+        assert!(!request_is_authenticated(
+            &hdrs(&[]),
+            None,
+            "secret-key",
+            true
+        ));
     }
 
     #[test]
     fn nonempty_key_keeps_auth_on_even_if_auth_disabled() {
         // Open mode requires BOTH empty key and auth disabled. A configured key
         // always gates, regardless of the dashboard-auth toggle.
-        assert!(!request_is_authenticated(&hdrs(&[]), None, "secret-key", false));
+        assert!(!request_is_authenticated(
+            &hdrs(&[]),
+            None,
+            "secret-key",
+            false
+        ));
     }
 
     #[test]
     fn valid_session_cookie_accepted() {
-        let token = crate::session_auth::create_session_token(None, "admin", "admin", "secret-key", 1)
-            .unwrap();
+        let token =
+            crate::session_auth::create_session_token(None, "admin", "admin", "secret-key", 1)
+                .unwrap();
         let h = hdrs(&[("cookie", &format!("opencarrier_session={token}"))]);
         assert!(request_is_authenticated(&h, None, "secret-key", true));
     }
@@ -343,8 +359,9 @@ mod tests {
     fn session_cookie_ignored_when_auth_disabled() {
         // Cookie path only runs when auth_enabled. A valid-looking cookie must
         // NOT bypass a key that the operator hasn't enabled dashboard auth for.
-        let token = crate::session_auth::create_session_token(None, "admin", "admin", "secret-key", 1)
-            .unwrap();
+        let token =
+            crate::session_auth::create_session_token(None, "admin", "admin", "secret-key", 1)
+                .unwrap();
         let h = hdrs(&[("cookie", &format!("opencarrier_session={token}"))]);
         assert!(!request_is_authenticated(&h, None, "secret-key", false));
     }

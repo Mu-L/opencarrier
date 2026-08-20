@@ -307,7 +307,9 @@ impl CronJob {
         // and emoji — including CJK and Chinese punctuation — so agents can name
         // jobs naturally (e.g. "发布第二篇：OpenAI 硬件").
         if self.name.chars().any(|c| c.is_control()) {
-            return Err(CarrierError::InvalidInput("name may not contain control characters".into()));
+            return Err(CarrierError::InvalidInput(
+                "name may not contain control characters".into(),
+            ));
         }
 
         // -- schedule --
@@ -339,7 +341,9 @@ impl CronJob {
             CronSchedule::At { at } => {
                 let now = Utc::now();
                 if *at <= now {
-                    return Err(CarrierError::InvalidInput("scheduled time must be in the future".into()));
+                    return Err(CarrierError::InvalidInput(
+                        "scheduled time must be in the future".into(),
+                    ));
                 }
                 let delta = (*at - now).num_seconds();
                 if delta > MAX_AT_HORIZON_SECS {
@@ -359,7 +363,9 @@ impl CronJob {
         match &self.action {
             CronAction::SystemEvent { text } => {
                 if text.is_empty() {
-                    return Err(CarrierError::InvalidInput("system event text must not be empty".into()));
+                    return Err(CarrierError::InvalidInput(
+                        "system event text must not be empty".into(),
+                    ));
                 }
                 if text.len() > MAX_EVENT_TEXT_LEN {
                     return Err(CarrierError::InvalidInput(format!(
@@ -374,7 +380,9 @@ impl CronJob {
                 ..
             } => {
                 if message.is_empty() {
-                    return Err(CarrierError::InvalidInput("agent turn message must not be empty".into()));
+                    return Err(CarrierError::InvalidInput(
+                        "agent turn message must not be empty".into(),
+                    ));
                 }
                 if message.len() > MAX_TURN_MESSAGE_LEN {
                     return Err(CarrierError::InvalidInput(format!(
@@ -408,7 +416,8 @@ impl CronJob {
                 }
                 if target.trim().is_empty() {
                     return Err(CarrierError::InvalidInput(
-                        "push action requires a target (\"admins\" | \"followers\" | user id)".into(),
+                        "push action requires a target (\"admins\" | \"followers\" | user id)"
+                            .into(),
                     ));
                 }
                 // Payload must be a valid NON-EMPTY ContentDescriptor — every
@@ -460,7 +469,9 @@ impl CronJob {
         match &self.delivery {
             CronDelivery::Webhook { url } => {
                 if !url.starts_with("http://") && !url.starts_with("https://") {
-                    return Err(CarrierError::InvalidInput("webhook URL must start with http:// or https://".into()));
+                    return Err(CarrierError::InvalidInput(
+                        "webhook URL must start with http:// or https://".into(),
+                    ));
                 }
                 if url.len() > MAX_WEBHOOK_URL_LEN {
                     return Err(CarrierError::InvalidInput(format!(
@@ -486,7 +497,9 @@ impl CronJob {
 fn validate_cron_expr(expr: &str) -> CarrierResult<()> {
     let trimmed = expr.trim();
     if trimmed.is_empty() {
-        return Err(CarrierError::InvalidInput("cron expression must not be empty".into()));
+        return Err(CarrierError::InvalidInput(
+            "cron expression must not be empty".into(),
+        ));
     }
     let fields: Vec<&str> = trimmed.split_whitespace().collect();
     if fields.len() != 5 {
@@ -499,7 +512,9 @@ fn validate_cron_expr(expr: &str) -> CarrierResult<()> {
     // Basic character validation per field — allow digits, *, /, -, and ,.
     for (i, field) in fields.iter().enumerate() {
         if field.is_empty() {
-            return Err(CarrierError::InvalidInput(format!("cron field {i} is empty")));
+            return Err(CarrierError::InvalidInput(format!(
+                "cron field {i} is empty"
+            )));
         }
         if !field
             .chars()
@@ -662,13 +677,28 @@ mod tests {
     /// successor expected, no broken-chain alert). Anything less expects one.
     #[test]
     fn chain_meta_is_tail() {
-        let mid = ChainMeta { chain_id: "p".into(), step: 2, total_steps: 5 };
-        assert!(!mid.is_tail(), "step 2/5 is a mid step — successor expected");
-        let tail = ChainMeta { chain_id: "p".into(), step: 5, total_steps: 5 };
+        let mid = ChainMeta {
+            chain_id: "p".into(),
+            step: 2,
+            total_steps: 5,
+        };
+        assert!(
+            !mid.is_tail(),
+            "step 2/5 is a mid step — successor expected"
+        );
+        let tail = ChainMeta {
+            chain_id: "p".into(),
+            step: 5,
+            total_steps: 5,
+        };
         assert!(tail.is_tail(), "step 5/5 is the tail — no successor");
         // step beyond total is treated as tail (defensive: validation rejects
         // it at cron_create, but is_tail must never panic or flip the other way)
-        let over = ChainMeta { chain_id: "p".into(), step: 6, total_steps: 5 };
+        let over = ChainMeta {
+            chain_id: "p".into(),
+            step: 6,
+            total_steps: 5,
+        };
         assert!(over.is_tail());
     }
 

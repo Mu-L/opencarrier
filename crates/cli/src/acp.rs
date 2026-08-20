@@ -9,8 +9,6 @@
 use kernel::CarrierKernel;
 use memory::acp_session::AcpSessionStore;
 use runtime::llm_driver::StreamEvent;
-use types::agent::AgentId;
-use types::message::StopReason;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -18,6 +16,8 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tracing::{debug, error, info};
+use types::agent::AgentId;
+use types::message::StopReason;
 
 use crate::serve::{
     jsonrpc_error, jsonrpc_success, write_response, JsonRpcRequest, Response, SharedWriter,
@@ -414,16 +414,19 @@ fn acp_session_prompt(
         let kernel_handle = kernel.get_kernel_handle();
 
         let result = rt.block_on(async {
-            let (mut rx, handle) = match kernel.send_message_streaming(
-                agent_id,
-                &message,
-                kernel_handle,
-                None,
-                None,
-                None,
-                None,
-                None,
-            ).await {
+            let (mut rx, handle) = match kernel
+                .send_message_streaming(
+                    agent_id,
+                    &message,
+                    kernel_handle,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+            {
                 Ok(r) => r,
                 Err(e) => return Err(format!("Failed to start streaming: {e}")),
             };

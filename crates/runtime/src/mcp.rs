@@ -6,13 +6,13 @@
 //!
 //! All MCP tools are namespaced with `mcp_{server}_{tool}` to prevent collisions.
 
-use types::tool::ToolDefinition;
-use types::error::{CarrierError, CarrierResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, info, warn};
+use types::error::{CarrierError, CarrierResult};
+use types::tool::ToolDefinition;
 
 // ---------------------------------------------------------------------------
 // Configuration types
@@ -303,7 +303,9 @@ impl McpConnection {
             }
             None => {
                 warn!(server = %self.config.name, "No result from MCP tools/call");
-                Err(CarrierError::Network("No result from MCP tools/call".to_string()))
+                Err(CarrierError::Network(
+                    "No result from MCP tools/call".to_string(),
+                ))
             }
         }
     }
@@ -347,8 +349,9 @@ impl McpConnection {
             params,
         };
 
-        let request_json = serde_json::to_string(&request)
-            .map_err(|e| CarrierError::Serialization(format!("Failed to serialize request: {e}")))?;
+        let request_json = serde_json::to_string(&request).map_err(|e| {
+            CarrierError::Serialization(format!("Failed to serialize request: {e}"))
+        })?;
 
         debug!(method, id, "MCP request");
 
@@ -358,7 +361,9 @@ impl McpConnection {
                 stdin
                     .write_all(request_json.as_bytes())
                     .await
-                    .map_err(|e| CarrierError::Network(format!("Failed to write to MCP stdin: {e}")))?;
+                    .map_err(|e| {
+                        CarrierError::Network(format!("Failed to write to MCP stdin: {e}"))
+                    })?;
                 stdin
                     .write_all(b"\n")
                     .await
@@ -374,12 +379,16 @@ impl McpConnection {
                 match tokio::time::timeout(timeout, stdout.read_line(&mut line)).await {
                     Ok(Ok(0)) => {
                         warn!(server = %self.config.name, "MCP server closed connection");
-                        return Err(CarrierError::Network("MCP server closed connection".to_string()));
+                        return Err(CarrierError::Network(
+                            "MCP server closed connection".to_string(),
+                        ));
                     }
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) => {
                         warn!(server = %self.config.name, error = %e, "Failed to read MCP response");
-                        return Err(CarrierError::Network(format!("Failed to read MCP response: {e}")));
+                        return Err(CarrierError::Network(format!(
+                            "Failed to read MCP response: {e}"
+                        )));
                     }
                     Err(_) => {
                         warn!(server = %self.config.name, method, "MCP request timed out");
@@ -387,11 +396,10 @@ impl McpConnection {
                     }
                 }
 
-                let response: JsonRpcResponse = serde_json::from_str(line.trim())
-                    .map_err(|e| {
-                        warn!(server = %self.config.name, error = %e, "Invalid MCP JSON-RPC response");
-                        CarrierError::Serialization(format!("Invalid MCP JSON-RPC response: {e}"))
-                    })?;
+                let response: JsonRpcResponse = serde_json::from_str(line.trim()).map_err(|e| {
+                    warn!(server = %self.config.name, error = %e, "Invalid MCP JSON-RPC response");
+                    CarrierError::Serialization(format!("Invalid MCP JSON-RPC response: {e}"))
+                })?;
 
                 if let Some(err) = response.error {
                     warn!(server = %self.config.name, method, error = %err, "MCP JSON-RPC error");
@@ -415,13 +423,10 @@ impl McpConnection {
                     req = req.header("mcp-session-id", sid);
                 }
 
-                let response = req
-                    .send()
-                    .await
-                    .map_err(|e| {
-                        warn!(server = %self.config.name, error = %e, "MCP SSE request failed");
-                        CarrierError::Network(format!("MCP SSE request failed: {e}"))
-                    })?;
+                let response = req.send().await.map_err(|e| {
+                    warn!(server = %self.config.name, error = %e, "MCP SSE request failed");
+                    CarrierError::Network(format!("MCP SSE request failed: {e}"))
+                })?;
 
                 if !response.status().is_success() {
                     let status = response.status();
@@ -436,13 +441,10 @@ impl McpConnection {
                     }
                 }
 
-                let body = response
-                    .text()
-                    .await
-                    .map_err(|e| {
-                        warn!(server = %self.config.name, error = %e, "Failed to read SSE response");
-                        CarrierError::Network(format!("Failed to read SSE response: {e}"))
-                    })?;
+                let body = response.text().await.map_err(|e| {
+                    warn!(server = %self.config.name, error = %e, "Failed to read SSE response");
+                    CarrierError::Network(format!("Failed to read SSE response: {e}"))
+                })?;
 
                 // Handle both plain JSON and SSE format (Streamable-HTTP).
                 // SSE format: "event: message\ndata: {...}\n\n"
@@ -482,8 +484,9 @@ impl McpConnection {
             "params": params.unwrap_or(serde_json::json!({})),
         });
 
-        let json = serde_json::to_string(&notification)
-            .map_err(|e| CarrierError::Serialization(format!("Failed to serialize notification: {e}")))?;
+        let json = serde_json::to_string(&notification).map_err(|e| {
+            CarrierError::Serialization(format!("Failed to serialize notification: {e}"))
+        })?;
 
         match &mut self.transport {
             McpTransportHandle::Stdio { stdin, .. } => {
@@ -495,7 +498,10 @@ impl McpConnection {
                     .write_all(b"\n")
                     .await
                     .map_err(|e| CarrierError::Network(format!("Write newline: {e}")))?;
-                stdin.flush().await.map_err(|e| CarrierError::Network(format!("Flush: {e}")))?;
+                stdin
+                    .flush()
+                    .await
+                    .map_err(|e| CarrierError::Network(format!("Flush: {e}")))?;
             }
             McpTransportHandle::Sse {
                 client,
@@ -526,7 +532,9 @@ impl McpConnection {
     ) -> CarrierResult<McpTransportHandle> {
         // Validate command path (no path traversal)
         if command.contains("..") {
-            return Err(CarrierError::InvalidInput("MCP command path contains '..': rejected".to_string()));
+            return Err(CarrierError::InvalidInput(
+                "MCP command path contains '..': rejected".to_string(),
+            ));
         }
 
         // On Windows, npm/npx install as .cmd batch wrappers. Detect and adapt.
@@ -587,9 +595,11 @@ impl McpConnection {
             }
         }
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| CarrierError::Internal(format!("Failed to spawn MCP server '{resolved_command}': {e}")))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            CarrierError::Internal(format!(
+                "Failed to spawn MCP server '{resolved_command}': {e}"
+            ))
+        })?;
 
         // Log stderr in background for debugging MCP server issues
         if let Some(stderr) = child.stderr.take() {
@@ -600,7 +610,11 @@ impl McpConnection {
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     // INFO for errors/warnings from MCP server, DEBUG for routine output
-                    if line.contains("ERROR") || line.contains("WARN") || line.contains("error") || line.contains("panic") {
+                    if line.contains("ERROR")
+                        || line.contains("WARN")
+                        || line.contains("error")
+                        || line.contains("panic")
+                    {
                         tracing::warn!(mcp_server = %cmd_name, "stderr: {line}");
                     } else {
                         tracing::debug!(mcp_server = %cmd_name, "stderr: {line}");
@@ -609,14 +623,12 @@ impl McpConnection {
             });
         }
 
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or(CarrierError::Internal("Failed to capture MCP server stdin".to_string()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or(CarrierError::Internal("Failed to capture MCP server stdout".to_string()))?;
+        let stdin = child.stdin.take().ok_or(CarrierError::Internal(
+            "Failed to capture MCP server stdin".to_string(),
+        ))?;
+        let stdout = child.stdout.take().ok_or(CarrierError::Internal(
+            "Failed to capture MCP server stdout".to_string(),
+        ))?;
 
         Ok(McpTransportHandle::Stdio {
             child: Box::new(child),

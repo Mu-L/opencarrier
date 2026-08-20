@@ -6,10 +6,8 @@
 use std::path::Path;
 
 use anyhow::Result;
-use types::agent::{
-    AgentManifest, CloneSource, ManifestCapabilities, ModelConfig, ResourceQuota,
-};
 use tracing::debug;
+use types::agent::{AgentManifest, CloneSource, ManifestCapabilities, ModelConfig, ResourceQuota};
 
 use crate::loader::{parse_template_manifest_lenient, TemplateManifest};
 
@@ -41,19 +39,35 @@ pub fn build_manifest_from_workspace(
     // should NOT be listed in capabilities.tools. MCP tools (mcp_*) are loaded
     // separately via mcp_servers config. So we only collect non-core builtins.
     let core_tools: &[&str] = &[
-        "session_summarize", "tool_search", "flow_load",
-        "knowledge_read", "knowledge_list",
-        "file_read", "file_list",
-        "cron_create", "cron_list", "cron_cancel",
-        "memory_tree", "task_plan",
+        "session_summarize",
+        "tool_search",
+        "flow_load",
+        "knowledge_read",
+        "knowledge_list",
+        "file_read",
+        "file_list",
+        "cron_create",
+        "cron_list",
+        "cron_cancel",
+        "memory_tree",
+        "task_plan",
     ];
 
     let evolution_tools: &[&str] = &[
-        "knowledge_add", "knowledge_list", "knowledge_read",
-        "knowledge_lint", "knowledge_extract", "knowledge_index",
-        "flow_create", "flow_update", "flow_load",
-        "session_summarize", "file_read", "file_write",
-        "file_list", "user_profile",
+        "knowledge_add",
+        "knowledge_list",
+        "knowledge_read",
+        "knowledge_lint",
+        "knowledge_extract",
+        "knowledge_index",
+        "flow_create",
+        "flow_update",
+        "flow_load",
+        "session_summarize",
+        "file_read",
+        "file_write",
+        "file_list",
+        "user_profile",
     ];
 
     let mut tools: Vec<String> = Vec::new();
@@ -68,8 +82,12 @@ pub fn build_manifest_from_workspace(
 
     // Add tools declared in flows (non-core builtins only, skip MCP tools)
     for tool in &flow_tools {
-        if tool.starts_with("mcp_") { continue; }
-        if core_tools.contains(&tool.as_str()) { continue; }
+        if tool.starts_with("mcp_") {
+            continue;
+        }
+        if core_tools.contains(&tool.as_str()) {
+            continue;
+        }
         if !tools.contains(tool) {
             tools.push(tool.clone());
         }
@@ -163,9 +181,7 @@ pub fn build_manifest_from_workspace(
         // default_flow: classifier-miss fallback flow (see AgentManifest::default_flow).
         // Read from template.json so clones can declare it in their definition layer
         // (dup-synced) rather than having to hand-edit the runtime agent.toml.
-        default_flow: template
-            .as_ref()
-            .and_then(|t| t.default_flow.clone()),
+        default_flow: template.as_ref().and_then(|t| t.default_flow.clone()),
         generate_identity_files: false, // .agx already has identity files
         ..Default::default()
     };
@@ -284,8 +300,12 @@ fn parse_flow_name(content: &str) -> Option<String> {
 
 /// Parse flow frontmatter to extract tools list (builtin + MCP).
 fn parse_flow_tools(content: &str) -> Vec<String> {
-    let Some(rest) = content.strip_prefix("---") else { return Vec::new() };
-    let Some(end) = rest.find("---") else { return Vec::new() };
+    let Some(rest) = content.strip_prefix("---") else {
+        return Vec::new();
+    };
+    let Some(end) = rest.find("---") else {
+        return Vec::new();
+    };
     let frontmatter = &rest[..end];
     let lines: Vec<&str> = frontmatter.lines().collect();
     for (i, line) in lines.iter().enumerate() {
@@ -302,8 +322,13 @@ fn parse_flow_tools(content: &str) -> Vec<String> {
                 let sub = subsequent.trim();
                 // Stop at next top-level key (no leading whitespace after trim, ends with ':')
                 // or non-list, non-empty line that isn't indented
-                if sub.is_empty() { continue; }
-                if !sub.starts_with('-') && !subsequent.starts_with(' ') && !subsequent.starts_with('\t') {
+                if sub.is_empty() {
+                    continue;
+                }
+                if !sub.starts_with('-')
+                    && !subsequent.starts_with(' ')
+                    && !subsequent.starts_with('\t')
+                {
                     break;
                 }
                 block.push('\n');
@@ -417,7 +442,8 @@ mod tests {
 
     #[test]
     fn test_parse_flow_tools_stops_at_next_key() {
-        let md = "---\nname: test\ntools:\n  - sqlite_query\n  - web_fetch\nother_key: value\n---\nbody";
+        let md =
+            "---\nname: test\ntools:\n  - sqlite_query\n  - web_fetch\nother_key: value\n---\nbody";
         let tools = parse_flow_tools(md);
         assert_eq!(tools, vec!["sqlite_query", "web_fetch"]);
     }

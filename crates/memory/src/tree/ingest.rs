@@ -11,6 +11,7 @@ use rusqlite::Connection;
 use types::error::{CarrierError, CarrierResult};
 use types::memory_tree::{IngestRequest, IngestResult};
 
+use super::canonicalize::{self, CanonicalisedSource};
 use super::chunker::{self, ChunkInput};
 use super::content_store::ContentStore;
 use super::entity_store::EntityStore;
@@ -22,7 +23,6 @@ use super::store::ChunkStore;
 use super::types::{
     ExtractChunkPayload, JobKind, NewJob, SourceKind, CHUNK_STATUS_PENDING_EXTRACTION,
 };
-use super::canonicalize::{self, CanonicalisedSource};
 
 /// Ingest pipeline backed by SQLite + filesystem content store.
 #[derive(Clone)]
@@ -35,10 +35,7 @@ pub struct IngestPipeline {
 }
 
 impl IngestPipeline {
-    pub fn new(
-        conn: Arc<Mutex<Connection>>,
-        content_root: PathBuf,
-    ) -> Self {
+    pub fn new(conn: Arc<Mutex<Connection>>, content_root: PathBuf) -> Self {
         Self {
             chunk_store: ChunkStore::new(conn.clone()),
             score_store: ScoreStore::new(conn.clone()),
@@ -57,7 +54,9 @@ impl IngestPipeline {
 
         // Document dedup: skip if already ingested
         if source_kind == SourceKind::Document
-            && self.job_store.check_ingested(&req.owner_id, &req.source_kind, &req.source_id)?
+            && self
+                .job_store
+                .check_ingested(&req.owner_id, &req.source_kind, &req.source_id)?
         {
             return Ok(IngestResult {
                 chunks_created: 0,
@@ -120,12 +119,7 @@ impl IngestPipeline {
             let entity_count = entities.len();
 
             // Score
-            let decision = scoring::score_chunk(
-                &chunk.content,
-                source_kind,
-                &tags,
-                entity_count,
-            );
+            let decision = scoring::score_chunk(&chunk.content, source_kind, &tags, entity_count);
 
             // Persist score row
             self.score_store.write_score(
@@ -139,8 +133,10 @@ impl IngestPipeline {
 
             if decision.dropped {
                 // Persist chunk but mark as dropped
-                self.chunk_store.upsert_chunks(std::slice::from_ref(chunk))?;
-                self.chunk_store.update_lifecycle(&req.owner_id, &chunk.id, "dropped")?;
+                self.chunk_store
+                    .upsert_chunks(std::slice::from_ref(chunk))?;
+                self.chunk_store
+                    .update_lifecycle(&req.owner_id, &chunk.id, "dropped")?;
                 chunks_dropped += 1;
                 continue;
             }
@@ -149,7 +145,8 @@ impl IngestPipeline {
             self.content_store.write_chunk(&req.owner_id, chunk)?;
 
             // Persist chunk to SQLite
-            self.chunk_store.upsert_chunks(std::slice::from_ref(chunk))?;
+            self.chunk_store
+                .upsert_chunks(std::slice::from_ref(chunk))?;
             self.chunk_store.update_lifecycle(
                 &req.owner_id,
                 &chunk.id,
@@ -158,19 +155,26 @@ impl IngestPipeline {
 
             // Persist entity index entries
             for entity in &entities {
-                self.entity_store.upsert_entity_index(&req.owner_id, &super::entity_store::EntityIndexEntry {
-                    entity_id: &entity.canonical_id,
-                    node_id: &chunk.id,
-                    node_kind: "leaf",
-                    entity_kind: entity.kind,
-                    surface: &entity.surface,
-                    score: decision.total,
-                    timestamp_ms: chunk.timestamp_ms,
-                    tree_id: None,
-                    user_id: chunk.user_id.as_str(),
-                })?;
+                self.entity_store.upsert_entity_index(
+                    &req.owner_id,
+                    &super::entity_store::EntityIndexEntry {
+                        entity_id: &entity.canonical_id,
+                        node_id: &chunk.id,
+                        node_kind: "leaf",
+                        entity_kind: entity.kind,
+                        surface: &entity.surface,
+                        score: decision.total,
+                        timestamp_ms: chunk.timestamp_ms,
+                        tree_id: None,
+                        user_id: chunk.user_id.as_str(),
+                    },
+                )?;
                 // Bump entity hotness
-                self.entity_store.bump_entity_hotness(&req.owner_id, &entity.canonical_id, &req.source_id)?;
+                self.entity_store.bump_entity_hotness(
+                    &req.owner_id,
+                    &entity.canonical_id,
+                    &req.source_id,
+                )?;
             }
 
             // Enqueue ExtractChunk job
@@ -193,7 +197,8 @@ impl IngestPipeline {
 
         // Mark document sources as ingested
         if source_kind == SourceKind::Document && chunks_written > 0 {
-            self.job_store.mark_ingested(&req.owner_id, &req.source_kind, &req.source_id)?;
+            self.job_store
+                .mark_ingested(&req.owner_id, &req.source_kind, &req.source_id)?;
         }
 
         Ok(IngestResult {
@@ -297,21 +302,22 @@ fn canonicalise_document(req: &IngestRequest) -> Option<CanonicalisedSource> {
 mod tests {
     use super::*;
     use crate::migration::run_migrations;
-    use types::memory_tree::IngestMessage;
     use tempfile::TempDir;
+    use types::memory_tree::IngestMessage;
 
     fn setup() -> (IngestPipeline, TempDir) {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         let dir = TempDir::new().unwrap();
-        let pipeline = IngestPipeline::new(
-            Arc::new(Mutex::new(conn)),
-            dir.path().to_path_buf(),
-        );
+        let pipeline = IngestPipeline::new(Arc::new(Mutex::new(conn)), dir.path().to_path_buf());
         (pipeline, dir)
     }
 
-    fn chat_request(owner_id: &str, source_id: &str, messages: Vec<(&str, &str, i64)>) -> IngestRequest {
+    fn chat_request(
+        owner_id: &str,
+        source_id: &str,
+        messages: Vec<(&str, &str, i64)>,
+    ) -> IngestRequest {
         IngestRequest {
             owner_id: owner_id.to_string(),
             agent_id: "agent_1".to_string(),

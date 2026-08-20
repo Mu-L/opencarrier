@@ -5,11 +5,11 @@
 
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::tool::ToolDefinition;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use types::error::{CarrierError, CarrierResult};
+use types::tool::ToolDefinition;
 
 // ---------------------------------------------------------------------------
 // Module struct
@@ -139,19 +139,18 @@ fn resolve_db_path(input: &Value, workspace_root: Option<&Path>) -> CarrierResul
 fn validate_sql(sql: &str) -> CarrierResult<()> {
     let upper = sql.trim().to_uppercase();
     if upper.starts_with("ATTACH") || upper.starts_with("DETACH") {
-        return Err(CarrierError::InvalidInput("ATTACH/DETACH is not allowed.".to_string()));
+        return Err(CarrierError::InvalidInput(
+            "ATTACH/DETACH is not allowed.".to_string(),
+        ));
     }
     Ok(())
 }
 
 /// Execute a SQL query and return markdown table (SELECT) or affected-row count (DML/DDL).
-async fn tool_sqlite_query(
-    input: &Value,
-    workspace_root: Option<&Path>,
-) -> CarrierResult<String> {
-    let sql = input["sql"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'sql' parameter".to_string()))?;
+async fn tool_sqlite_query(input: &Value, workspace_root: Option<&Path>) -> CarrierResult<String> {
+    let sql = input["sql"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'sql' parameter".to_string(),
+    ))?;
     validate_sql(sql)?;
 
     let db_path = resolve_db_path(input, workspace_root)?;
@@ -170,7 +169,7 @@ async fn tool_sqlite_query(
 }
 
 fn run_statement(db_path: &str, sql: &str) -> CarrierResult<String> {
-    use rusqlite::{Connection, types::ValueRef};
+    use rusqlite::{types::ValueRef, Connection};
 
     let conn = Connection::open(db_path)
         .map_err(|e| CarrierError::Internal(format!("Failed to open database: {e}")))?;
@@ -178,7 +177,9 @@ fn run_statement(db_path: &str, sql: &str) -> CarrierResult<String> {
     let trimmed = sql.trim().to_uppercase();
 
     // DML/DDL: use execute() and return affected rows
-    if !trimmed.starts_with("SELECT") && !trimmed.starts_with("PRAGMA") && !trimmed.starts_with("WITH")
+    if !trimmed.starts_with("SELECT")
+        && !trimmed.starts_with("PRAGMA")
+        && !trimmed.starts_with("WITH")
         && !trimmed.starts_with("EXPLAIN")
     {
         let affected = conn
@@ -234,20 +235,30 @@ fn run_statement(db_path: &str, sql: &str) -> CarrierResult<String> {
     md.push_str("| ");
     md.push_str(&col_names.join(" | "));
     md.push_str(" |\n| ");
-    md.push_str(&col_names.iter().map(|_| "---".to_string()).collect::<Vec<_>>().join(" | "));
+    md.push_str(
+        &col_names
+            .iter()
+            .map(|_| "---".to_string())
+            .collect::<Vec<_>>()
+            .join(" | "),
+    );
     md.push_str(" |\n");
 
     for cols in &result_rows {
         md.push_str("| ");
-        let escaped: Vec<String> = cols.iter().map(|c| {
-            c.replace('|', "\\|").replace('\n', " ").replace('\r', "")
-        }).collect();
+        let escaped: Vec<String> = cols
+            .iter()
+            .map(|c| c.replace('|', "\\|").replace('\n', " ").replace('\r', ""))
+            .collect();
         md.push_str(&escaped.join(" | "));
         md.push_str(" |\n");
     }
 
     if truncated {
-        md.push_str(&format!("\n*[Results limited to {} rows. Use WHERE/LIMIT to narrow.]*", MAX_ROWS));
+        md.push_str(&format!(
+            "\n*[Results limited to {} rows. Use WHERE/LIMIT to narrow.]*",
+            MAX_ROWS
+        ));
     } else {
         md.push_str(&format!("\n*{total_fetched} rows returned.*"));
     }
@@ -256,10 +267,7 @@ fn run_statement(db_path: &str, sql: &str) -> CarrierResult<String> {
 }
 
 /// Show schema of all tables.
-async fn tool_sqlite_schema(
-    input: &Value,
-    workspace_root: Option<&Path>,
-) -> CarrierResult<String> {
+async fn tool_sqlite_schema(input: &Value, workspace_root: Option<&Path>) -> CarrierResult<String> {
     let db_path = resolve_db_path(input, workspace_root)?;
     let db_path_str = db_path.display().to_string();
 
@@ -283,9 +291,9 @@ fn run_schema(db_path: &str) -> CarrierResult<String> {
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
     ).map_err(|e| CarrierError::Internal(format!("Failed to list tables: {e}")))?;
 
-    let table_iter = stmt.query_map([], |row| {
-        row.get::<_, String>(0)
-    }).map_err(|e| CarrierError::Internal(format!("Query failed: {e}")))?;
+    let table_iter = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| CarrierError::Internal(format!("Query failed: {e}")))?;
 
     let mut table_names = Vec::new();
     for name_result in table_iter {
@@ -295,16 +303,21 @@ fn run_schema(db_path: &str) -> CarrierResult<String> {
         }
     }
 
-    let mut output = format!("Database: `{db_path}`\n\n**Tables:** {}\n\n", table_names.len());
+    let mut output = format!(
+        "Database: `{db_path}`\n\n**Tables:** {}\n\n",
+        table_names.len()
+    );
 
     for table in &table_names {
         output.push_str(&format!("## Table: `{table}`\n\n"));
 
         let pragma = format!("PRAGMA table_info({})", table);
-        let mut stmt = conn.prepare(&pragma)
-            .map_err(|e| CarrierError::Internal(format!("Failed to get schema for {table}: {e}")))?;
+        let mut stmt = conn.prepare(&pragma).map_err(|e| {
+            CarrierError::Internal(format!("Failed to get schema for {table}: {e}"))
+        })?;
 
-        let mut rows = stmt.query([])
+        let mut rows = stmt
+            .query([])
             .map_err(|e| CarrierError::Internal(format!("Query failed: {e}")))?;
 
         let mut columns: Vec<(String, String, String, String)> = Vec::new();
@@ -359,8 +372,10 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
         {
             let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)", []).unwrap();
-            conn.execute("INSERT INTO t (name) VALUES ('Alice'), ('Bob')", []).unwrap();
+            conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)", [])
+                .unwrap();
+            conn.execute("INSERT INTO t (name) VALUES ('Alice'), ('Bob')", [])
+                .unwrap();
         }
 
         let input = serde_json::json!({
@@ -382,7 +397,8 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
         {
             let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)", []).unwrap();
+            conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)", [])
+                .unwrap();
         }
 
         let input = serde_json::json!({
@@ -391,7 +407,10 @@ mod tests {
         });
         let result = tool_sqlite_query(&input, None).await;
         assert!(result.is_ok(), "Insert failed: {:?}", result);
-        assert!(result.unwrap().contains("1 row(s) affected"), "Wrong message");
+        assert!(
+            result.unwrap().contains("1 row(s) affected"),
+            "Wrong message"
+        );
 
         let _ = std::fs::remove_file(&db_path);
     }
@@ -402,8 +421,10 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
         {
             let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)", []).unwrap();
-            conn.execute("INSERT INTO t (v) VALUES ('a'), ('b'), ('c')", []).unwrap();
+            conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)", [])
+                .unwrap();
+            conn.execute("INSERT INTO t (v) VALUES ('a'), ('b'), ('c')", [])
+                .unwrap();
         }
 
         // UPDATE
@@ -433,8 +454,16 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
         {
             let conn = rusqlite::Connection::open(&db_path).unwrap();
-            conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL)", []).unwrap();
-            conn.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT)", []).unwrap();
+            conn.execute(
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT)",
+                [],
+            )
+            .unwrap();
         }
 
         let input = serde_json::json!({"db_path": db_path.to_str().unwrap()});

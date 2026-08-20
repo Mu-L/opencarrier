@@ -5,7 +5,10 @@
 
 use anyhow::Result;
 use mcp_common::cookie::make_cookie;
-use mcp_common::{define_params, impl_cookie, json::{error_response, json_to_string}};
+use mcp_common::{
+    define_params, impl_cookie,
+    json::{error_response, json_to_string},
+};
 use reqwest::Method;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::{tool, tool_router, transport::stdio as stdio_transport, ServiceExt};

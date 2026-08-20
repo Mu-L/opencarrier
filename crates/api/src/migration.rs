@@ -67,12 +67,24 @@ fn migrate_sessions_platform(home_dir: &Path, platform: &str) {
                         .to_string()
                 } else {
                     // app/kf: use name as sender_id
-                    json.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string()
+                    json.get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
                 }
             }
-            "feishu" => json.get("app_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            "dingtalk" => json.get("app_key").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            "weixin" => json.get("user_id")
+            "feishu" => json
+                .get("app_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            "dingtalk" => json
+                .get("app_key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            "weixin" => json
+                .get("user_id")
                 .or_else(|| json.get("bot_id"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
@@ -88,7 +100,11 @@ fn migrate_sessions_platform(home_dir: &Path, platform: &str) {
         let sender_key = match platform {
             "wecom" => {
                 let mode = json.get("mode").and_then(|v| v.as_str()).unwrap_or("app");
-                if mode == "smartbot" { "bot_id" } else { "name" }
+                if mode == "smartbot" {
+                    "bot_id"
+                } else {
+                    "name"
+                }
             }
             "feishu" => "app_id",
             "dingtalk" => "app_key",
@@ -97,8 +113,14 @@ fn migrate_sessions_platform(home_dir: &Path, platform: &str) {
         };
 
         if let Some(obj) = json.as_object_mut() {
-            obj.insert("channel".to_string(), serde_json::Value::String(platform.to_string()));
-            obj.insert("sender_key".to_string(), serde_json::Value::String(sender_key.to_string()));
+            obj.insert(
+                "channel".to_string(),
+                serde_json::Value::String(platform.to_string()),
+            );
+            obj.insert(
+                "sender_key".to_string(),
+                serde_json::Value::String(sender_key.to_string()),
+            );
         }
 
         // Write to senders/{sender_id}/session.json
@@ -209,7 +231,10 @@ fn migrate_platform(home_dir: &Path, platform: &str) {
         let session_filename = match platform {
             "wecom" => {
                 // For smartbot mode, use bot_id; for app/kf, use name
-                let mode = json_val.get("mode").and_then(|v| v.as_str()).unwrap_or("app");
+                let mode = json_val
+                    .get("mode")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("app");
                 if mode == "smartbot" {
                     json_val
                         .get("bot_id")
@@ -333,15 +358,41 @@ pub fn migrate_sender_data_to_senders_dir(home_dir: &Path) {
             let dirname = entry.file_name().to_string_lossy().to_string();
 
             // Skip non-sender directories
-            if matches!(dirname.as_str(), "skills" | "knowledge" | "sessions" | "logs" | "history" | "data" | "senders" | "workspaces" | "output" | "input" | "memory" | "agents" | ".lifecycle" | "style" | "test" | "test-img" | "test-pipeline" | "test-quick" | "test-sender" | "test2" | "test3" | "test4" | "test5" | "articles") {
+            if matches!(
+                dirname.as_str(),
+                "skills"
+                    | "knowledge"
+                    | "sessions"
+                    | "logs"
+                    | "history"
+                    | "data"
+                    | "senders"
+                    | "workspaces"
+                    | "output"
+                    | "input"
+                    | "memory"
+                    | "agents"
+                    | ".lifecycle"
+                    | "style"
+                    | "test"
+                    | "test-img"
+                    | "test-pipeline"
+                    | "test-quick"
+                    | "test-sender"
+                    | "test2"
+                    | "test3"
+                    | "test4"
+                    | "test5"
+                    | "articles"
+            ) {
                 continue;
             }
 
             // Check if this looks like a sender data dir (has profile.json, sessions/, output/, etc.)
             let entry_path = entry.path();
-            let is_sender_data = agent_data_indicators.iter().any(|indicator| {
-                entry_path.join(indicator).exists()
-            });
+            let is_sender_data = agent_data_indicators
+                .iter()
+                .any(|indicator| entry_path.join(indicator).exists());
 
             if !is_sender_data {
                 continue;
@@ -380,7 +431,11 @@ pub fn migrate_sender_data_to_senders_dir(home_dir: &Path) {
             };
 
             for sender_entry in sender_entries.flatten() {
-                if !sender_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                if !sender_entry
+                    .file_type()
+                    .map(|t| t.is_dir())
+                    .unwrap_or(false)
+                {
                     continue;
                 }
                 let sender_path = sender_entry.path();
@@ -407,7 +462,11 @@ pub fn migrate_sender_data_to_senders_dir(home_dir: &Path) {
                 Err(_) => continue,
             };
             for nested_entry in nested_entries.flatten() {
-                if !nested_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                if !nested_entry
+                    .file_type()
+                    .map(|t| t.is_dir())
+                    .unwrap_or(false)
+                {
                     continue;
                 }
                 let nested_name = nested_entry.file_name().to_string_lossy().to_string();
@@ -493,9 +552,9 @@ pub fn migrate_sender_data_to_workspaces(home_dir: &Path) {
             let agent_dir = agent_entry.path();
 
             // Check if this looks like agent data (has known subdirs)
-            let is_agent_data = agent_data_indicators.iter().any(|indicator| {
-                agent_dir.join(indicator).exists()
-            });
+            let is_agent_data = agent_data_indicators
+                .iter()
+                .any(|indicator| agent_dir.join(indicator).exists());
 
             if !is_agent_data {
                 continue;

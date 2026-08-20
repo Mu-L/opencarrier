@@ -8,7 +8,6 @@ use types::flow::{FlowDef, StepDef, StepKind, StepOutputMode};
 
 use crate::error::{KernelError, KernelResult};
 
-
 /// Render a map step's `over` template and parse it as a JSON array. Errors
 /// clearly if the template does not resolve to an array.
 pub(crate) fn render_over_array(
@@ -85,12 +84,14 @@ pub(crate) fn select_output(
         }
         StepOutputMode::File(path) => {
             let rendered = render_template(&path, outputs, input);
-            std::fs::read_to_string(&rendered).map(Value::String).map_err(|e| {
-                KernelError::Carrier(CarrierError::Internal(format!(
-                    "step '{}' output:file '{}' missing: {}",
-                    step.id, rendered, e
-                )))
-            })
+            std::fs::read_to_string(&rendered)
+                .map(Value::String)
+                .map_err(|e| {
+                    KernelError::Carrier(CarrierError::Internal(format!(
+                        "step '{}' output:file '{}' missing: {}",
+                        step.id, rendered, e
+                    )))
+                })
         }
     }
 }
@@ -107,7 +108,11 @@ fn extract_json_span(msg: &str) -> Option<&str> {
 /// expressions are left intact. Supports an optional `| default('fallback')`
 /// filter: when the path does not resolve, the fallback is used instead of
 /// leaving the expression literal (useful for `when:false`-skipped steps).
-pub(crate) fn render_template(tpl: &str, outputs: &HashMap<String, Value>, input: &Value) -> String {
+pub(crate) fn render_template(
+    tpl: &str,
+    outputs: &HashMap<String, Value>,
+    input: &Value,
+) -> String {
     let mut out = String::new();
     let mut rest = tpl;
     while let Some(start) = rest.find("{{") {
@@ -180,7 +185,11 @@ pub(crate) fn render_value(v: &Value, outputs: &HashMap<String, Value>, input: &
                 .collect();
             Value::Object(rendered)
         }
-        Value::Array(a) => Value::Array(a.iter().map(|vv| render_value(vv, outputs, input)).collect()),
+        Value::Array(a) => Value::Array(
+            a.iter()
+                .map(|vv| render_value(vv, outputs, input))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
@@ -267,4 +276,3 @@ pub(crate) fn decide_cancel(reply: &str, keywords: &[String]) -> bool {
         .iter()
         .any(|kw| !kw.is_empty() && reply_lower.contains(&kw.to_lowercase()))
 }
-

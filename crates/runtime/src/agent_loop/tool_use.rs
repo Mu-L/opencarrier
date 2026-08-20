@@ -14,17 +14,17 @@ use crate::context_budget::{truncate_tool_result_dynamic, ContextBudget};
 use crate::hooks::HookRegistry;
 use crate::kernel_handle::KernelHandle;
 use crate::llm_driver::{Brain, StreamEvent};
+use crate::mcp::McpConnection;
 use crate::tool_context::ToolContext;
 use crate::tool_runner;
-use crate::mcp::McpConnection;
 use crate::web_fetch::WebFetchEngine;
 use memory::MemorySubstrate;
-use types::message::{ContentBlock, Message, MessageContent, Role};
-use types::tool::ToolDefinition;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
+use types::message::{ContentBlock, Message, MessageContent, Role};
+use types::tool::ToolDefinition;
 
 /// When a tool fails this many consecutive times, escalate the feedback
 /// to urge the LLM to change approach entirely. (Tools are NOT removed —
@@ -201,8 +201,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         messages.push(Message::system(&warning));
     }
     if recent_tool_calls.len() > super::helpers::LOOP_DETECTION_WINDOW * 3 {
-        let drain_count =
-            recent_tool_calls.len() - super::helpers::LOOP_DETECTION_WINDOW * 2;
+        let drain_count = recent_tool_calls.len() - super::helpers::LOOP_DETECTION_WINDOW * 2;
         recent_tool_calls.drain(..drain_count);
     }
 
@@ -214,10 +213,9 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     // to write/overwrite the target). The tool stays available. After
     // LOOP_BREAK_THRESHOLD ignored nudges we fail the turn fast rather than
     // burning the whole max_iterations budget.
-    if let Some((looping_name, _)) = super::helpers::detect_tool_loop(
-        recent_tool_calls,
-        super::helpers::LOOP_DETECTION_WINDOW,
-    ) {
+    if let Some((looping_name, _)) =
+        super::helpers::detect_tool_loop(recent_tool_calls, super::helpers::LOOP_DETECTION_WINDOW)
+    {
         let rearm = tool_loop_rearm.entry(looping_name.clone()).or_insert(0);
         *rearm += 1;
         let rearm = *rearm;
@@ -674,14 +672,16 @@ pub(in crate::agent_loop) async fn handle_tool_use(
 
         // Build actionable, per-tool error analysis with escalating detail.
         // We do NOT remove tools — the LLM can still succeed with correct params.
-        let mut guidance = String::from(
-            "[工具错误分析 — 不要编造结果，也不要用相同参数重试。\n",
-        );
+        let mut guidance = String::from("[工具错误分析 — 不要编造结果，也不要用相同参数重试。\n");
         for (name, err_msg) in &failed_tools {
             let count = error_tracker.consecutive_failures(name).max(1);
             // Truncate long error messages for readability
             let short_err: String = err_msg.chars().take(200).collect();
-            let ellipsis = if err_msg.chars().count() > 200 { "..." } else { "" };
+            let ellipsis = if err_msg.chars().count() > 200 {
+                "..."
+            } else {
+                ""
+            };
 
             // Escalating detail based on how many times this tool has failed
             let suggestion = if count >= ERROR_ESCALATION_THRESHOLD {
@@ -695,13 +695,9 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 String::new()
             };
 
-            guidance.push_str(&format!(
-                " ❌ {name} → {short_err}{ellipsis}{suggestion}\n"
-            ));
+            guidance.push_str(&format!(" ❌ {name} → {short_err}{ellipsis}{suggestion}\n"));
         }
-        guidance.push_str(
-            "修正方法：分析上面的错误原因，用不同的参数或换一个合适的工具重试。]",
-        );
+        guidance.push_str("修正方法：分析上面的错误原因，用不同的参数或换一个合适的工具重试。]");
 
         tool_result_blocks.push(ContentBlock::Text {
             text: guidance,
@@ -763,11 +759,8 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 types::tool::PermissionLevel::Dangerous
             };
             for q in &search_queries {
-                let results = kernel.search_tools(
-                    q,
-                    super::helpers::TOOL_SEARCH_RECALL_LIMIT,
-                    search_level,
-                );
+                let results =
+                    kernel.search_tools(q, super::helpers::TOOL_SEARCH_RECALL_LIMIT, search_level);
                 for (_, def) in results {
                     if found_names.insert(def.name.clone()) {
                         found_tools.push(def);
@@ -844,11 +837,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     // (success -> full save, failure -> summary only)
 
     // Detect task_plan: extract plan data and break out of the loop
-    if let Some(tc) = response
-        .tool_calls
-        .iter()
-        .find(|tc| tc.name == "task_plan")
-    {
+    if let Some(tc) = response.tool_calls.iter().find(|tc| tc.name == "task_plan") {
         let title = tc.input["title"].as_str().unwrap_or("").to_string();
         let steps: Vec<TaskStep> = tc.input["steps"]
             .as_array()

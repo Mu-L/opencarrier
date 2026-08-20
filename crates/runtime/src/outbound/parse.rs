@@ -11,7 +11,11 @@ pub(crate) struct DeliverMarker {
 }
 
 /// Generic `[OPEN:key]content[/CLOSE]` marker parser.
-pub(crate) fn parse_markers(text: &str, open: &str, close: &str) -> (Vec<(String, String)>, String) {
+pub(crate) fn parse_markers(
+    text: &str,
+    open: &str,
+    close: &str,
+) -> (Vec<(String, String)>, String) {
     let mut out = Vec::new();
     let mut cleaned = String::new();
     let mut rest = text;

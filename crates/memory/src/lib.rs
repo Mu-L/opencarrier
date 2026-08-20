@@ -26,6 +26,9 @@ pub use flow_run::{FlowRunRow, FlowRunStore};
 pub use follower_store::{Follower, FollowerStats, FollowerStore};
 pub use notify_store::NotifyRouteStore;
 pub use session::SessionStore;
-pub use session_events::{derive_messages, fold_surface, message_events, rebuild_turn_summaries, SessionEvent, SessionEventKind, SessionEventLog};
+pub use session_events::{
+    derive_messages, fold_surface, message_events, rebuild_turn_summaries, SessionEvent,
+    SessionEventKind, SessionEventLog,
+};
 pub use substrate::MemorySubstrate;
 pub use weixin_store::WeixinSessionStore;

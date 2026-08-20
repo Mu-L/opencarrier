@@ -153,7 +153,10 @@ mod tests {
 
         let config: BrainConfig = serde_json::from_str(json).unwrap();
 
-        assert_eq!(config.base_url, "https://brain.aginx.net/v1/chat/completions");
+        assert_eq!(
+            config.base_url,
+            "https://brain.aginx.net/v1/chat/completions"
+        );
         assert_eq!(config.api_key_env, "AGINXBRAIN_API_KEY");
         assert_eq!(config.default_modality, "chat");
         assert_eq!(config.modalities.len(), 3);

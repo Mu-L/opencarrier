@@ -5,15 +5,15 @@
 
 use runtime::agent_loop::{run_agent_loop, run_agent_loop_streaming, AgentLoopResult};
 use runtime::kernel_handle::KernelHandle;
+use runtime::llm_driver::LlmDriver;
 use runtime::llm_driver::StreamEvent;
 use runtime::python_runtime::{self, PythonConfig};
 use runtime::sandbox::SandboxConfig;
-use runtime::llm_driver::LlmDriver;
-use types::agent::*;
-use types::error::CarrierError;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info, warn};
+use types::agent::*;
+use types::error::CarrierError;
 
 use crate::capabilities::manifest_to_capabilities;
 use crate::error::{KernelError, KernelResult};
@@ -184,7 +184,11 @@ impl CarrierKernel {
             .ok()
             .and_then(|g| g.clone())
         {
-            if let Some(def) = dispatcher.definitions().into_iter().find(|d| d.name == name) {
+            if let Some(def) = dispatcher
+                .definitions()
+                .into_iter()
+                .find(|d| d.name == name)
+            {
                 return Some(def);
             }
         }
@@ -291,7 +295,14 @@ impl CarrierKernel {
         // present, hard-error so the call site is forced to pass an explicit
         // label rather than silently corrupting session isolation.
         let session = {
-            let label = Self::resolve_session_label(agent_id, session_label, sender_id, task_id, owner_id, channel_type)?;
+            let label = Self::resolve_session_label(
+                agent_id,
+                session_label,
+                sender_id,
+                task_id,
+                owner_id,
+                channel_type,
+            )?;
             // Windowed lookup: only resume a session updated within the
             // staleness window. A sender returning after the window starts a
             // fresh session (the old one stays archived-in-place, out of the
@@ -402,8 +413,7 @@ impl CarrierKernel {
             Some(Arc::clone(&*self.brain.brain.read().unwrap_or_else(|e| {
                 warn!("Brain RwLock poisoned, recovering");
                 e.into_inner()
-            }))
-                as Arc<dyn runtime::llm_driver::Brain>);
+            })) as Arc<dyn runtime::llm_driver::Brain>);
 
         // Flow resolution priority: resume > explicit active_flow > LLM classify.
         // resume and active_flow both load a named flow directly (skipping the
@@ -412,7 +422,15 @@ impl CarrierKernel {
         // 2026-08-18: silent fallbacks hide configuration problems; an
         // explicit active_flow is the sanctioned way to pin a flow).
         let (auto_matched_flow, flow_max_iterations, matched_flow) = self
-            .resolve_matched_flow(entry, message, &mut tools, &brain_ref, resume_flow, active_flow, &session)
+            .resolve_matched_flow(
+                entry,
+                message,
+                &mut tools,
+                &brain_ref,
+                resume_flow,
+                active_flow,
+                &session,
+            )
             .await;
 
         // Auto-match subagent trigger (only when no flow matched) + subagent
@@ -463,7 +481,19 @@ impl CarrierKernel {
             sender_id.as_deref().unwrap_or(""),
         );
 
-        self.build_and_apply_prompt(&mut manifest, &tools, sender_id, sender_name, owner_id, prompt_auto_match.clone(), turn_summaries, drawer_entries, recalled_memories, task_id.map(|s| s.to_string()), chain_id);
+        self.build_and_apply_prompt(
+            &mut manifest,
+            &tools,
+            sender_id,
+            sender_name,
+            owner_id,
+            prompt_auto_match.clone(),
+            turn_summaries,
+            drawer_entries,
+            recalled_memories,
+            task_id.map(|s| s.to_string()),
+            chain_id,
+        );
 
         Ok(PreparedContext {
             session,
@@ -531,8 +561,8 @@ impl CarrierKernel {
         agent_id: AgentId,
     ) -> bool {
         use runtime::compactor::{
-            estimate_token_count, needs_compaction as check_compact,
-            needs_compaction_by_tokens, CompactionConfig,
+            estimate_token_count, needs_compaction as check_compact, needs_compaction_by_tokens,
+            CompactionConfig,
         };
         let config = CompactionConfig::default();
         let by_messages = check_compact(session, &config);
@@ -568,17 +598,22 @@ impl CarrierKernel {
     /// Build the agent's core tool set for this turn: bootstrap CORE_TOOL_NAMES,
     /// declarative API tools, and subagent delegate tools.
     fn resolve_tools(&self, entry: &AgentEntry) -> Vec<types::tool::ToolDefinition> {
-        let mut tools: Vec<types::tool::ToolDefinition> = runtime::tool_runner::builtin_tool_definitions(self.config.cli_exec.clone())
-            .into_iter()
-            .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
-            .collect();
+        let mut tools: Vec<types::tool::ToolDefinition> =
+            runtime::tool_runner::builtin_tool_definitions(self.config.cli_exec.clone())
+                .into_iter()
+                .filter(|t| types::tool::CORE_TOOL_NAMES.contains(&t.name.as_str()))
+                .collect();
 
         // Also include declarative API tools — they are always available to all
         // agents (registered via builtin_modules), but not in CORE_TOOL_NAMES.
         // Capabilities.tools filtering still applies downstream.
         let home_dir = types::config::home_dir();
         let api_tool_names: std::collections::HashSet<String> = {
-            let mut names: std::collections::HashSet<String> = runtime::api_tools::loader::load_all_api_tools(&home_dir, entry.manifest.workspace.as_deref())
+            let mut names: std::collections::HashSet<String> =
+                runtime::api_tools::loader::load_all_api_tools(
+                    &home_dir,
+                    entry.manifest.workspace.as_deref(),
+                )
                 .into_iter()
                 .map(|t| t.name)
                 .collect();
@@ -589,7 +624,8 @@ impl CarrierKernel {
             names
         };
         if !api_tool_names.is_empty() {
-            let all_builtins = runtime::tool_runner::builtin_tool_definitions(self.config.cli_exec.clone());
+            let all_builtins =
+                runtime::tool_runner::builtin_tool_definitions(self.config.cli_exec.clone());
             for t in &all_builtins {
                 if api_tool_names.contains(&t.name) {
                     tools.push(t.clone());
@@ -598,7 +634,9 @@ impl CarrierKernel {
         }
 
         if !entry.manifest.subagents.is_empty() {
-            tools.extend(types::agent::build_subagent_tool_definitions(&entry.manifest.subagents));
+            tools.extend(types::agent::build_subagent_tool_definitions(
+                &entry.manifest.subagents,
+            ));
         }
 
         info!(
@@ -695,12 +733,29 @@ impl CarrierKernel {
                 .take(2)
                 .rev()
                 .map(|t| {
-                    let intent = if t.user_intent.is_empty() { "(no intent)".to_string() } else { t.user_intent.clone() };
-                    let outcome = if t.assistant_outcome.is_empty() { "(no outcome)".to_string() } else { t.assistant_outcome.clone() };
+                    let intent = if t.user_intent.is_empty() {
+                        "(no intent)".to_string()
+                    } else {
+                        t.user_intent.clone()
+                    };
+                    let outcome = if t.assistant_outcome.is_empty() {
+                        "(no outcome)".to_string()
+                    } else {
+                        t.assistant_outcome.clone()
+                    };
                     (intent, outcome)
                 })
                 .collect();
-            match crate::prompt_sources::classify_flow_with_llm(message, ws, brain, &entry.manifest.flows, &recent_turns, entry.manifest.clone_source.is_some()).await {
+            match crate::prompt_sources::classify_flow_with_llm(
+                message,
+                ws,
+                brain,
+                &entry.manifest.flows,
+                &recent_turns,
+                entry.manifest.clone_source.is_some(),
+            )
+            .await
+            {
                 Some(flow) => {
                     let flow_name = flow.name.clone();
                     let flow_body = flow.body.clone();
@@ -723,7 +778,14 @@ impl CarrierKernel {
 
                     let mut flow_prompt = format!("**{}**\n{}", flow_name, flow_body);
                     if !flow_warnings.is_empty() {
-                        flow_prompt.push_str(&format!("\n\n⚠️ **Flow Tool Warnings:**\n{}", flow_warnings.iter().map(|w| format!("- {}", w)).collect::<Vec<_>>().join("\n")));
+                        flow_prompt.push_str(&format!(
+                            "\n\n⚠️ **Flow Tool Warnings:**\n{}",
+                            flow_warnings
+                                .iter()
+                                .map(|w| format!("- {}", w))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        ));
                     }
 
                     // The flow body is injected into the base system prompt for
@@ -755,8 +817,12 @@ impl CarrierKernel {
             // even run (silent (None, None, None) here leaves the turn with
             // no flow prompt and no explanation in the logs).
             match (entry.manifest.workspace.as_ref(), brain_ref.as_ref()) {
-                (None, _) => warn!(agent = %entry.name, "Flow classification skipped — no workspace (no flows to match)"),
-                (Some(_), None) => warn!(agent = %entry.name, "Flow classification skipped — no brain configured"),
+                (None, _) => {
+                    warn!(agent = %entry.name, "Flow classification skipped — no workspace (no flows to match)")
+                }
+                (Some(_), None) => {
+                    warn!(agent = %entry.name, "Flow classification skipped — no brain configured")
+                }
                 _ => {}
             }
             (None, None, None)
@@ -775,7 +841,9 @@ impl CarrierKernel {
     ) -> (Option<String>, Option<SubagentConfig>) {
         // Auto-match subagent trigger (only when no flow matched)
         let auto_matched_subagent = if auto_matched_flow.is_none() && !subagents.is_empty() {
-            if let Some(sa_match) = crate::prompt_sources::match_subagent_for_message(message, subagents) {
+            if let Some(sa_match) =
+                crate::prompt_sources::match_subagent_for_message(message, subagents)
+            {
                 info!(
                     agent = %agent_name,
                     subagent = %sa_match.name,
@@ -864,12 +932,9 @@ impl CarrierKernel {
         // default_flow fallback that had to skip this gate is gone), so a
         // casual chat turn only sees the gate if the classifier matched a
         // report flow for it.
-        if flow
-                .flow_def
-                .output
-                .as_deref()
-                .is_some_and(|o| types::flow::StepOutputMode::parse(o.trim()) == types::flow::StepOutputMode::Report)
-        {
+        if flow.flow_def.output.as_deref().is_some_and(|o| {
+            types::flow::StepOutputMode::parse(o.trim()) == types::flow::StepOutputMode::Report
+        }) {
             manifest.metadata.insert(
                 types::flow::META_OUTPUT_REPORT.to_string(),
                 serde_json::json!(true),
@@ -914,7 +979,10 @@ impl CarrierKernel {
     ) {
         // Apply flow's max_iterations override
         if let Some(max_iter) = flow_max_iterations {
-            manifest.autonomous.get_or_insert_with(Default::default).max_iterations = max_iter;
+            manifest
+                .autonomous
+                .get_or_insert_with(Default::default)
+                .max_iterations = max_iter;
             manifest.metadata.insert(
                 types::flow::META_MAX_ITERATIONS_DECLARED.to_string(),
                 serde_json::json!(max_iter),
@@ -928,8 +996,13 @@ impl CarrierKernel {
 
         // Apply subagent's max_iterations override
         if let Some(sa) = subagent_config {
-            manifest.autonomous.get_or_insert_with(Default::default).max_iterations = sa.max_iterations;
-            manifest.metadata.insert("is_subagent".to_string(), serde_json::json!(true));
+            manifest
+                .autonomous
+                .get_or_insert_with(Default::default)
+                .max_iterations = sa.max_iterations;
+            manifest
+                .metadata
+                .insert("is_subagent".to_string(), serde_json::json!(true));
             manifest.metadata.insert(
                 types::flow::META_MAX_ITERATIONS_DECLARED.to_string(),
                 serde_json::json!(sa.max_iterations),
@@ -959,8 +1032,10 @@ impl CarrierKernel {
             .get()
             .and_then(|w| w.upgrade())
             .map(|arc| arc as Arc<dyn KernelHandle>);
-        self.send_message_with_handle(agent_id, message, handle, None, None, None, None, None, None)
-            .await
+        self.send_message_with_handle(
+            agent_id, message, handle, None, None, None, None, None, None,
+        )
+        .await
     }
 
     /// Send a multimodal message (text + images) to an agent and get a response.
@@ -1015,11 +1090,7 @@ impl CarrierKernel {
     /// progress/stuck detection, not a time budget. `secs == 0` disables the
     /// backstop entirely (run unbounded, rely solely on stuck detection + the
     /// per-LLM-call stall timeout).
-    async fn bounded_turn<F>(
-        fut: F,
-        secs: u64,
-        agent_id: &str,
-    ) -> KernelResult<AgentLoopResult>
+    async fn bounded_turn<F>(fut: F, secs: u64, agent_id: &str) -> KernelResult<AgentLoopResult>
     where
         F: std::future::Future<Output = KernelResult<AgentLoopResult>>,
     {
@@ -1112,16 +1183,18 @@ impl CarrierKernel {
             // or open a new one. Skips for empty sessions, when disabled, or
             // when resuming a suspended flow (the reply continues the flow's
             // session, so rotation would be wrong).
-            if resume_row.is_none()
-                && entry.manifest.intent_classifier_enabled.unwrap_or(true)
-            {
+            if resume_row.is_none() && entry.manifest.intent_classifier_enabled.unwrap_or(true) {
                 if let Err(e) = self
                     .maybe_rotate_session_by_intent(agent_id, &entry, message)
                     .await
                 {
                     tracing::warn!(agent_id = %agent_id, error = %e, "Intent classifier failed; opening new session as fallback");
                     // Fallback: open new session on classifier error.
-                    let agent_name = self.registry.get(agent_id).map(|e| e.name.clone()).unwrap_or_else(|| agent_id.to_string());
+                    let agent_name = self
+                        .registry
+                        .get(agent_id)
+                        .map(|e| e.name.clone())
+                        .unwrap_or_else(|| agent_id.to_string());
                     if let Ok(new_session) = self.memory.create_session_async(agent_name).await {
                         if let Err(e) = self.registry.update_session_id(agent_id, new_session.id) {
                             tracing::warn!(agent_id = %agent_id, error = %e, "Failed to update session ID in registry");
@@ -1368,10 +1441,31 @@ impl CarrierKernel {
         }
 
         // LLM agent: true streaming via agent loop
-        let ctx = self.prepare_agent_context(
-            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type, None, None, active_flow, None, None,
-        ).await?;
-        let PreparedContext { mut session, needs_compact, tools, manifest, driver, ctx_window, .. } = ctx;
+        let ctx = self
+            .prepare_agent_context(
+                agent_id,
+                message,
+                &entry,
+                &sender_id,
+                sender_name,
+                &owner_id,
+                &channel_type,
+                None,
+                None,
+                active_flow,
+                None,
+                None,
+            )
+            .await?;
+        let PreparedContext {
+            mut session,
+            needs_compact,
+            tools,
+            manifest,
+            driver,
+            ctx_window,
+            ..
+        } = ctx;
 
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
 
@@ -1388,21 +1482,31 @@ impl CarrierKernel {
 
         let handle = tokio::spawn(async move {
             // Clone Brain Arc before any .await so the RwLockReadGuard is dropped (not Send).
-            let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> =
-                Some(Arc::clone(&*kernel_clone.brain.brain.read().unwrap_or_else(|e| {
+            let brain_ref: Option<Arc<dyn runtime::llm_driver::Brain>> = Some(Arc::clone(
+                &*kernel_clone.brain.brain.read().unwrap_or_else(|e| {
                     warn!("Brain RwLock poisoned, recovering");
                     e.into_inner()
-                }))
-                    as Arc<dyn runtime::llm_driver::Brain>);
+                }),
+            )
+                as Arc<dyn runtime::llm_driver::Brain>);
 
             // Extract MemoryHandle from kernel.
-            let memory_handle: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
-                Some(crate::handle::make_memory_handle(Arc::clone(&kernel_clone.memory)));
+            let memory_handle: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> = Some(
+                crate::handle::make_memory_handle(Arc::clone(&kernel_clone.memory)),
+            );
 
             // Auto-compact if the session is large before running the loop
             if needs_compact {
                 info!(agent_id = %agent_id, messages = session.messages.len(), "Auto-compacting session");
-                match kernel_clone.compact_agent_session(agent_id, session.id, owner_id.as_deref(), sender_id.as_deref()).await {
+                match kernel_clone
+                    .compact_agent_session(
+                        agent_id,
+                        session.id,
+                        owner_id.as_deref(),
+                        sender_id.as_deref(),
+                    )
+                    .await
+                {
                     Ok(msg) => {
                         info!(agent_id = %agent_id, "{msg}");
                         // Reload the session after compaction
@@ -1418,24 +1522,23 @@ impl CarrierKernel {
 
             // Create a phase callback that emits PhaseChange events to WS/SSE clients
             let phase_tx = tx.clone();
-            let phase_cb: runtime::agent_loop::PhaseCallback =
-                std::sync::Arc::new(move |phase| {
-                    use runtime::agent_loop::LoopPhase;
-                    let (phase_str, detail) = match &phase {
-                        LoopPhase::Thinking => ("thinking".to_string(), None),
-                        LoopPhase::ToolUse { tool_name } => {
-                            ("tool_use".to_string(), Some(tool_name.clone()))
-                        }
-                        LoopPhase::Streaming => ("streaming".to_string(), None),
-                        LoopPhase::Done => ("done".to_string(), None),
-                        LoopPhase::Error => ("error".to_string(), None),
-                    };
-                    let event = StreamEvent::PhaseChange {
-                        phase: phase_str,
-                        detail,
-                    };
-                    let _ = phase_tx.try_send(event);
-                });
+            let phase_cb: runtime::agent_loop::PhaseCallback = std::sync::Arc::new(move |phase| {
+                use runtime::agent_loop::LoopPhase;
+                let (phase_str, detail) = match &phase {
+                    LoopPhase::Thinking => ("thinking".to_string(), None),
+                    LoopPhase::ToolUse { tool_name } => {
+                        ("tool_use".to_string(), Some(tool_name.clone()))
+                    }
+                    LoopPhase::Streaming => ("streaming".to_string(), None),
+                    LoopPhase::Done => ("done".to_string(), None),
+                    LoopPhase::Error => ("error".to_string(), None),
+                };
+                let event = StreamEvent::PhaseChange {
+                    phase: phase_str,
+                    detail,
+                };
+                let _ = phase_tx.try_send(event);
+            });
 
             let result = run_agent_loop_streaming(
                 &manifest,
@@ -1453,8 +1556,8 @@ impl CarrierKernel {
                 Some(&kernel_clone.coordination.hooks),
                 ctx_window,
                 Some(&kernel_clone.coordination.process_manager),
-                None,              // content_blocks (streaming path uses text only for now)
-                brain_ref.clone(), // Brain for modality-based routing
+                None,                  // content_blocks (streaming path uses text only for now)
+                brain_ref.clone(),     // Brain for modality-based routing
                 memory_handle.clone(), // Memory handle for kv/tree operations
                 sender_id.as_deref(),
                 owner_id.as_deref(),
@@ -1487,11 +1590,22 @@ impl CarrierKernel {
                     }
 
                     // Evolution hook — post-conversation auto-learning for clones
-                    kernel_clone.maybe_run_evolution(&manifest, &message_owned, &result.response, owner_id.as_deref(), sender_id.as_deref());
+                    kernel_clone.maybe_run_evolution(
+                        &manifest,
+                        &message_owned,
+                        &result.response,
+                        owner_id.as_deref(),
+                        sender_id.as_deref(),
+                    );
 
                     // Multi-tenancy: update user profile
                     if let Some(ref sid) = &sender_id {
-                        touch_user_profile(&kernel_clone.config.home_dir, owner_id.as_deref().unwrap_or(sid), &manifest.name, Some(sid));
+                        touch_user_profile(
+                            &kernel_clone.config.home_dir,
+                            owner_id.as_deref().unwrap_or(sid),
+                            &manifest.name,
+                            Some(sid),
+                        );
                     }
 
                     // Write JSONL session mirror to workspace
@@ -1507,7 +1621,13 @@ impl CarrierKernel {
                             warn!("Failed to write JSONL session mirror (streaming): {e}");
                         }
                         // Append daily memory log (best-effort)
-                        append_daily_memory_log(&kernel_clone.config.home_dir, &manifest.name, &result.response, owner_id.as_deref(), sender_id.as_deref());
+                        append_daily_memory_log(
+                            &kernel_clone.config.home_dir,
+                            &manifest.name,
+                            &result.response,
+                            owner_id.as_deref(),
+                            sender_id.as_deref(),
+                        );
                     }
 
                     kernel_clone
@@ -1517,15 +1637,15 @@ impl CarrierKernel {
 
                     // Persist usage and check budget thresholds
                     let model = manifest.model.modality.clone();
-                    match kernel_clone.metering.record_and_check(
-                        &memory::usage::UsageRecord {
+                    match kernel_clone
+                        .metering
+                        .record_and_check(&memory::usage::UsageRecord {
                             agent_id,
                             model: model.clone(),
                             input_tokens: result.total_usage.input_tokens,
                             output_tokens: result.total_usage.output_tokens,
                             tool_calls: result.iterations.saturating_sub(1),
-                        },
-                    ) {
+                        }) {
                         Ok(Some(alert)) => kernel_clone.handle_budget_alert(&alert),
                         Err(e) => warn!("Failed to record metering: {e}"),
                         _ => {}
@@ -1555,7 +1675,15 @@ impl CarrierKernel {
                             let kc = kernel_clone.clone();
                             tokio::spawn(async move {
                                 info!(agent_id = %agent_id, estimated_tokens = estimated, "Post-loop compaction triggered");
-                                if let Err(e) = kc.compact_agent_session(agent_id, compact_session_id, oid.as_deref(), sid.as_deref()).await {
+                                if let Err(e) = kc
+                                    .compact_agent_session(
+                                        agent_id,
+                                        compact_session_id,
+                                        oid.as_deref(),
+                                        sid.as_deref(),
+                                    )
+                                    .await
+                                {
                                     warn!(agent_id = %agent_id, "Post-loop compaction failed: {e}");
                                 }
                             });
@@ -1748,14 +1876,42 @@ impl CarrierKernel {
         chain_id: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
         // Prepare shared context (session, tools, flow/subagent matching, manifest)
-        let ctx = self.prepare_agent_context(
-            agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type, task_id.as_deref(), resume, active_flow, session_label, chain_id,
-        ).await?;
-        let PreparedContext { mut session, needs_compact, tools, manifest, flow, .. } = ctx;
+        let ctx = self
+            .prepare_agent_context(
+                agent_id,
+                message,
+                entry,
+                &sender_id,
+                sender_name,
+                &owner_id,
+                &channel_type,
+                task_id.as_deref(),
+                resume,
+                active_flow,
+                session_label,
+                chain_id,
+            )
+            .await?;
+        let PreparedContext {
+            mut session,
+            needs_compact,
+            tools,
+            manifest,
+            flow,
+            ..
+        } = ctx;
 
         // Execute compaction if needed
         if needs_compact {
-            match self.compact_agent_session(agent_id, session.id, owner_id.as_deref(), sender_id.as_deref()).await {
+            match self
+                .compact_agent_session(
+                    agent_id,
+                    session.id,
+                    owner_id.as_deref(),
+                    sender_id.as_deref(),
+                )
+                .await
+            {
                 Ok(msg) => {
                     info!(agent_id = %agent_id, "{msg}");
                     if let Ok(Some(reloaded)) = self.memory.get_session_async(session.id).await {
@@ -1773,8 +1929,7 @@ impl CarrierKernel {
             Some(Arc::clone(&*self.brain.brain.read().unwrap_or_else(|e| {
                 warn!("Brain RwLock poisoned, recovering");
                 e.into_inner()
-            }))
-                as Arc<dyn runtime::llm_driver::Brain>);
+            })) as Arc<dyn runtime::llm_driver::Brain>);
 
         // Extract MemoryHandle from kernel.
         let memory_handle: Option<Arc<dyn runtime::memory_handle::MemoryHandle>> =
@@ -1819,7 +1974,10 @@ impl CarrierKernel {
         let resume = match (resume, &flow) {
             (Some(rf), None) => {
                 let completed = rf.completed_steps.clone();
-                let _ = self.memory.flow_runs().update_status(&rf.run_id, "failed", &completed);
+                let _ = self
+                    .memory
+                    .flow_runs()
+                    .update_status(&rf.run_id, "failed", &completed);
                 warn!(agent = %entry.name, run_id = %rf.run_id, flow = %rf.flow_name, "resume aborted: flow def not found, marked failed");
                 None
             }
@@ -1891,7 +2049,11 @@ impl CarrierKernel {
                 .await?;
             match outcome {
                 crate::flow_runner::FlowOutcome::Completed { result, .. } => result,
-                crate::flow_runner::FlowOutcome::Suspended { question, total_usage, iterations } => {
+                crate::flow_runner::FlowOutcome::Suspended {
+                    question,
+                    total_usage,
+                    iterations,
+                } => {
                     // The flow paused at a `user_input` step: the question IS the
                     // reply to send. Skip plan/file/evolution post-processing.
                     let r = AgentLoopResult {
@@ -1902,7 +2064,9 @@ impl CarrierKernel {
                         directives: Default::default(),
                         plan: None,
                     };
-                    return self.finalize_suspended(r, agent_id, &manifest, &session, &sender_id, &owner_id).await;
+                    return self
+                        .finalize_suspended(r, agent_id, &manifest, &session, &sender_id, &owner_id)
+                        .await;
                 }
             }
         } else {
@@ -1923,7 +2087,7 @@ impl CarrierKernel {
                 ctx_window,
                 Some(&self.coordination.process_manager),
                 content_blocks,
-                brain_ref.clone(), // Brain for modality-based routing
+                brain_ref.clone(),     // Brain for modality-based routing
                 memory_handle.clone(), // Memory handle for kv/tree operations
                 sender_id.as_deref(),
                 owner_id.as_deref(),
@@ -1944,27 +2108,27 @@ impl CarrierKernel {
                 steps = plan.steps.len(),
                 "Executing task_plan"
             );
-            result = self.execute_plan(
-                agent_id,
-                &plan,
-                &manifest,
-                &tools,
-                brain_ref.as_ref(),
-                kernel_handle.clone(),
-                sender_id.clone(),
-                owner_id.clone(),
-                channel_type.clone(),
-            ).await?;
+            result = self
+                .execute_plan(
+                    agent_id,
+                    &plan,
+                    &manifest,
+                    &tools,
+                    brain_ref.as_ref(),
+                    kernel_handle.clone(),
+                    sender_id.clone(),
+                    owner_id.clone(),
+                    channel_type.clone(),
+                )
+                .await?;
         }
 
         if let (Some((dir, before)), Some(ref sid), Some(ref ext_url)) =
             (&output_dir_before, &sender_id, &self.config.external_url)
         {
             let after = list_output_rel_paths(dir);
-            let mut new_files: Vec<String> = after
-                .into_iter()
-                .filter(|f| !before.contains(f))
-                .collect();
+            let mut new_files: Vec<String> =
+                after.into_iter().filter(|f| !before.contains(f)).collect();
             new_files.sort();
             if !new_files.is_empty() {
                 // Prefer /api/files/view/{agent_name}/… so links work like the file explorer.
@@ -1993,11 +2157,22 @@ impl CarrierKernel {
         }
 
         // Evolution hook — post-conversation auto-learning for clones
-        self.maybe_run_evolution(&manifest, message, &result.response, owner_id.as_deref(), sender_id.as_deref());
+        self.maybe_run_evolution(
+            &manifest,
+            message,
+            &result.response,
+            owner_id.as_deref(),
+            sender_id.as_deref(),
+        );
 
         // Multi-tenancy: update user profile (touch last_seen, increment conversation_count)
         if let Some(ref sid) = sender_id {
-            touch_user_profile(&self.config.home_dir, owner_id.as_deref().unwrap_or(sid), &manifest.name, Some(sid));
+            touch_user_profile(
+                &self.config.home_dir,
+                owner_id.as_deref().unwrap_or(sid),
+                &manifest.name,
+                Some(sid),
+            );
         }
 
         // Append new messages to canonical session for cross-channel memory
@@ -2015,20 +2190,24 @@ impl CarrierKernel {
                 warn!("Failed to write JSONL session mirror: {e}");
             }
             // Append daily memory log (best-effort)
-            append_daily_memory_log(&self.config.home_dir, &manifest.name, &result.response, owner_id.as_deref(), sender_id.as_deref());
+            append_daily_memory_log(
+                &self.config.home_dir,
+                &manifest.name,
+                &result.response,
+                owner_id.as_deref(),
+                sender_id.as_deref(),
+            );
         }
 
         // Record usage and check budget thresholds
         let model = manifest.model.modality.clone();
-        match self
-            .metering
-            .record_and_check(&memory::usage::UsageRecord {
-                agent_id,
-                model: model.clone(),
-                input_tokens: result.total_usage.input_tokens,
-                output_tokens: result.total_usage.output_tokens,
-                tool_calls: result.iterations.saturating_sub(1),
-            }) {
+        match self.metering.record_and_check(&memory::usage::UsageRecord {
+            agent_id,
+            model: model.clone(),
+            input_tokens: result.total_usage.input_tokens,
+            output_tokens: result.total_usage.output_tokens,
+            tool_calls: result.iterations.saturating_sub(1),
+        }) {
             Ok(Some(alert)) => self.handle_budget_alert(&alert),
             Err(e) => warn!("Failed to record metering: {e}"),
             _ => {}
@@ -2052,7 +2231,12 @@ impl CarrierKernel {
         owner_id: &Option<String>,
     ) -> KernelResult<AgentLoopResult> {
         if let Some(ref sid) = sender_id {
-            touch_user_profile(&self.config.home_dir, owner_id.as_deref().unwrap_or(sid), &manifest.name, Some(sid));
+            touch_user_profile(
+                &self.config.home_dir,
+                owner_id.as_deref().unwrap_or(sid),
+                &manifest.name,
+                Some(sid),
+            );
         }
 
         if let Some(ref workspace) = manifest.workspace {
@@ -2069,15 +2253,13 @@ impl CarrierKernel {
         }
 
         let model = manifest.model.modality.clone();
-        match self
-            .metering
-            .record_and_check(&memory::usage::UsageRecord {
-                agent_id,
-                model,
-                input_tokens: r.total_usage.input_tokens,
-                output_tokens: r.total_usage.output_tokens,
-                tool_calls: r.iterations.saturating_sub(1),
-            }) {
+        match self.metering.record_and_check(&memory::usage::UsageRecord {
+            agent_id,
+            model,
+            input_tokens: r.total_usage.input_tokens,
+            output_tokens: r.total_usage.output_tokens,
+            tool_calls: r.iterations.saturating_sub(1),
+        }) {
             Ok(Some(alert)) => self.handle_budget_alert(&alert),
             Err(e) => warn!("Failed to record metering: {e}"),
             _ => {}
@@ -2164,7 +2346,10 @@ impl CarrierKernel {
                 let mut message = format!("## Task: {}\n\n{}", step.id, step.prompt);
                 for dep_id in &step.depends_on {
                     if let Some(output) = step_outputs.get(dep_id) {
-                        message.push_str(&format!("\n\n## Output from step '{}':\n{}", dep_id, output));
+                        message.push_str(&format!(
+                            "\n\n## Output from step '{}':\n{}",
+                            dep_id, output
+                        ));
                     }
                 }
 
@@ -2174,7 +2359,8 @@ impl CarrierKernel {
                     .as_ref()
                     .map(|e| e.name.clone())
                     .unwrap_or_else(|| agent_id.to_string());
-                let step_session = self.memory
+                let step_session = self
+                    .memory
                     .create_session_async(agent_name.clone())
                     .await
                     .map_err(KernelError::Carrier)?;
@@ -2267,23 +2453,30 @@ impl CarrierKernel {
                 let handle = tokio::spawn(async move {
                     let mut session = step_session;
                     let result = runtime::agent_loop::run_agent_loop(
-                        &manifest_clone, &message, &mut session,
-                        &memory, driver_clone, &tools_owned,
-                        kh, None,
+                        &manifest_clone,
+                        &message,
+                        &mut session,
+                        &memory,
+                        driver_clone,
+                        &tools_owned,
+                        kh,
+                        None,
                         Some(&*mcp_arc),
-                        None,   // fetch_engine: not available in spawned task
+                        None, // fetch_engine: not available in spawned task
                         ws.as_deref(),
-                        None,   // on_phase
-                        None,   // hooks: not available in spawned task
-                        None,   // context_window_tokens
-                        None,   // process_manager
-                        None,   // user_content_blocks
+                        None, // on_phase
+                        None, // hooks: not available in spawned task
+                        None, // context_window_tokens
+                        None, // process_manager
+                        None, // user_content_blocks
                         brain_clone,
                         mh_clone,
-                        sid.as_deref(), oid.as_deref(),
+                        sid.as_deref(),
+                        oid.as_deref(),
                         ct.as_deref(),
                         Some(sem_clone),
-                    ).await;
+                    )
+                    .await;
                     (step_id, result, session)
                 });
                 layer_handles.push(handle);
@@ -2307,21 +2500,25 @@ impl CarrierKernel {
                     }
                     Ok((step_id, Err(e), _)) => {
                         warn!(step = %step_id, error = %e, "Plan step failed");
-                        return Err(KernelError::Carrier(CarrierError::Internal(
-                            format!("Plan step '{}' failed: {}", step_id, e)
-                        )));
+                        return Err(KernelError::Carrier(CarrierError::Internal(format!(
+                            "Plan step '{}' failed: {}",
+                            step_id, e
+                        ))));
                     }
                     Err(e) => {
-                        return Err(KernelError::Carrier(CarrierError::Internal(
-                            format!("Plan step panicked: {}", e)
-                        )));
+                        return Err(KernelError::Carrier(CarrierError::Internal(format!(
+                            "Plan step panicked: {}",
+                            e
+                        ))));
                     }
                 }
             }
         }
 
         // Final result = last step's output
-        let final_output = plan.steps.last()
+        let final_output = plan
+            .steps
+            .last()
             .and_then(|s| step_outputs.get(&s.id))
             .cloned()
             .unwrap_or_default();
@@ -2348,12 +2545,13 @@ impl CarrierKernel {
 ///
 /// Steps in the same layer have no dependencies on each other and can run in parallel.
 /// Each layer only contains steps whose dependencies are all in earlier layers.
-fn partition_steps_by_layers(steps: &[runtime::agent_loop::TaskStep]) -> Vec<Vec<&runtime::agent_loop::TaskStep>> {
+fn partition_steps_by_layers(
+    steps: &[runtime::agent_loop::TaskStep],
+) -> Vec<Vec<&runtime::agent_loop::TaskStep>> {
     use std::collections::HashMap;
 
-    let step_map: HashMap<&str, &runtime::agent_loop::TaskStep> = steps.iter()
-        .map(|s| (s.id.as_str(), s))
-        .collect();
+    let step_map: HashMap<&str, &runtime::agent_loop::TaskStep> =
+        steps.iter().map(|s| (s.id.as_str(), s)).collect();
 
     let mut layer_of: HashMap<String, usize> = HashMap::new();
 
@@ -2366,7 +2564,8 @@ fn partition_steps_by_layers(steps: &[runtime::agent_loop::TaskStep]) -> Vec<Vec
             let computed_layer = if step.depends_on.is_empty() {
                 0
             } else {
-                step.depends_on.iter()
+                step.depends_on
+                    .iter()
                     .filter_map(|dep| layer_of.get(dep))
                     .max()
                     .map(|&l| l + 1)
@@ -2402,7 +2601,10 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use std::collections::HashMap;
-    use types::agent::{AgentEntry, AgentId, AgentManifest, AgentMode, AgentState, ManifestCapabilities, ModelConfig, ResourceQuota, ScheduleMode, SessionId};
+    use types::agent::{
+        AgentEntry, AgentId, AgentManifest, AgentMode, AgentState, ManifestCapabilities,
+        ModelConfig, ResourceQuota, ScheduleMode, SessionId,
+    };
 
     fn entry_with_workspace(ws: &std::path::Path) -> AgentEntry {
         AgentEntry {
@@ -2454,7 +2656,6 @@ mod tests {
             onboarding_completed_at: None,
         }
     }
-
 
     /// Rollover sizing: empty session is 0; messages count toward the
     /// threshold; a realistic bloated chain session (the jiakao failure mode)
@@ -2538,151 +2739,169 @@ mod tests {
     /// Regression guard: 86bus chat misses once loaded article-formatter and
     /// were elevated Write→Dangerous by accident (that is now prevented one
     /// level up, by not loading the flow at all).
-/// Boot a kernel on a fresh tempdir (offline brain pointing at a refused port).
-/// Same pattern as `kv_memory_recall_uses_sender_partition`.
-fn boot_test_kernel() -> (tempfile::TempDir, CarrierKernel) {
-    let tmp = tempfile::tempdir().unwrap();
-    let brain = serde_json::json!({
-        "base_url": "http://127.0.0.1:1/v1/chat/completions",
-        "api_key_env": "",
-        "default_modality": "chat",
-        "modalities": { "chat": { "description": "test" } }
-    });
-    std::fs::write(tmp.path().join("brain.json"), brain.to_string()).unwrap();
-    let config = types::config::KernelConfig {
-        home_dir: tmp.path().to_path_buf(),
-        data_dir: tmp.path().join("data"),
-        ..types::config::KernelConfig::default()
-    };
-    let kernel = CarrierKernel::boot_with_config(config).expect("kernel should boot");
-    (tmp, kernel)
-}
-
-/// Driver that records the model-visible surface of every LLM request it
-/// serves (advertised tool names, system prompt, message roles) and then
-/// answers with a plain EndTurn. The deepseek-harness `model-visible.json`
-/// technique: pin what the model actually sees, not what assembly intended.
-struct RecordingDriver {
-    requests: std::sync::Mutex<Vec<RecordedRequest>>,
-}
-
-#[derive(Default)]
-struct RecordedRequest {
-    tool_names: Vec<String>,
-    system: String,
-    message_roles: Vec<&'static str>,
-}
-
-#[async_trait::async_trait]
-impl runtime::llm_driver::LlmDriver for RecordingDriver {
-    async fn complete(
-        &self,
-        request: runtime::llm_driver::CompletionRequest,
-    ) -> Result<runtime::llm_driver::CompletionResponse, runtime::llm_driver::LlmError> {
-        self.requests.lock().unwrap().push(RecordedRequest {
-            tool_names: request.tools.iter().map(|t| t.name.clone()).collect(),
-            system: request.system.clone().unwrap_or_default(),
-            message_roles: request
-                .messages
-                .iter()
-                .map(|m| match m.role {
-                    types::message::Role::System => "system",
-                    types::message::Role::User => "user",
-                    types::message::Role::Assistant => "assistant",
-                })
-                .collect(),
+    /// Boot a kernel on a fresh tempdir (offline brain pointing at a refused port).
+    /// Same pattern as `kv_memory_recall_uses_sender_partition`.
+    fn boot_test_kernel() -> (tempfile::TempDir, CarrierKernel) {
+        let tmp = tempfile::tempdir().unwrap();
+        let brain = serde_json::json!({
+            "base_url": "http://127.0.0.1:1/v1/chat/completions",
+            "api_key_env": "",
+            "default_modality": "chat",
+            "modalities": { "chat": { "description": "test" } }
         });
-        Ok(runtime::llm_driver::CompletionResponse {
-            content: vec![types::message::ContentBlock::Text {
-                text: "done".to_string(),
-                provider_metadata: None,
-            }],
-            stop_reason: types::message::StopReason::EndTurn,
-            tool_calls: vec![],
-            usage: Default::default(),
-            media: None,
-        })
+        std::fs::write(tmp.path().join("brain.json"), brain.to_string()).unwrap();
+        let config = types::config::KernelConfig {
+            home_dir: tmp.path().to_path_buf(),
+            data_dir: tmp.path().join("data"),
+            ..types::config::KernelConfig::default()
+        };
+        let kernel = CarrierKernel::boot_with_config(config).expect("kernel should boot");
+        (tmp, kernel)
     }
-}
 
-impl RecordingDriver {
-    fn new() -> Self {
-        Self {
-            requests: std::sync::Mutex::new(Vec::new()),
+    /// Driver that records the model-visible surface of every LLM request it
+    /// serves (advertised tool names, system prompt, message roles) and then
+    /// answers with a plain EndTurn. The deepseek-harness `model-visible.json`
+    /// technique: pin what the model actually sees, not what assembly intended.
+    struct RecordingDriver {
+        requests: std::sync::Mutex<Vec<RecordedRequest>>,
+    }
+
+    #[derive(Default)]
+    struct RecordedRequest {
+        tool_names: Vec<String>,
+        system: String,
+        message_roles: Vec<&'static str>,
+    }
+
+    #[async_trait::async_trait]
+    impl runtime::llm_driver::LlmDriver for RecordingDriver {
+        async fn complete(
+            &self,
+            request: runtime::llm_driver::CompletionRequest,
+        ) -> Result<runtime::llm_driver::CompletionResponse, runtime::llm_driver::LlmError>
+        {
+            self.requests.lock().unwrap().push(RecordedRequest {
+                tool_names: request.tools.iter().map(|t| t.name.clone()).collect(),
+                system: request.system.clone().unwrap_or_default(),
+                message_roles: request
+                    .messages
+                    .iter()
+                    .map(|m| match m.role {
+                        types::message::Role::System => "system",
+                        types::message::Role::User => "user",
+                        types::message::Role::Assistant => "assistant",
+                    })
+                    .collect(),
+            });
+            Ok(runtime::llm_driver::CompletionResponse {
+                content: vec![types::message::ContentBlock::Text {
+                    text: "done".to_string(),
+                    provider_metadata: None,
+                }],
+                stop_reason: types::message::StopReason::EndTurn,
+                tool_calls: vec![],
+                usage: Default::default(),
+                media: None,
+            })
         }
     }
-}
 
-/// Tool names contributed by machine config — api_tools.toml on the global
-/// home plus process-global dynamic registrations (the two extra sources
-/// `resolve_tools` reads beyond CORE_TOOL_NAMES). Goldens pin the
-/// code-defined surface only, so these are subtracted before comparing.
-fn machine_config_tool_names(entry: &AgentEntry) -> std::collections::HashSet<String> {
-    let home = types::config::home_dir();
-    runtime::api_tools::loader::load_all_api_tools(&home, entry.manifest.workspace.as_deref())
-        .into_iter()
-        .map(|t| t.name)
-        .chain(
-            runtime::api_tools::register::dynamic_tools()
-                .into_iter()
-                .map(|t| t.name),
-        )
-        .collect()
-}
+    impl RecordingDriver {
+        fn new() -> Self {
+            Self {
+                requests: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
 
-/// Core tool surface golden — the bootstrap set every agent's turn starts
-/// from (`resolve_tools`: CORE_TOOL_NAMES ∩ builtin catalog). An independent
-/// pinned snapshot: editing CORE_TOOL_NAMES OR dropping/renaming a builtin
-/// definition must show up here in review, never only in production.
-/// Machine-config extras (api_tools.toml from the global home) are filtered
-/// out — they are config, not code, and vary per host.
-#[test]
-fn core_tool_surface_is_pinned() {
-    let (_tmp, kernel) = boot_test_kernel();
-    let entry = entry_with_workspace(std::path::Path::new("/tmp/nonexistent-ws"));
-    let machine = machine_config_tool_names(&entry);
-    let names: Vec<String> = {
-        let mut v: Vec<String> = kernel
-            .resolve_tools(&entry)
+    /// Tool names contributed by machine config — api_tools.toml on the global
+    /// home plus process-global dynamic registrations (the two extra sources
+    /// `resolve_tools` reads beyond CORE_TOOL_NAMES). Goldens pin the
+    /// code-defined surface only, so these are subtracted before comparing.
+    fn machine_config_tool_names(entry: &AgentEntry) -> std::collections::HashSet<String> {
+        let home = types::config::home_dir();
+        runtime::api_tools::loader::load_all_api_tools(&home, entry.manifest.workspace.as_deref())
             .into_iter()
-            .filter(|t| !machine.contains(&t.name))
             .map(|t| t.name)
-            .collect();
-        v.sort();
-        v
-    };
-    let golden: Vec<&str> = vec![
-        "api_tool_register", "cron_cancel", "cron_create", "cron_list",
-        "document_generate", "file_list", "file_read", "flow_create",
-        "flow_load", "flow_update", "image_generate", "knowledge_add",
-        "knowledge_list", "knowledge_read", "kv_get", "kv_list", "kv_set",
-        "session_summarize", "task_plan", "tool_search", "user_profile",
-        "web_fetch", "web_search",
-    ];
-    assert_eq!(
+            .chain(
+                runtime::api_tools::register::dynamic_tools()
+                    .into_iter()
+                    .map(|t| t.name),
+            )
+            .collect()
+    }
+
+    /// Core tool surface golden — the bootstrap set every agent's turn starts
+    /// from (`resolve_tools`: CORE_TOOL_NAMES ∩ builtin catalog). An independent
+    /// pinned snapshot: editing CORE_TOOL_NAMES OR dropping/renaming a builtin
+    /// definition must show up here in review, never only in production.
+    /// Machine-config extras (api_tools.toml from the global home) are filtered
+    /// out — they are config, not code, and vary per host.
+    #[test]
+    fn core_tool_surface_is_pinned() {
+        let (_tmp, kernel) = boot_test_kernel();
+        let entry = entry_with_workspace(std::path::Path::new("/tmp/nonexistent-ws"));
+        let machine = machine_config_tool_names(&entry);
+        let names: Vec<String> = {
+            let mut v: Vec<String> = kernel
+                .resolve_tools(&entry)
+                .into_iter()
+                .filter(|t| !machine.contains(&t.name))
+                .map(|t| t.name)
+                .collect();
+            v.sort();
+            v
+        };
+        let golden: Vec<&str> = vec![
+            "api_tool_register",
+            "cron_cancel",
+            "cron_create",
+            "cron_list",
+            "document_generate",
+            "file_list",
+            "file_read",
+            "flow_create",
+            "flow_load",
+            "flow_update",
+            "image_generate",
+            "knowledge_add",
+            "knowledge_list",
+            "knowledge_read",
+            "kv_get",
+            "kv_list",
+            "kv_set",
+            "session_summarize",
+            "task_plan",
+            "tool_search",
+            "user_profile",
+            "web_fetch",
+            "web_search",
+        ];
+        assert_eq!(
         names,
         golden.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
         "core model-visible tool surface drifted — if intentional, update the golden deliberately"
     );
-}
+    }
 
-/// Flow turn assembly golden: a real flow.md parsed from disk through
-/// tool injection, deny_tools, elevation, and prompt assembly, then one
-/// turn through the real agent loop. Pins three invariants the historical
-/// "tool silently vanished from the model's view" bugs broke:
-///   1. advertised tools = core ∪ flow tools − deny_tools (exactly)
-///   2. advertised tools = META_FLOW_ALLOWED_TOOLS (dispatch sandbox matches
-///      what the model was promised — the cage-era mismatch)
-///   3. no "Flow Tool Warnings" (declared-but-unresolvable tools vanish
-///      silently — the clone-generate description-empty bug class)
-#[tokio::test(flavor = "multi_thread")]
-async fn model_visible_surface_flow_assembly_golden() {
-    let (tmp, kernel) = boot_test_kernel();
-    let ws = tmp.path().join("workspaces").join("golden-agent");
-    std::fs::create_dir_all(ws.join("flows").join("fixture-writer")).unwrap();
-    std::fs::write(
-        ws.join("flows").join("fixture-writer").join("flow.md"),
-        "---\n\
+    /// Flow turn assembly golden: a real flow.md parsed from disk through
+    /// tool injection, deny_tools, elevation, and prompt assembly, then one
+    /// turn through the real agent loop. Pins three invariants the historical
+    /// "tool silently vanished from the model's view" bugs broke:
+    ///   1. advertised tools = core ∪ flow tools − deny_tools (exactly)
+    ///   2. advertised tools = META_FLOW_ALLOWED_TOOLS (dispatch sandbox matches
+    ///      what the model was promised — the cage-era mismatch)
+    ///   3. no "Flow Tool Warnings" (declared-but-unresolvable tools vanish
+    ///      silently — the clone-generate description-empty bug class)
+    #[tokio::test(flavor = "multi_thread")]
+    async fn model_visible_surface_flow_assembly_golden() {
+        let (tmp, kernel) = boot_test_kernel();
+        let ws = tmp.path().join("workspaces").join("golden-agent");
+        std::fs::create_dir_all(ws.join("flows").join("fixture-writer")).unwrap();
+        std::fs::write(
+            ws.join("flows").join("fixture-writer").join("flow.md"),
+            "---\n\
          name: fixture-writer\n\
          description: golden fixture flow for the model-visible surface test\n\
          version: 1\n\
@@ -2690,129 +2909,171 @@ async fn model_visible_surface_flow_assembly_golden() {
          deny_tools:\n  - task_plan\n\
          shell_allow:\n  - python3 flows/fixture-writer/scripts/*\n\
          ---\n\nWrite the report.\n",
-    )
-    .unwrap();
+        )
+        .unwrap();
 
-    let entry = entry_with_workspace(&ws);
-    let mut tools = kernel.resolve_tools(&entry);
-    let mut manifest = entry.manifest.clone();
+        let entry = entry_with_workspace(&ws);
+        let mut tools = kernel.resolve_tools(&entry);
+        let mut manifest = entry.manifest.clone();
 
-    // The explicit active_flow path, exactly as prepare_agent_context runs it.
-    let flow = kernel
-        .load_flow_match(&entry, "fixture-writer")
-        .expect("fixture flow parses from disk");
-    let (flow_prompt, _max_iter) = kernel.apply_flow_to_turn(&flow, &mut tools, &entry);
-    assert!(
-        !flow_prompt.contains("Flow Tool Warnings"),
-        "flow tool injection failed — declared tools vanished: {flow_prompt}"
-    );
-    CarrierKernel::apply_flow_elevation(&mut tools, &mut manifest, &flow, &entry.name);
-    kernel.build_and_apply_prompt(
-        &mut manifest,
-        &tools,
-        &Some("user:golden".to_string()),
-        Some("Golden User".to_string()),
-        &None,
-        Some(flow_prompt),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        None,
-        None,
-    );
+        // The explicit active_flow path, exactly as prepare_agent_context runs it.
+        let flow = kernel
+            .load_flow_match(&entry, "fixture-writer")
+            .expect("fixture flow parses from disk");
+        let (flow_prompt, _max_iter) = kernel.apply_flow_to_turn(&flow, &mut tools, &entry);
+        assert!(
+            !flow_prompt.contains("Flow Tool Warnings"),
+            "flow tool injection failed — declared tools vanished: {flow_prompt}"
+        );
+        CarrierKernel::apply_flow_elevation(&mut tools, &mut manifest, &flow, &entry.name);
+        kernel.build_and_apply_prompt(
+            &mut manifest,
+            &tools,
+            &Some("user:golden".to_string()),
+            Some("Golden User".to_string()),
+            &None,
+            Some(flow_prompt),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        );
 
-    // Loop-observed surface.
-    let mut session = memory::session::Session {
-        id: SessionId::new(),
-        agent_name: manifest.name.clone(),
-        messages: Vec::new(),
-        context_window_tokens: 0,
-        turn_summaries: Vec::new(),
-        label: None,
-    };
-    let recorder = std::sync::Arc::new(RecordingDriver::new());
-    let peek: std::sync::Arc<RecordingDriver> = recorder.clone();
-    let driver: std::sync::Arc<dyn runtime::llm_driver::LlmDriver> = recorder;
-    let _result = runtime::agent_loop::run_agent_loop(
-        &manifest, "write it", &mut session, &kernel.memory, driver, &tools,
-        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-    )
-    .await
-    .expect("loop runs");
+        // Loop-observed surface.
+        let mut session = memory::session::Session {
+            id: SessionId::new(),
+            agent_name: manifest.name.clone(),
+            messages: Vec::new(),
+            context_window_tokens: 0,
+            turn_summaries: Vec::new(),
+            label: None,
+        };
+        let recorder = std::sync::Arc::new(RecordingDriver::new());
+        let peek: std::sync::Arc<RecordingDriver> = recorder.clone();
+        let driver: std::sync::Arc<dyn runtime::llm_driver::LlmDriver> = recorder;
+        let _result = runtime::agent_loop::run_agent_loop(
+            &manifest,
+            "write it",
+            &mut session,
+            &kernel.memory,
+            driver,
+            &tools,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("loop runs");
 
-    let recorded = peek.requests.lock().unwrap();
-    assert_eq!(recorded.len(), 1, "one EndTurn iteration = one request");
-    let req = &recorded[0];
+        let recorded = peek.requests.lock().unwrap();
+        assert_eq!(recorded.len(), 1, "one EndTurn iteration = one request");
+        let req = &recorded[0];
 
-    // Filter machine-config extras (api_tools.toml on the global home):
-    // golden pins the code-defined surface only.
-    let machine = machine_config_tool_names(&entry);
-    let mut advertised: Vec<String> = req
-        .tool_names
-        .iter()
-        .filter(|n| !machine.contains(*n))
-        .cloned()
-        .collect();
-    advertised.sort();
-    let mut expected: Vec<String> = vec![
-        "api_tool_register", "cron_cancel", "cron_create", "cron_list",
-        "document_generate", "file_list", "file_read", "file_write",
-        "flow_create", "flow_load", "flow_update", "image_generate",
-        "knowledge_add", "knowledge_list", "knowledge_read", "kv_get",
-        "kv_list", "kv_set", "session_summarize", "shell_exec",
-        "tool_search", "user_profile", "web_fetch", "web_search",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
-    expected.sort();
-    assert_eq!(
-        advertised, expected,
-        "flow-turn advertised tool surface drifted (core ∪ flow.tools − deny_tools)"
-    );
-    assert!(
-        !req.tool_names.contains(&"task_plan".to_string()),
-        "deny_tools must remove task_plan from the model's view"
-    );
-
-    // Advertised ⟺ enforced: the sandbox allow-list the dispatcher will check
-    // must be exactly the set the model was shown (full sets, machine-config
-    // extras cancel out on both sides).
-    let advertised_full: Vec<String> = {
-        let mut v = req.tool_names.clone();
-        v.sort();
-        v
-    };
-    let allowed: Vec<String> = {
-        let mut v: Vec<String> = manifest
-            .metadata
-            .get(types::flow::META_FLOW_ALLOWED_TOOLS)
-            .and_then(|v| v.as_array())
-            .expect("sandbox stamp present")
+        // Filter machine-config extras (api_tools.toml on the global home):
+        // golden pins the code-defined surface only.
+        let machine = machine_config_tool_names(&entry);
+        let mut advertised: Vec<String> = req
+            .tool_names
             .iter()
-            .filter_map(|x| x.as_str().map(String::from))
+            .filter(|n| !machine.contains(*n))
+            .cloned()
             .collect();
-        v.sort();
-        v
-    };
-    assert_eq!(allowed, advertised_full, "advertised tools must equal the dispatch sandbox allow-list");
+        advertised.sort();
+        let mut expected: Vec<String> = vec![
+            "api_tool_register",
+            "cron_cancel",
+            "cron_create",
+            "cron_list",
+            "document_generate",
+            "file_list",
+            "file_read",
+            "file_write",
+            "flow_create",
+            "flow_load",
+            "flow_update",
+            "image_generate",
+            "knowledge_add",
+            "knowledge_list",
+            "knowledge_read",
+            "kv_get",
+            "kv_list",
+            "kv_set",
+            "session_summarize",
+            "shell_exec",
+            "tool_search",
+            "user_profile",
+            "web_fetch",
+            "web_search",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        expected.sort();
+        assert_eq!(
+            advertised, expected,
+            "flow-turn advertised tool surface drifted (core ∪ flow.tools − deny_tools)"
+        );
+        assert!(
+            !req.tool_names.contains(&"task_plan".to_string()),
+            "deny_tools must remove task_plan from the model's view"
+        );
 
-    assert!(
-        req.system.contains("## Active Flow (auto-matched)"),
-        "flow prompt must reach the system prompt"
-    );
-    assert!(
-        req.system.contains("**fixture-writer**"),
-        "flow header must be visible"
-    );
-    // First-request message shape: the user turn + the loop's injected
-    // turn-status system line (build_status_message "📊 Turn…") — pinning the
-    // position keeps future injections (which shift what the model sees) visible.
-    assert_eq!(
-        req.message_roles, vec!["user", "system"],
-        "first request sees the user turn plus the loop status system message"
-    );
-}
+        // Advertised ⟺ enforced: the sandbox allow-list the dispatcher will check
+        // must be exactly the set the model was shown (full sets, machine-config
+        // extras cancel out on both sides).
+        let advertised_full: Vec<String> = {
+            let mut v = req.tool_names.clone();
+            v.sort();
+            v
+        };
+        let allowed: Vec<String> = {
+            let mut v: Vec<String> = manifest
+                .metadata
+                .get(types::flow::META_FLOW_ALLOWED_TOOLS)
+                .and_then(|v| v.as_array())
+                .expect("sandbox stamp present")
+                .iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            allowed, advertised_full,
+            "advertised tools must equal the dispatch sandbox allow-list"
+        );
+
+        assert!(
+            req.system.contains("## Active Flow (auto-matched)"),
+            "flow prompt must reach the system prompt"
+        );
+        assert!(
+            req.system.contains("**fixture-writer**"),
+            "flow header must be visible"
+        );
+        // First-request message shape: the user turn + the loop's injected
+        // turn-status system line (build_status_message "📊 Turn…") — pinning the
+        // position keeps future injections (which shift what the model sees) visible.
+        assert_eq!(
+            req.message_roles,
+            vec!["user", "system"],
+            "first request sees the user turn plus the loop status system message"
+        );
+    }
 
     #[test]
     fn matched_flow_gets_full_authority() {
@@ -2847,14 +3108,37 @@ async fn model_visible_surface_flow_assembly_golden() {
         let mut tools = vec![tool("task_plan"), tool("file_read"), tool("shell_exec")];
         let mut manifest = entry_with_workspace(std::path::Path::new("/tmp")).manifest;
         CarrierKernel::apply_flow_elevation(&mut tools, &mut manifest, &flow, "a");
-        assert!(!tools.iter().any(|t| t.name == "task_plan"), "deny_tools applies");
         assert!(
-            manifest.metadata.contains_key(types::flow::META_FLOW_ALLOWED_TOOLS),
+            !tools.iter().any(|t| t.name == "task_plan"),
+            "deny_tools applies"
+        );
+        assert!(
+            manifest
+                .metadata
+                .contains_key(types::flow::META_FLOW_ALLOWED_TOOLS),
             "hard sandbox applies"
         );
-        assert!(manifest.max_tool_level > types::tool::PermissionLevel::Write, "elevates");
-        assert!(manifest.metadata.contains_key(types::flow::META_OUTPUT_REPORT), "report gate stamps");
-        assert!(manifest.metadata.contains_key(types::flow::META_FLOW_SHELL_ALLOW), "shell_allow stamps");
-        assert!(manifest.metadata.contains_key(types::flow::META_FLOW_ELEVATED_TOOLS), "elevated tools stamp");
+        assert!(
+            manifest.max_tool_level > types::tool::PermissionLevel::Write,
+            "elevates"
+        );
+        assert!(
+            manifest
+                .metadata
+                .contains_key(types::flow::META_OUTPUT_REPORT),
+            "report gate stamps"
+        );
+        assert!(
+            manifest
+                .metadata
+                .contains_key(types::flow::META_FLOW_SHELL_ALLOW),
+            "shell_allow stamps"
+        );
+        assert!(
+            manifest
+                .metadata
+                .contains_key(types::flow::META_FLOW_ELEVATED_TOOLS),
+            "elevated tools stamp"
+        );
     }
 }

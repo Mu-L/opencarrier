@@ -4,8 +4,8 @@
 //! Handles IDC redirect and QR expiry (max 3 refreshes).
 
 use crate::api;
-use crate::token::WEIXIN_STATE;
 use crate::models::*;
+use crate::token::WEIXIN_STATE;
 use reqwest::Client;
 use tracing::{info, warn};
 use types::error::{CarrierError, CarrierResult};
@@ -65,12 +65,12 @@ pub async fn qr_login(
                         info!("QR code scanned, waiting for confirmation");
                     }
                     "confirmed" => {
-                        let bot_token = status
-                            .bot_token
-                            .ok_or_else(|| CarrierError::Internal("confirmed but no bot_token".to_string()))?;
-                        let ilink_bot_id = status
-                            .ilink_bot_id
-                            .ok_or_else(|| CarrierError::Internal("confirmed but no ilink_bot_id".to_string()))?;
+                        let bot_token = status.bot_token.ok_or_else(|| {
+                            CarrierError::Internal("confirmed but no bot_token".to_string())
+                        })?;
+                        let ilink_bot_id = status.ilink_bot_id.ok_or_else(|| {
+                            CarrierError::Internal("confirmed but no ilink_bot_id".to_string())
+                        })?;
                         let baseurl = status.baseurl.unwrap_or_else(|| ILINK_API_BASE.to_string());
                         let user_id = status.ilink_user_id;
 

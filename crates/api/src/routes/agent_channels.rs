@@ -247,7 +247,11 @@ pub async fn bind_weixin_oa(
         Err(e) => return e.into_response(),
     };
 
-    let app_id = match body.get("app_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+    let app_id = match body
+        .get("app_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
         Some(s) => s.to_string(),
         None => {
             return (
@@ -329,11 +333,15 @@ pub async fn bind_weixin_oa(
     // otherwise keep what the session already had.
     let fallback_template_id = match body.get("fallback_template_id") {
         Some(v) => v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()),
-        None => existing.as_ref().and_then(|e| e.fallback_template_id.clone()),
+        None => existing
+            .as_ref()
+            .and_then(|e| e.fallback_template_id.clone()),
     };
     let fallback_template_field = match body.get("fallback_template_field") {
         Some(v) => v.as_str().filter(|s| !s.is_empty()).map(|s| s.to_string()),
-        None => existing.as_ref().and_then(|e| e.fallback_template_field.clone()),
+        None => existing
+            .as_ref()
+            .and_then(|e| e.fallback_template_field.clone()),
     };
 
     let sf = channel_weixin_oa::WeixinOaSessionFile {
@@ -515,7 +523,11 @@ pub async fn bind_wecom_kf(
         Err(e) => return e.into_response(),
     };
 
-    let name = match body.get("name").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+    let name = match body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
         Some(s) => s.to_string(),
         None => {
             return (
@@ -729,10 +741,7 @@ pub async fn unbind_wecom_kf(
 pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> {
     use axum::routing::{delete, get, post};
     axum::Router::new()
-        .route(
-            "/api/agents/{agent}/channels",
-            get(list_agent_channels),
-        )
+        .route("/api/agents/{agent}/channels", get(list_agent_channels))
         .route(
             "/api/agents/{agent}/channels/weixin-oa",
             post(bind_weixin_oa),
@@ -741,10 +750,7 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
             "/api/agents/{agent}/channels/weixin-oa/{app_id}",
             delete(unbind_weixin_oa),
         )
-        .route(
-            "/api/agents/{agent}/channels/wecom-kf",
-            post(bind_wecom_kf),
-        )
+        .route("/api/agents/{agent}/channels/wecom-kf", post(bind_wecom_kf))
         .route(
             "/api/agents/{agent}/channels/wecom-kf/{name}",
             delete(unbind_wecom_kf),

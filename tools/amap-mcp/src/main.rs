@@ -4,11 +4,11 @@
 //! the `AMAP_API_KEY` environment variable (configured via config.toml env section).
 
 use anyhow::Result;
+use mcp_common::json::{error_response, json_to_string};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::{tool, tool_router, transport::stdio as stdio_transport, ServiceExt};
 use schemars::JsonSchema;
 use serde::Deserialize;
-use mcp_common::json::{error_response, json_to_string};
 
 // ================================================================== //
 //  API key                                                             //
@@ -63,7 +63,9 @@ async fn geocode_inner(address: &str) -> Result<(String, String)> {
         .geocodes
         .and_then(|g| g.into_iter().next())
         .ok_or_else(|| anyhow::anyhow!("No geocode result for address: {}", address))?;
-    let location = geo.location.ok_or_else(|| anyhow::anyhow!("No location in geocode result"))?;
+    let location = geo
+        .location
+        .ok_or_else(|| anyhow::anyhow!("No location in geocode result"))?;
     let formatted = geo.formatted_address.unwrap_or_default();
     Ok((location, formatted))
 }
@@ -107,7 +109,9 @@ async fn driving_inner(origin: &str, destination: &str) -> Result<serde_json::Va
     if resp.status != "1" {
         anyhow::bail!("Driving API returned status={}", resp.status);
     }
-    let route = resp.route.ok_or_else(|| anyhow::anyhow!("No route in response"))?;
+    let route = resp
+        .route
+        .ok_or_else(|| anyhow::anyhow!("No route in response"))?;
     let path = route
         .paths
         .and_then(|p| p.into_iter().next())
@@ -125,12 +129,7 @@ async fn driving_inner(origin: &str, destination: &str) -> Result<serde_json::Va
         .unwrap_or("0")
         .parse()
         .unwrap_or(0.0);
-    let tolls: f64 = path
-        .tolls
-        .as_deref()
-        .unwrap_or("0")
-        .parse()
-        .unwrap_or(0.0);
+    let tolls: f64 = path.tolls.as_deref().unwrap_or("0").parse().unwrap_or(0.0);
     let toll_distance_m: f64 = path
         .toll_distance
         .as_deref()
@@ -217,17 +216,17 @@ impl AmapServer {
     #[tool(description = "将地名地址转换为经纬度坐标。输入地名，返回经纬度和标准地址。")]
     async fn geocode(&self, Parameters(params): Parameters<GeocodeParams>) -> String {
         match geocode_inner(&params.address).await {
-            Ok((location, formatted_address)) => {
-                json_to_string(&serde_json::json!({
-                    "location": location,
-                    "formatted_address": formatted_address,
-                }))
-            }
+            Ok((location, formatted_address)) => json_to_string(&serde_json::json!({
+                "location": location,
+                "formatted_address": formatted_address,
+            })),
             Err(e) => error_response(&e),
         }
     }
 
-    #[tool(description = "驾驶路线规划。输入起终点（地名或经纬度），返回里程(km)、预计时间(分钟)、过路费(元)、收费路段距离(km)、距离档位(市内/近郊/远郊/长途)。")]
+    #[tool(
+        description = "驾驶路线规划。输入起终点（地名或经纬度），返回里程(km)、预计时间(分钟)、过路费(元)、收费路段距离(km)、距离档位(市内/近郊/远郊/长途)。"
+    )]
     async fn driving(&self, Parameters(params): Parameters<DrivingParams>) -> String {
         let origin = match resolve_location(&params.origin).await {
             Ok(o) => o,

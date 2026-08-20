@@ -43,9 +43,16 @@ pub fn drill_down(
         }
     };
 
-    let root_tree_scope = root.as_ref().and_then(|s| {
-        tree_store.get_tree(owner_id, user_id, &s.tree_id).ok().flatten().map(|t| t.scope)
-    }).unwrap_or_default();
+    let root_tree_scope = root
+        .as_ref()
+        .and_then(|s| {
+            tree_store
+                .get_tree(owner_id, user_id, &s.tree_id)
+                .ok()
+                .flatten()
+                .map(|t| t.scope)
+        })
+        .unwrap_or_default();
 
     let mut hits: Vec<RetrievalHit> = Vec::new();
     let mut frontier: VecDeque<(String, u32)> =
@@ -58,7 +65,8 @@ pub fn drill_down(
 
         // Try as summary
         if let Some(node) = tree_store.get_summary(owner_id, user_id, &id)? {
-            let scope = tree_store.get_tree(owner_id, user_id, &node.tree_id)?
+            let scope = tree_store
+                .get_tree(owner_id, user_id, &node.tree_id)?
                 .map(|t| t.scope)
                 .unwrap_or_else(|| root_tree_scope.clone());
             let child_ids = node.child_ids.clone();
@@ -119,9 +127,9 @@ mod tests {
     use super::*;
     use crate::migration::run_migrations;
     use crate::tree::bucket_seal::BucketSealEngine;
+    use crate::tree::store::ChunkStore;
     use crate::tree::summariser::inert::InertSummariser;
     use crate::tree::types::{Chunk, SourceKind};
-    use crate::tree::store::ChunkStore;
     use tempfile::TempDir;
 
     fn setup() -> (Arc<Mutex<Connection>>, TempDir) {
@@ -153,7 +161,8 @@ mod tests {
         let tree_store = TreeTreeStore::new(conn.clone());
         let chunk_store = ChunkStore::new(conn.clone());
 
-        let tree = tree_store.get_or_create_tree("owner_1", "", TreeKind::Source, "wechat:test:sender")?;
+        let tree =
+            tree_store.get_or_create_tree("owner_1", "", TreeKind::Source, "wechat:test:sender")?;
 
         // Insert enough chunks and force seal
         for i in 0..10 {
@@ -179,9 +188,20 @@ mod tests {
             chunk_store.upsert_chunks(&[chunk])?;
         }
 
-        let seal_engine = BucketSealEngine::new(conn.clone(), _dir.path().to_path_buf(), Arc::new(InertSummariser));
+        let seal_engine = BucketSealEngine::new(
+            conn.clone(),
+            _dir.path().to_path_buf(),
+            Arc::new(InertSummariser),
+        );
         for i in 0..10 {
-            seal_engine.append_to_buffer("owner_1", &tree.id, 0, &format!("chunk_dd_{i}"), 6000, 1_700_000_000_000)?;
+            seal_engine.append_to_buffer(
+                "owner_1",
+                &tree.id,
+                0,
+                &format!("chunk_dd_{i}"),
+                6000,
+                1_700_000_000_000,
+            )?;
         }
         seal_engine.cascade_seals("owner_1", &tree, 0, false)?;
 
@@ -190,7 +210,10 @@ mod tests {
         let root_id = refreshed.root_id.unwrap();
 
         let result = drill_down(&conn, "owner_1", None, &root_id, 1, None)?;
-        assert!(!result.is_empty(), "drill_down from sealed L1 should return leaf children");
+        assert!(
+            !result.is_empty(),
+            "drill_down from sealed L1 should return leaf children"
+        );
         Ok(())
     }
 }

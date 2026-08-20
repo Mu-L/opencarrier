@@ -6,18 +6,18 @@
 
 pub mod api;
 pub mod channel;
-pub mod token;
 pub mod models;
+pub mod token;
 pub mod ws;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use tokio::sync::mpsc;
+use tracing::{info, warn};
 use types::channel::Channel;
 use types::error::{CarrierError, CarrierResult};
 use types::plugin::PluginMessage;
-use tokio::sync::mpsc;
-use tracing::{info, warn};
 
 // ---------------------------------------------------------------------------
 // Runtime bot entry
@@ -88,7 +88,10 @@ impl channels_common::ChannelBot for DingTalkBot {
         Some(DingTalkBotEntry::new(cfg))
     }
 
-    fn status_extra(entry: &DingTalkBotEntry, out: &mut serde_json::Map<String, serde_json::Value>) {
+    fn status_extra(
+        entry: &DingTalkBotEntry,
+        out: &mut serde_json::Map<String, serde_json::Value>,
+    ) {
         out.insert("app_key".to_string(), entry.config.app_key.clone().into());
     }
 }
@@ -175,7 +178,11 @@ impl Channel for SessionWatcher {
         self.shutdown.store(true, Ordering::Relaxed);
     }
 
-    fn start_sender(&self, sender_id: &str, sender: mpsc::Sender<PluginMessage>) -> CarrierResult<()> {
+    fn start_sender(
+        &self,
+        sender_id: &str,
+        sender: mpsc::Sender<PluginMessage>,
+    ) -> CarrierResult<()> {
         DINGTALK_STATE.load_new_from_dir();
         spawn_bot_by_id(sender_id, &sender);
         info!(sender_id = %sender_id, "DingTalk: started new sender");
@@ -199,7 +206,8 @@ fn spawn_inactive_bots(sender: &mpsc::Sender<PluginMessage>) {
         let tx = sender.clone();
         let app_key_for_ws = app_key.clone();
         std::thread::spawn(move || {
-            let mut ch = channel::DingTalkChannel::new(bot_name.clone(), app_key_for_ws, token_cache);
+            let mut ch =
+                channel::DingTalkChannel::new(bot_name.clone(), app_key_for_ws, token_cache);
             if let Err(e) = ch.start(tx) {
                 warn!(bot = %bot_name, "DingTalk channel start error: {e}");
             }
@@ -220,7 +228,8 @@ fn spawn_bot_by_id(sender_id: &str, sender: &mpsc::Sender<PluginMessage>) {
         let tx = sender.clone();
         let app_key_for_ws = sender_id.to_string();
         std::thread::spawn(move || {
-            let mut ch = channel::DingTalkChannel::new(bot_name.clone(), app_key_for_ws, token_cache);
+            let mut ch =
+                channel::DingTalkChannel::new(bot_name.clone(), app_key_for_ws, token_cache);
             if let Err(e) = ch.start(tx) {
                 warn!(bot = %bot_name, "DingTalk channel start error: {e}");
             }

@@ -26,8 +26,8 @@ pub use types::{ChannelDeliverFn, ChannelSendFn, NotifyTarget, RoutingModeFn};
 
 #[cfg(test)]
 mod tests {
-    use super::parse::{parse_deliver_markers, parse_publish_markers};
     use super::is_no_reply_sentinel;
+    use super::parse::{parse_deliver_markers, parse_publish_markers};
 
     #[test]
     fn detects_no_reply_sentinels() {
@@ -49,7 +49,9 @@ mod tests {
     #[test]
     fn leaves_real_replies_untouched() {
         // A real reply that merely mentions the phrase must NOT be suppressed.
-        assert!(!is_no_reply_sentinel("这是咱们的月票，点开小程序就能看详情"));
+        assert!(!is_no_reply_sentinel(
+            "这是咱们的月票，点开小程序就能看详情"
+        ));
         assert!(!is_no_reply_sentinel(
             "Sure, no reply needed from me, but here's the answer: 42"
         ));

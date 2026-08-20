@@ -91,9 +91,13 @@ impl ToolErrorTracker {
     }
 
     pub fn failed_tools(&self) -> impl Iterator<Item = (&String, u32)> {
-        self.history.iter().filter_map(|(name, _)| {
+        self.history.keys().filter_map(|name| {
             let cf = self.consecutive_failures(name);
-            if cf > 0 { Some((name, cf)) } else { None }
+            if cf > 0 {
+                Some((name, cf))
+            } else {
+                None
+            }
         })
     }
 }
@@ -277,7 +281,9 @@ impl LoopState {
         }
 
         // Error tracking via sliding window
-        let failed: Vec<String> = self.error_tracker.failed_tools()
+        let failed: Vec<String> = self
+            .error_tracker
+            .failed_tools()
             .map(|(name, count)| format!("{name}(×{count})"))
             .collect();
         if !failed.is_empty() {

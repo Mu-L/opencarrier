@@ -46,9 +46,9 @@ pub fn map_tool_name(name: &str) -> Option<&'static str> {
 /// Returns a subslice of `name` (no allocation). Does not rewrite aliases —
 /// use [`normalize_tool_name`] for full mapping.
 pub fn sanitize_tool_name(name: &str) -> &str {
-    let name = name.trim().trim_matches(|c: char| {
-        matches!(c, '"' | '\'' | '`' | '“' | '”' | '‘' | '’' | '«' | '»')
-    });
+    let name = name
+        .trim()
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | '“' | '”' | '‘' | '’' | '«' | '»'));
     name.trim_end_matches(|c: char| {
         matches!(
             c,
@@ -90,7 +90,6 @@ pub fn is_known_carrier_tool(name: &str) -> bool {
             | "file_write"
             | "file_list"
             | "shell_exec"
-            
             | "web_fetch"
             | "web_search"
             | "browser_navigate"

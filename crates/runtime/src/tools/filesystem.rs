@@ -2,10 +2,10 @@
 
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::tool::ToolDefinition;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use types::error::{CarrierError, CarrierResult};
+use types::tool::ToolDefinition;
 
 // ---------------------------------------------------------------------------
 // Module struct
@@ -158,7 +158,9 @@ async fn extract_document_with_markitdown(path: &Path, raw_path: &str) -> Carrie
 
     let out = tokio::time::timeout(
         std::time::Duration::from_secs(120),
-        tokio::process::Command::new("markitdown").arg(path).output(),
+        tokio::process::Command::new("markitdown")
+            .arg(path)
+            .output(),
     )
     .await;
 
@@ -284,22 +286,33 @@ fn directory_read_hint(raw_path: &str) -> String {
 }
 
 async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<String> {
-    let raw_path = input["path"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
+    let raw_path = input["path"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'path' parameter".to_string(),
+    ))?;
 
-    let resolved = if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
-        match resolve_user_data_path(raw_path, hd, sid, ctx.owner_id, an) {
-            Some(Ok(path)) => path,
-            Some(Err(e)) => return Err(e),
-            None => {
-                // Internal path — go through sandbox
-                super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
+    let resolved =
+        if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
+            match resolve_user_data_path(raw_path, hd, sid, ctx.owner_id, an) {
+                Some(Ok(path)) => path,
+                Some(Err(e)) => return Err(e),
+                None => {
+                    // Internal path — go through sandbox
+                    super::resolve_file_path_for_read(
+                        raw_path,
+                        ctx.workspace_root,
+                        ctx.sender_id,
+                        ctx.agent_name,
+                    )?
+                }
             }
-        }
-    } else {
-        super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
-    };
+        } else {
+            super::resolve_file_path_for_read(
+                raw_path,
+                ctx.workspace_root,
+                ctx.sender_id,
+                ctx.agent_name,
+            )?
+        };
 
     tracing::info!(raw_path, resolved = %resolved.display(), "file_read resolved path");
 
@@ -335,28 +348,26 @@ async fn tool_file_read(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<S
         }
     }
 
-    tokio::fs::read_to_string(&resolved)
-        .await
-        .map_err(|e| {
-            // Friendly message for UTF-8 decode failures on text files
-            if e.to_string().contains("stream did not contain valid UTF-8")
-                || e.to_string().contains("invalid utf-8")
-            {
-                CarrierError::InvalidInput(format!(
-                    "文件 '{raw_path}' 包含非 UTF-8 内容（可能是二进制文件）。\
+    tokio::fs::read_to_string(&resolved).await.map_err(|e| {
+        // Friendly message for UTF-8 decode failures on text files
+        if e.to_string().contains("stream did not contain valid UTF-8")
+            || e.to_string().contains("invalid utf-8")
+        {
+            CarrierError::InvalidInput(format!(
+                "文件 '{raw_path}' 包含非 UTF-8 内容（可能是二进制文件）。\
                      file_read 只能读文本。如果是图片，请用 image_analyze；\
                      如果是文档，请确认文件格式或使用对应的解析工具。"
-                ))
-            } else {
-                CarrierError::Internal(format!("Failed to read file: {e}"))
-            }
-        })
+            ))
+        } else {
+            CarrierError::Internal(format!("Failed to read file: {e}"))
+        }
+    })
 }
 
 async fn tool_file_write(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<String> {
-    let raw_path = input["path"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
+    let raw_path = input["path"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'path' parameter".to_string(),
+    ))?;
 
     // input/ is the user's inbox (attachments they sent, saved by the channel
     // bridge). It's read-only from the agent's side - block writes here so a
@@ -368,30 +379,43 @@ async fn tool_file_write(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<
         ));
     }
 
-    let resolved = if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
-        match resolve_user_data_path(raw_path, hd, sid, ctx.owner_id, an) {
-            Some(Ok(path)) => path,
-            Some(Err(e)) => return Err(e),
-            None => {
-                // Internal path — go through sandbox
-                if let Some(root) = ctx.workspace_root {
-                    crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin)?
-                } else {
-                    let _ = super::validate_path(raw_path)?;
-                    PathBuf::from(raw_path)
+    let resolved =
+        if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
+            match resolve_user_data_path(raw_path, hd, sid, ctx.owner_id, an) {
+                Some(Ok(path)) => path,
+                Some(Err(e)) => return Err(e),
+                None => {
+                    // Internal path — go through sandbox
+                    if let Some(root) = ctx.workspace_root {
+                        crate::workspace_sandbox::resolve_sandbox_path_for_write(
+                            raw_path,
+                            root,
+                            ctx.sender_id,
+                            ctx.agent_name,
+                            ctx.is_clone_admin,
+                        )?
+                    } else {
+                        let _ = super::validate_path(raw_path)?;
+                        PathBuf::from(raw_path)
+                    }
                 }
             }
-        }
-    } else if let Some(root) = ctx.workspace_root {
-        crate::workspace_sandbox::resolve_sandbox_path_for_write(raw_path, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin)?
-    } else {
-        let _ = super::validate_path(raw_path)?;
-        PathBuf::from(raw_path)
-    };
+        } else if let Some(root) = ctx.workspace_root {
+            crate::workspace_sandbox::resolve_sandbox_path_for_write(
+                raw_path,
+                root,
+                ctx.sender_id,
+                ctx.agent_name,
+                ctx.is_clone_admin,
+            )?
+        } else {
+            let _ = super::validate_path(raw_path)?;
+            PathBuf::from(raw_path)
+        };
 
-    let content = input["content"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'content' parameter".to_string()))?;
+    let content = input["content"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'content' parameter".to_string(),
+    ))?;
     if let Some(parent) = resolved.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -402,11 +426,7 @@ async fn tool_file_write(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<
         .map_err(|e| CarrierError::Internal(format!("Failed to write file: {e}")))?;
 
     // Public view URL so any clone can paste a clickable link (system capability).
-    let mut msg = format!(
-        "Successfully wrote {} bytes to {}",
-        content.len(),
-        raw_path
-    );
+    let mut msg = format!("Successfully wrote {} bytes to {}", content.len(), raw_path);
     if let (Some(an), Some(sid)) = (ctx.agent_name, ctx.sender_id) {
         if let Some(rel) = crate::file_view::rel_path_for_user_write(raw_path) {
             if let Some(url) =
@@ -422,26 +442,39 @@ async fn tool_file_write(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<
 }
 
 async fn tool_file_list(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<String> {
-    let raw_path = input["path"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'path' parameter".to_string()))?;
+    let raw_path = input["path"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'path' parameter".to_string(),
+    ))?;
 
-    let resolved = if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
-        match resolve_user_data_path(raw_path, hd, sid, ctx.owner_id, an) {
-            Some(Ok(path)) => path,
-            Some(Err(e)) => return Err(e),
-            None => {
-                // Internal path — go through sandbox
-                super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
+    let resolved =
+        if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
+            match resolve_user_data_path(raw_path, hd, sid, ctx.owner_id, an) {
+                Some(Ok(path)) => path,
+                Some(Err(e)) => return Err(e),
+                None => {
+                    // Internal path — go through sandbox
+                    super::resolve_file_path_for_read(
+                        raw_path,
+                        ctx.workspace_root,
+                        ctx.sender_id,
+                        ctx.agent_name,
+                    )?
+                }
             }
-        }
-    } else {
-        super::resolve_file_path_for_read(raw_path, ctx.workspace_root, ctx.sender_id, ctx.agent_name)?
-    };
+        } else {
+            super::resolve_file_path_for_read(
+                raw_path,
+                ctx.workspace_root,
+                ctx.sender_id,
+                ctx.agent_name,
+            )?
+        };
 
     // For user-data paths (output/ memory/), treat missing directory as empty
-    let is_user_data = raw_path.starts_with("output/") || raw_path == "output"
-        || raw_path.starts_with("memory/") || raw_path == "memory";
+    let is_user_data = raw_path.starts_with("output/")
+        || raw_path == "output"
+        || raw_path.starts_with("memory/")
+        || raw_path == "memory";
 
     // Friendly error: if path points to a file (not a directory), tell the
     // LLM clearly instead of returning the cryptic OS "Not a directory" error.
@@ -462,7 +495,11 @@ async fn tool_file_list(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<S
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && is_user_data => {
             return Ok("(empty directory)".to_string());
         }
-        Err(e) => return Err(CarrierError::Internal(format!("Failed to list directory: {e}"))),
+        Err(e) => {
+            return Err(CarrierError::Internal(format!(
+                "Failed to list directory: {e}"
+            )))
+        }
     };
     let mut files = Vec::new();
     while let Some(entry) = entries
@@ -489,10 +526,14 @@ async fn tool_file_list(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<S
 async fn tool_file_convert(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<String> {
     let raw_input_path = input["input_path"]
         .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'input_path' parameter".to_string()))?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'input_path' parameter".to_string(),
+        ))?;
     let output_format = input["output_format"]
         .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'output_format' parameter".to_string()))?;
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'output_format' parameter".to_string(),
+        ))?;
     let raw_output_path = input["output_path"].as_str();
 
     let input_path = super::resolve_file_path(raw_input_path, ctx.workspace_root)?;
@@ -519,7 +560,13 @@ async fn tool_file_convert(input: &Value, ctx: &ToolContext<'_>) -> CarrierResul
                 Some(Err(e)) => return Err(e),
                 None => {
                     if let Some(root) = ctx.workspace_root {
-                        crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin)?
+                        crate::workspace_sandbox::resolve_sandbox_path_for_write(
+                            op,
+                            root,
+                            ctx.sender_id,
+                            ctx.agent_name,
+                            ctx.is_clone_admin,
+                        )?
                     } else {
                         let _ = super::validate_path(op)?;
                         PathBuf::from(op)
@@ -527,7 +574,13 @@ async fn tool_file_convert(input: &Value, ctx: &ToolContext<'_>) -> CarrierResul
                 }
             }
         } else if let Some(root) = ctx.workspace_root {
-            crate::workspace_sandbox::resolve_sandbox_path_for_write(op, root, ctx.sender_id, ctx.agent_name, ctx.is_clone_admin)?
+            crate::workspace_sandbox::resolve_sandbox_path_for_write(
+                op,
+                root,
+                ctx.sender_id,
+                ctx.agent_name,
+                ctx.is_clone_admin,
+            )?
         } else {
             let _ = super::validate_path(op)?;
             PathBuf::from(op)
@@ -561,22 +614,28 @@ async fn tool_file_convert(input: &Value, ctx: &ToolContext<'_>) -> CarrierResul
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| CarrierError::Internal(format!("Failed to run pandoc (is it installed?): {e}")))?;
+    let child = cmd.spawn().map_err(|e| {
+        CarrierError::Internal(format!("Failed to run pandoc (is it installed?): {e}"))
+    })?;
 
     let output = tokio::time::timeout(std::time::Duration::from_secs(60), child.wait_with_output())
         .await
         .map_err(|_| CarrierError::Internal("Pandoc timed out after 60 seconds".to_string()))
-        .and_then(|r| r.map_err(|e| CarrierError::Internal(format!("Pandoc process error: {e}"))))?;
+        .and_then(|r| {
+            r.map_err(|e| CarrierError::Internal(format!("Pandoc process error: {e}")))
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(CarrierError::Internal(format!("Pandoc conversion failed: {stderr}")));
+        return Err(CarrierError::Internal(format!(
+            "Pandoc conversion failed: {stderr}"
+        )));
     }
 
     if !output_path.exists() {
-        return Err(CarrierError::Internal("Pandoc completed but no output file was produced".to_string()));
+        return Err(CarrierError::Internal(
+            "Pandoc completed but no output file was produced".to_string(),
+        ));
     }
 
     let out_size = std::fs::metadata(&output_path)
@@ -656,7 +715,10 @@ mod tests {
     #[test]
     fn document_extension_detects_formats() {
         use std::path::Path;
-        assert_eq!(document_extension(Path::new("foo.pdf")), Some("pdf".to_string()));
+        assert_eq!(
+            document_extension(Path::new("foo.pdf")),
+            Some("pdf".to_string())
+        );
         assert_eq!(
             document_extension(Path::new("销售.XLSX")),
             Some("xlsx".to_string())
@@ -665,7 +727,10 @@ mod tests {
             document_extension(Path::new("input/report.docx")),
             Some("docx".to_string())
         );
-        assert_eq!(document_extension(Path::new("a.pptx")), Some("pptx".to_string()));
+        assert_eq!(
+            document_extension(Path::new("a.pptx")),
+            Some("pptx".to_string())
+        );
         assert_eq!(document_extension(Path::new("notes.md")), None);
         assert_eq!(document_extension(Path::new("data.csv")), None);
         assert_eq!(document_extension(Path::new("noext")), None);
@@ -677,8 +742,14 @@ mod tests {
         // The hint must name the corrective tool AND echo the path so the agent
         // can copy it — this is exactly what breaks the file_read-on-directory
         // loop. If a future cleanup makes the error generic again, this fires.
-        assert!(msg.contains("file_list"), "hint must mention file_list: {msg}");
-        assert!(msg.contains("file_read"), "hint must mention file_read: {msg}");
+        assert!(
+            msg.contains("file_list"),
+            "hint must mention file_list: {msg}"
+        );
+        assert!(
+            msg.contains("file_read"),
+            "hint must mention file_read: {msg}"
+        );
         assert!(
             msg.contains("output/pipeline-20260725-x"),
             "hint must echo the path: {msg}"

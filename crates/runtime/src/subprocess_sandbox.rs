@@ -273,11 +273,9 @@ fn extract_all_commands(command: &str) -> Vec<&str> {
 /// Returns `Ok(())` if the command is allowed, `Err(reason)` if blocked.
 pub fn validate_command_allowlist(command: &str, policy: &ExecPolicy) -> CarrierResult<()> {
     match policy.mode {
-        ExecSecurityMode::Deny => {
-            Err(CarrierError::InvalidInput(
-                "Shell execution is disabled (exec_policy.mode = deny)".to_string(),
-            ))
-        }
+        ExecSecurityMode::Deny => Err(CarrierError::InvalidInput(
+            "Shell execution is disabled (exec_policy.mode = deny)".to_string(),
+        )),
         ExecSecurityMode::Full => {
             tracing::warn!(
                 command = crate::str_utils::safe_truncate_str(command, 100),
@@ -496,10 +494,14 @@ async fn kill_tree_windows(pid: u32, grace_ms: u64) -> CarrierResult<bool> {
                 if stderr.contains("not found") || stderr.contains("no process") {
                     Ok(false) // Already dead.
                 } else {
-                    Err(CarrierError::Internal(format!("Force kill failed: {stderr}")))
+                    Err(CarrierError::Internal(format!(
+                        "Force kill failed: {stderr}"
+                    )))
                 }
             }
-            Err(e) => Err(CarrierError::Internal(format!("Failed to execute taskkill: {e}"))),
+            Err(e) => Err(CarrierError::Internal(format!(
+                "Failed to execute taskkill: {e}"
+            ))),
         }
     } else {
         Ok(true)
@@ -745,7 +747,10 @@ mod tests {
     fn test_cd_and_chain_allowed_by_metachar_gate() {
         // The one canonical agent pattern passes the metachar gate.
         assert!(contains_shell_metacharacters("cd /tmp && python3 x.py").is_none());
-        assert!(contains_shell_metacharacters("cd /home/u/ws && python3 flows/foo/scripts/x.py arg").is_none());
+        assert!(contains_shell_metacharacters(
+            "cd /home/u/ws && python3 flows/foo/scripts/x.py arg"
+        )
+        .is_none());
     }
 
     #[test]

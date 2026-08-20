@@ -63,7 +63,7 @@ pub async fn query_source(
     }
 
     let total = hits.len();
-    hits.sort_by(|a, b| b.time_range_end_ms.cmp(&a.time_range_end_ms));
+    hits.sort_by_key(|h| std::cmp::Reverse(h.time_range_end_ms));
     hits.truncate(limit);
 
     Ok(QueryResponse {
@@ -106,10 +106,17 @@ fn scope_matches_kind(scope: &str, kind_prefix: &str) -> bool {
     }
     // Platform-specific prefix mapping
     const PLATFORM_KINDS: &[(&str, &str)] = &[
-        ("wechat", "chat"), ("feishu", "chat"), ("wecom", "chat"),
-        ("dingtalk", "chat"), ("slack", "chat"), ("api", "chat"),
-        ("imap", "email"), ("gmail", "email"), ("outlook", "email"),
-        ("notion", "document"), ("drive", "document"),
+        ("wechat", "chat"),
+        ("feishu", "chat"),
+        ("wecom", "chat"),
+        ("dingtalk", "chat"),
+        ("slack", "chat"),
+        ("api", "chat"),
+        ("imap", "email"),
+        ("gmail", "email"),
+        ("outlook", "email"),
+        ("notion", "document"),
+        ("drive", "document"),
     ];
     PLATFORM_KINDS
         .iter()
@@ -137,13 +144,20 @@ mod tests {
 
     async fn setup() -> Option<(Pool, TempDir)> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         Some((pool, TempDir::new().ok()?))
     }
 
@@ -156,7 +170,9 @@ mod tests {
                 return;
             }
         };
-        let resp = query_source(&pool, "owner_x", None, None, None, None, 10).await.unwrap();
+        let resp = query_source(&pool, "owner_x", None, None, None, None, 10)
+            .await
+            .unwrap();
         assert!(resp.hits.is_empty());
         assert_eq!(resp.total, 0);
     }
@@ -201,18 +217,40 @@ mod tests {
             chunk_store.upsert_chunks(&[c]).await.unwrap();
         }
 
-        let seal_engine = BucketSealEngine::new(pool.clone(), dir.path().to_path_buf(), Arc::new(InertSummariser));
+        let seal_engine = BucketSealEngine::new(
+            pool.clone(),
+            dir.path().to_path_buf(),
+            Arc::new(InertSummariser),
+        );
         for i in 0..10 {
             seal_engine
-                .append_to_buffer("owner_1", &tree.id, 0, &format!("chunk_src_{i}"), 6000, 1_700_000_000_000)
+                .append_to_buffer(
+                    "owner_1",
+                    &tree.id,
+                    0,
+                    &format!("chunk_src_{i}"),
+                    6000,
+                    1_700_000_000_000,
+                )
                 .await
                 .unwrap();
         }
-        seal_engine.cascade_seals("owner_1", &tree, 0, false).await.unwrap();
-
-        let resp = query_source(&pool, "owner_1", None, Some("wechat:test:sender"), None, None, 10)
+        seal_engine
+            .cascade_seals("owner_1", &tree, 0, false)
             .await
             .unwrap();
+
+        let resp = query_source(
+            &pool,
+            "owner_1",
+            None,
+            Some("wechat:test:sender"),
+            None,
+            None,
+            10,
+        )
+        .await
+        .unwrap();
         assert!(!resp.hits.is_empty());
         assert_eq!(resp.hits[0].tree_scope, "wechat:test:sender");
     }
@@ -271,17 +309,24 @@ mod tests {
                 .unwrap();
         }
 
-        let resp = query_source(&pool, "owner_1", Some("alice"), None, None, None, 10).await.unwrap();
+        let resp = query_source(&pool, "owner_1", Some("alice"), None, None, None, 10)
+            .await
+            .unwrap();
         assert!(!resp.hits.is_empty(), "alice should see her own summaries");
         assert!(
             resp.hits.iter().all(|h| h.tree_scope == "wechat:gh:alice"),
-            "alice must not see bob's summaries: {:?}", resp.hits
+            "alice must not see bob's summaries: {:?}",
+            resp.hits
         );
 
-        let resp_b = query_source(&pool, "owner_1", Some("bob"), None, None, None, 10).await.unwrap();
+        let resp_b = query_source(&pool, "owner_1", Some("bob"), None, None, None, 10)
+            .await
+            .unwrap();
         assert!(resp_b.hits.iter().all(|h| h.tree_scope == "wechat:gh:bob"));
 
-        let resp_all = query_source(&pool, "owner_1", None, None, None, None, 10).await.unwrap();
+        let resp_all = query_source(&pool, "owner_1", None, None, None, None, 10)
+            .await
+            .unwrap();
         assert_eq!(resp_all.hits.len(), 2);
     }
 }

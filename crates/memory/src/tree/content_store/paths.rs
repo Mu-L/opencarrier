@@ -76,12 +76,7 @@ pub fn chunk_abs_path(
 /// Generate the relative path for a summary .md file.
 ///
 /// Format: `summaries/{tree_kind}-{scope_slug}/L{level}/{summary_filename}.md`
-pub fn summary_rel_path(
-    tree_kind: &str,
-    scope_slug: &str,
-    level: u32,
-    summary_id: &str,
-) -> String {
+pub fn summary_rel_path(tree_kind: &str, scope_slug: &str, level: u32, summary_id: &str) -> String {
     let safe_id = sanitize_filename(summary_id);
     format!("summaries/{tree_kind}-{scope_slug}/L{level}/{safe_id}.md")
 }
@@ -151,19 +146,13 @@ mod tests {
     #[test]
     fn test_chunk_rel_path() {
         let path = chunk_rel_path("chat", "wechat:gh_abc:sender_1", "chunk_001");
-        assert_eq!(
-            path,
-            "chat/wechat-gh_abc-sender_1/chunk_001.md"
-        );
+        assert_eq!(path, "chat/wechat-gh_abc-sender_1/chunk_001.md");
     }
 
     #[test]
     fn test_summary_rel_path() {
         let path = summary_rel_path("source", "wechat-gh-abc", 1, "sum_001");
-        assert_eq!(
-            path,
-            "summaries/source-wechat-gh-abc/L1/sum_001.md"
-        );
+        assert_eq!(path, "summaries/source-wechat-gh-abc/L1/sum_001.md");
     }
 
     #[test]
@@ -176,7 +165,9 @@ mod tests {
         );
         assert_eq!(
             path,
-            PathBuf::from("/data/memory_tree/content/owner_1/chat/wechat-gh_abc-sender_1/chunk_001.md")
+            PathBuf::from(
+                "/data/memory_tree/content/owner_1/chat/wechat-gh_abc-sender_1/chunk_001.md"
+            )
         );
     }
 }

@@ -24,7 +24,9 @@ pub(crate) fn is_token_expired(err: &str) -> bool {
 
 /// Get a fresh access_token. If a prior call failed with 40001, call this to
 /// invalidate the cache and get a new token for one retry.
-pub(crate) async fn refresh_token(account: &crate::channel::OaAccountState) -> CarrierResult<String> {
+pub(crate) async fn refresh_token(
+    account: &crate::channel::OaAccountState,
+) -> CarrierResult<String> {
     account.invalidate_token().await;
     account.get_token().await
 }
@@ -47,7 +49,11 @@ impl ToolProvider for WeixinOaPublishArticleTool {
         }
     }
 
-    fn execute(&self, args: &Value, _context: &PluginToolContext) -> Result<String, PluginToolError> {
+    fn execute(
+        &self,
+        args: &Value,
+        _context: &PluginToolContext,
+    ) -> Result<String, PluginToolError> {
         let app_id = args["app_id"]
             .as_str()
             .ok_or_else(|| PluginToolError::tool("missing app_id"))?
@@ -74,8 +80,14 @@ impl ToolProvider for WeixinOaPublishArticleTool {
             .to_string();
         let cover_path = args["cover_path"].as_str().map(|s| s.to_string());
         let publish = args["publish"].as_bool().unwrap_or(true);
-        let digest = args["digest"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
-        let author = args["author"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        let digest = args["digest"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let author = args["author"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
 
         // Build a fresh HTTP client; tokens flow through the central
         // `wechat-oa` core cache (keyed by app_id) — no WEIXIN_OA_STATE

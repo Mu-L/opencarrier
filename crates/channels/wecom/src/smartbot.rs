@@ -8,13 +8,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use types::channel::Channel;
-use types::error::{CarrierError, CarrierResult};
-use types::plugin::{PluginContent, PluginMessage};
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info, warn};
+use types::channel::Channel;
+use types::error::{CarrierError, CarrierResult};
+use types::plugin::{PluginContent, PluginMessage};
 
 use crate::token;
 
@@ -155,13 +155,7 @@ impl Channel for SmartBotChannel {
                 .enable_all()
                 .build()
                 .expect("Failed to create tokio runtime for SmartBot");
-            rt.block_on(run_ws_loop(
-                bot_name,
-                secret,
-                bot_id,
-                sender,
-                response_urls,
-            ));
+            rt.block_on(run_ws_loop(bot_name, secret, bot_id, sender, response_urls));
         });
 
         info!(
@@ -190,9 +184,11 @@ impl Channel for SmartBotChannel {
             crate::token::WecomMode::SmartBot { bot_id, secret } => {
                 (bot_id.clone(), secret.clone())
             }
-            _ => return Err(CarrierError::InvalidInput(format!(
-                "sender {bot_id} is not a smartbot session"
-            ))),
+            _ => {
+                return Err(CarrierError::InvalidInput(format!(
+                    "sender {bot_id} is not a smartbot session"
+                )))
+            }
         };
         let http = bot.entry.http.clone();
         let user_id = user_id.to_string();
@@ -236,15 +232,7 @@ async fn run_ws_loop(
     response_urls: ResponseUrlStore,
 ) {
     loop {
-        match connect_and_handle(
-            &bot_name,
-            &secret,
-            &bot_id,
-            &sender,
-            &response_urls,
-        )
-        .await
-        {
+        match connect_and_handle(&bot_name, &secret, &bot_id, &sender, &response_urls).await {
             Ok(()) => {
                 info!("SmartBot WebSocket disconnected normally, reconnecting...");
             }
@@ -296,12 +284,16 @@ async fn connect_and_handle(
     let sub_resp: serde_json::Value = read
         .next()
         .await
-        .ok_or_else(|| CarrierError::Network("Connection closed before subscribe response".to_string()))?
+        .ok_or_else(|| {
+            CarrierError::Network("Connection closed before subscribe response".to_string())
+        })?
         .map_err(|e| CarrierError::Network(format!("Read subscribe response failed: {e}")))?
         .into_text()
         .map_err(|e| CarrierError::Network(format!("Subscribe response not text: {e}")))?
         .parse()
-        .map_err(|e| CarrierError::Serialization(format!("Parse subscribe response failed: {e}")))?;
+        .map_err(|e| {
+            CarrierError::Serialization(format!("Parse subscribe response failed: {e}"))
+        })?;
 
     info!("SmartBot subscribe response: {}", sub_resp);
     if sub_resp["errcode"].as_i64() != Some(0) {
@@ -361,14 +353,16 @@ async fn handle_ws_message(
     sender: &tokio::sync::mpsc::Sender<PluginMessage>,
     response_urls: &ResponseUrlStore,
 ) -> CarrierResult<()> {
-    let json: serde_json::Value =
-        serde_json::from_str(raw).map_err(|e| CarrierError::Serialization(format!("Parse WS message failed: {e}")))?;
+    let json: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|e| CarrierError::Serialization(format!("Parse WS message failed: {e}")))?;
     let cmd = json["cmd"].as_str().unwrap_or("");
 
     match cmd {
         "aibot_msg_callback" => {
-            let body: MsgCallbackBody = serde_json::from_value(json["body"].clone())
-                .map_err(|e| CarrierError::Serialization(format!("Parse msg_callback body failed: {e}")))?;
+            let body: MsgCallbackBody =
+                serde_json::from_value(json["body"].clone()).map_err(|e| {
+                    CarrierError::Serialization(format!("Parse msg_callback body failed: {e}"))
+                })?;
 
             let user_id = &body.from.userid;
             let chattype = &body.chattype;
@@ -414,7 +408,11 @@ async fn handle_ws_message(
                     let image_url = body
                         .content
                         .as_ref()
-                        .and_then(|c| c.get("image").and_then(|i| i.get("image_url")).and_then(|v| v.as_str()))
+                        .and_then(|c| {
+                            c.get("image")
+                                .and_then(|i| i.get("image_url"))
+                                .and_then(|v| v.as_str())
+                        })
                         .unwrap_or("")
                         .to_string();
                     let image_data = if !image_url.is_empty() {
@@ -428,14 +426,22 @@ async fn handle_ws_message(
                     } else {
                         None
                     };
-                    PluginContent::Image { url: image_url, caption: None, data: image_data }
+                    PluginContent::Image {
+                        url: image_url,
+                        caption: None,
+                        data: image_data,
+                    }
                 }
                 "voice" => {
                     // WeCom SmartBot provides speech-to-text result in voice.content
                     let recognition = body
                         .content
                         .as_ref()
-                        .and_then(|c| c.get("voice").and_then(|v| v.get("content")).and_then(|v| v.as_str()))
+                        .and_then(|c| {
+                            c.get("voice")
+                                .and_then(|v| v.get("content"))
+                                .and_then(|v| v.as_str())
+                        })
                         .unwrap_or("")
                         .to_string();
 
@@ -461,7 +467,10 @@ async fn handle_ws_message(
             // Store response_url for later reply via send()
             if let Some(ref url) = body.response_url {
                 let key = format!("{}:{}", bot_id, user_id);
-                response_urls.lock().unwrap_or_else(|e| e.into_inner()).insert(key, url.clone());
+                response_urls
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(key, url.clone());
             }
 
             let mut metadata = HashMap::new();
@@ -500,8 +509,10 @@ async fn handle_ws_message(
         }
 
         "aibot_event_callback" => {
-            let body: EventCallbackBody = serde_json::from_value(json["body"].clone())
-                .map_err(|e| CarrierError::Serialization(format!("Parse event_callback body failed: {e}")))?;
+            let body: EventCallbackBody =
+                serde_json::from_value(json["body"].clone()).map_err(|e| {
+                    CarrierError::Serialization(format!("Parse event_callback body failed: {e}"))
+                })?;
 
             info!(
                 "SmartBot event: eventtype={}, from={}",

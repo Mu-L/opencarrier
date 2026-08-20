@@ -191,9 +191,7 @@ where
         }
 
         fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
-            record_lenient_fallback(&format!(
-                "map_lenient: value was float {v}, expected a map"
-            ));
+            record_lenient_fallback(&format!("map_lenient: value was float {v}, expected a map"));
             Ok(HashMap::new())
         }
 
@@ -205,9 +203,7 @@ where
         }
 
         fn visit_bool<E: de::Error>(self, v: bool) -> Result<Self::Value, E> {
-            record_lenient_fallback(&format!(
-                "map_lenient: value was bool {v}, expected a map"
-            ));
+            record_lenient_fallback(&format!("map_lenient: value was bool {v}, expected a map"));
             Ok(HashMap::new())
         }
 

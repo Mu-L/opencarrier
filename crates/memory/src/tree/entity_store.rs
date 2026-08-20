@@ -1,9 +1,9 @@
 //! Entity index and hotness store for tree memory.
 
-use types::error::{CarrierError, CarrierResult};
-use types::memory_tree::EntityMatch;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
+use types::error::{CarrierError, CarrierResult};
+use types::memory_tree::EntityMatch;
 
 use super::types::{EntityKind, HotnessCounters};
 
@@ -87,7 +87,8 @@ impl EntityStore {
             Box::new(entity_id.to_string()),
         ];
         let mut sql = "SELECT node_id, node_kind FROM mem_tree_entity_index
-                 WHERE owner_id = ?1 AND entity_id = ?2".to_string();
+                 WHERE owner_id = ?1 AND entity_id = ?2"
+            .to_string();
         if let Some(u) = user_id {
             sql.push_str(" AND (user_id = ? OR user_id = '')");
             params.push(Box::new(u.to_string()));
@@ -95,7 +96,9 @@ impl EntityStore {
         sql.push_str(" ORDER BY timestamp_ms DESC LIMIT ?");
         params.push(Box::new(limit as i64));
 
-        let mut stmt = conn.prepare(&sql).map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|p| p.as_ref()).collect();
 
@@ -135,25 +138,22 @@ impl EntityStore {
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let rows = stmt
-            .query_map(
-                rusqlite::params![owner_id, limit as i64],
-                |row| {
-                    let canonical_id: String = row.get(0)?;
-                    let kind_str: String = row.get(1).unwrap_or_default();
-                    let surface: String = row.get(2).unwrap_or_default();
-                    let mention_count: i64 = row.get(3).unwrap_or(0);
-                    let last_seen_ms: i64 = row.get(4).unwrap_or(0);
+            .query_map(rusqlite::params![owner_id, limit as i64], |row| {
+                let canonical_id: String = row.get(0)?;
+                let kind_str: String = row.get(1).unwrap_or_default();
+                let surface: String = row.get(2).unwrap_or_default();
+                let mention_count: i64 = row.get(3).unwrap_or(0);
+                let last_seen_ms: i64 = row.get(4).unwrap_or(0);
 
-                    let kind = Self::parse_entity_kind(&kind_str);
-                    Ok(EntityMatch {
-                        canonical_id,
-                        kind,
-                        surface,
-                        mention_count: mention_count as u64,
-                        last_seen_ms,
-                    })
-                },
-            )
+                let kind = Self::parse_entity_kind(&kind_str);
+                Ok(EntityMatch {
+                    canonical_id,
+                    kind,
+                    surface,
+                    mention_count: mention_count as u64,
+                    last_seen_ms,
+                })
+            })
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         let mut result = Vec::new();
@@ -187,7 +187,8 @@ impl EntityStore {
 
         let mut sql = "SELECT DISTINCT entity_id, entity_kind, surface, 0 as mc, 0 as ls
                      FROM mem_tree_entity_index
-                     WHERE owner_id = ?1 AND surface LIKE ?2".to_string();
+                     WHERE owner_id = ?1 AND surface LIKE ?2"
+            .to_string();
 
         if let Some(u) = user_id {
             sql.push_str(" AND (user_id = ? OR user_id = '')");
@@ -235,16 +236,17 @@ impl EntityStore {
         let now_ms = chrono::Utc::now().timestamp_millis();
 
         // Try to update existing row
-        let updated = conn.execute(
-            "UPDATE mem_tree_entity_hotness
+        let updated = conn
+            .execute(
+                "UPDATE mem_tree_entity_hotness
              SET mention_count_30d = mention_count_30d + 1,
                  last_seen_ms = ?1,
                  ingests_since_check = ingests_since_check + 1,
                  last_updated_ms = ?1
              WHERE owner_id = ?2 AND entity_id = ?3",
-            rusqlite::params![now_ms, owner_id, entity_id],
-        )
-        .map_err(|e| CarrierError::Memory(e.to_string()))?;
+                rusqlite::params![now_ms, owner_id, entity_id],
+            )
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
 
         if updated == 0 {
             // Insert new row
@@ -400,13 +402,16 @@ impl EntityStore {
             Box::new(node_id.to_string()),
         ];
         let mut sql = "SELECT DISTINCT entity_id FROM mem_tree_entity_index
-                 WHERE owner_id = ?1 AND node_id = ?2".to_string();
+                 WHERE owner_id = ?1 AND node_id = ?2"
+            .to_string();
         if let Some(u) = user_id {
             sql.push_str(" AND (user_id = ? OR user_id = '')");
             params.push(Box::new(u.to_string()));
         }
 
-        let mut stmt = conn.prepare(&sql).map_err(|e| CarrierError::Memory(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|p| p.as_ref()).collect();
 
@@ -487,7 +492,9 @@ mod tests {
             )
             .unwrap();
 
-        let nodes = store.chunks_for_entity("owner_1", None, "person:Alice", 10).unwrap();
+        let nodes = store
+            .chunks_for_entity("owner_1", None, "person:Alice", 10)
+            .unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].0, "chunk_001");
     }

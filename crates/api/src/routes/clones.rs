@@ -263,8 +263,7 @@ pub async fn clone_feedback_push(
     let hub_api_key =
         clone::hub::read_api_key(&state.kernel.config.hub.api_key_env).unwrap_or_default();
 
-    match lifecycle::feedback::push_feedback_to_hub(&hub_url, &hub_api_key, &entries).await
-    {
+    match lifecycle::feedback::push_feedback_to_hub(&hub_url, &hub_api_key, &entries).await {
         Ok(results) => {
             let pushed = results.iter().filter(|r| r.starts_with("ok:")).count();
             let failed = results.len() - pushed;
@@ -354,9 +353,7 @@ pub async fn clone_evaluate(
                                 model: String::new(), // driver uses its default
                                 messages: vec![types::message::Message {
                                     role: types::message::Role::User,
-                                    content: types::message::MessageContent::Text(
-                                        q.clone(),
-                                    ),
+                                    content: types::message::MessageContent::Text(q.clone()),
                                 }],
                                 tools: vec![],
                                 max_tokens: 1024,
@@ -569,10 +566,7 @@ pub fn router() -> axum::Router<std::sync::Arc<crate::routes::state::AppState>> 
         .route("/api/clones", routing::get(list_clones))
         .route("/api/clones/{name}", routing::delete(uninstall_clone))
         .route("/api/clones/{name}/compile", routing::post(clone_compile))
-        .route(
-            "/api/clones/{name}/evaluate",
-            routing::get(clone_evaluate),
-        )
+        .route("/api/clones/{name}/evaluate", routing::get(clone_evaluate))
         .route(
             "/api/clones/{name}/feedback/push",
             routing::post(clone_feedback_push),

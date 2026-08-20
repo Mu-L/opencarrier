@@ -9,15 +9,13 @@ use axum::response::IntoResponse;
 use axum::Json;
 use kernel::CarrierKernel;
 use runtime::kernel_handle::KernelHandle;
-use types::agent::AgentId;
 use std::sync::Arc;
+use types::agent::AgentId;
 /// Resolve uploaded file attachments into ContentBlock::Image blocks.
 ///
 /// Reads each file from the upload directory, base64-encodes it, and
 /// returns image content blocks ready to insert into a session message.
-pub fn resolve_attachments(
-    attachments: &[AttachmentRef],
-) -> Vec<types::message::ContentBlock> {
+pub fn resolve_attachments(attachments: &[AttachmentRef]) -> Vec<types::message::ContentBlock> {
     use base64::Engine;
 
     let upload_dir = std::env::temp_dir().join("carrier_uploads");
@@ -199,8 +197,8 @@ pub async fn send_message_stream(
     Json(req): Json<MessageRequest>,
 ) -> axum::response::Response {
     use axum::response::sse::{Event, Sse};
-    use runtime::llm_driver::StreamEvent;
     use futures::stream;
+    use runtime::llm_driver::StreamEvent;
 
     // SECURITY: Reject oversized messages to prevent OOM / LLM token abuse.
     const MAX_MESSAGE_SIZE: usize = 64 * 1024; // 64KB
@@ -224,16 +222,20 @@ pub async fn send_message_stream(
     };
 
     let kernel_handle: Arc<dyn KernelHandle> = state.kernel.clone() as Arc<dyn KernelHandle>;
-    let (rx, _handle) = match state.kernel.send_message_streaming(
-        agent_id,
-        &req.message,
-        Some(kernel_handle),
-        req.sender_id,
-        req.sender_name,
-        None,
-        None,
-        req.active_flow.as_deref(),
-    ).await {
+    let (rx, _handle) = match state
+        .kernel
+        .send_message_streaming(
+            agent_id,
+            &req.message,
+            Some(kernel_handle),
+            req.sender_id,
+            req.sender_name,
+            None,
+            None,
+            req.active_flow.as_deref(),
+        )
+        .await
+    {
         Ok(pair) => pair,
         Err(e) => {
             tracing::warn!("Streaming message failed for agent {id}: {e}");

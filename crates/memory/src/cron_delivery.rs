@@ -1,8 +1,8 @@
 //! Cron delivery routing: tracks last channel per sender and buffers
 //! notifications for channels that don't support proactive push.
 
-use std::sync::{Arc, Mutex};
 use rusqlite::Connection;
+use std::sync::{Arc, Mutex};
 use types::error::{CarrierError, CarrierResult};
 
 /// Channel + bot identification for a sender's most recent inbound message.

@@ -119,9 +119,7 @@ mod tests {
     fn test_extract_url() {
         let entities = extract_entities("Check https://example.com/page for details");
         assert!(entities.iter().any(|e| e.kind == EntityKind::Url));
-        assert!(entities
-            .iter()
-            .any(|e| e.canonical_id.starts_with("url:")));
+        assert!(entities.iter().any(|e| e.canonical_id.starts_with("url:")));
     }
 
     #[test]
@@ -132,7 +130,9 @@ mod tests {
         assert!(entities
             .iter()
             .any(|e| e.canonical_id == "hashtag:project-phoenix"));
-        assert!(entities.iter().any(|e| e.canonical_id == "topic:project-phoenix"));
+        assert!(entities
+            .iter()
+            .any(|e| e.canonical_id == "topic:project-phoenix"));
     }
 
     #[test]

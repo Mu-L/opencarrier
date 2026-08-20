@@ -3,10 +3,10 @@
 //! Generates docker-compose.yml from .mcp.json manifests and provides
 //! start/stop/restart/status/logs operations via `docker compose`.
 
-use types::mcp_manifest::{McpDockerInstall, McpInstallConfig, McpServerManifest};
 use std::path::Path;
 use std::process::Stdio;
 use tracing::info;
+use types::mcp_manifest::{McpDockerInstall, McpInstallConfig, McpServerManifest};
 
 /// Container state returned by `status()`.
 #[derive(Debug, serde::Serialize)]

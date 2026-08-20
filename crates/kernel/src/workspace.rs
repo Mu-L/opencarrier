@@ -4,19 +4,13 @@
 //! filesystem. No kernel state is accessed.
 
 use crate::error::{KernelError, KernelResult};
-use types::agent::AgentManifest;
 use std::io::Write;
 use std::path::Path;
+use types::agent::AgentManifest;
 
 /// Create workspace directory structure for an agent.
 pub fn ensure_workspace(workspace: &Path) -> KernelResult<()> {
-    for subdir in &[
-        "knowledge",
-        "sessions",
-        "flows",
-        "logs",
-        "history",
-    ] {
+    for subdir in &["knowledge", "sessions", "flows", "logs", "history"] {
         std::fs::create_dir_all(workspace.join(subdir)).map_err(|e| {
             KernelError::Carrier(types::error::CarrierError::Internal(format!(
                 "Failed to create workspace dir {}/{subdir}: {e}",
@@ -183,7 +177,13 @@ pub fn generate_identity_files(workspace: &Path, manifest: &AgentManifest) {
 /// Append an assistant response summary to the daily memory log (best-effort, append-only).
 /// Caps daily log at 1MB to prevent unbounded growth.
 /// When sender_id is present, writes to per-sender memory directory.
-pub fn append_daily_memory_log(home_dir: &Path, agent_name: &str, response: &str, owner_id: Option<&str>, sender_id: Option<&str>) {
+pub fn append_daily_memory_log(
+    home_dir: &Path,
+    agent_name: &str,
+    response: &str,
+    owner_id: Option<&str>,
+    sender_id: Option<&str>,
+) {
     let trimmed = response.trim();
     if trimmed.is_empty() {
         return;

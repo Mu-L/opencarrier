@@ -23,10 +23,7 @@ pub fn write_if_new(path: &Path, content: &str) -> CarrierResult<bool> {
     }
 
     // Write to temp file in same directory (so rename is atomic on same FS)
-    let tmp_name = format!(
-        ".tmp_{}.md",
-        uuid::Uuid::new_v4().simple()
-    );
+    let tmp_name = format!(".tmp_{}.md", uuid::Uuid::new_v4().simple());
     let tmp_path = path.with_file_name(&tmp_name);
 
     let mut f = fs::File::create(&tmp_path)
@@ -74,10 +71,7 @@ pub fn write_atomic(path: &Path, content: &str) -> CarrierResult<()> {
             .map_err(|e| CarrierError::Internal(format!("mkdir {}: {e}", parent.display())))?;
     }
 
-    let tmp_name = format!(
-        ".tmp_rewrite_{}.md",
-        uuid::Uuid::new_v4().simple()
-    );
+    let tmp_name = format!(".tmp_rewrite_{}.md", uuid::Uuid::new_v4().simple());
     let tmp_path = path.with_file_name(&tmp_name);
 
     let mut f = fs::File::create(&tmp_path)

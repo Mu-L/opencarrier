@@ -85,9 +85,8 @@ fn read_wechat_app_secret(
     app_id: &str,
 ) -> Option<String> {
     // (1) User profile preferences.wechat_accounts (explicit user-provided).
-    let profile_path =
-        types::config::sender_data_dir(home, sender_id, agent_id, Some(sender_id))
-            .join("profile.json");
+    let profile_path = types::config::sender_data_dir(home, sender_id, agent_id, Some(sender_id))
+        .join("profile.json");
     if let Ok(content) = std::fs::read_to_string(&profile_path) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(accounts) = v["preferences"]["wechat_accounts"].as_array() {
@@ -113,7 +112,11 @@ fn read_wechat_app_secret(
             let matches_app = v.get("app_id").and_then(|a| a.as_str()) == Some(app_id);
             let bound_to_us = v.get("bind_agent").and_then(|a| a.as_str()) == Some(agent_id);
             if is_oa && matches_app && bound_to_us {
-                if let Some(s) = v.get("app_secret").and_then(|s| s.as_str()).filter(|s| !s.is_empty()) {
+                if let Some(s) = v
+                    .get("app_secret")
+                    .and_then(|s| s.as_str())
+                    .filter(|s| !s.is_empty())
+                {
                     return Some(s.to_string());
                 }
             }
@@ -229,10 +232,9 @@ fn resolve_article_title(html_path: &str) -> String {
             // Skip metadata-like lines (key: value patterns, e.g. "流水线ID: ...")
             if trimmed.contains(':')
                 && !trimmed.starts_with('-')
-                && trimmed
-                    .chars()
-                    .take(20)
-                    .all(|c| c.is_alphanumeric() || c == '_' || c == ':' || c == ' ' || c >= '\u{4e00}')
+                && trimmed.chars().take(20).all(|c| {
+                    c.is_alphanumeric() || c == '_' || c == ':' || c == ' ' || c >= '\u{4e00}'
+                })
             {
                 continue;
             }
@@ -324,8 +326,12 @@ async fn handle_publish_marker(
     // this avoids a second read for author/digest).
     let md_content =
         std::fs::read_to_string(std::path::Path::new(&abs_html).with_extension("md")).ok();
-    let meta_author = md_content.as_deref().and_then(|c| extract_meta_field(c, "AUTHOR"));
-    let meta_digest = md_content.as_deref().and_then(|c| extract_meta_field(c, "DIGEST"));
+    let meta_author = md_content
+        .as_deref()
+        .and_then(|c| extract_meta_field(c, "AUTHOR"));
+    let meta_digest = md_content
+        .as_deref()
+        .and_then(|c| extract_meta_field(c, "DIGEST"));
     let author = meta_author;
     let digest = digest
         .filter(|d| !d.is_empty())
@@ -494,15 +500,23 @@ mod tests {
         let content = "<!--\nMETA_TITLE: 我的标题\nMETA_AUTHOR: 张三\nMETA_DIGEST: 这是一段摘要\n-->\n\n# 正文";
         assert_eq!(extract_meta_field(content, "TITLE").unwrap(), "我的标题");
         assert_eq!(extract_meta_field(content, "AUTHOR").unwrap(), "张三");
-        assert_eq!(extract_meta_field(content, "DIGEST").unwrap(), "这是一段摘要");
+        assert_eq!(
+            extract_meta_field(content, "DIGEST").unwrap(),
+            "这是一段摘要"
+        );
         assert!(extract_meta_field(content, "NOPE").is_none());
     }
 
     #[test]
     fn resolve_title_from_meta_block() {
-        let md = tmp_md("<!--\nMETA_TITLE: 以前怕你不卖芯片\nMETA_AUTHOR: 小载\n-->\n\n# 别的标题\n正文");
+        let md = tmp_md(
+            "<!--\nMETA_TITLE: 以前怕你不卖芯片\nMETA_AUTHOR: 小载\n-->\n\n# 别的标题\n正文",
+        );
         let html = md.with_extension("html");
-        assert_eq!(resolve_article_title(html.to_str().unwrap()), "以前怕你不卖芯片");
+        assert_eq!(
+            resolve_article_title(html.to_str().unwrap()),
+            "以前怕你不卖芯片"
+        );
     }
 
     #[test]
@@ -519,7 +533,10 @@ mod tests {
     fn resolve_title_from_heading_without_meta() {
         let md = tmp_md("# 标题直接开头\n\n正文");
         let html = md.with_extension("html");
-        assert_eq!(resolve_article_title(html.to_str().unwrap()), "标题直接开头");
+        assert_eq!(
+            resolve_article_title(html.to_str().unwrap()),
+            "标题直接开头"
+        );
     }
 
     // --- read_wechat_app_secret: profile vs OA sender session fallback ---
@@ -608,7 +625,10 @@ mod tests {
         )
         .unwrap();
         let got = read_wechat_app_secret(home, "owner1", "agent1", "wxEEE");
-        assert!(got.is_none(), "must not use an OA bound to a different agent");
+        assert!(
+            got.is_none(),
+            "must not use an OA bound to a different agent"
+        );
     }
 
     #[test]

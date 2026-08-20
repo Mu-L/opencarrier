@@ -34,9 +34,18 @@ pub fn read_identity_file(workspace: &Path, filename: &str) -> Option<String> {
 
 /// Read user profile for multi-tenancy context injection.
 /// Returns a short summary string suitable for the system prompt.
-pub fn read_user_profile_summary(home_dir: &Path, owner_id: &str, agent_name: &str, user_id: Option<&str>) -> Option<String> {
+pub fn read_user_profile_summary(
+    home_dir: &Path,
+    owner_id: &str,
+    agent_name: &str,
+    user_id: Option<&str>,
+) -> Option<String> {
     // SECURITY: sanitize to prevent path traversal
-    if owner_id.contains('/') || owner_id.contains('\\') || owner_id.contains("..") || owner_id.is_empty() {
+    if owner_id.contains('/')
+        || owner_id.contains('\\')
+        || owner_id.contains("..")
+        || owner_id.is_empty()
+    {
         return None;
     }
     if let Some(uid) = user_id {
@@ -44,7 +53,8 @@ pub fn read_user_profile_summary(home_dir: &Path, owner_id: &str, agent_name: &s
             return None;
         }
     }
-    let profile_path = types::config::sender_data_dir(home_dir, owner_id, agent_name, user_id).join("profile.json");
+    let profile_path = types::config::sender_data_dir(home_dir, owner_id, agent_name, user_id)
+        .join("profile.json");
     if !profile_path.exists() {
         return None;
     }
@@ -89,9 +99,18 @@ pub fn read_user_profile_summary(home_dir: &Path, owner_id: &str, agent_name: &s
 }
 
 /// Update user profile after a conversation (touch last_seen, increment count).
-pub fn touch_user_profile(home_dir: &Path, owner_id: &str, agent_name: &str, user_id: Option<&str>) {
+pub fn touch_user_profile(
+    home_dir: &Path,
+    owner_id: &str,
+    agent_name: &str,
+    user_id: Option<&str>,
+) {
     // SECURITY: sanitize to prevent path traversal
-    if owner_id.contains('/') || owner_id.contains('\\') || owner_id.contains("..") || owner_id.is_empty() {
+    if owner_id.contains('/')
+        || owner_id.contains('\\')
+        || owner_id.contains("..")
+        || owner_id.is_empty()
+    {
         return;
     }
     if let Some(uid) = user_id {
@@ -99,7 +118,8 @@ pub fn touch_user_profile(home_dir: &Path, owner_id: &str, agent_name: &str, use
             return;
         }
     }
-    let profile_path = types::config::sender_data_dir(home_dir, owner_id, agent_name, user_id).join("profile.json");
+    let profile_path = types::config::sender_data_dir(home_dir, owner_id, agent_name, user_id)
+        .join("profile.json");
     let mut profile: serde_json::Value = if profile_path.exists() {
         std::fs::read_to_string(&profile_path)
             .ok()
@@ -182,7 +202,9 @@ pub fn read_knowledge_content(
     let mut total_bytes = 0;
 
     if knowledge_dir.is_dir() {
-        if let Some(shared) = read_knowledge_dir(&knowledge_dir, &mut total_bytes, MAX_KNOWLEDGE_TOTAL_BYTES) {
+        if let Some(shared) =
+            read_knowledge_dir(&knowledge_dir, &mut total_bytes, MAX_KNOWLEDGE_TOTAL_BYTES)
+        {
             entries.extend(shared);
         }
     }
@@ -193,17 +215,22 @@ pub fn read_knowledge_content(
         let aname_ref: &str = match agent_name {
             Some(a) => a,
             None => {
-                aname = workspace.file_name()
+                aname = workspace
+                    .file_name()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
                 &aname
             }
         };
-        let private_dir = types::config::sender_data_dir(hd, oid, aname_ref, sender_id).join("knowledge");
+        let private_dir =
+            types::config::sender_data_dir(hd, oid, aname_ref, sender_id).join("knowledge");
         if private_dir.is_dir() {
-            if let Some(private) = read_knowledge_dir(&private_dir, &mut total_bytes, MAX_KNOWLEDGE_TOTAL_BYTES) {
+            if let Some(private) =
+                read_knowledge_dir(&private_dir, &mut total_bytes, MAX_KNOWLEDGE_TOTAL_BYTES)
+            {
                 // Private overrides shared: remove shared entries with same name
-                let private_names: std::collections::HashSet<String> = private.iter().map(|(n, _)| n.clone()).collect();
+                let private_names: std::collections::HashSet<String> =
+                    private.iter().map(|(n, _)| n.clone()).collect();
                 entries.retain(|(n, _)| !private_names.contains(n));
                 entries.extend(private);
             }
@@ -224,7 +251,11 @@ pub fn read_knowledge_content(
 }
 
 /// Read knowledge files from a single directory, returning (name, compiled_content) pairs.
-fn read_knowledge_dir(knowledge_dir: &Path, total_bytes: &mut usize, max_bytes: usize) -> Option<Vec<(String, String)>> {
+fn read_knowledge_dir(
+    knowledge_dir: &Path,
+    total_bytes: &mut usize,
+    max_bytes: usize,
+) -> Option<Vec<(String, String)>> {
     let dir_iter = std::fs::read_dir(knowledge_dir).ok()?;
     let mut files: Vec<_> = dir_iter
         .filter_map(|e| e.ok())
@@ -254,7 +285,11 @@ fn read_knowledge_dir(knowledge_dir: &Path, total_bytes: &mut usize, max_bytes: 
         }
     }
 
-    if entries.is_empty() { None } else { Some(entries) }
+    if entries.is_empty() {
+        None
+    } else {
+        Some(entries)
+    }
 }
 
 /// Read EVOLUTION.md rules (body text after YAML frontmatter).
@@ -456,7 +491,12 @@ pub fn parse_flow_full(content: &str) -> (String, String, Option<u32>, Vec<Strin
                 let trimmed = line.trim();
                 // Detect new key — ends multi-line tools list
                 if trimmed.starts_with('-') && in_tools_list {
-                    let item = trimmed.strip_prefix('-').unwrap().trim().trim_matches('"').trim_matches('\'');
+                    let item = trimmed
+                        .strip_prefix('-')
+                        .unwrap()
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'');
                     if !item.is_empty() {
                         tools.push(item.to_string());
                     }
@@ -473,7 +513,8 @@ pub fn parse_flow_full(content: &str) -> (String, String, Option<u32>, Vec<Strin
                     let inline = val.trim();
                     if inline.starts_with('[') {
                         let inner = inline.trim_start_matches('[').trim_end_matches(']');
-                        tools = inner.split(',')
+                        tools = inner
+                            .split(',')
                             .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
                             .filter(|s| !s.is_empty())
                             .collect();
@@ -647,10 +688,7 @@ pub async fn classify_flow_with_llm(
     if !recent_turns.is_empty() {
         prompt.push_str("\nRecent conversation:\n");
         for (intent, outcome) in recent_turns.iter().rev().take(2) {
-            prompt.push_str(&format!(
-                "  Turn: {} → {}\n",
-                intent, outcome
-            ));
+            prompt.push_str(&format!("  Turn: {} → {}\n", intent, outcome));
         }
     }
 
@@ -689,7 +727,9 @@ pub async fn classify_flow_with_llm(
             return None;
         }
         Err(_) => {
-            tracing::warn!("Flow classification LLM call timed out after 30s — skipping flow matching");
+            tracing::warn!(
+                "Flow classification LLM call timed out after 30s — skipping flow matching"
+            );
             return None;
         }
     };
@@ -720,16 +760,15 @@ pub async fn classify_flow_with_llm(
         .find(|(name, _, _)| name.to_lowercase() == flow_name)
         .or_else(|| {
             flow_summaries.iter().find(|(name, _, _)| {
-                name.to_lowercase().contains(&flow_name)
-                    || flow_name.contains(&name.to_lowercase())
+                name.to_lowercase().contains(&flow_name) || flow_name.contains(&name.to_lowercase())
             })
         })
         // Fallback: some LLMs (e.g. DeepSeek) output a reasoning chain instead of
         // just the flow name. Scan the full response for any known flow name.
         .or_else(|| {
-            flow_summaries.iter().find(|(name, _, _)| {
-                raw.contains(&name.to_lowercase())
-            })
+            flow_summaries
+                .iter()
+                .find(|(name, _, _)| raw.contains(&name.to_lowercase()))
         });
 
     let matched_flow = match matched {
@@ -806,7 +845,10 @@ pub struct SubagentMatch {
 ///
 /// Uses the same keyword extraction as flow matching. Returns the best
 /// match (most keyword hits), or `None` if nothing matches.
-pub fn match_subagent_for_message(message: &str, subagents: &[types::agent::SubagentConfig]) -> Option<SubagentMatch> {
+pub fn match_subagent_for_message(
+    message: &str,
+    subagents: &[types::agent::SubagentConfig],
+) -> Option<SubagentMatch> {
     if subagents.is_empty() {
         return None;
     }
@@ -852,8 +894,8 @@ pub fn match_subagent_for_message(message: &str, subagents: &[types::agent::Suba
 /// Also used by subagent trigger matching.
 fn extract_keywords(text: &str) -> Vec<String> {
     const STOP_WORDS: &[&str] = &[
-        "用户", "要求", "使用", "时", "当", "想要", "需要", "请", "帮", "帮我", "你",
-        "可以", "时候", "以下", "情况", "或者", "或", "说",
+        "用户", "要求", "使用", "时", "当", "想要", "需要", "请", "帮", "帮我", "你", "可以",
+        "时候", "以下", "情况", "或者", "或", "说",
     ];
 
     let mut keywords: Vec<String> = Vec::new();
@@ -873,8 +915,11 @@ fn extract_keywords(text: &str) -> Vec<String> {
     for segment in text.split(punct_separators) {
         let s = segment.trim();
         // Strip leading stop words
-        let s = s.strip_prefix("当").unwrap_or(s)
-            .strip_prefix("或").unwrap_or(s)
+        let s = s
+            .strip_prefix("当")
+            .unwrap_or(s)
+            .strip_prefix("或")
+            .unwrap_or(s)
             .trim();
         if s.len() >= 2 && !STOP_WORDS.contains(&s) && !keywords.iter().any(|k| k == s) {
             keywords.push(s.to_string());
@@ -925,7 +970,8 @@ mod tests {
 
     #[test]
     fn test_parse_flow_full_inline_tools() {
-        let content = "---\nname: test-flow\ndescription: test\ntools: [\"foo\", \"bar\"]\n---\nBody text";
+        let content =
+            "---\nname: test-flow\ndescription: test\ntools: [\"foo\", \"bar\"]\n---\nBody text";
         let (name, desc, max_iter, tools, body) = parse_flow_full(content);
         assert_eq!(name, "test-flow");
         assert_eq!(desc, "test");
@@ -983,6 +1029,10 @@ mod tests {
 
         let summaries = collect_flow_summaries(&flows);
         let names: Vec<&str> = summaries.iter().map(|(n, _, _)| n.as_str()).collect();
-        assert_eq!(names, vec!["healthy"], "empty-description flow must be skipped");
+        assert_eq!(
+            names,
+            vec!["healthy"],
+            "empty-description flow must be skipped"
+        );
     }
 }

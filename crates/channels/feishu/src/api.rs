@@ -41,7 +41,9 @@ pub async fn get_tenant_token(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(CarrierError::Network(format!("Feishu token HTTP {status}: {body}")));
+        return Err(CarrierError::Network(format!(
+            "Feishu token HTTP {status}: {body}"
+        )));
     }
 
     resp.json::<TenantTokenResponse>()
@@ -80,7 +82,9 @@ pub async fn send_message(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(CarrierError::Network(format!("Feishu send_message HTTP {status}: {body}")));
+        return Err(CarrierError::Network(format!(
+            "Feishu send_message HTTP {status}: {body}"
+        )));
     }
 
     resp.json::<SendMessageResponse>()
@@ -130,7 +134,9 @@ pub async fn get_ws_endpoint(
     );
 
     if !status.is_success() {
-        return Err(CarrierError::Network(format!("Feishu ws/endpoint HTTP {status}: {body_text}")));
+        return Err(CarrierError::Network(format!(
+            "Feishu ws/endpoint HTTP {status}: {body_text}"
+        )));
     }
 
     serde_json::from_str(&body_text)
@@ -158,7 +164,9 @@ pub async fn download_image(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(CarrierError::Network(format!("Feishu download_image HTTP {status}: {body}")));
+        return Err(CarrierError::Network(format!(
+            "Feishu download_image HTTP {status}: {body}"
+        )));
     }
 
     resp.bytes()
@@ -188,7 +196,9 @@ pub async fn download_file(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(CarrierError::Network(format!("Feishu download_file HTTP {status}: {body}")));
+        return Err(CarrierError::Network(format!(
+            "Feishu download_file HTTP {status}: {body}"
+        )));
     }
 
     resp.bytes()

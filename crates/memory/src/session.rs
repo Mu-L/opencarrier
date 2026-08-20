@@ -1,14 +1,14 @@
 //! Session management — load/save conversation history.
 
-use dashmap::DashMap;
-use types::agent::SessionId;
-use types::error::{CarrierError, CarrierResult};
-use types::message::{ContentBlock, Message, MessageContent, Role, TurnSummary};
 use chrono::Utc;
+use dashmap::DashMap;
 use rusqlite::Connection;
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use types::agent::SessionId;
+use types::error::{CarrierError, CarrierResult};
+use types::message::{ContentBlock, Message, MessageContent, Role, TurnSummary};
 
 /// A conversation session with message history.
 #[derive(Debug, Clone)]
@@ -191,7 +191,8 @@ impl SessionStore {
 
         // Clean up lock entry if no one else is waiting
         drop(_guard);
-        self.session_locks.retain(|k, v| Arc::strong_count(v) > 1 || k != &key);
+        self.session_locks
+            .retain(|k, v| Arc::strong_count(v) > 1 || k != &key);
         Ok(())
     }
 
@@ -369,17 +370,14 @@ impl SessionStore {
                  ORDER BY updated_at DESC LIMIT 1",
             )
             .map_err(|e| CarrierError::Memory(e.to_string()))?;
-        let result = stmt.query_row(
-            rusqlite::params![agent_id, label, stale_secs],
-            |row| {
-                let id_str: String = row.get(0)?;
-                let messages_blob: Vec<u8> = row.get(1)?;
-                let summaries_blob: Option<Vec<u8>> = row.get(2)?;
-                let tokens: i64 = row.get(3)?;
-                let lbl: Option<String> = row.get(4).unwrap_or(None);
-                Ok((id_str, messages_blob, summaries_blob, tokens, lbl))
-            },
-        );
+        let result = stmt.query_row(rusqlite::params![agent_id, label, stale_secs], |row| {
+            let id_str: String = row.get(0)?;
+            let messages_blob: Vec<u8> = row.get(1)?;
+            let summaries_blob: Option<Vec<u8>> = row.get(2)?;
+            let tokens: i64 = row.get(3)?;
+            let lbl: Option<String> = row.get(4).unwrap_or(None);
+            Ok((id_str, messages_blob, summaries_blob, tokens, lbl))
+        });
         match result {
             Ok((id_str, messages_blob, summaries_blob, tokens, lbl)) => {
                 let session_id = uuid::Uuid::parse_str(&id_str)
@@ -547,7 +545,8 @@ impl SessionStore {
 
         let mut result = Vec::new();
         for row in rows {
-            let (session_id, messages_blob) = row.map_err(|e| CarrierError::Memory(e.to_string()))?;
+            let (session_id, messages_blob) =
+                row.map_err(|e| CarrierError::Memory(e.to_string()))?;
             let messages: Vec<Message> = rmp_serde::from_slice(&messages_blob)
                 .map_err(|e| CarrierError::Serialization(e.to_string()))?;
             result.push((session_id, messages));
@@ -684,7 +683,9 @@ impl SessionStore {
         agent_name: Option<&str>,
     ) -> Result<(), std::io::Error> {
         // Route to per-sender sessions directory when sender_id is present
-        let effective_dir = if let (Some(oid), Some(hd), Some(an)) = (owner_id.or(sender_id), home_dir, agent_name) {
+        let effective_dir = if let (Some(oid), Some(hd), Some(an)) =
+            (owner_id.or(sender_id), home_dir, agent_name)
+        {
             let user_dir = types::config::sender_data_dir(hd, oid, an, sender_id).join("sessions");
             std::fs::create_dir_all(&user_dir)?;
             user_dir
@@ -835,7 +836,11 @@ pub(crate) fn strip_tool_history(messages: &[Message]) -> Vec<Message> {
                             // Log input size for debugging (not persisted)
                             let _ = input;
                         }
-                        ContentBlock::ToolResult { tool_name, is_error, .. } => {
+                        ContentBlock::ToolResult {
+                            tool_name,
+                            is_error,
+                            ..
+                        } => {
                             // Replace tool_result with a brief placeholder
                             let marker = if *is_error { " (error)" } else { "" };
                             let summary = format!("[Result from {tool_name}{marker}]");
@@ -1029,34 +1034,28 @@ mod tests {
             Message::user("Generate an image"),
             Message {
                 role: Role::Assistant,
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolUse {
-                        id: "tu1".to_string(),
-                        name: "image_generate".to_string(),
-                        input: serde_json::json!({"prompt": "a cat"}),
-                        provider_metadata: None,
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "tu1".to_string(),
+                    name: "image_generate".to_string(),
+                    input: serde_json::json!({"prompt": "a cat"}),
+                    provider_metadata: None,
+                }]),
             },
             Message {
                 role: Role::User,
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolResult {
-                        tool_use_id: "tu1".to_string(),
-                        tool_name: "image_generate".to_string(),
-                        content: "huge base64 data here...".repeat(1000),
-                        is_error: false,
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "tu1".to_string(),
+                    tool_name: "image_generate".to_string(),
+                    content: "huge base64 data here...".repeat(1000),
+                    is_error: false,
+                }]),
             },
             Message {
                 role: Role::Assistant,
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::Text {
-                        text: "Image generated successfully".to_string(),
-                        provider_metadata: None,
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::Text {
+                    text: "Image generated successfully".to_string(),
+                    provider_metadata: None,
+                }]),
             },
         ];
 
@@ -1071,22 +1070,30 @@ mod tests {
         // Tool_use replaced with text summary
         if let MessageContent::Blocks(blocks) = &clean[1].content {
             assert!(blocks.iter().any(|b| matches!(b, ContentBlock::Text { text, .. } if text.contains("Called image_generate"))));
-            assert!(!blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })));
+            assert!(!blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { .. })));
         } else {
             panic!("Expected Blocks");
         }
 
         // Tool_result replaced with text summary
         if let MessageContent::Blocks(blocks) = &clean[2].content {
-            assert!(blocks.iter().any(|b| matches!(b, ContentBlock::Text { text, .. } if text.contains("Result from"))));
-            assert!(!blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })));
+            assert!(blocks.iter().any(
+                |b| matches!(b, ContentBlock::Text { text, .. } if text.contains("Result from"))
+            ));
+            assert!(!blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolResult { .. })));
         } else {
             panic!("Expected Blocks");
         }
 
         // Final assistant text preserved
         if let MessageContent::Blocks(blocks) = &clean[3].content {
-            assert!(blocks.iter().any(|b| matches!(b, ContentBlock::Text { text, .. } if text.contains("successfully"))));
+            assert!(blocks.iter().any(
+                |b| matches!(b, ContentBlock::Text { text, .. } if text.contains("successfully"))
+            ));
         }
     }
 
@@ -1099,25 +1106,21 @@ mod tests {
         session.messages.push(Message::user("Hello"));
         session.messages.push(Message {
             role: Role::Assistant,
-            content: MessageContent::Blocks(vec![
-                ContentBlock::ToolUse {
-                    id: "tu1".to_string(),
-                    name: "some_tool".to_string(),
-                    input: serde_json::json!({}),
-                    provider_metadata: None,
-                },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "tu1".to_string(),
+                name: "some_tool".to_string(),
+                input: serde_json::json!({}),
+                provider_metadata: None,
+            }]),
         });
         session.messages.push(Message {
             role: Role::User,
-            content: MessageContent::Blocks(vec![
-                ContentBlock::ToolResult {
-                    tool_use_id: "tu1".to_string(),
-                    tool_name: "some_tool".to_string(),
-                    content: "big result data".repeat(1000),
-                    is_error: false,
-                },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "tu1".to_string(),
+                tool_name: "some_tool".to_string(),
+                content: "big result data".repeat(1000),
+                is_error: false,
+            }]),
         });
 
         store.save_session(&session).unwrap();
@@ -1130,8 +1133,14 @@ mod tests {
         for msg in &loaded.messages {
             if let MessageContent::Blocks(blocks) = &msg.content {
                 for block in blocks {
-                    assert!(!matches!(block, ContentBlock::ToolUse { .. }), "ToolUse should be stripped");
-                    assert!(!matches!(block, ContentBlock::ToolResult { .. }), "ToolResult should be stripped");
+                    assert!(
+                        !matches!(block, ContentBlock::ToolUse { .. }),
+                        "ToolUse should be stripped"
+                    );
+                    assert!(
+                        !matches!(block, ContentBlock::ToolResult { .. }),
+                        "ToolResult should be stripped"
+                    );
                 }
             }
         }

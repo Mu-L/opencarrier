@@ -14,7 +14,7 @@ use memory::tree::extract::extract_entities;
 use memory::tree::summariser::inert::InertSummariser;
 use memory::tree::types::{
     AppendBufferPayload, AppendTarget, DigestDailyPayload, ExtractChunkPayload, FlushStalePayload,
-    Job, JobKind, NodeRef, NewJob, SealPayload, TopicRoutePayload, DEFAULT_FLUSH_AGE_SECS,
+    Job, JobKind, NewJob, NodeRef, SealPayload, TopicRoutePayload, DEFAULT_FLUSH_AGE_SECS,
 };
 use types::error::{CarrierError, CarrierResult};
 use types::memory_tree::TreeKind;
@@ -64,7 +64,10 @@ async fn handle_extract(
     let entity_store = EntityStore::new(pool.clone());
     let job_store = JobStore::new(pool.clone());
 
-    let Some(chunk) = chunk_store.get_chunk(owner_id, None, &payload.chunk_id).await? else {
+    let Some(chunk) = chunk_store
+        .get_chunk(owner_id, None, &payload.chunk_id)
+        .await?
+    else {
         tracing::warn!(
             "[tree_jobs] extract chunk missing chunk_id={}",
             payload.chunk_id
@@ -159,18 +162,19 @@ async fn handle_append_buffer(
     let (item_id, token_count, timestamp_ms, node_user_id) = match &payload.node {
         NodeRef::Leaf { chunk_id } => {
             let Some(chunk) = chunk_store.get_chunk(owner_id, None, chunk_id).await? else {
-                tracing::warn!(
-                    "[tree_jobs] append_buffer chunk missing chunk_id={chunk_id}"
-                );
+                tracing::warn!("[tree_jobs] append_buffer chunk missing chunk_id={chunk_id}");
                 return Ok(JobOutcome::Done);
             };
-            (chunk.id.clone(), chunk.token_count, chunk.timestamp_ms, chunk.user_id.clone())
+            (
+                chunk.id.clone(),
+                chunk.token_count,
+                chunk.timestamp_ms,
+                chunk.user_id.clone(),
+            )
         }
         NodeRef::Summary { summary_id } => {
             let Some(summary) = tree_store.get_summary(owner_id, None, summary_id).await? else {
-                tracing::warn!(
-                    "[tree_jobs] append_buffer summary missing summary_id={summary_id}"
-                );
+                tracing::warn!("[tree_jobs] append_buffer summary missing summary_id={summary_id}");
                 return Ok(JobOutcome::Done);
             };
             (
@@ -191,12 +195,13 @@ async fn handle_append_buffer(
                 .get_or_create_tree(owner_id, &node_user_id, TreeKind::Source, source_id)
                 .await?
         }
-        AppendTarget::Topic { tree_id } => match tree_store.get_tree(owner_id, None, tree_id).await? {
+        AppendTarget::Topic { tree_id } => match tree_store
+            .get_tree(owner_id, None, tree_id)
+            .await?
+        {
             Some(t) => t,
             None => {
-                tracing::warn!(
-                    "[tree_jobs] append_buffer topic tree missing tree_id={tree_id}"
-                );
+                tracing::warn!("[tree_jobs] append_buffer topic tree missing tree_id={tree_id}");
                 return Ok(JobOutcome::Done);
             }
         },
@@ -210,11 +215,20 @@ async fn handle_append_buffer(
 
     // Append to L0 buffer
     seal_engine
-        .append_to_buffer(owner_id, &tree.id, 0, &item_id, token_count as i64, timestamp_ms)
+        .append_to_buffer(
+            owner_id,
+            &tree.id,
+            0,
+            &item_id,
+            token_count as i64,
+            timestamp_ms,
+        )
         .await?;
 
     // Check if seal should happen
-    let buf = seal_engine.get_or_create_buffer(owner_id, &tree.id, 0).await?;
+    let buf = seal_engine
+        .get_or_create_buffer(owner_id, &tree.id, 0)
+        .await?;
     if crate::bucket_seal::should_seal(&buf) {
         let seal_payload = SealPayload {
             tree_id: tree.id.clone(),
@@ -258,11 +272,11 @@ async fn handle_seal(
     let tree_store = TreeStore::new(pool.clone());
     let job_store = JobStore::new(pool.clone());
 
-    let Some(tree) = tree_store.get_tree(owner_id, None, &payload.tree_id).await? else {
-        tracing::warn!(
-            "[tree_jobs] seal tree missing tree_id={}",
-            payload.tree_id
-        );
+    let Some(tree) = tree_store
+        .get_tree(owner_id, None, &payload.tree_id)
+        .await?
+    else {
+        tracing::warn!("[tree_jobs] seal tree missing tree_id={}", payload.tree_id);
         return Ok(JobOutcome::Done);
     };
 
@@ -320,7 +334,9 @@ async fn handle_topic_route(
         NodeRef::Summary { summary_id } => summary_id.clone(),
     };
 
-    let entity_ids = entity_store.entities_for_node(owner_id, None, &node_id).await?;
+    let entity_ids = entity_store
+        .entities_for_node(owner_id, None, &node_id)
+        .await?;
     if entity_ids.is_empty() {
         return Ok(JobOutcome::Done);
     }
@@ -369,9 +385,9 @@ async fn handle_digest_daily(
         .and_then(|p| chrono::NaiveDate::parse_from_str(&p.date_iso, "%Y-%m-%d").ok())
         .unwrap_or_else(|| {
             // Yesterday in the digest calendar timezone (Asia/Shanghai).
-            (chrono::Utc::now() + chrono::Duration::seconds(crate::digest::digest_tz()
-                .local_minus_utc() as i64))
-                .date_naive()
+            (chrono::Utc::now()
+                + chrono::Duration::seconds(crate::digest::digest_tz().local_minus_utc() as i64))
+            .date_naive()
                 - chrono::Duration::days(1)
         });
 
@@ -446,13 +462,20 @@ mod tests {
 
     async fn setup() -> Option<(Pool, PathBuf, TempDir)> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         let dir = TempDir::new().ok()?;
         Some((pool, dir.path().to_path_buf(), dir))
     }
@@ -522,13 +545,25 @@ mod tests {
             .await
             .unwrap();
 
-        let payload = ExtractChunkPayload { chunk_id: "chunk_test".to_string() };
-        let job = mk_job("owner_1", JobKind::ExtractChunk, &serde_json::to_string(&payload).unwrap());
+        let payload = ExtractChunkPayload {
+            chunk_id: "chunk_test".to_string(),
+        };
+        let job = mk_job(
+            "owner_1",
+            JobKind::ExtractChunk,
+            &serde_json::to_string(&payload).unwrap(),
+        );
 
-        let result = handle_job(&pool, &content_root, "owner_1", &job).await.unwrap();
+        let result = handle_job(&pool, &content_root, "owner_1", &job)
+            .await
+            .unwrap();
         assert_eq!(result, JobOutcome::Done);
 
-        let updated = chunk_store.get_chunk("owner_1", None, "chunk_test").await.unwrap().unwrap();
+        let updated = chunk_store
+            .get_chunk("owner_1", None, "chunk_test")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(updated.lifecycle_status, "admitted");
 
         let entities = entity_store
@@ -563,16 +598,33 @@ mod tests {
             .unwrap();
 
         let payload = AppendBufferPayload {
-            node: NodeRef::Leaf { chunk_id: "chunk_ab".to_string() },
-            target: AppendTarget::Source { source_id: "wechat:test:sender".to_string() },
+            node: NodeRef::Leaf {
+                chunk_id: "chunk_ab".to_string(),
+            },
+            target: AppendTarget::Source {
+                source_id: "wechat:test:sender".to_string(),
+            },
         };
-        let job = mk_job("owner_1", JobKind::AppendBuffer, &serde_json::to_string(&payload).unwrap());
+        let job = mk_job(
+            "owner_1",
+            JobKind::AppendBuffer,
+            &serde_json::to_string(&payload).unwrap(),
+        );
 
-        let result = handle_job(&pool, &content_root, "owner_1", &job).await.unwrap();
+        let result = handle_job(&pool, &content_root, "owner_1", &job)
+            .await
+            .unwrap();
         assert_eq!(result, JobOutcome::Done);
 
-        let seal_engine = BucketSealEngine::new(pool.clone(), content_root.to_path_buf(), Arc::new(InertSummariser));
-        let buf = seal_engine.get_or_create_buffer("owner_1", &tree.id, 0).await.unwrap();
+        let seal_engine = BucketSealEngine::new(
+            pool.clone(),
+            content_root.to_path_buf(),
+            Arc::new(InertSummariser),
+        );
+        let buf = seal_engine
+            .get_or_create_buffer("owner_1", &tree.id, 0)
+            .await
+            .unwrap();
         assert!(buf.item_ids.contains(&"chunk_ab".to_string()));
     }
 
@@ -595,24 +647,50 @@ mod tests {
 
         for i in 0..10 {
             let chunk_id = format!("chunk_seal_{i}");
-            let mut c = mk_chunk("owner_1", &chunk_id, "test content for seal test", "admitted");
+            let mut c = mk_chunk(
+                "owner_1",
+                &chunk_id,
+                "test content for seal test",
+                "admitted",
+            );
             c.token_count = 6000;
             c.seq_in_source = i;
             chunk_store.upsert_chunks(&[c]).await.unwrap();
         }
 
-        let seal_engine = BucketSealEngine::new(pool.clone(), content_root.to_path_buf(), Arc::new(InertSummariser));
+        let seal_engine = BucketSealEngine::new(
+            pool.clone(),
+            content_root.to_path_buf(),
+            Arc::new(InertSummariser),
+        );
         for i in 0..10 {
             seal_engine
-                .append_to_buffer("owner_1", &tree.id, 0, &format!("chunk_seal_{i}"), 6000, 1_700_000_000_000)
+                .append_to_buffer(
+                    "owner_1",
+                    &tree.id,
+                    0,
+                    &format!("chunk_seal_{i}"),
+                    6000,
+                    1_700_000_000_000,
+                )
                 .await
                 .unwrap();
         }
 
-        let payload = SealPayload { tree_id: tree.id.clone(), level: 0, force_now_ms: None };
-        let job = mk_job("owner_1", JobKind::Seal, &serde_json::to_string(&payload).unwrap());
+        let payload = SealPayload {
+            tree_id: tree.id.clone(),
+            level: 0,
+            force_now_ms: None,
+        };
+        let job = mk_job(
+            "owner_1",
+            JobKind::Seal,
+            &serde_json::to_string(&payload).unwrap(),
+        );
 
-        let result = handle_job(&pool, &content_root, "owner_1", &job).await.unwrap();
+        let result = handle_job(&pool, &content_root, "owner_1", &job)
+            .await
+            .unwrap();
         assert_eq!(result, JobOutcome::Done);
 
         let summaries = tree_store
@@ -631,9 +709,17 @@ mod tests {
                 return;
             }
         };
-        let payload = DigestDailyPayload { date_iso: "2026-05-16".to_string() };
-        let job = mk_job("owner_1", JobKind::DigestDaily, &serde_json::to_string(&payload).unwrap());
-        let result = handle_job(&pool, &content_root, "owner_1", &job).await.unwrap();
+        let payload = DigestDailyPayload {
+            date_iso: "2026-05-16".to_string(),
+        };
+        let job = mk_job(
+            "owner_1",
+            JobKind::DigestDaily,
+            &serde_json::to_string(&payload).unwrap(),
+        );
+        let result = handle_job(&pool, &content_root, "owner_1", &job)
+            .await
+            .unwrap();
         assert_eq!(result, JobOutcome::Done);
     }
 
@@ -661,19 +747,39 @@ mod tests {
         c.created_at_ms = 1_000_000_000_000;
         chunk_store.upsert_chunks(&[c]).await.unwrap();
 
-        let seal_engine = BucketSealEngine::new(pool.clone(), content_root.to_path_buf(), Arc::new(InertSummariser));
+        let seal_engine = BucketSealEngine::new(
+            pool.clone(),
+            content_root.to_path_buf(),
+            Arc::new(InertSummariser),
+        );
         seal_engine
-            .append_to_buffer("owner_1", &tree.id, 0, "chunk_stale", 100, 1_000_000_000_000)
+            .append_to_buffer(
+                "owner_1",
+                &tree.id,
+                0,
+                "chunk_stale",
+                100,
+                1_000_000_000_000,
+            )
             .await
             .unwrap();
 
         let payload = FlushStalePayload::default();
-        let job = mk_job("owner_1", JobKind::FlushStale, &serde_json::to_string(&payload).unwrap());
+        let job = mk_job(
+            "owner_1",
+            JobKind::FlushStale,
+            &serde_json::to_string(&payload).unwrap(),
+        );
 
-        let result = handle_job(&pool, &content_root, "owner_1", &job).await.unwrap();
+        let result = handle_job(&pool, &content_root, "owner_1", &job)
+            .await
+            .unwrap();
         assert_eq!(result, JobOutcome::Done);
 
-        let pending = job_store.count_pending("owner_1", Some(JobKind::Seal)).await.unwrap();
+        let pending = job_store
+            .count_pending("owner_1", Some(JobKind::Seal))
+            .await
+            .unwrap();
         assert!(pending >= 1);
     }
 
@@ -686,9 +792,17 @@ mod tests {
                 return;
             }
         };
-        let payload = ExtractChunkPayload { chunk_id: "nonexistent".to_string() };
-        let job = mk_job("owner_1", JobKind::ExtractChunk, &serde_json::to_string(&payload).unwrap());
-        let result = handle_job(&pool, &content_root, "owner_1", &job).await.unwrap();
+        let payload = ExtractChunkPayload {
+            chunk_id: "nonexistent".to_string(),
+        };
+        let job = mk_job(
+            "owner_1",
+            JobKind::ExtractChunk,
+            &serde_json::to_string(&payload).unwrap(),
+        );
+        let result = handle_job(&pool, &content_root, "owner_1", &job)
+            .await
+            .unwrap();
         assert_eq!(result, JobOutcome::Done);
     }
 }

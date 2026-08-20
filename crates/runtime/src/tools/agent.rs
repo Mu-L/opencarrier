@@ -9,11 +9,11 @@ use super::ToolModule;
 use crate::kernel_handle::KernelHandle;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use types::error::{CarrierError, CarrierResult};
-use types::tool::ToolDefinition;
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Arc;
+use types::error::{CarrierError, CarrierResult};
+use types::tool::ToolDefinition;
 
 // ---------------------------------------------------------------------------
 // User profile tool (multi-tenancy)
@@ -29,13 +29,18 @@ async fn tool_user_profile(
     let sender = sender_id.ok_or(CarrierError::Internal(
         "user_profile requires a sender context (sender_id). This tool is only available when a user identity is provided.".to_string(),
     ))?;
-    let hd = home_dir.ok_or(CarrierError::Internal("user_profile requires home_dir".to_string()))?;
-    let an = agent_name.ok_or(CarrierError::Internal("user_profile requires agent_name".to_string()))?;
+    let hd = home_dir.ok_or(CarrierError::Internal(
+        "user_profile requires home_dir".to_string(),
+    ))?;
+    let an = agent_name.ok_or(CarrierError::Internal(
+        "user_profile requires agent_name".to_string(),
+    ))?;
     let oid = crate::tools::sanitize_path_component(owner_id.unwrap_or(sender))?;
     let sender = crate::tools::sanitize_path_component(sender)?;
 
     let action = input["action"].as_str().unwrap_or("read");
-    let profile_path = types::config::sender_data_dir(hd, oid, an, Some(sender)).join("profile.json");
+    let profile_path =
+        types::config::sender_data_dir(hd, oid, an, Some(sender)).join("profile.json");
 
     match action {
         "read" => {
@@ -96,13 +101,14 @@ async fn tool_user_profile(
 
             // Ensure directory exists
             if let Some(parent) = profile_path.parent() {
-                tokio::fs::create_dir_all(parent)
-                    .await
-                    .map_err(|e| CarrierError::Internal(format!("Failed to create user directory: {e}")))?;
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    CarrierError::Internal(format!("Failed to create user directory: {e}"))
+                })?;
             }
 
-            let output = serde_json::to_string_pretty(&profile)
-                .map_err(|e| CarrierError::Serialization(format!("Failed to serialize profile: {e}")))?;
+            let output = serde_json::to_string_pretty(&profile).map_err(|e| {
+                CarrierError::Serialization(format!("Failed to serialize profile: {e}"))
+            })?;
             tokio::fs::write(&profile_path, &output)
                 .await
                 .map_err(|e| CarrierError::Internal(format!("Failed to write profile: {e}")))?;
@@ -122,7 +128,9 @@ async fn tool_user_profile(
                     )
                 })?;
             if !profile_path.exists() {
-                return Ok(format!("No profile for user '{sender}' — nothing to remove."));
+                return Ok(format!(
+                    "No profile for user '{sender}' — nothing to remove."
+                ));
             }
             let mut profile: serde_json::Value = {
                 let content = tokio::fs::read_to_string(&profile_path)
@@ -135,19 +143,26 @@ async fn tool_user_profile(
                 .and_then(|p| p.get_mut("wechat_accounts"))
                 .and_then(|a| a.as_array_mut());
             let Some(accounts) = accounts else {
-                return Ok(format!("User '{sender}' has no wechat_accounts — nothing to remove."));
+                return Ok(format!(
+                    "User '{sender}' has no wechat_accounts — nothing to remove."
+                ));
             };
             let before = accounts.len();
             accounts.retain(|a| a.get("app_id").and_then(|v| v.as_str()) != Some(app_id));
             if accounts.len() == before {
-                return Ok(format!("app_id '{app_id}' not found in user '{sender}' wechat_accounts."));
+                return Ok(format!(
+                    "app_id '{app_id}' not found in user '{sender}' wechat_accounts."
+                ));
             }
-            let output = serde_json::to_string_pretty(&profile)
-                .map_err(|e| CarrierError::Serialization(format!("Failed to serialize profile: {e}")))?;
+            let output = serde_json::to_string_pretty(&profile).map_err(|e| {
+                CarrierError::Serialization(format!("Failed to serialize profile: {e}"))
+            })?;
             tokio::fs::write(&profile_path, &output)
                 .await
                 .map_err(|e| CarrierError::Internal(format!("Failed to write profile: {e}")))?;
-            Ok(format!("Removed app_id '{app_id}' from user '{sender}' wechat_accounts."))
+            Ok(format!(
+                "Removed app_id '{app_id}' from user '{sender}' wechat_accounts."
+            ))
         }
         other => Err(CarrierError::InvalidInput(format!(
             "Unknown action '{other}'. Use 'read' or 'update'."
@@ -215,7 +230,10 @@ fn apply_object_shallow_merge(
 /// Items without `app_id` are skipped. Same `app_id` overwrites fields on the
 /// existing object (so a new `app_secret` updates, other keys stay unless
 /// resent). New ids are appended. Incoming empty → existing unchanged.
-fn merge_wechat_accounts(existing: &[serde_json::Value], incoming: &[serde_json::Value]) -> Vec<serde_json::Value> {
+fn merge_wechat_accounts(
+    existing: &[serde_json::Value],
+    incoming: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
     let mut accounts = existing.to_vec();
     for inc in incoming {
         let Some(id) = inc.get("app_id").and_then(|v| v.as_str()) else {
@@ -225,7 +243,8 @@ fn merge_wechat_accounts(existing: &[serde_json::Value], incoming: &[serde_json:
             .iter()
             .position(|a| a.get("app_id").and_then(|v| v.as_str()) == Some(id))
         {
-            if let (Some(old), Some(new_fields)) = (accounts[pos].as_object_mut(), inc.as_object()) {
+            if let (Some(old), Some(new_fields)) = (accounts[pos].as_object_mut(), inc.as_object())
+            {
                 for (k, v) in new_fields {
                     old.insert(k.clone(), v.clone());
                 }
@@ -250,9 +269,9 @@ async fn tool_delegate_subagent(
     sender_id: Option<&str>,
 ) -> CarrierResult<String> {
     let kh = crate::tools::require_kernel(kernel)?;
-    let message = input["message"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput("Missing 'message' parameter".to_string()))?;
+    let message = input["message"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'message' parameter".to_string(),
+    ))?;
     let aid = caller_agent_id.ok_or(CarrierError::Internal(
         "delegate_* requires caller_agent_id".to_string(),
     ))?;
@@ -275,8 +294,16 @@ async fn tool_delegate_subagent(
 
     crate::tool_runner::AGENT_CALL_DEPTH
         .scope(std::cell::Cell::new(current_depth + 1), async {
-            kh.send_to_agent(aid, message, sender_id, None, caller_agent_id, owner_id, Some(&subagent_channel))
-                .await
+            kh.send_to_agent(
+                aid,
+                message,
+                sender_id,
+                None,
+                caller_agent_id,
+                owner_id,
+                Some(&subagent_channel),
+            )
+            .await
         })
         .await
 }
@@ -322,14 +349,24 @@ impl ToolModule for DelegationTools {
 
         match name {
             // User profile
-            "user_profile" => Some(tool_user_profile(input, ctx.home_dir, ctx.agent_name, owner_id, sender_id).await),
+            "user_profile" => Some(
+                tool_user_profile(input, ctx.home_dir, ctx.agent_name, owner_id, sender_id).await,
+            ),
 
             // Subagent delegation (delegate_{name})
             name if name.starts_with("delegate_") => {
                 let subagent_name = &name["delegate_".len()..];
-                Some(tool_delegate_subagent(
-                    subagent_name, input, kernel, caller_agent_id, owner_id, sender_id,
-                ).await)
+                Some(
+                    tool_delegate_subagent(
+                        subagent_name,
+                        input,
+                        kernel,
+                        caller_agent_id,
+                        owner_id,
+                        sender_id,
+                    )
+                    .await,
+                )
             }
 
             _ => None,
@@ -402,7 +439,9 @@ mod tests {
             &mut profile,
             &json!({"wechat_accounts": [{"app_id": "wxBBB", "app_secret": "BBB"}]}),
         );
-        let accts = profile["preferences"]["wechat_accounts"].as_array().unwrap();
+        let accts = profile["preferences"]["wechat_accounts"]
+            .as_array()
+            .unwrap();
         assert_eq!(accts.len(), 2);
         assert_eq!(accts[0]["app_secret"], "AAA");
         assert_eq!(accts[1]["app_secret"], "BBB");
@@ -414,11 +453,7 @@ mod tests {
         let mut profile = json!({
             "interaction_patterns": { "asks_for_schedule": true, "lang": "zh" }
         });
-        apply_object_shallow_merge(
-            &mut profile,
-            "interaction_patterns",
-            &json!({"lang": "en"}),
-        );
+        apply_object_shallow_merge(&mut profile, "interaction_patterns", &json!({"lang": "en"}));
         assert_eq!(profile["interaction_patterns"]["asks_for_schedule"], true);
         assert_eq!(profile["interaction_patterns"]["lang"], "en");
     }
@@ -431,7 +466,9 @@ mod tests {
             }
         });
         apply_preferences_update(&mut profile, &json!({"tone": "轻松"}));
-        let accts = profile["preferences"]["wechat_accounts"].as_array().unwrap();
+        let accts = profile["preferences"]["wechat_accounts"]
+            .as_array()
+            .unwrap();
         assert_eq!(accts.len(), 1);
         assert_eq!(accts[0]["app_secret"], "AAA");
         assert_eq!(profile["preferences"]["tone"], "轻松");
@@ -449,9 +486,15 @@ mod tests {
                 }
             }
         });
-        tool_user_profile(&input, Some(home), Some("agent1"), Some("owner1"), Some("owner1"))
-            .await
-            .unwrap();
+        tool_user_profile(
+            &input,
+            Some(home),
+            Some("agent1"),
+            Some("owner1"),
+            Some("owner1"),
+        )
+        .await
+        .unwrap();
 
         let input2 = json!({
             "action": "update",
@@ -461,9 +504,15 @@ mod tests {
                 }
             }
         });
-        tool_user_profile(&input2, Some(home), Some("agent1"), Some("owner1"), Some("owner1"))
-            .await
-            .unwrap();
+        tool_user_profile(
+            &input2,
+            Some(home),
+            Some("agent1"),
+            Some("owner1"),
+            Some("owner1"),
+        )
+        .await
+        .unwrap();
 
         let path = types::config::sender_data_dir(home, "owner1", "agent1", Some("owner1"))
             .join("profile.json");
@@ -488,9 +537,15 @@ mod tests {
                     }
                 }
             });
-            tool_user_profile(&input, Some(home), Some("agent1"), Some("owner1"), Some("owner1"))
-                .await
-                .unwrap();
+            tool_user_profile(
+                &input,
+                Some(home),
+                Some("agent1"),
+                Some("owner1"),
+                Some("owner1"),
+            )
+            .await
+            .unwrap();
         }
 
         let out = tool_user_profile(

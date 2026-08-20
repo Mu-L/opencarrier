@@ -68,7 +68,9 @@ pub async fn probe_health(base_url: &str, deadline: std::time::Duration) -> Carr
     loop {
         match client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => return Ok(()),
-            Ok(resp) => tracing::warn!(status = %resp.status(), url = %url, "aginxMemory /health not ready"),
+            Ok(resp) => {
+                tracing::warn!(status = %resp.status(), url = %url, "aginxMemory /health not ready")
+            }
             Err(e) => tracing::warn!(error = %e, url = %url, "aginxMemory /health probe failed"),
         }
         if start.elapsed() >= deadline {
@@ -170,12 +172,10 @@ impl MemoryHandle for HttpMemoryHandle {
         let client = self.client.clone();
         let url = self.url("kv/set");
         self.block_http(async move {
-            let resp = client
-                .post(&url)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| CarrierError::Network(format!("aginxMemory kv/set request: {e}")))?;
+            let resp =
+                client.post(&url).json(&body).send().await.map_err(|e| {
+                    CarrierError::Network(format!("aginxMemory kv/set request: {e}"))
+                })?;
             Self::parse_response::<()>("kv/set", resp).await
         })
     }
@@ -196,12 +196,10 @@ impl MemoryHandle for HttpMemoryHandle {
         let client = self.client.clone();
         let url = self.url("kv/get");
         self.block_http(async move {
-            let resp = client
-                .post(&url)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| CarrierError::Network(format!("aginxMemory kv/get request: {e}")))?;
+            let resp =
+                client.post(&url).json(&body).send().await.map_err(|e| {
+                    CarrierError::Network(format!("aginxMemory kv/get request: {e}"))
+                })?;
             Self::parse_response::<Option<Value>>("kv/get", resp).await
         })
     }
@@ -220,12 +218,10 @@ impl MemoryHandle for HttpMemoryHandle {
         let client = self.client.clone();
         let url = self.url("kv/list");
         self.block_http(async move {
-            let resp = client
-                .post(&url)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| CarrierError::Network(format!("aginxMemory kv/list request: {e}")))?;
+            let resp =
+                client.post(&url).json(&body).send().await.map_err(|e| {
+                    CarrierError::Network(format!("aginxMemory kv/list request: {e}"))
+                })?;
             Self::parse_response::<Vec<(String, Value)>>("kv/list", resp).await
         })
     }
@@ -246,12 +242,9 @@ impl MemoryHandle for HttpMemoryHandle {
         let client = self.client.clone();
         let url = self.url("kv/delete");
         self.block_http(async move {
-            let resp = client
-                .post(&url)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| CarrierError::Network(format!("aginxMemory kv/delete request: {e}")))?;
+            let resp = client.post(&url).json(&body).send().await.map_err(|e| {
+                CarrierError::Network(format!("aginxMemory kv/delete request: {e}"))
+            })?;
             Self::parse_response::<()>("kv/delete", resp).await
         })
     }
@@ -277,10 +270,7 @@ impl MemoryHandle for HttpMemoryHandle {
         self.post_json("tree/query_topic", &owned).await
     }
 
-    async fn tree_search_entities(
-        &self,
-        req: EntitySearch<'_>,
-    ) -> CarrierResult<Vec<EntityMatch>> {
+    async fn tree_search_entities(&self, req: EntitySearch<'_>) -> CarrierResult<Vec<EntityMatch>> {
         let owned = EntitySearchOwned::from(req);
         self.post_json("tree/search_entities", &owned).await
     }
@@ -324,7 +314,8 @@ impl MemoryHandle for HttpMemoryHandle {
     }
 
     fn analytics_recent_conversations(&self, agent_id: &str, limit: u32) -> CarrierResult<Value> {
-        self.fallback.analytics_recent_conversations(agent_id, limit)
+        self.fallback
+            .analytics_recent_conversations(agent_id, limit)
     }
 }
 

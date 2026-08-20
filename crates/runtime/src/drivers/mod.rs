@@ -26,10 +26,7 @@ mod tests {
             base_url: Some("https://brain.aginx.net/v1/chat/completions".to_string()),
         };
         let driver = create_driver(&config);
-        assert!(
-            driver.is_ok(),
-            "HTTP driver with key + URL should succeed"
-        );
+        assert!(driver.is_ok(), "HTTP driver with key + URL should succeed");
     }
 
     #[test]

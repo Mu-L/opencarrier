@@ -38,7 +38,10 @@ pub async fn get_agent_session(
         .filter(|s| !s.is_empty())
         .map(|sid| format!("user:{sid}"));
     let session_result = match &requested_label {
-        Some(label) => state.kernel.memory.find_session_by_label(&entry.name, label),
+        Some(label) => state
+            .kernel
+            .memory
+            .find_session_by_label(&entry.name, label),
         None => state.kernel.memory.get_session(entry.session_id),
     };
 
@@ -96,10 +99,7 @@ pub async fn get_agent_session(
                                     }
                                 }
                                 types::message::ContentBlock::ToolUse {
-                                    id,
-                                    name,
-                                    input,
-                                    ..
+                                    id, name, input, ..
                                 } => {
                                     let tool_idx = tools.len();
                                     tools.push(serde_json::json!({
@@ -125,7 +125,7 @@ pub async fn get_agent_session(
                 }
                 let msg_idx = built_messages.len();
                 // Fix up the msg_idx for tool_use entries registered with sentinel
-                for (_, (mi, _)) in tool_use_index.iter_mut() {
+                for (mi, _) in tool_use_index.values_mut() {
                     if *mi == usize::MAX {
                         *mi = msg_idx;
                     }
@@ -331,7 +331,11 @@ pub async fn find_session_by_label(
         Err(resp) => return resp,
     };
 
-    match state.kernel.memory.find_session_by_label(&entry.name, &label) {
+    match state
+        .kernel
+        .memory
+        .find_session_by_label(&entry.name, &label)
+    {
         Ok(Some(session)) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -477,7 +481,21 @@ pub async fn compact_session(
         Ok(id) => id,
         Err(resp) => return resp,
     };
-    match state.kernel.compact_agent_session(agent_id, state.kernel.registry.get(agent_id).map(|e| e.session_id).unwrap_or_else(|| types::agent::SessionId(uuid::Uuid::nil())), None, None).await {
+    match state
+        .kernel
+        .compact_agent_session(
+            agent_id,
+            state
+                .kernel
+                .registry
+                .get(agent_id)
+                .map(|e| e.session_id)
+                .unwrap_or_else(|| types::agent::SessionId(uuid::Uuid::nil())),
+            None,
+            None,
+        )
+        .await
+    {
         Ok(msg) => (
             StatusCode::OK,
             Json(serde_json::json!({"status": "ok", "message": msg})),

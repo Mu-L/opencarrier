@@ -51,9 +51,16 @@ impl EntityStore {
                      timestamp_ms=EXCLUDED.timestamp_ms, tree_id=EXCLUDED.tree_id, \
                      user_id=EXCLUDED.user_id",
                 &[
-                    &entry.entity_id, &entry.node_id, &entry.node_kind, &owner_id,
-                    &entity_kind, &entry.surface, &score, &entry.timestamp_ms,
-                    &entry.tree_id, &entry.user_id,
+                    &entry.entity_id,
+                    &entry.node_id,
+                    &entry.node_kind,
+                    &owner_id,
+                    &entity_kind,
+                    &entry.surface,
+                    &score,
+                    &entry.timestamp_ms,
+                    &entry.tree_id,
+                    &entry.user_id,
                 ],
             )
             .await
@@ -109,7 +116,11 @@ impl EntityStore {
     }
 
     /// List top entities for an owner by mention frequency.
-    pub async fn top_entities(&self, owner_id: &str, limit: usize) -> CarrierResult<Vec<EntityMatch>> {
+    pub async fn top_entities(
+        &self,
+        owner_id: &str,
+        limit: usize,
+    ) -> CarrierResult<Vec<EntityMatch>> {
         let client = self.client().await?;
         let lim = limit as i64;
         let rows = client
@@ -371,23 +382,29 @@ impl EntityStore {
             .try_get(7)
             .map_err(|e| CarrierError::Serialization(e.to_string()))?;
         Ok(HotnessCounters {
-            entity_id: row.try_get(0).map_err(|e| CarrierError::Serialization(e.to_string()))?,
+            entity_id: row
+                .try_get(0)
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             mention_count_30d: row
                 .try_get::<_, i32>(1)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as u32,
             distinct_sources: row
                 .try_get::<_, i32>(2)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as u32,
             last_seen_ms: row
                 .try_get(3)
                 .map_err(|e| CarrierError::Serialization(e.to_string()))?,
             query_hits_30d: row
                 .try_get::<_, i32>(4)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as u32,
             graph_centrality: graph_centrality.map(|v| v as f32),
             ingests_since_check: row
                 .try_get::<_, i32>(6)
-                .map_err(|e| CarrierError::Serialization(e.to_string()))? as u32,
+                .map_err(|e| CarrierError::Serialization(e.to_string()))?
+                as u32,
             last_hotness: last_hotness.map(|v| v as f32),
             last_updated_ms: row
                 .try_get(8)
@@ -424,17 +441,29 @@ mod tests {
 
     async fn setup() -> Option<EntityStore> {
         let url = std::env::var("AGINX_MEMORY_TEST_PG").ok()?;
-        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.ok()?;
-        tokio::spawn(async move { let _ = conn.await; });
+        let (mut client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls)
+            .await
+            .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
         crate::pg::reset_and_migrate(&mut client).await;
         drop(client);
         let cfg: tokio_postgres::Config = url.parse().ok()?;
         let mgr = Manager::new(cfg, tokio_postgres::NoTls);
-        let pool = deadpool_postgres::Pool::builder(mgr).max_size(4).build().ok()?;
+        let pool = deadpool_postgres::Pool::builder(mgr)
+            .max_size(4)
+            .build()
+            .ok()?;
         Some(EntityStore::new(pool))
     }
 
-    fn entry<'a>(entity_id: &'a str, node_id: &'a str, surface: &'a str, score: f32) -> EntityIndexEntry<'a> {
+    fn entry<'a>(
+        entity_id: &'a str,
+        node_id: &'a str,
+        surface: &'a str,
+        score: f32,
+    ) -> EntityIndexEntry<'a> {
         EntityIndexEntry {
             entity_id,
             node_id,
@@ -461,7 +490,10 @@ mod tests {
             .upsert_entity_index("owner_1", &entry("person:Alice", "chunk_001", "Alice", 0.8))
             .await
             .unwrap();
-        let nodes = store.chunks_for_entity("owner_1", None, "person:Alice", 10).await.unwrap();
+        let nodes = store
+            .chunks_for_entity("owner_1", None, "person:Alice", 10)
+            .await
+            .unwrap();
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].0, "chunk_001");
     }
@@ -475,9 +507,19 @@ mod tests {
                 return;
             }
         };
-        store.bump_entity_hotness("owner_1", "person:Alice", "source_1").await.unwrap();
-        store.bump_entity_hotness("owner_1", "person:Alice", "source_1").await.unwrap();
-        let hotness = store.get_hotness("owner_1", "person:Alice").await.unwrap().unwrap();
+        store
+            .bump_entity_hotness("owner_1", "person:Alice", "source_1")
+            .await
+            .unwrap();
+        store
+            .bump_entity_hotness("owner_1", "person:Alice", "source_1")
+            .await
+            .unwrap();
+        let hotness = store
+            .get_hotness("owner_1", "person:Alice")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(hotness.mention_count_30d, 2);
     }
 
@@ -490,9 +532,19 @@ mod tests {
                 return;
             }
         };
-        store.bump_entity_hotness("owner_1", "person:Alice", "source_1").await.unwrap();
-        store.update_hotness_score("owner_1", "person:Alice", 15.0).await.unwrap();
-        let hotness = store.get_hotness("owner_1", "person:Alice").await.unwrap().unwrap();
+        store
+            .bump_entity_hotness("owner_1", "person:Alice", "source_1")
+            .await
+            .unwrap();
+        store
+            .update_hotness_score("owner_1", "person:Alice", 15.0)
+            .await
+            .unwrap();
+        let hotness = store
+            .get_hotness("owner_1", "person:Alice")
+            .await
+            .unwrap()
+            .unwrap();
         assert!((hotness.last_hotness.unwrap() - 15.0).abs() < 0.01);
         assert_eq!(hotness.ingests_since_check, 0);
     }
@@ -506,10 +558,22 @@ mod tests {
                 return;
             }
         };
-        store.bump_entity_hotness("owner_1", "person:Alice", "source_1").await.unwrap();
-        store.bump_entity_hotness("owner_1", "person:Bob", "source_1").await.unwrap();
-        store.update_hotness_score("owner_1", "person:Alice", 15.0).await.unwrap();
-        store.update_hotness_score("owner_1", "person:Bob", 5.0).await.unwrap();
+        store
+            .bump_entity_hotness("owner_1", "person:Alice", "source_1")
+            .await
+            .unwrap();
+        store
+            .bump_entity_hotness("owner_1", "person:Bob", "source_1")
+            .await
+            .unwrap();
+        store
+            .update_hotness_score("owner_1", "person:Alice", 15.0)
+            .await
+            .unwrap();
+        store
+            .update_hotness_score("owner_1", "person:Bob", 5.0)
+            .await
+            .unwrap();
         let hot = store.list_hot_entities("owner_1", 10.0, 10).await.unwrap();
         assert_eq!(hot.len(), 1);
         assert_eq!(hot[0].entity_id, "person:Alice");
@@ -525,14 +589,23 @@ mod tests {
             }
         };
         store
-            .upsert_entity_index("owner_1", &entry("person:Alice", "chunk_001", "Alice Smith", 0.8))
+            .upsert_entity_index(
+                "owner_1",
+                &entry("person:Alice", "chunk_001", "Alice Smith", 0.8),
+            )
             .await
             .unwrap();
         store
-            .upsert_entity_index("owner_1", &entry("person:Bob", "chunk_002", "Bob Jones", 0.6))
+            .upsert_entity_index(
+                "owner_1",
+                &entry("person:Bob", "chunk_002", "Bob Jones", 0.6),
+            )
             .await
             .unwrap();
-        let results = store.search_entities("owner_1", None, "Alice", None, 10).await.unwrap();
+        let results = store
+            .search_entities("owner_1", None, "Alice", None, 10)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].canonical_id, "person:Alice");
     }
@@ -549,7 +622,10 @@ mod tests {
         // Alice-only entry.
         let mut alice_entry = entry("person:Alice", "chunk_alice", "Alice", 0.8);
         alice_entry.user_id = "alice";
-        store.upsert_entity_index("owner_1", &alice_entry).await.unwrap();
+        store
+            .upsert_entity_index("owner_1", &alice_entry)
+            .await
+            .unwrap();
         // Owner-shared entry.
         store
             .upsert_entity_index("owner_1", &entry("person:Bob", "chunk_shared", "Bob", 0.6))
@@ -557,15 +633,27 @@ mod tests {
             .unwrap();
 
         // Bob sees only the owner-shared entity for the shared node, none for alice's node.
-        let bob_for_alice = store.entities_for_node("owner_1", Some("bob"), "chunk_alice").await.unwrap();
+        let bob_for_alice = store
+            .entities_for_node("owner_1", Some("bob"), "chunk_alice")
+            .await
+            .unwrap();
         assert!(bob_for_alice.is_empty());
-        let bob_for_shared = store.entities_for_node("owner_1", Some("bob"), "chunk_shared").await.unwrap();
+        let bob_for_shared = store
+            .entities_for_node("owner_1", Some("bob"), "chunk_shared")
+            .await
+            .unwrap();
         assert_eq!(bob_for_shared, vec!["person:Bob".to_string()]);
         // Alice sees her own.
-        let alice_own = store.entities_for_node("owner_1", Some("alice"), "chunk_alice").await.unwrap();
+        let alice_own = store
+            .entities_for_node("owner_1", Some("alice"), "chunk_alice")
+            .await
+            .unwrap();
         assert_eq!(alice_own, vec!["person:Alice".to_string()]);
         // None (write-path) sees all.
-        let all = store.entities_for_node("owner_1", None, "chunk_alice").await.unwrap();
+        let all = store
+            .entities_for_node("owner_1", None, "chunk_alice")
+            .await
+            .unwrap();
         assert_eq!(all, vec!["person:Alice".to_string()]);
     }
 
@@ -582,7 +670,10 @@ mod tests {
             .upsert_entity_index("owner_1", &entry("person:Alice", "chunk_001", "Alice", 0.8))
             .await
             .unwrap();
-        let results = store.search_entities("owner_2", None, "Alice", None, 10).await.unwrap();
+        let results = store
+            .search_entities("owner_2", None, "Alice", None, 10)
+            .await
+            .unwrap();
         assert!(results.is_empty());
     }
 }

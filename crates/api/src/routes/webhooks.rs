@@ -6,8 +6,8 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use runtime::kernel_handle::KernelHandle;
-use types::agent::AgentId;
 use std::sync::Arc;
+use types::agent::AgentId;
 // ---------------------------------------------------------------------------
 // Webhook trigger endpoints
 // ---------------------------------------------------------------------------

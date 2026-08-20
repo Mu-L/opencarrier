@@ -110,9 +110,7 @@ pub async fn get_user_unionid(
 ) -> CarrierResult<Option<String>> {
     let url = format!(
         "{}/cgi-bin/user/info?access_token={}&openid={}&lang=zh_CN",
-        WECHAT_API_BASE,
-        access_token,
-        openid
+        WECHAT_API_BASE, access_token, openid
     );
     let resp = http
         .get(&url)
@@ -164,8 +162,10 @@ pub async fn custom_send_text(
         .text()
         .await
         .map_err(|e| CarrierError::Network(format!("custom_send read body failed: {e}")))?;
-    let err: WechatApiError = serde_json::from_str(&resp_text)
-        .unwrap_or(WechatApiError { errcode: -1, errmsg: resp_text });
+    let err: WechatApiError = serde_json::from_str(&resp_text).unwrap_or(WechatApiError {
+        errcode: -1,
+        errmsg: resp_text,
+    });
     if err.errcode != 0 {
         return Err(CarrierError::Network(format!(
             "WeChat API error {}: {}",
@@ -178,10 +178,15 @@ pub async fn custom_send_text(
 /// Check a WeChat API JSON response for an error errcode.
 /// Returns Ok(()) if errcode==0, else Err with the message.
 fn check_wechat_error(resp_text: String, label: &str) -> CarrierResult<()> {
-    let err: WechatApiError = serde_json::from_str(&resp_text)
-        .unwrap_or(WechatApiError { errcode: -1, errmsg: resp_text });
+    let err: WechatApiError = serde_json::from_str(&resp_text).unwrap_or(WechatApiError {
+        errcode: -1,
+        errmsg: resp_text,
+    });
     if err.errcode != 0 {
-        return Err(CarrierError::Network(format!("WeChat API error {} ({})", err.errcode, err.errmsg)));
+        return Err(CarrierError::Network(format!(
+            "WeChat API error {} ({})",
+            err.errcode, err.errmsg
+        )));
     }
     let _ = label;
     Ok(())
@@ -247,16 +252,12 @@ pub async fn custom_send_miniprogrampage(
             "appid": mini_appid,
         },
     });
-    let resp = http
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| CarrierError::Network(format!("custom_send_miniprogrampage request failed: {e}")))?;
-    let resp_text = resp
-        .text()
-        .await
-        .map_err(|e| CarrierError::Network(format!("custom_send_miniprogrampage read body failed: {e}")))?;
+    let resp = http.post(&url).json(&body).send().await.map_err(|e| {
+        CarrierError::Network(format!("custom_send_miniprogrampage request failed: {e}"))
+    })?;
+    let resp_text = resp.text().await.map_err(|e| {
+        CarrierError::Network(format!("custom_send_miniprogrampage read body failed: {e}"))
+    })?;
     check_wechat_error(resp_text, "custom_send_miniprogrampage")
 }
 
@@ -302,8 +303,11 @@ pub async fn upload_media_permanent(
         .text()
         .await
         .map_err(|e| CarrierError::Network(format!("upload_media read body failed: {e}")))?;
-    let parsed: UploadMaterialResponse = serde_json::from_str(&resp_text)
-        .map_err(|e| CarrierError::Serialization(format!("upload_media parse failed: {e} (body: {resp_text})")))?;
+    let parsed: UploadMaterialResponse = serde_json::from_str(&resp_text).map_err(|e| {
+        CarrierError::Serialization(format!(
+            "upload_media parse failed: {e} (body: {resp_text})"
+        ))
+    })?;
     let media_id = parsed.media_id.ok_or_else(|| {
         CarrierError::Serialization(format!(
             "upload_media: no media_id (errcode={}, errmsg={})",
@@ -357,8 +361,9 @@ pub async fn add_draft(
         .text()
         .await
         .map_err(|e| CarrierError::Network(format!("add_draft read body failed: {e}")))?;
-    let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| CarrierError::Serialization(format!("add_draft parse failed: {e} (body: {resp_text})")))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+        CarrierError::Serialization(format!("add_draft parse failed: {e} (body: {resp_text})"))
+    })?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         return Err(CarrierError::Network(format!(
@@ -370,7 +375,9 @@ pub async fn add_draft(
     v["media_id"]
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| CarrierError::Serialization(format!("add_draft: no media_id (body: {resp_text})")))
+        .ok_or_else(|| {
+            CarrierError::Serialization(format!("add_draft: no media_id (body: {resp_text})"))
+        })
 }
 
 /// Submit a draft for publishing (`/cgi-bin/freepublish/submit`).
@@ -397,8 +404,9 @@ pub async fn freepublish_submit(
         .text()
         .await
         .map_err(|e| CarrierError::Network(format!("freepublish read body failed: {e}")))?;
-    let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| CarrierError::Serialization(format!("freepublish parse failed: {e} (body: {resp_text})")))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+        CarrierError::Serialization(format!("freepublish parse failed: {e} (body: {resp_text})"))
+    })?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         return Err(CarrierError::Network(format!(
@@ -410,7 +418,9 @@ pub async fn freepublish_submit(
     v["publish_id"]
         .as_str()
         .map(|s| s.to_string())
-        .ok_or_else(|| CarrierError::Serialization(format!("freepublish: no publish_id (body: {resp_text})")))
+        .ok_or_else(|| {
+            CarrierError::Serialization(format!("freepublish: no publish_id (body: {resp_text})"))
+        })
 }
 
 /// List permanent materials (`/cgi-bin/material/batchget_material`).
@@ -443,8 +453,11 @@ pub async fn list_materials(
         .text()
         .await
         .map_err(|e| CarrierError::Network(format!("list_materials read body failed: {e}")))?;
-    let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| CarrierError::Serialization(format!("list_materials parse failed: {e} (body: {resp_text})")))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+        CarrierError::Serialization(format!(
+            "list_materials parse failed: {e} (body: {resp_text})"
+        ))
+    })?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         return Err(CarrierError::Network(format!(
@@ -510,8 +523,9 @@ pub async fn user_get(
         .text()
         .await
         .map_err(|e| CarrierError::Network(format!("user_get read body failed: {e}")))?;
-    let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| CarrierError::Serialization(format!("user_get parse failed: {e} (body: {resp_text})")))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+        CarrierError::Serialization(format!("user_get parse failed: {e} (body: {resp_text})"))
+    })?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         return Err(CarrierError::Network(format!(
@@ -551,8 +565,11 @@ pub async fn freepublish_get(
         .text()
         .await
         .map_err(|e| CarrierError::Network(format!("freepublish_get read body failed: {e}")))?;
-    let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| CarrierError::Serialization(format!("freepublish_get parse failed: {e} (body: {resp_text})")))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+        CarrierError::Serialization(format!(
+            "freepublish_get parse failed: {e} (body: {resp_text})"
+        ))
+    })?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         return Err(CarrierError::Network(format!(
@@ -592,8 +609,11 @@ pub async fn draft_batchget(
         .text()
         .await
         .map_err(|e| CarrierError::Network(format!("draft_batchget read body failed: {e}")))?;
-    let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| CarrierError::Serialization(format!("draft_batchget parse failed: {e} (body: {resp_text})")))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+        CarrierError::Serialization(format!(
+            "draft_batchget parse failed: {e} (body: {resp_text})"
+        ))
+    })?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         return Err(CarrierError::Network(format!(
@@ -621,8 +641,9 @@ pub async fn draft_count(http: &reqwest::Client, access_token: &str) -> CarrierR
         .text()
         .await
         .map_err(|e| CarrierError::Network(format!("draft_count read body failed: {e}")))?;
-    let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| CarrierError::Serialization(format!("draft_count parse failed: {e} (body: {resp_text})")))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+        CarrierError::Serialization(format!("draft_count parse failed: {e} (body: {resp_text})"))
+    })?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         return Err(CarrierError::Network(format!(
@@ -674,8 +695,11 @@ pub async fn template_send(
         .text()
         .await
         .map_err(|e| CarrierError::Network(format!("template_send read body failed: {e}")))?;
-    let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| CarrierError::Serialization(format!("template_send parse failed: {e} (body: {resp_text})")))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+        CarrierError::Serialization(format!(
+            "template_send parse failed: {e} (body: {resp_text})"
+        ))
+    })?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         return Err(CarrierError::Network(format!(
@@ -697,17 +721,17 @@ pub async fn get_all_private_template(
         "{}/cgi-bin/template/get_all_private_template?access_token={}",
         WECHAT_API_BASE, access_token
     );
-    let resp = http
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| CarrierError::Network(format!("get_all_private_template request failed: {e}")))?;
-    let resp_text = resp
-        .text()
-        .await
-        .map_err(|e| CarrierError::Network(format!("get_all_private_template read body failed: {e}")))?;
-    let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| CarrierError::Serialization(format!("get_all_private_template parse failed: {e} (body: {resp_text})")))?;
+    let resp = http.get(&url).send().await.map_err(|e| {
+        CarrierError::Network(format!("get_all_private_template request failed: {e}"))
+    })?;
+    let resp_text = resp.text().await.map_err(|e| {
+        CarrierError::Network(format!("get_all_private_template read body failed: {e}"))
+    })?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+        CarrierError::Serialization(format!(
+            "get_all_private_template parse failed: {e} (body: {resp_text})"
+        ))
+    })?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         return Err(CarrierError::Network(format!(
@@ -745,8 +769,9 @@ async fn wx_json_post(
         .text()
         .await
         .map_err(|e| CarrierError::Network(format!("{path} read body failed: {e}")))?;
-    let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| CarrierError::Serialization(format!("{path} parse failed: {e} (body: {resp_text})")))?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+        CarrierError::Serialization(format!("{path} parse failed: {e} (body: {resp_text})"))
+    })?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         return Err(CarrierError::Network(format!(
@@ -937,18 +962,18 @@ pub async fn freepublish_batchget(
         "count": count,
         "no_content": if no_content { 1 } else { 0 },
     });
-    let resp = http
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| CarrierError::Network(format!("freepublish_batchget request failed: {e}")))?;
-    let resp_text = resp
-        .text()
-        .await
-        .map_err(|e| CarrierError::Network(format!("freepublish_batchget read body failed: {e}")))?;
-    let v: serde_json::Value = serde_json::from_str(&resp_text)
-        .map_err(|e| CarrierError::Serialization(format!("freepublish_batchget parse failed: {e} (body: {resp_text})")))?;
+    let resp =
+        http.post(&url).json(&body).send().await.map_err(|e| {
+            CarrierError::Network(format!("freepublish_batchget request failed: {e}"))
+        })?;
+    let resp_text = resp.text().await.map_err(|e| {
+        CarrierError::Network(format!("freepublish_batchget read body failed: {e}"))
+    })?;
+    let v: serde_json::Value = serde_json::from_str(&resp_text).map_err(|e| {
+        CarrierError::Serialization(format!(
+            "freepublish_batchget parse failed: {e} (body: {resp_text})"
+        ))
+    })?;
     let errcode = v["errcode"].as_i64().unwrap_or(0);
     if errcode != 0 {
         return Err(CarrierError::Network(format!(
@@ -1074,7 +1099,10 @@ mod tests {
         // get_user_unionid: "user/info errcode={code}"
         assert_eq!(extract_errcode("user/info errcode=40003"), Some(40003));
         // "errcode: 40013" form
-        assert_eq!(extract_errcode("stable token errcode: 40013 bad appid"), Some(40013));
+        assert_eq!(
+            extract_errcode("stable token errcode: 40013 bad appid"),
+            Some(40013)
+        );
     }
 
     #[test]

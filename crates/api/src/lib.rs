@@ -4,8 +4,8 @@
 //! The kernel runs in-process; the CLI connects over HTTP.
 
 pub mod command_security;
-pub mod migration;
 pub mod middleware;
+pub mod migration;
 pub mod pages;
 pub mod rate_limiter;
 pub mod routes;

@@ -261,7 +261,9 @@ impl ImageGenRequest {
     pub fn validate(&self) -> CarrierResult<()> {
         // Prompt length
         if self.prompt.is_empty() {
-            return Err(CarrierError::InvalidInput("Image generation prompt cannot be empty".into()));
+            return Err(CarrierError::InvalidInput(
+                "Image generation prompt cannot be empty".into(),
+            ));
         }
         if self.prompt.len() > Self::MAX_PROMPT_LEN {
             return Err(CarrierError::InvalidInput(format!(
@@ -276,7 +278,9 @@ impl ImageGenRequest {
             .chars()
             .any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t')
         {
-            return Err(CarrierError::InvalidInput("Prompt contains invalid control characters".into()));
+            return Err(CarrierError::InvalidInput(
+                "Prompt contains invalid control characters".into(),
+            ));
         }
 
         // Model-specific size validation
@@ -296,7 +300,9 @@ impl ImageGenRequest {
         match self.model {
             ImageGenModel::DallE3 => {
                 if self.count != 1 {
-                    return Err(CarrierError::InvalidInput("DALL-E 3 only supports count=1".into()));
+                    return Err(CarrierError::InvalidInput(
+                        "DALL-E 3 only supports count=1".into(),
+                    ));
                 }
             }
             ImageGenModel::DallE2 | ImageGenModel::GptImage1 => {

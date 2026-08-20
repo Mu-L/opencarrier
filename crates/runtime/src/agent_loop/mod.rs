@@ -18,21 +18,19 @@
 //! ```
 
 mod context;
+mod end_turn;
 mod helpers;
 mod knowledge;
-mod state;
-mod end_turn;
-mod tool_use;
 mod max_tokens;
+mod state;
+mod tool_use;
 
 use crate::agent_loop::context::LoopContext;
 use crate::agent_loop::state::LoopState;
 use crate::context_budget::{apply_context_guard, ContextBudget};
 use crate::context_overflow::{recover_from_overflow, RecoveryStage};
 use crate::kernel_handle::KernelHandle;
-use crate::llm_driver::{
-    Brain, CompletionRequest, CompletionResponse, LlmDriver, StreamEvent,
-};
+use crate::llm_driver::{Brain, CompletionRequest, CompletionResponse, LlmDriver, StreamEvent};
 
 use crate::mcp::McpConnection;
 use crate::text_tool_recovery::detect_text_tool_mentions;
@@ -43,22 +41,27 @@ use types::agent::AgentManifest;
 use types::error::{CarrierError, CarrierResult};
 use types::message::{ContentBlock, Message, Role, StopReason, TokenUsage};
 // Re-export for tests (via `use super::*`)
-#[allow(unused_imports)]
-pub(crate) use types::message::MessageContent;
-use types::tool::ToolDefinition;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
+#[allow(unused_imports)]
+pub(crate) use types::message::MessageContent;
+use types::tool::ToolDefinition;
 
 // Re-export constants that external modules (tests) reference.
-pub use helpers::TOOL_TIMEOUT_SECS;
-pub use helpers::TOOL_TIMEOUT_LONG_SECS;
 pub use helpers::TOOL_LONG_TIMEOUT_NAMES;
+pub use helpers::TOOL_TIMEOUT_LONG_SECS;
+pub use helpers::TOOL_TIMEOUT_SECS;
 pub use max_tokens::MAX_CONTINUATIONS;
 // Re-export constants and functions used by tests via `use super::*`.
-pub use helpers::{MAX_RETRIES, BASE_RETRY_DELAY_MS, MAX_HISTORY_MESSAGES, LOOP_DETECTION_WINDOW, SOFT_LOOP_WINDOW, CUMULATIVE_REMIND_AT, CUMULATIVE_ESCALATE_AT, CUMULATIVE_BREAK_AT};
-pub use helpers::{tool_input_hash, tool_call_key, tool_args_preview, detect_tool_loop, detect_soft_loop};
+pub use helpers::{
+    detect_soft_loop, detect_tool_loop, tool_args_preview, tool_call_key, tool_input_hash,
+};
+pub use helpers::{
+    BASE_RETRY_DELAY_MS, CUMULATIVE_BREAK_AT, CUMULATIVE_ESCALATE_AT, CUMULATIVE_REMIND_AT,
+    LOOP_DETECTION_WINDOW, MAX_HISTORY_MESSAGES, MAX_RETRIES, SOFT_LOOP_WINDOW,
+};
 // Re-export the kv-drawer knowledge merge so the kernel's compaction path can
 // flush facts with the same idempotent semantics as the per-turn path.
 pub use knowledge::merge_key_facts;
@@ -179,10 +182,27 @@ pub async fn run_agent_loop(
     // (config `agent_turn_timeout_secs`, default 4h) is a daemon-hang backstop
     // only - it must never be the thing that kills legitimate long work.
     run_agent_loop_impl(
-        manifest, user_message, session, memory, driver, tools,
-        kernel, stream_tx, mcp_connections, fetch_engine, workspace_root,
-        on_phase, hooks, context_window_tokens, process_manager,
-        user_content_blocks, brain, memory_handle, sender_id, owner_id, channel_type,
+        manifest,
+        user_message,
+        session,
+        memory,
+        driver,
+        tools,
+        kernel,
+        stream_tx,
+        mcp_connections,
+        fetch_engine,
+        workspace_root,
+        on_phase,
+        hooks,
+        context_window_tokens,
+        process_manager,
+        user_content_blocks,
+        brain,
+        memory_handle,
+        sender_id,
+        owner_id,
+        channel_type,
         llm_concurrency_limit,
     )
     .await
@@ -218,12 +238,30 @@ pub async fn run_agent_loop_streaming(
     llm_concurrency_limit: Option<Arc<tokio::sync::Semaphore>>,
 ) -> CarrierResult<AgentLoopResult> {
     run_agent_loop(
-        manifest, user_message, session, memory, driver, tools,
-        kernel, Some(stream_tx), mcp_connections, fetch_engine, workspace_root,
-        on_phase, hooks, context_window_tokens, process_manager,
-        user_content_blocks, brain, memory_handle, sender_id, owner_id, channel_type,
+        manifest,
+        user_message,
+        session,
+        memory,
+        driver,
+        tools,
+        kernel,
+        Some(stream_tx),
+        mcp_connections,
+        fetch_engine,
+        workspace_root,
+        on_phase,
+        hooks,
+        context_window_tokens,
+        process_manager,
+        user_content_blocks,
+        brain,
+        memory_handle,
+        sender_id,
+        owner_id,
+        channel_type,
         llm_concurrency_limit,
-    ).await
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +384,9 @@ async fn run_agent_loop_impl(
             sender_id.unwrap_or(""),
             &agent_key,
         ) {
-            if let Ok(last_run) = serde_json::from_value::<crate::agent_loop::state::LastRunSummary>(val) {
+            if let Ok(last_run) =
+                serde_json::from_value::<crate::agent_loop::state::LastRunSummary>(val)
+            {
                 info!(
                     agent = %manifest.name,
                     last_iterations = last_run.iterations,
@@ -558,10 +598,15 @@ fn prepare_turn(ctx: &mut LoopContext<'_>) {
         RecoveryStage::FinalError => {
             warn!("Context overflow unrecoverable — suggest /reset or /compact");
             if let Some(tx) = &ctx.stream_tx {
-                if tx.try_send(StreamEvent::PhaseChange {
-                    phase: "context_warning".to_string(),
-                    detail: Some("Context overflow unrecoverable. Use /reset or /compact.".to_string()),
-                }).is_err() {
+                if tx
+                    .try_send(StreamEvent::PhaseChange {
+                        phase: "context_warning".to_string(),
+                        detail: Some(
+                            "Context overflow unrecoverable. Use /reset or /compact.".to_string(),
+                        ),
+                    })
+                    .is_err()
+                {
                     warn!("Stream consumer disconnected while sending context overflow warning");
                 }
             }
@@ -593,9 +638,10 @@ fn prepare_turn(ctx: &mut LoopContext<'_>) {
     // Inject loop status every turn so the model always has full context.
     {
         let status_msg = ctx.state.build_status_message();
-        let should_inject = ctx.messages.last().is_none_or(|m| {
-            !m.content.text_content().starts_with("📊 Turn")
-        });
+        let should_inject = ctx
+            .messages
+            .last()
+            .is_none_or(|m| !m.content.text_content().starts_with("📊 Turn"));
         if should_inject {
             tracing::info!(
                 iteration = ctx.state.iteration,
@@ -777,7 +823,7 @@ async fn handle_text_recovery(
         ctx.messages.push(Message::system(
             "你刚才用文本描述了工具调用，但多次重试后仍无法转为结构化调用。\
              请不要再尝试工具调用，直接用自然语言回复用户。\
-             不要在回复中包含 [Called ...] 或工具调用的原始文本。"
+             不要在回复中包含 [Called ...] 或工具调用的原始文本。",
         ));
     } else {
         ctx.state.text_recovery_retries += 1;
@@ -789,7 +835,9 @@ async fn handle_text_recovery(
             "LLM described tool calls as text — retrying with structured tool_use"
         );
         let tool_names = mentions.join("、");
-        ctx.messages.push(Message::assistant(format!("我需要调用工具：{tool_names}。")));
+        ctx.messages.push(Message::assistant(format!(
+            "我需要调用工具：{tool_names}。"
+        )));
         ctx.messages.push(Message::system(
             "你刚才用文本描述了工具调用，但用户看到的是原始文本。这些工具已添加到你的可用工具列表中，请直接用 tool_use 功能调用，带上完整的参数。不要再输出 [Called ...] 格式的文本。"
         ));
@@ -798,7 +846,11 @@ async fn handle_text_recovery(
             "text_recovery_retry",
             response.usage.input_tokens as u32,
             response.usage.output_tokens as u32,
-            response.tool_calls.iter().map(|tc| tc.name.clone()).collect(),
+            response
+                .tool_calls
+                .iter()
+                .map(|tc| tc.name.clone())
+                .collect(),
             0,
         );
         return TextRecoveryOutcome::Continue;
@@ -936,12 +988,6 @@ async fn dispatch(
     Ok(LoopAction::Continue)
 }
 
-
-
-
-
-
-
 // ---------------------------------------------------------------------------
 // Phase: TEARDOWN - persist loop state, return plan (or abnormal-exit error)
 // ---------------------------------------------------------------------------
@@ -972,7 +1018,11 @@ async fn teardown(ctx: &mut LoopContext<'_>) -> CarrierResult<AgentLoopResult> {
     // If task_plan was detected, return success with the plan
     if let Some(plan) = ctx.detected_plan.take() {
         return Ok(AgentLoopResult {
-            response: format!("Plan '{}' created with {} steps. Executing...", plan.title, plan.steps.len()),
+            response: format!(
+                "Plan '{}' created with {} steps. Executing...",
+                plan.title,
+                plan.steps.len()
+            ),
             total_usage: ctx.state.total_usage,
             iterations: ctx.state.iteration + 1,
             silent: false,

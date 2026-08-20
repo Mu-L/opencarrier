@@ -16,13 +16,12 @@ use crate::routes::state::AppState;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Path, State, WebSocketUpgrade};
 use axum::response::IntoResponse;
-use runtime::kernel_handle::KernelHandle;
-use runtime::llm_driver::StreamEvent;
-use runtime::llm_errors;
-use types::agent::AgentId;
 use dashmap::DashMap;
 use futures::stream::SplitSink;
 use futures::{SinkExt, StreamExt};
+use runtime::kernel_handle::KernelHandle;
+use runtime::llm_driver::StreamEvent;
+use runtime::llm_errors;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, SocketAddr};
@@ -31,6 +30,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
+use types::agent::AgentId;
 
 /// Per-IP WebSocket connection tracker.
 /// Max 5 concurrent WS connections per IP address.
@@ -424,7 +424,8 @@ async fn handle_text_message(
     match msg_type {
         "message" => {
             // Validate + sanitize content and inject attachments (extracted).
-            let Some(content) = prepare_incoming_message(sender, state, agent_id, &parsed).await else {
+            let Some(content) = prepare_incoming_message(sender, state, agent_id, &parsed).await
+            else {
                 return;
             };
 
@@ -445,16 +446,20 @@ async fn handle_text_message(
             // Send message to agent with streaming
             let kernel_handle: Arc<dyn KernelHandle> =
                 state.kernel.clone() as Arc<dyn KernelHandle>;
-            match state.kernel.send_message_streaming(
-                agent_id,
-                &content,
-                Some(kernel_handle),
-                ws_sender_id,
-                ws_sender_name,
-                None,
-                None,
-                None,
-            ).await {
+            match state
+                .kernel
+                .send_message_streaming(
+                    agent_id,
+                    &content,
+                    Some(kernel_handle),
+                    ws_sender_id,
+                    ws_sender_name,
+                    None,
+                    None,
+                    None,
+                )
+                .await
+            {
                 Ok((rx, handle)) => {
                     // Forward stream events to WebSocket with debouncing.
                     //
@@ -513,7 +518,13 @@ async fn handle_text_message(
                     // Send the response immediately from stream data
                     match stream_result {
                         Ok((accumulated_text, stream_usage, is_silent)) => {
-                            finalize_stream_response(sender, accumulated_text, stream_usage, is_silent).await;
+                            finalize_stream_response(
+                                sender,
+                                accumulated_text,
+                                stream_usage,
+                                is_silent,
+                            )
+                            .await;
                         }
                         Err(e) => {
                             warn!("Stream task panicked: {e}");
@@ -750,8 +761,12 @@ async fn stream_events_to_ws(
     // If model sent only thinking (no text), use thinking as response
     // Some providers (e.g. GLM via Anthropic compat) send all content
     // as thinking blocks with no text block.
-    tracing::debug!("[ws-stream] stream ended: text={} bytes, thinking={} bytes, usage={:?}",
-        accumulated_text.len(), accumulated_thinking.len(), stream_usage);
+    tracing::debug!(
+        "[ws-stream] stream ended: text={} bytes, thinking={} bytes, usage={:?}",
+        accumulated_text.len(),
+        accumulated_thinking.len(),
+        stream_usage
+    );
     if accumulated_text.is_empty() && !accumulated_thinking.is_empty() {
         accumulated_text = accumulated_thinking;
         tracing::debug!(
@@ -824,8 +839,7 @@ async fn finalize_stream_response(
     };
 
     // Estimate context pressure
-    let ctx_pct =
-        (usage.input_tokens as f64 / 200_000.0 * 100.0).min(100.0);
+    let ctx_pct = (usage.input_tokens as f64 / 200_000.0 * 100.0).min(100.0);
     let pressure = if ctx_pct > 85.0 {
         "critical"
     } else if ctx_pct > 70.0 {
@@ -851,10 +865,7 @@ async fn finalize_stream_response(
 }
 
 /// Send typing-stop followed by an error payload (streaming failure paths).
-async fn send_stream_failure(
-    sender: &Arc<Mutex<SplitSink<WebSocket, Message>>>,
-    user_msg: &str,
-) {
+async fn send_stream_failure(sender: &Arc<Mutex<SplitSink<WebSocket, Message>>>, user_msg: &str) {
     let _ = send_json(
         sender,
         &serde_json::json!({
@@ -892,7 +903,21 @@ async fn handle_command(
             }
             Err(e) => serde_json::json!({"type": "error", "content": format!("Reset failed: {e}")}),
         },
-        "compact" => match state.kernel.compact_agent_session(agent_id, state.kernel.registry.get(agent_id).map(|e| e.session_id).unwrap_or_else(|| types::agent::SessionId(uuid::Uuid::nil())), None, None).await {
+        "compact" => match state
+            .kernel
+            .compact_agent_session(
+                agent_id,
+                state
+                    .kernel
+                    .registry
+                    .get(agent_id)
+                    .map(|e| e.session_id)
+                    .unwrap_or_else(|| types::agent::SessionId(uuid::Uuid::nil())),
+                None,
+                None,
+            )
+            .await
+        {
             Ok(msg) => {
                 serde_json::json!({"type": "command_result", "command": cmd, "message": msg})
             }

@@ -19,7 +19,8 @@ type HmacSha256 = Hmac<Sha256>;
 /// the derivation convention. No extra configuration needed.
 fn derive_session_secret(api_key: &str) -> [u8; 32] {
     use hmac::Mac;
-    let mut mac = HmacSha256::new_from_slice(b"opencarrier-session-v1").expect("HMAC key length is valid");
+    let mut mac =
+        HmacSha256::new_from_slice(b"opencarrier-session-v1").expect("HMAC key length is valid");
     mac.update(api_key.as_bytes());
     let result = mac.finalize().into_bytes();
     let mut key = [0u8; 32];
@@ -204,9 +205,7 @@ pub fn verify_password(password: &str, stored_hash: &str) -> PasswordResult {
             return PasswordResult::Invalid;
         }
         if computed.as_bytes().ct_eq(stored_hash.as_bytes()).into() {
-            tracing::warn!(
-                "Legacy SHA256 password hash verified — auto-upgrading to Argon2id"
-            );
+            tracing::warn!("Legacy SHA256 password hash verified — auto-upgrading to Argon2id");
             let new_hash = hash_password(password);
             return PasswordResult::Upgraded { new_hash };
         }
@@ -230,13 +229,20 @@ mod tests {
     #[test]
     fn test_hash_and_verify_password() {
         let hash = hash_password("secret123");
-        assert!(matches!(verify_password("secret123", &hash), PasswordResult::Valid));
-        assert!(matches!(verify_password("wrong", &hash), PasswordResult::Invalid));
+        assert!(matches!(
+            verify_password("secret123", &hash),
+            PasswordResult::Valid
+        ));
+        assert!(matches!(
+            verify_password("wrong", &hash),
+            PasswordResult::Invalid
+        ));
     }
 
     #[test]
     fn test_create_and_verify_new_token() {
-        let token = create_session_token(Some("tenant-123"), "tenant", "user1", "my-secret", 1).unwrap();
+        let token =
+            create_session_token(Some("tenant-123"), "tenant", "user1", "my-secret", 1).unwrap();
         let info = verify_session_token(&token, "my-secret").unwrap();
         assert_eq!(info.tenant_id, Some("tenant-123".to_string()));
         assert_eq!(info.role, "tenant");
@@ -283,6 +289,9 @@ mod tests {
 
     #[test]
     fn test_password_hash_length_mismatch() {
-        assert!(matches!(verify_password("x", "short"), PasswordResult::Invalid));
+        assert!(matches!(
+            verify_password("x", "short"),
+            PasswordResult::Invalid
+        ));
     }
 }

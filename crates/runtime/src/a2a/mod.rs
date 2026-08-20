@@ -7,8 +7,8 @@ pub mod client;
 pub mod types;
 
 // Re-export all public types for backward compatibility
-pub use types::*;
 pub use client::{discover_external_agents, A2aClient};
+pub use types::*;
 
 #[cfg(test)]
 mod tests {

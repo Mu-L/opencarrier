@@ -11,13 +11,13 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use runtime::drivers;
 use runtime::llm_driver::{Brain as BrainTrait, DriverConfig, LlmDriver};
+use tracing::{debug, info, warn};
 use types::brain::{
     BrainConfig, BrainStatus, EndpointHealth, EndpointReport, ModalityInfo, ResolvedEndpoint,
 };
-use dashmap::DashMap;
-use tracing::{info, warn, debug};
 
 // ---------------------------------------------------------------------------
 // Per-modality health tracker (lock-free atomics)
@@ -90,11 +90,7 @@ impl EndpointTracker {
         let failure = self.failure_count.load(Ordering::Relaxed);
         let total_lat = self.total_latency_ms.load(Ordering::Relaxed);
         let lat_count = self.latency_count.load(Ordering::Relaxed);
-        let avg = if lat_count > 0 {
-            total_lat / lat_count
-        } else {
-            0
-        };
+        let avg = total_lat.checked_div(lat_count).unwrap_or(0);
         let consec = self.consecutive_failures.load(Ordering::Relaxed);
         let circuit_open = consec >= CIRCUIT_BREAKER_THRESHOLD && !self.is_available();
         EndpointSnapshot {
@@ -203,7 +199,11 @@ impl Brain {
         // Resolve the modality (fall back to default_modality).
         let resolved = if self.config.modalities.contains_key(modality) {
             modality
-        } else if self.config.modalities.contains_key(&self.config.default_modality) {
+        } else if self
+            .config
+            .modalities
+            .contains_key(&self.config.default_modality)
+        {
             &self.config.default_modality
         } else {
             return vec![];
@@ -300,10 +300,7 @@ impl Brain {
     }
 
     /// Resolve credentials for the brain (for flow credential injection).
-    pub fn credentials_for(
-        &self,
-        _provider: &str,
-    ) -> Option<types::brain::ProviderCredentials> {
+    pub fn credentials_for(&self, _provider: &str) -> Option<types::brain::ProviderCredentials> {
         let mut env_vars = HashMap::new();
         if !self.config.api_key_env.is_empty() {
             if let Some(val) = types::env::get_env(&self.config.api_key_env) {
@@ -322,7 +319,11 @@ impl Brain {
     pub fn model_for(&self, modality: &str) -> String {
         if self.config.modalities.contains_key(modality) {
             modality.to_string()
-        } else if self.config.modalities.contains_key(&self.config.default_modality) {
+        } else if self
+            .config
+            .modalities
+            .contains_key(&self.config.default_modality)
+        {
             self.config.default_modality.clone()
         } else {
             "unknown".to_string()
@@ -376,7 +377,7 @@ impl BrainTrait for Brain {
     }
 
     fn status(&self) -> BrainStatus {
-        Brain::status(self,)
+        Brain::status(self)
     }
 
     fn credentials_for(&self, provider: &str) -> Option<types::brain::ProviderCredentials> {
@@ -410,4 +411,3 @@ impl std::fmt::Display for BrainError {
 }
 
 impl std::error::Error for BrainError {}
-
