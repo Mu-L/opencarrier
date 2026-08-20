@@ -883,6 +883,7 @@ async fn dispatch(
                 &mut ctx.state.error_tracker,
                 &mut ctx.state.tool_loop_rearm,
                 &mut ctx.state.tool_call_counts,
+                &mut ctx.state.max_iterations,
                 ctx.session_base_len,
                 ctx.state.iteration,
             )

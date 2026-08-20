@@ -50,6 +50,16 @@ pub(in crate::agent_loop) enum ToolUseAction {
     BreakToolLoop(String),
 }
 
+/// flow_load 的预算收紧判定：仅当 flow 声明值比当前更紧时应用。
+/// `None` = 本轮尚无声明上限（聊天默认预算），任何声明值都收紧；
+/// 已有值时取 min 语义——flow_load 永远不能把 turn 的上限改宽松。
+fn should_tighten_max_iterations(current: Option<u32>, flow_max: u32) -> bool {
+    match current {
+        Some(cur) => flow_max < cur,
+        None => true,
+    }
+}
+
 /// Handle a `StopReason::ToolUse` response.
 ///
 /// Executes each tool call, handles loop detection, error tracking,
@@ -92,6 +102,9 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     error_tracker: &mut crate::agent_loop::state::ToolErrorTracker,
     tool_loop_rearm: &mut std::collections::HashMap<String, u32>,
     tool_call_counts: &mut std::collections::HashMap<(String, u64), u32>,
+    // Declared-budget override: flow_load applies loaded flows' max_iterations
+    // here (tighten-only — see the flow_load block below).
+    max_iterations: &mut Option<u32>,
     // For task_plan save
     session_base_len: usize,
     iteration: u32,
@@ -505,11 +518,30 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                     continue;
                 } else {
                     loaded_flows.insert(skill_name.clone());
+                    let loaded_def = types::flow::parse_flow_def(&result.content);
+                    // Apply the loaded flow's declared max_iterations
+                    // (tighten-only). active_flow stamps
+                    // META_MAX_ITERATIONS_DECLARED before the loop starts, but
+                    // a flow loaded mid-turn via flow_load never did — its
+                    // budget silently didn't apply (2026-08-19: outline-writer
+                    // declared 12, chat-initiated turn ran to iteration 15).
+                    // Take the min so loading another flow can never RAISE the
+                    // turn's cap.
+                    if let Some(flow_max) = loaded_def.max_iterations {
+                        if should_tighten_max_iterations(*max_iterations, flow_max) {
+                            *max_iterations = Some(flow_max);
+                            info!(
+                                agent = %manifest.name,
+                                skill = %skill_name,
+                                max_iterations = flow_max,
+                                "flow_load: applying flow-declared max_iterations (tighten)"
+                            );
+                        }
+                    }
                     // Grant the loaded flow's `shell_allow` for the rest of the
                     // turn — mirrors what stamping it as active_flow would do.
                     // flow_load reads clone-authored flow files only, so this
                     // grants nothing the clone author didn't already declare.
-                    let loaded_def = types::flow::parse_flow_def(&result.content);
                     for pat in &loaded_def.shell_allow {
                         if !pat.is_empty() && !loaded_flow_shell_allow.contains(pat) {
                             loaded_flow_shell_allow.push(pat.clone());
@@ -856,4 +888,24 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     }
 
     ToolUseAction::Continue
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_tighten_max_iterations;
+
+    /// 无声明上限（聊天默认预算）→ 任何 flow 声明值都收紧。
+    #[test]
+    fn tighten_applies_when_no_current_cap() {
+        assert!(should_tighten_max_iterations(None, 12));
+        assert!(should_tighten_max_iterations(None, 1));
+    }
+
+    /// 更紧的声明值应用（min 语义）。
+    #[test]
+    fn tighten_applies_only_when_stricter() {
+        assert!(should_tighten_max_iterations(Some(60), 12));
+        assert!(!should_tighten_max_iterations(Some(12), 12));
+        assert!(!should_tighten_max_iterations(Some(10), 12));
+    }
 }
