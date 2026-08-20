@@ -62,6 +62,72 @@ fn count_report_fixes(messages: &[Message]) -> usize {
         .count()
 }
 
+/// Token shaped like a UUID (8-4-4-4-12 hex digits, case-insensitive).
+fn is_uuid_shaped(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('-').collect();
+    let lens = [8usize, 4, 4, 4, 12];
+    parts.len() == 5
+        && parts
+            .iter()
+            .zip(lens)
+            .all(|(p, l)| p.len() == l && p.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// All UUID-shaped tokens in `text`, in order of appearance.
+fn uuid_tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !(c.is_ascii_hexdigit() || c == '-'))
+        .filter(|t| is_uuid_shaped(t))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Evidence fact-check (08-19 白云调图事故): article-writer cited a formatter
+/// cron job UUID that was never created (cron_create had failed) and the
+/// shape-only gate waved it through. When the report's `evidence` talks about
+/// cron jobs (keyword hint) AND cites UUID-shaped ids, every cited id must
+/// exist in the agent's live cron list - a missing one is a fabricated claim,
+/// rejected through the same corrective-retry path as a shape violation.
+async fn verify_evidence_cron_claims(
+    kernel: &Arc<dyn KernelHandle>,
+    report: &serde_json::Value,
+    agent_id: &str,
+    owner_id: Option<&str>,
+) -> Option<String> {
+    const CRON_HINTS: [&str; 5] = ["cron", "job", "任务", "接力", "定时"];
+    let evidence_text = match report.get("evidence")? {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => return None,
+    };
+    let lowered = evidence_text.to_lowercase();
+    if !CRON_HINTS.iter().any(|h| lowered.contains(h)) {
+        return None;
+    }
+    let uuids = uuid_tokens(&evidence_text);
+    if uuids.is_empty() {
+        return None;
+    }
+    let jobs = kernel.cron_list(agent_id, owner_id).await.ok()?;
+    for u in &uuids {
+        let exists = jobs.iter().any(|j| {
+            j.get("id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|id| id.eq_ignore_ascii_case(u))
+        });
+        if !exists {
+            return Some(format!(
+                "evidence 引用的任务 ID {u} 不在当前 cron 任务列表中--禁止虚报未执行成功的操作；\
+                 若 cron_create 未成功，如实写 status:blocked 并说明原因"
+            ));
+        }
+    }
+    None
+}
+
 /// Verbatim side-effect marker spans in `text`: `[PUBLISH:…]…[/PUBLISH]`,
 /// `[NOTIFY:…]…[/NOTIFY]`, and single-tag `[DELIVER:key|f=v]` (body ends at
 /// the first `]` not preceded by a backslash, mirroring the outbound parser).
@@ -127,7 +193,7 @@ pub(in crate::agent_loop) async fn handle_end_turn(
     messages: &mut Vec<Message>,
     manifest: &AgentManifest,
     memory: &MemorySubstrate,
-    _kernel: Option<&Arc<dyn KernelHandle>>,
+    kernel: Option<&Arc<dyn KernelHandle>>,
     memory_handle: Option<&Arc<dyn crate::memory_handle::MemoryHandle>>,
     brain: Option<&Arc<dyn Brain>>,
     hooks: Option<&HookRegistry>,
@@ -293,10 +359,22 @@ pub(in crate::agent_loop) async fn handle_end_turn(
         let parsed = types::flow::extract_json_span(&final_response)
             .map(str::trim)
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
-        let verdict = parsed
+        let mut verdict = parsed
             .as_ref()
             .ok_or_else(|| "final message carries no JSON object".to_string())
             .and_then(types::flow::validate_step_report);
+        // Evidence fact-check: cited cron-job UUIDs must exist. Runs only when
+        // the shape verdict already passed (no point fact-checking malformed
+        // reports) and a kernel handle is available.
+        if verdict.is_ok() {
+            if let (Some(kh), Some(report)) = (kernel, parsed.as_ref()) {
+                if let Some(reason) =
+                    verify_evidence_cron_claims(kh, report, agent_id_str, owner_id).await
+                {
+                    verdict = Err(reason);
+                }
+            }
+        }
         match verdict {
             Ok(()) => {
                 // The report JSON is for the orchestrator; chat sinks get the
@@ -504,7 +582,31 @@ pub(in crate::agent_loop) async fn handle_end_turn(
 
 #[cfg(test)]
 mod tests {
-    use super::side_effect_marker_spans;
+    use super::{side_effect_marker_spans, uuid_tokens};
+
+    #[test]
+    fn uuid_tokens_extracts_shaped_ids_only() {
+        // Fabricated-citation shape (08-19 incident): prose + a bare UUID.
+        let text = "已创建 formatter job 04d7518f-1234-4abc-b3f4-aabbccddeeff 接力下一步";
+        let ids = uuid_tokens(text);
+        assert_eq!(
+            ids,
+            vec!["04d7518f-1234-4abc-b3f4-aabbccddeeff".to_string()]
+        );
+
+        // Non-UUID ids (task_id shape, file names) are ignored.
+        assert!(uuid_tokens("任务 daily-brief-20260820 已排期, 输出 output/x/大纲.md").is_empty());
+
+        // Wrong group lengths / non-hex are ignored.
+        assert!(uuid_tokens("aaaaaaaaaa-1234-4abc-b3f4-aabbccddeeff").is_empty());
+        assert!(uuid_tokens("04d7518f-1234-4abc-b3f4-aabbccddegg").is_empty());
+
+        // Uppercase hex is valid UUID shape; multiple ids come back in order.
+        let ids = uuid_tokens("AABBCCDD-0011-4052-9FEA-ABCDEF012345 和 04d7518f-1234-4abc-b3f4-aabbccddeeff");
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ids[0], "AABBCCDD-0011-4052-9FEA-ABCDEF012345");
+    }
+
 
     /// Markers must survive the report-gate human-message swap verbatim —
     /// the 6b0b3a4 regression dropped them, so a chain publisher's
