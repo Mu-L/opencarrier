@@ -353,6 +353,11 @@ impl KernelHandle for CarrierKernel {
                 }
                 other => other.clone(),
             };
+            // Relative one-shot time ({"kind":"at","in_secs":N}): resolve the
+            // absolute fire time SERVER-side so agents never do timezone math
+            // (08-19 白云调图事故: agent-computed `at` landed in the past
+            // twice with "scheduled time must be in the future" rejections).
+            let resolved = resolve_relative_at(resolved)?;
             serde_json::from_value(resolved)
                 .map_err(|e| CarrierError::Serialization(format!("Invalid schedule: {e}")))?
         };
@@ -1286,4 +1291,118 @@ fn mime_from_image_url(url: &str) -> String {
         _ => "image/jpeg",
     }
     .to_string()
+}
+
+/// Resolve a relative one-shot schedule (`{"kind":"at","in_secs":N}`) into an
+/// absolute `at` timestamp, server-side. Agents computing absolute times
+/// themselves is a recurring timezone failure (08-19 白云调图事故: agent
+/// computed `at` in the past twice and got "scheduled time must be in the
+/// future" rejections), so relative delays are the recommended chaining
+/// form. Absolute `at` passes through untouched.
+fn resolve_relative_at(mut schedule: serde_json::Value) -> CarrierResult<serde_json::Value> {
+    let is_at = schedule
+        .get("kind")
+        .and_then(|k| k.as_str())
+        .is_some_and(|k| k == "at");
+    if !is_at {
+        return Ok(schedule);
+    }
+    let in_secs = match schedule.get("in_secs") {
+        None | Some(serde_json::Value::Null) => return Ok(schedule),
+        Some(v) => v
+            .as_u64()
+            .or_else(|| {
+                v.as_str()
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+            })
+            .ok_or_else(|| {
+                CarrierError::InvalidInput(
+                    "schedule.in_secs must be a positive integer (seconds from now)".into(),
+                )
+            })?,
+    };
+    if in_secs == 0 {
+        return Err(CarrierError::InvalidInput(
+            "schedule.in_secs must be > 0".into(),
+        ));
+    }
+    if schedule.get("at").is_some() {
+        return Err(CarrierError::InvalidInput(
+            "schedule: pass EITHER 'at' (absolute RFC3339) OR 'in_secs' (relative seconds), not both"
+                .into(),
+        ));
+    }
+    let at = chrono::Utc::now() + chrono::Duration::seconds(in_secs as i64);
+    let obj = schedule
+        .as_object_mut()
+        .expect("kind check above implies object");
+    obj.insert(
+        "at".to_string(),
+        serde_json::Value::String(at.to_rfc3339()),
+    );
+    obj.remove("in_secs");
+    Ok(schedule)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_relative_at;
+
+    #[test]
+    fn relative_at_resolves_to_future_rfc3339() {
+        let before = chrono::Utc::now();
+        let out = resolve_relative_at(serde_json::json!({
+            "kind": "at", "in_secs": 120
+        }))
+        .expect("relative at resolves");
+        let at = out["at"].as_str().expect("at injected");
+        let parsed = chrono::DateTime::parse_from_rfc3339(at).expect("rfc3339");
+        let delta = parsed.signed_duration_since(before).num_seconds();
+        assert!(
+            (115..=125).contains(&delta),
+            "at should be ~now+120s, got delta {delta}s"
+        );
+        assert!(out.get("in_secs").is_none(), "in_secs stripped");
+        assert_eq!(out["kind"], "at");
+    }
+
+    #[test]
+    fn relative_at_accepts_stringified_secs() {
+        let out = resolve_relative_at(serde_json::json!({
+            "kind": "at", "in_secs": "60"
+        }))
+        .expect("string in_secs accepted");
+        assert!(out["at"].is_string());
+    }
+
+    #[test]
+    fn absolute_at_passthrough() {
+        let sched = serde_json::json!({
+            "kind": "at", "at": "2030-01-01T00:00:00Z"
+        });
+        let out = resolve_relative_at(sched.clone()).expect("passthrough");
+        assert_eq!(out, sched);
+    }
+
+    #[test]
+    fn non_at_kinds_untouched() {
+        let sched = serde_json::json!({"kind": "every", "every_secs": 300});
+        let out = resolve_relative_at(sched.clone()).expect("passthrough");
+        assert_eq!(out, sched);
+    }
+
+    #[test]
+    fn both_at_and_in_secs_rejected() {
+        let err = resolve_relative_at(serde_json::json!({
+            "kind": "at", "at": "2030-01-01T00:00:00Z", "in_secs": 60
+        }))
+        .expect_err("ambiguous schedule rejected");
+        assert!(err.to_string().contains("EITHER"));
+    }
+
+    #[test]
+    fn zero_and_invalid_in_secs_rejected() {
+        assert!(resolve_relative_at(serde_json::json!({"kind": "at", "in_secs": 0})).is_err());
+        assert!(resolve_relative_at(serde_json::json!({"kind": "at", "in_secs": "soon"})).is_err());
+    }
 }

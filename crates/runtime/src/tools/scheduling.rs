@@ -397,7 +397,7 @@ impl ToolModule for SchedulingTools {
                         "name": { "type": "string", "description": "Job name (max 128 chars, alphanumeric + spaces/hyphens/underscores)" },
                         "schedule": {
                             "type": "object",
-                            "description": "Schedule: {\"kind\":\"at\",\"at\":\"2025-01-01T00:00:00Z\"} or {\"kind\":\"every\",\"every_secs\":300} or {\"kind\":\"cron\",\"expr\":\"0 8 * * *\"}. Cron expressions default to server local timezone; pass {\"kind\":\"cron\",\"expr\":\"...\",\"tz\":\"UTC\"} or any IANA tz (e.g. \"Asia/Shanghai\") to override."
+                            "description": "Schedule: {\"kind\":\"at\",\"in_secs\":120} (RECOMMENDED for one-shot: relative seconds from now, server computes the absolute time - never do timezone math yourself) or {\"kind\":\"at\",\"at\":\"2025-01-01T00:00:00Z\"} (absolute RFC3339, only when the exact wall-clock time matters) or {\"kind\":\"every\",\"every_secs\":300} or {\"kind\":\"cron\",\"expr\":\"0 8 * * *\"}. Cron expressions default to server local timezone; pass {\"kind\":\"cron\",\"expr\":\"...\",\"tz\":\"UTC\"} or any IANA tz (e.g. \"Asia/Shanghai\") to override."
                         },
                         "action": {
                             "type": "object",
