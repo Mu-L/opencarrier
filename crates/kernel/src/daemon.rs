@@ -192,6 +192,10 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                 Some(task_id),
                 active_flow.as_deref(),
                 session_label.as_deref(),
+                // Chained pipeline: expose the chain_id to the prompt builder so
+                // the 任务 ID section tells the agent the pipeline identity
+                // (output/{chain_id}/) apart from this turn's task_id label.
+                job.chain.as_ref().map(|c| c.chain_id.as_str()),
             );
             let outcome = if timeout_s == 0 {
                 Some(turn_fut.await)

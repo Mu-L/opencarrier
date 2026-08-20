@@ -274,6 +274,7 @@ impl CarrierKernel {
         resume_flow: Option<&memory::FlowRunRow>,
         active_flow: Option<&str>,
         session_label: Option<&str>,
+        chain_id: Option<String>,
     ) -> KernelResult<PreparedContext> {
         let agent_name = self
             .registry
@@ -462,7 +463,7 @@ impl CarrierKernel {
             sender_id.as_deref().unwrap_or(""),
         );
 
-        self.build_and_apply_prompt(&mut manifest, &tools, sender_id, sender_name, owner_id, prompt_auto_match.clone(), turn_summaries, drawer_entries, recalled_memories, task_id.map(|s| s.to_string()));
+        self.build_and_apply_prompt(&mut manifest, &tools, sender_id, sender_name, owner_id, prompt_auto_match.clone(), turn_summaries, drawer_entries, recalled_memories, task_id.map(|s| s.to_string()), chain_id);
 
         Ok(PreparedContext {
             session,
@@ -990,6 +991,7 @@ impl CarrierKernel {
             task_id,
             active_flow,
             None,
+            None,
         )
         .await
     }
@@ -1046,6 +1048,7 @@ impl CarrierKernel {
         task_id: Option<String>,
         active_flow: Option<&str>,
         session_label: Option<&str>,
+        chain_id: Option<&str>,
     ) -> KernelResult<AgentLoopResult> {
         // NOTE: The per-owner execution lock has been removed. Concurrent messages
         // for the same agent+owner now run in parallel (like nginx). Session
@@ -1186,6 +1189,7 @@ impl CarrierKernel {
                                     resume_row.as_ref(),
                                     active_flow,
                                     session_label,
+                                    chain_id.map(|s| s.to_string()),
                                 ),
                                 turn_secs_g,
                                 &agent_id_str,
@@ -1221,6 +1225,7 @@ impl CarrierKernel {
                         resume_row.as_ref(),
                         active_flow,
                         session_label,
+                        chain_id.map(|s| s.to_string()),
                     ),
                     turn_secs,
                     &agent_id_str,
@@ -1364,7 +1369,7 @@ impl CarrierKernel {
 
         // LLM agent: true streaming via agent loop
         let ctx = self.prepare_agent_context(
-            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type, None, None, active_flow, None,
+            agent_id, message, &entry, &sender_id, sender_name, &owner_id, &channel_type, None, None, active_flow, None, None,
         ).await?;
         let PreparedContext { mut session, needs_compact, tools, manifest, driver, ctx_window, .. } = ctx;
 
@@ -1740,10 +1745,11 @@ impl CarrierKernel {
         resume: Option<&memory::FlowRunRow>,
         active_flow: Option<&str>,
         session_label: Option<&str>,
+        chain_id: Option<String>,
     ) -> KernelResult<AgentLoopResult> {
         // Prepare shared context (session, tools, flow/subagent matching, manifest)
         let ctx = self.prepare_agent_context(
-            agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type, task_id.as_deref(), resume, active_flow, session_label,
+            agent_id, message, entry, &sender_id, sender_name, &owner_id, &channel_type, task_id.as_deref(), resume, active_flow, session_label, chain_id,
         ).await?;
         let PreparedContext { mut session, needs_compact, tools, manifest, flow, .. } = ctx;
 
@@ -2711,6 +2717,7 @@ async fn model_visible_surface_flow_assembly_golden() {
         Vec::new(),
         Vec::new(),
         Vec::new(),
+        None,
         None,
     );
 

@@ -1192,6 +1192,7 @@ impl CarrierKernel {
         drawer_entries: Vec<runtime::prompt_builder::DrawerEntry>,
         recalled_memories: Vec<(String, String)>,
         task_id: Option<String>,
+        chain_id: Option<String>,
     ) {
         let sid = sender_id.as_deref().unwrap_or("");
         let oid = owner_id.as_deref().unwrap_or(sid);
@@ -1342,6 +1343,7 @@ impl CarrierKernel {
             turn_summaries,
             drawer_entries,
             task_id,
+            chain_id,
         };
         manifest.model.system_prompt =
             runtime::prompt_builder::build_system_prompt(&prompt_ctx);

@@ -124,6 +124,10 @@ pub struct PromptContext {
     /// must use this ID as the output directory and in PUBLISH markers, ensuring
     /// file paths and publish paths are always consistent.
     pub task_id: Option<String>,
+    /// Chained-pipeline ID (cron `chain.chain_id`). When present, the task_id is
+    /// NOT the pipeline identity: file output paths and PUBLISH markers must use
+    /// the chain_id instead, and task_id is only this turn's cron job label.
+    pub chain_id: Option<String>,
 }
 
 /// Build the complete system prompt from a `PromptContext`.
@@ -268,18 +272,37 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
         sections.push(format!("## Current Date\nToday is {date}."));
     }
 
-    // Section 1.6 — Task ID (when assigned by initiator, e.g. cron job)
+    // Section 1.6 - Task ID (when assigned by initiator, e.g. cron job)
     if let Some(ref tid) = ctx.task_id {
-        sections.push(format!(
-            "## 任务 ID\n\
-             当前任务 ID: {tid}\n\
-             文件输出目录: output/{tid}/\n\
-             发布标记格式: [PUBLISH:app_id]output/{tid}/正文.html|文章标题|摘要[/PUBLISH]\n\
-             规则：\n\
-             1. 所有文件写入 output/{tid}/ 目录，PUBLISH 标记路径也用 output/{tid}/ 开头\n\
-             2. 不要把任务 ID 或流水线 ID 写入文章内容或文件开头——文章标题是文章的主题，不是任务 ID\n\
-             3. Markdown 文件第一行必须是文章的 # 标题（如 # 阿里 banning Claude 分析）"
-        ));
+        // Chained pipeline: chain_id is the real pipeline identity (it lives in
+        // every step's cron chain meta and matches the trigger message's
+        // "流水线ID"). task_id is just this turn's cron job label
+        // ({jobname}-{date}) - conflating the two sent agents reading
+        // output/{task_id}/ that never exists (08-19 白云调图事故坑4).
+        if let Some(ref cid) = ctx.chain_id {
+            sections.push(format!(
+                "## 任务 ID\n\
+                 当前任务 ID: {tid}（仅本轮 cron 任务标识，**不是流水线 ID**）\n\
+                 流水线 ID: {cid}（本任务属于链式流水线）\n\
+                 文件输出目录: output/{cid}/\n\
+                 发布标记格式: [PUBLISH:app_id]output/{cid}/正文.html|文章标题|摘要[/PUBLISH]\n\
+                 规则：\n\
+                 1. 所有文件写入 output/{cid}/ 目录（用流水线 ID，不要用任务 ID），PUBLISH 标记路径也用 output/{cid}/ 开头\n\
+                 2. 不要把任务 ID 或流水线 ID 写入文章内容或文件开头--文章标题是文章的主题，不是任务 ID\n\
+                 3. Markdown 文件第一行必须是文章的 # 标题（如 # 阿里 banning Claude 分析）"
+            ));
+        } else {
+            sections.push(format!(
+                "## 任务 ID\n\
+                 当前任务 ID: {tid}\n\
+                 文件输出目录: output/{tid}/\n\
+                 发布标记格式: [PUBLISH:app_id]output/{tid}/正文.html|文章标题|摘要[/PUBLISH]\n\
+                 规则：\n\
+                 1. 所有文件写入 output/{tid}/ 目录，PUBLISH 标记路径也用 output/{tid}/ 开头\n\
+                 2. 不要把任务 ID 或流水线 ID 写入文章内容或文件开头--文章标题是文章的主题，不是任务 ID\n\
+                 3. Markdown 文件第一行必须是文章的 # 标题（如 # 阿里 banning Claude 分析）"
+            ));
+        }
     }
 
     // Section 2 — Tool Call Behavior (skip for subagents)
@@ -978,6 +1001,31 @@ mod tests {
             ],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn test_task_id_section_chain_aware() {
+        // Chained pipeline: chain_id present -> output paths point at the
+        // chain (pipeline) id and the task_id is explicitly labelled as
+        // NOT the pipeline id.
+        let mut ctx = basic_ctx();
+        ctx.task_id = Some("article-writer-pipeline-x-20260819".to_string());
+        ctx.chain_id = Some("pipeline-x".to_string());
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("流水线 ID: pipeline-x"));
+        assert!(prompt.contains("output/pipeline-x/"));
+        assert!(prompt.contains("**不是流水线 ID**"));
+        assert!(
+            !prompt.contains("output/article-writer-pipeline-x-20260819/"),
+            "chained prompt must not point output paths at the task_id"
+        );
+
+        // Non-chained: task_id remains the output dir (unchanged behaviour).
+        let mut plain = basic_ctx();
+        plain.task_id = Some("daily-brief-20260820".to_string());
+        let prompt = build_system_prompt(&plain);
+        assert!(prompt.contains("output/daily-brief-20260820/"));
+        assert!(!prompt.contains("流水线 ID: "));
     }
 
     #[test]
