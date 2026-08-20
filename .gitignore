@@ -54,7 +54,6 @@ Thumbs.db
 .cargo/
 .env.example
 CONTRIBUTING.md
-SECURITY.md
 MIGRATION.md
 LICENSE-*
 CHANGELOG.md
