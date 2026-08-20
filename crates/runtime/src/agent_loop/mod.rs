@@ -526,7 +526,7 @@ async fn loop_iteration(ctx: &mut LoopContext<'_>) -> CarrierResult<LoopAction> 
             "Declared flow/subagent max_iterations exceeded — aborting"
         );
         return Err(CarrierError::LoopStuck(format!(
-            "agent 已跑 {} 轮，超过本 flow 声明的 max_iterations={n}+2，判定卡死，终止本轮",
+            "agent 已跑 {} 轮，超过本轮预算上限 max_iterations={n}+2（active_flow 声明值或 flow_load 加载点锚定值），判定卡死，终止本轮",
             ctx.state.iteration
         )));
     }

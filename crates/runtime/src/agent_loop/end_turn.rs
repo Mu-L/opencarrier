@@ -62,21 +62,13 @@ fn count_report_fixes(messages: &[Message]) -> usize {
         .count()
 }
 
-/// Token shaped like a UUID (8-4-4-4-12 hex digits, case-insensitive).
-fn is_uuid_shaped(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('-').collect();
-    let lens = [8usize, 4, 4, 4, 12];
-    parts.len() == 5
-        && parts
-            .iter()
-            .zip(lens)
-            .all(|(p, l)| p.len() == l && p.bytes().all(|b| b.is_ascii_hexdigit()))
-}
-
-/// All UUID-shaped tokens in `text`, in order of appearance.
+/// All UUID tokens in `text`, in order of appearance. Uses the uuid crate's
+/// authoritative parser (superset: hyphenated 8-4-4-4-12, 32-hex simple,
+/// braced, urn forms) rather than a hand-rolled shape check - a fabricated id
+/// written in 32-hex no-dash form must not slip past the fact-check below.
 fn uuid_tokens(text: &str) -> Vec<String> {
-    text.split(|c: char| !(c.is_ascii_hexdigit() || c == '-'))
-        .filter(|t| is_uuid_shaped(t))
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .filter(|t| uuid::Uuid::parse_str(t).is_ok())
         .map(str::to_string)
         .collect()
 }
@@ -84,9 +76,21 @@ fn uuid_tokens(text: &str) -> Vec<String> {
 /// Evidence fact-check (08-19 白云调图事故): article-writer cited a formatter
 /// cron job UUID that was never created (cron_create had failed) and the
 /// shape-only gate waved it through. When the report's `evidence` talks about
-/// cron jobs (keyword hint) AND cites UUID-shaped ids, every cited id must
-/// exist in the agent's live cron list - a missing one is a fabricated claim,
+/// cron jobs (keyword hint) AND cites UUIDs, AT LEAST ONE cited id must exist
+/// in the agent's live cron list - if none does, the cron claim is fabricated,
 /// rejected through the same corrective-retry path as a shape violation.
+///
+/// At-least-one (not every-id) semantics: evidence prose routinely carries
+/// non-cron UUIDs (session/message ids, chain ids) next to a genuinely created
+/// job's id - requiring every token to match would bounce truthful reports
+/// (2026-08-20 review). The 08-19 pattern (the ONLY cited job id doesn't
+/// exist) is still caught. Known miss: one real + one fabricated id cited
+/// together passes - accepted trade-off, recall of true reports first.
+///
+/// A one-shot job is REMOVED from the list once it fires (record_success),
+/// so a truthful citation of an already-fired successor can still trip this -
+/// the corrective message tells the agent to rephrase those as completed
+/// instead of citing the (now unlisted) id.
 async fn verify_evidence_cron_claims(
     kernel: &Arc<dyn KernelHandle>,
     report: &serde_json::Value,
@@ -111,21 +115,36 @@ async fn verify_evidence_cron_claims(
     if uuids.is_empty() {
         return None;
     }
-    let jobs = kernel.cron_list(agent_id, owner_id).await.ok()?;
-    for u in &uuids {
-        let exists = jobs.iter().any(|j| {
+    // Fail-open on cron_list errors, but OBSERVABLY: silently swallowing the
+    // error would disable the fabrication check exactly when the system is
+    // unhealthy. Failing closed would burn the corrective retries on a system
+    // error rather than a report problem - so log and skip instead.
+    let jobs = match kernel.cron_list(agent_id, owner_id).await {
+        Ok(jobs) => jobs,
+        Err(e) => {
+            warn!(
+                error = %e,
+                "report gate: cron_list unavailable - evidence cron fact-check skipped (fail-open)"
+            );
+            return None;
+        }
+    };
+    let any_exists = uuids.iter().any(|u| {
+        jobs.iter().any(|j| {
             j.get("id")
                 .and_then(|v| v.as_str())
                 .is_some_and(|id| id.eq_ignore_ascii_case(u))
-        });
-        if !exists {
-            return Some(format!(
-                "evidence 引用的任务 ID {u} 不在当前 cron 任务列表中--禁止虚报未执行成功的操作；\
-                 若 cron_create 未成功，如实写 status:blocked 并说明原因"
-            ));
-        }
+        })
+    });
+    if any_exists {
+        return None;
     }
-    None
+    Some(format!(
+        "evidence 声称创建了 cron 任务，但引用的所有 ID（{}）都不在当前 cron 任务列表中\
+         --禁止虚报未执行成功的操作；若 cron_create 未成功，如实写 status:blocked 并说明原因；\
+         若引用的一次性任务已执行完成（执行后即从列表移除），改述为已完成并去掉其 ID",
+        uuids.join("、")
+    ))
 }
 
 /// Verbatim side-effect marker spans in `text`: `[PUBLISH:…]…[/PUBLISH]`,
@@ -605,6 +624,15 @@ mod tests {
         let ids = uuid_tokens("AABBCCDD-0011-4052-9FEA-ABCDEF012345 和 04d7518f-1234-4abc-b3f4-aabbccddeeff");
         assert_eq!(ids.len(), 2);
         assert_eq!(ids[0], "AABBCCDD-0011-4052-9FEA-ABCDEF012345");
+
+        // 32-hex simple form parses via the uuid crate (hand-rolled 8-4-4-4-12
+        // shape checks missed it - a fabricated id must not slip through by
+        // dropping the dashes). Braced form too (braces are separators, the
+        // inner simple token parses).
+        let ids = uuid_tokens("job 04d7518f12344abcb3f4aabbccddeeff 已建");
+        assert_eq!(ids, vec!["04d7518f12344abcb3f4aabbccddeeff".to_string()]);
+        let ids = uuid_tokens("job {04d7518f-1234-4abc-b3f4-aabbccddeeff} 已建");
+        assert_eq!(ids, vec!["04d7518f-1234-4abc-b3f4-aabbccddeeff".to_string()]);
     }
 
 

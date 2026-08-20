@@ -428,6 +428,8 @@ impl KernelHandle for CarrierKernel {
                         "chain.chain_id must be a non-empty pipeline id".into(),
                     ));
                 }
+                // Identity/path-safety checks (see validate_chain_identity).
+                validate_chain_identity(&c, &action)?;
                 if c.step < 1 || c.total_steps < 1 || c.step > c.total_steps {
                     return Err(CarrierError::InvalidInput(format!(
                         "chain step/total_steps out of range: step={} total_steps={} \
@@ -1326,7 +1328,9 @@ fn resolve_relative_at(mut schedule: serde_json::Value) -> CarrierResult<serde_j
             "schedule.in_secs must be > 0".into(),
         ));
     }
-    if schedule.get("at").is_some() {
+    // JSON null counts as absent - an LLM echoing the documented schema with
+    // a null'd optional `at` while using `in_secs` must not be rejected.
+    if matches!(schedule.get("at"), Some(v) if !v.is_null()) {
         return Err(CarrierError::InvalidInput(
             "schedule: pass EITHER 'at' (absolute RFC3339) OR 'in_secs' (relative seconds), not both"
                 .into(),
@@ -1344,9 +1348,52 @@ fn resolve_relative_at(mut schedule: serde_json::Value) -> CarrierResult<serde_j
     Ok(schedule)
 }
 
+/// Chain identity validation for cron_create: chain_id is interpolated
+/// verbatim into the system prompt's output-dir template
+/// (output/{chain_id}/, [PUBLISH] markers), so it must be a single path-safe
+/// segment - the same guarantee task_id gets from slugify. And the
+/// "pipeline:<id>" session_label convention must carry the SAME id: the
+/// prompt steers file output by chain_id while the turn runs in the
+/// session_label session; a mismatch splits pipeline state across two ids
+/// (08-19 坑4 in a new shape).
+fn validate_chain_identity(
+    c: &types::scheduler::ChainMeta,
+    action: &types::scheduler::CronAction,
+) -> CarrierResult<()> {
+    if !c
+        .chain_id
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.')
+        || c.chain_id == ".."
+    {
+        return Err(CarrierError::InvalidInput(format!(
+            "chain.chain_id must be path-safe (letters, digits, '-', '_', '.'; no '/'、'..'、空格): got {:?} - \
+             it becomes the output directory output/<chain_id>/",
+            c.chain_id
+        )));
+    }
+    if let types::scheduler::CronAction::AgentTurn {
+        session_label: Some(label),
+        ..
+    } = action
+    {
+        if let Some(label_id) = label.strip_prefix("pipeline:") {
+            if label_id != c.chain_id {
+                return Err(CarrierError::InvalidInput(format!(
+                    "chain.chain_id ({}) and action.session_label ({label}) name different pipelines - \
+                     they must use the SAME id (session_label = \"pipeline:<chain_id>\")",
+                    c.chain_id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::resolve_relative_at;
+    use types::scheduler::CronAction;
 
     #[test]
     fn relative_at_resolves_to_future_rfc3339() {
@@ -1404,5 +1451,75 @@ mod tests {
     fn zero_and_invalid_in_secs_rejected() {
         assert!(resolve_relative_at(serde_json::json!({"kind": "at", "in_secs": 0})).is_err());
         assert!(resolve_relative_at(serde_json::json!({"kind": "at", "in_secs": "soon"})).is_err());
+    }
+
+    /// JSON null `at` counts as absent - an LLM echoing the documented schema
+    /// with a null'd optional must not hit the EITHER/OR rejection.
+    #[test]
+    fn null_at_with_in_secs_accepted() {
+        let out = resolve_relative_at(serde_json::json!({
+            "kind": "at", "at": null, "in_secs": 120
+        }))
+        .expect("null at treated as absent");
+        assert!(out["at"].is_string(), "at injected from in_secs");
+        assert!(out.get("in_secs").is_none());
+    }
+
+    fn chain(chain_id: &str) -> types::scheduler::ChainMeta {
+        types::scheduler::ChainMeta {
+            chain_id: chain_id.to_string(),
+            step: 1,
+            total_steps: 3,
+        }
+    }
+
+    fn agent_turn(label: Option<&str>) -> CronAction {
+        CronAction::AgentTurn {
+            message: "m".into(),
+            timeout_secs: None,
+            active_flow: None,
+            session_label: label.map(str::to_string),
+            model_override: None,
+        }
+    }
+
+    /// chain_id becomes output/<chain_id>/ in the prompt - it must be a
+    /// single path-safe segment.
+    #[test]
+    fn chain_id_must_be_path_safe() {
+        use super::validate_chain_identity;
+        let action = agent_turn(None);
+        for ok in ["pipeline-20260820-baiyun", "self_growth_v2", "a.b"] {
+            assert!(
+                validate_chain_identity(&chain(ok), &action).is_ok(),
+                "{ok} should be accepted"
+            );
+        }
+        for bad in [
+            "pipeline/2026-08-20",
+            "..",
+            "a/../b",
+            "pipeline x",
+            "流水线",
+        ] {
+            assert!(
+                validate_chain_identity(&chain(bad), &action).is_err(),
+                "{bad} should be rejected"
+            );
+        }
+    }
+
+    /// "pipeline:<id>" session_label must carry the same id as chain_id.
+    #[test]
+    fn chain_id_and_pipeline_session_label_must_agree() {
+        use super::validate_chain_identity;
+        let c = chain("pipeline-x");
+        assert!(validate_chain_identity(&c, &agent_turn(Some("pipeline:pipeline-x"))).is_ok());
+        assert!(validate_chain_identity(&c, &agent_turn(Some("pipeline-x"))).is_ok());
+        assert!(validate_chain_identity(&c, &agent_turn(None)).is_ok());
+        assert!(
+            validate_chain_identity(&c, &agent_turn(Some("pipeline:other-id"))).is_err(),
+            "mismatched pipeline: label must be rejected"
+        );
     }
 }

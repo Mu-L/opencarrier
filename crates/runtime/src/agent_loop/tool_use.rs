@@ -50,12 +50,13 @@ pub(in crate::agent_loop) enum ToolUseAction {
     BreakToolLoop(String),
 }
 
-/// flow_load 的预算收紧判定：仅当 flow 声明值比当前更紧时应用。
-/// `None` = 本轮尚无声明上限（聊天默认预算），任何声明值都收紧；
-/// 已有值时取 min 语义——flow_load 永远不能把 turn 的上限改宽松。
-fn should_tighten_max_iterations(current: Option<u32>, flow_max: u32) -> bool {
+/// flow_load 的预算收紧判定：仅当候选上限比当前更紧时应用。
+/// `None` = 本轮尚无声明上限（聊天默认预算），任何有限上限都收紧；
+/// 已有值时取 min 语义--flow_load 永远不能把 turn 的上限改宽松。
+/// 候选值由调用方按"加载点轮次 + 声明值"锚定后传入（见 flow_load 块）。
+fn should_tighten_max_iterations(current: Option<u32>, candidate: u32) -> bool {
     match current {
-        Some(cur) => flow_max < cur,
+        Some(cur) => candidate < cur,
         None => true,
     }
 }
@@ -522,19 +523,29 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                     // Apply the loaded flow's declared max_iterations
                     // (tighten-only). active_flow stamps
                     // META_MAX_ITERATIONS_DECLARED before the loop starts, but
-                    // a flow loaded mid-turn via flow_load never did — its
+                    // a flow loaded mid-turn via flow_load never did - its
                     // budget silently didn't apply (2026-08-19: outline-writer
                     // declared 12, chat-initiated turn ran to iteration 15).
-                    // Take the min so loading another flow can never RAISE the
-                    // turn's cap.
+                    // The candidate is ANCHORED at the load point: the declared
+                    // value counts from adoption, not from turn start. The
+                    // enforcement check (state.declared_max_exceeded) compares
+                    // against the cumulative iteration counter, so applying the
+                    // raw declared value would hard-stop a long chat turn the
+                    // moment it loads a small-cap flow (iteration 12 + declared
+                    // 5 -> next loop check aborts mid-work).
+                    // Turn-local by design: manifest metadata stays the
+                    // turn-START source only - never re-derive max_iterations
+                    // from the manifest mid-turn; re-entry (plan step / resume)
+                    // rebuilds state from scratch and re-tightens on re-load.
                     if let Some(flow_max) = loaded_def.max_iterations {
-                        if should_tighten_max_iterations(*max_iterations, flow_max) {
-                            *max_iterations = Some(flow_max);
+                        let anchored = iteration.saturating_add(flow_max);
+                        if should_tighten_max_iterations(*max_iterations, anchored) {
+                            *max_iterations = Some(anchored);
                             info!(
                                 agent = %manifest.name,
                                 skill = %skill_name,
-                                max_iterations = flow_max,
-                                "flow_load: applying flow-declared max_iterations (tighten)"
+                                anchored_max_iterations = anchored,
+                                "flow_load: applying flow-declared max_iterations (tighten, load-anchored)"
                             );
                         }
                     }
@@ -894,18 +905,35 @@ pub(in crate::agent_loop) async fn handle_tool_use(
 mod tests {
     use super::should_tighten_max_iterations;
 
-    /// 无声明上限（聊天默认预算）→ 任何 flow 声明值都收紧。
+    /// 无声明上限（聊天默认预算）-> 任何有限上限都收紧。
+    /// 注意 None 分支收到的已是"加载点轮次 + 声明值"锚定后的候选值。
     #[test]
     fn tighten_applies_when_no_current_cap() {
         assert!(should_tighten_max_iterations(None, 12));
         assert!(should_tighten_max_iterations(None, 1));
     }
 
-    /// 更紧的声明值应用（min 语义）。
+    /// 更紧的候选上限应用（min 语义，永不放宽）。
     #[test]
     fn tighten_applies_only_when_stricter() {
         assert!(should_tighten_max_iterations(Some(60), 12));
         assert!(!should_tighten_max_iterations(Some(12), 12));
         assert!(!should_tighten_max_iterations(Some(10), 12));
+    }
+
+    /// 加载点锚定：长 turn 中途加载小预算 flow，候选 = 已耗轮次 + 声明值，
+    /// 不会立刻硬停（iteration 12 + 声明 5 -> 上限 17 而非 5）。
+    #[test]
+    fn anchored_candidate_not_below_elapsed_iterations() {
+        let elapsed = 12u32;
+        let flow_max = 5u32;
+        let anchored = elapsed.saturating_add(flow_max);
+        assert_eq!(anchored, 17);
+        // 无既有上限：应用锚定值（17），而非裸声明值（5）。
+        assert!(should_tighten_max_iterations(None, anchored));
+        // 既有上限比锚定值更紧：保持既有值。
+        assert!(!should_tighten_max_iterations(Some(15), anchored));
+        // 既有上限更松：收紧到锚定值。
+        assert!(should_tighten_max_iterations(Some(60), anchored));
     }
 }
