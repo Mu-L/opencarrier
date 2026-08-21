@@ -72,7 +72,11 @@ pub use types::message::SESSION_SUMMARY_PREFIX;
 
 /// Whether a message is a compaction summary injected by a prior compaction.
 pub fn is_session_summary_message(msg: &Message) -> bool {
-    msg.role == Role::User && msg.content.text_content().starts_with(SESSION_SUMMARY_PREFIX)
+    msg.role == Role::User
+        && msg
+            .content
+            .text_content()
+            .starts_with(SESSION_SUMMARY_PREFIX)
 }
 
 /// Result of a compaction operation.
@@ -824,8 +828,14 @@ pub async fn compact_session(
     }
 
     // Stage 1: Try full single-pass summarization
-    match summarize_messages(driver.clone(), model, to_compact, config, prior_summary.as_deref())
-        .await
+    match summarize_messages(
+        driver.clone(),
+        model,
+        to_compact,
+        config,
+        prior_summary.as_deref(),
+    )
+    .await
     {
         Ok((summary, facts)) => {
             info!(
@@ -849,8 +859,14 @@ pub async fn compact_session(
     }
 
     // Stage 2: Chunked summarization with adaptive ratio
-    match summarize_in_chunks(driver.clone(), model, to_compact, config, prior_summary.as_deref())
-        .await
+    match summarize_in_chunks(
+        driver.clone(),
+        model,
+        to_compact,
+        config,
+        prior_summary.as_deref(),
+    )
+    .await
     {
         Ok((summary, facts)) => {
             let chunk_ratio = compute_adaptive_chunk_ratio(to_compact, config);
@@ -1360,10 +1376,15 @@ mod tests {
             .collect();
         let config = CompactionConfig::default();
 
-        let (summary, _facts) =
-            summarize_in_chunks(Arc::new(CountingDriver), "test-model", &messages, &config, None)
-                .await
-                .unwrap();
+        let (summary, _facts) = summarize_in_chunks(
+            Arc::new(CountingDriver),
+            "test-model",
+            &messages,
+            &config,
+            None,
+        )
+        .await
+        .unwrap();
 
         let calls = CALL_COUNT.load(Ordering::SeqCst);
         // With base_chunk_ratio=0.4, chunk_size = ceil(20*0.4) = 8, so 3 chunks + 1 merge = 4 calls
@@ -1769,7 +1790,11 @@ mod tests {
                 &self,
                 req: CompletionRequest,
             ) -> Result<CompletionResponse, LlmError> {
-                let text = req.messages.first().map(|m| m.content.text_content()).unwrap_or_default();
+                let text = req
+                    .messages
+                    .first()
+                    .map(|m| m.content.text_content())
+                    .unwrap_or_default();
                 self.prompts.lock().unwrap().push(text);
                 Ok(CompletionResponse {
                     content: vec![ContentBlock::Text {

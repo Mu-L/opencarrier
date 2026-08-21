@@ -348,12 +348,7 @@ const DANGEROUS_PREFIXES: &[(&[&str], &[&str], &str, &str)] = &[
         "编码命令混淆",
         "明文执行",
     ),
-    (
-        &["mkfs*", "dd"],
-        &[],
-        "裸磁盘写入",
-        "flow 永不需要，拒绝",
-    ),
+    (&["mkfs*", "dd"], &[], "裸磁盘写入", "flow 永不需要，拒绝"),
     (
         &["chmod"],
         &["777"],
@@ -701,9 +696,7 @@ mod tests {
     #[test]
     fn test_dangerous_prefix_allows_safe_commands() {
         assert!(check_dangerous_prefix("python3 output/scripts/run.py").is_none());
-        assert!(
-            check_dangerous_prefix("python3 flows/outline-writer/scripts/x.py").is_none()
-        );
+        assert!(check_dangerous_prefix("python3 flows/outline-writer/scripts/x.py").is_none());
         assert!(check_dangerous_prefix("ffmpeg -i in.mp4 out.mp4").is_none());
         assert!(check_dangerous_prefix("mkdir -p output/foo").is_none());
         // Plain `rm <file>` (non-recursive) is a legitimate temp-cleanup pattern.

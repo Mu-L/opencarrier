@@ -568,10 +568,7 @@ fn parse_top_array(lines: &[&str], key_idx: usize, key: &str) -> (Vec<String>, u
 /// Inline `[...]` form supports plain strings only.
 ///
 /// Returns (patterns, checks, lines_consumed_including_the_key_line).
-fn parse_shell_allow(
-    lines: &[&str],
-    key_idx: usize,
-) -> (Vec<String>, Vec<ShellAllowCheck>, usize) {
+fn parse_shell_allow(lines: &[&str], key_idx: usize) -> (Vec<String>, Vec<ShellAllowCheck>, usize) {
     let mut patterns = Vec::new();
     let mut checks = Vec::new();
 
@@ -603,7 +600,9 @@ fn parse_shell_allow(
             break;
         }
         let t = l.trim_start();
-        let Some(item) = t.strip_prefix('-') else { break };
+        let Some(item) = t.strip_prefix('-') else {
+            break;
+        };
         let item = item.trim();
         if item.starts_with("pattern:") {
             let pattern = unquote(item.strip_prefix("pattern:").unwrap_or("").trim());
@@ -670,7 +669,13 @@ pub fn command_matches_shell_allow(command: &str, patterns: &[String]) -> bool {
 /// means prefix-match (e.g. `mkfs*` catches `mkfs.ext4`). Checked at install
 /// time by [`validate_shell_allow`].
 pub const FORBIDDEN_SHELL_ALLOW_BASES: &[&str] = &[
-    "sudo", "rm", "mkfs*", "dd", "osascript", "powershell", "pwsh",
+    "sudo",
+    "rm",
+    "mkfs*",
+    "dd",
+    "osascript",
+    "powershell",
+    "pwsh",
 ];
 
 /// Validate a flow's `shell_allow` declarations at install/load time. Returns
@@ -1930,7 +1935,11 @@ body"#;
             }],
             ..Default::default()
         };
-        assert!(validate_shell_allow(&def).is_empty(), "{:?}", validate_shell_allow(&def));
+        assert!(
+            validate_shell_allow(&def).is_empty(),
+            "{:?}",
+            validate_shell_allow(&def)
+        );
     }
 
     #[test]
@@ -1983,7 +1992,10 @@ body"#;
             ..Default::default()
         };
         let errs = validate_shell_allow(&broad);
-        assert!(errs.iter().any(|e| e.contains("not_match 示例")), "{errs:?}");
+        assert!(
+            errs.iter().any(|e| e.contains("not_match 示例")),
+            "{errs:?}"
+        );
     }
 
     #[test]
@@ -2363,7 +2375,10 @@ mod report_matrix_tests {
         let check = &def.shell_allow_checks[0];
         assert_eq!(check.pattern, "python3 flows/<name>/scripts/render.py");
         assert!(!check.matches.is_empty(), "match examples must parse");
-        assert!(!check.not_matches.is_empty(), "not_match examples must parse");
+        assert!(
+            !check.not_matches.is_empty(),
+            "not_match examples must parse"
+        );
         // max_iterations numeric.
         assert_eq!(def.max_iterations, Some(8));
         // The doc must also still teach the two hard rules; if these strings

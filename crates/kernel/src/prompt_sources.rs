@@ -1042,7 +1042,9 @@ mod tests {
         assert!(!flow_entry_is_false(
             "---\nname: x\ndescription: d\nentry: true\n---\nBody"
         ));
-        assert!(!flow_entry_is_false("---\nname: x\ndescription: d\n---\nBody"));
+        assert!(!flow_entry_is_false(
+            "---\nname: x\ndescription: d\n---\nBody"
+        ));
     }
 
     /// `entry: false` flows must STILL appear in `collect_flow_summaries`

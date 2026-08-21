@@ -629,10 +629,7 @@ mod tests {
                 .to_vec(),
         );
         let errs = validate_install_format(&files).unwrap();
-        assert!(
-            errs.iter().any(|e| e.contains("shell_allow")),
-            "{errs:?}"
-        );
+        assert!(errs.iter().any(|e| e.contains("shell_allow")), "{errs:?}");
 
         // A not_match golden sample the pattern WOULD match is rejected.
         let mut files = BTreeMap::new();
@@ -643,10 +640,7 @@ mod tests {
                 .to_vec(),
         );
         let errs = validate_install_format(&files).unwrap();
-        assert!(
-            errs.iter().any(|e| e.contains("not_match")),
-            "{errs:?}"
-        );
+        assert!(errs.iter().any(|e| e.contains("not_match")), "{errs:?}");
 
         // A clean map-form shell_allow passes with no errors.
         let mut files = BTreeMap::new();

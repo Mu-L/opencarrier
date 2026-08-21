@@ -180,7 +180,10 @@ mod tests {
         // never get stripped into garbage).
         assert!(!NARRATION_FALLBACK_REPLY.is_empty());
         assert!(detect_text_tool_mentions(NARRATION_FALLBACK_REPLY).is_empty());
-        assert_eq!(strip_tool_call_artifacts(NARRATION_FALLBACK_REPLY), NARRATION_FALLBACK_REPLY);
+        assert_eq!(
+            strip_tool_call_artifacts(NARRATION_FALLBACK_REPLY),
+            NARRATION_FALLBACK_REPLY
+        );
     }
 
     #[test]

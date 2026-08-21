@@ -408,7 +408,7 @@ async fn tool_apply_patch(
             }
             crate::apply_patch::PatchOp::DeleteFile { path } => (path, None),
         };
-        for p in std::iter::once(path).chain(move_to.into_iter()) {
+        for p in std::iter::once(path).chain(move_to) {
             if p.contains('\u{FFFD}') {
                 return Err(CarrierError::InvalidInput(format!(
                     "路径 '{p}' 含损坏字符（U+FFFD），无法寻址。请用干净的文件名（中文名或 ASCII 名）重写补丁。"
@@ -417,12 +417,11 @@ async fn tool_apply_patch(
             let normalized = p.replace('\\', "/");
             if normalized == "input" || normalized.starts_with("input/") {
                 return Err(CarrierError::InvalidInput(
-                    "input/ 是用户发来的文件收件箱（只读），请改用 output/ 前缀写文件。".to_string(),
+                    "input/ 是用户发来的文件收件箱（只读），请改用 output/ 前缀写文件。"
+                        .to_string(),
                 ));
             }
-            if let (Some(hd), Some(sid), Some(an)) =
-                (ctx.home_dir, ctx.sender_id, ctx.agent_name)
-            {
+            if let (Some(hd), Some(sid), Some(an)) = (ctx.home_dir, ctx.sender_id, ctx.agent_name) {
                 if let Some(res) =
                     super::filesystem::resolve_user_data_path(p, hd, sid, ctx.owner_id, an)
                 {
@@ -591,11 +590,9 @@ async fn tool_knowledge_update(
         .ok_or(CarrierError::InvalidInput(
             "Missing 'filename' parameter".to_string(),
         ))?;
-    let content = input["content"]
-        .as_str()
-        .ok_or(CarrierError::InvalidInput(
-            "Missing 'content' parameter".to_string(),
-        ))?;
+    let content = input["content"].as_str().ok_or(CarrierError::InvalidInput(
+        "Missing 'content' parameter".to_string(),
+    ))?;
 
     if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
         return Err(CarrierError::InvalidInput(
@@ -1222,7 +1219,9 @@ mod apply_patch_routing_tests {
         let add = serde_json::json!({
             "patch": "*** Begin Patch\n*** Add File: output/p1/material.md\n+hello\n*** End Patch\n"
         });
-        let out = tool_apply_patch(&add, Some(&workspace), &ctx).await.unwrap();
+        let out = tool_apply_patch(&add, Some(&workspace), &ctx)
+            .await
+            .unwrap();
         assert!(out.contains("added"), "{out}");
         let sender_file = home.join("workspaces/ag/senders/u1/output/p1/material.md");
         assert!(sender_file.exists(), "file must land in sender output dir");
@@ -1233,8 +1232,13 @@ mod apply_patch_routing_tests {
         let del = serde_json::json!({
             "patch": "*** Begin Patch\n*** Delete File: output/p1/material.md\n*** End Patch\n"
         });
-        tool_apply_patch(&del, Some(&workspace), &ctx).await.unwrap();
-        assert!(!sender_file.exists(), "delete must remove the sender-scoped file");
+        tool_apply_patch(&del, Some(&workspace), &ctx)
+            .await
+            .unwrap();
+        assert!(
+            !sender_file.exists(),
+            "delete must remove the sender-scoped file"
+        );
     }
 
     #[tokio::test]
@@ -1280,9 +1284,13 @@ mod apply_patch_routing_tests {
         let add = serde_json::json!({
             "patch": "*** Begin Patch\n*** Add File: knowledge/new.md\n+x\n*** End Patch\n"
         });
-        tool_apply_patch(&add, Some(&workspace), &ctx).await.unwrap();
+        tool_apply_patch(&add, Some(&workspace), &ctx)
+            .await
+            .unwrap();
         assert!(workspace.join("knowledge/new.md").exists());
-        assert!(!home.join("workspaces/ag/senders/u1/output/knowledge/new.md").exists());
+        assert!(!home
+            .join("workspaces/ag/senders/u1/output/knowledge/new.md")
+            .exists());
     }
 }
 
@@ -1318,10 +1326,13 @@ mod knowledge_update_tests {
     async fn update_rejects_missing_frontmatter() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        knowledge_add_core(root, "policy", "old", "test").await.unwrap();
-        let err = tool_knowledge_update(&input("policy.md", "just body, no frontmatter"), Some(root))
+        knowledge_add_core(root, "policy", "old", "test")
             .await
-            .unwrap_err();
+            .unwrap();
+        let err =
+            tool_knowledge_update(&input("policy.md", "just body, no frontmatter"), Some(root))
+                .await
+                .unwrap_err();
         assert!(err.to_string().contains("frontmatter"), "{err}");
     }
 
@@ -1329,7 +1340,9 @@ mod knowledge_update_tests {
     async fn update_rejects_credentials() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        knowledge_add_core(root, "policy", "old", "test").await.unwrap();
+        knowledge_add_core(root, "policy", "old", "test")
+            .await
+            .unwrap();
         let bad = "---\nname: p\n---\napp_secret = wx123\n";
         let err = tool_knowledge_update(&input("policy.md", bad), Some(root))
             .await
@@ -1342,12 +1355,9 @@ mod knowledge_update_tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(root.join("knowledge")).unwrap();
-        let err = tool_knowledge_update(
-            &input("nope.md", "---\nname: n\n---\nbody\n"),
-            Some(root),
-        )
-        .await
-        .unwrap_err();
+        let err = tool_knowledge_update(&input("nope.md", "---\nname: n\n---\nbody\n"), Some(root))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("No knowledge file"), "{err}");
     }
 
