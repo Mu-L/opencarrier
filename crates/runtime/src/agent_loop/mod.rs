@@ -723,7 +723,7 @@ enum TextRecoveryOutcome {
 
 async fn handle_text_recovery(
     ctx: &mut LoopContext<'_>,
-    response: CompletionResponse,
+    mut response: CompletionResponse,
     modality: &str,
 ) -> TextRecoveryOutcome {
     if !matches!(
@@ -813,18 +813,45 @@ async fn handle_text_recovery(
     // Nudge the model to retry with structured tool_use (capped) instead of
     // executing text-described calls.
     if ctx.state.text_recovery_retries >= MAX_TEXT_RECOVERY_RETRIES {
+        if ctx.state.text_recovery_final {
+            // 08-21 86bus: after the final no-tools attempt the model could
+            // still parrot the narration ("我需要调用工具：x。") — never relay
+            // that to the user; replace the reply with an honest fallback.
+            warn!(
+                agent = %ctx.manifest.name,
+                ctx.state.iteration,
+                "Text recovery final attempt still narrating — replacing reply with fallback"
+            );
+            response.content = vec![ContentBlock::Text {
+                text: crate::text_tool_recovery::NARRATION_FALLBACK_REPLY.to_string(),
+                provider_metadata: None,
+            }];
+            response.tool_calls.clear();
+            return TextRecoveryOutcome::Proceed(response);
+        }
+        // One final attempt with tools forbidden. The old code pushed this
+        // guidance and then PROCEEDED with the narrated response — the guidance
+        // was never consumed (turn ended) and the narration text went out as
+        // the final answer. Continue instead so the extra call actually reads it.
+        ctx.state.text_recovery_final = true;
         warn!(
             agent = %ctx.manifest.name,
             retries = ctx.state.text_recovery_retries,
             ctx.state.iteration,
-            "Giving up text-based tool recovery — LLM keeps outputting text instead of tool_use"
+            "Giving up structured tool recovery — final attempt, natural language only"
         );
-        // O10: Inject guidance so the LLM cleans up raw tool-call text
         ctx.messages.push(Message::system(
-            "你刚才用文本描述了工具调用，但多次重试后仍无法转为结构化调用。\
-             请不要再尝试工具调用，直接用自然语言回复用户。\
-             不要在回复中包含 [Called ...] 或工具调用的原始文本。",
+            "多次尝试后你仍用文本描述工具调用而非结构化 tool_use。本轮不要再调用任何工具，直接用自然语言回复用户；禁止输出 [Called ...]、[调用 ...] 或『我需要调用工具：…』这类文本。",
         ));
+        ctx.state.log_turn(
+            modality,
+            "text_recovery_final",
+            response.usage.input_tokens as u32,
+            response.usage.output_tokens as u32,
+            Vec::new(),
+            0,
+        );
+        TextRecoveryOutcome::Continue
     } else {
         ctx.state.text_recovery_retries += 1;
         warn!(
@@ -835,12 +862,12 @@ async fn handle_text_recovery(
             "LLM described tool calls as text — retrying with structured tool_use"
         );
         let tool_names = mentions.join("、");
-        ctx.messages.push(Message::assistant(format!(
-            "我需要调用工具：{tool_names}。"
+        // 08-21 86bus 教训：不要把「我需要调用工具：X。」作为 assistant 先例注入——
+        // 模型放弃工具后会逐字复读它当最终答案（原文直达用户）。工具名写进
+        // system 引导即可，不造 assistant 文本。
+        ctx.messages.push(Message::system(format!(
+            "你刚才把工具调用（{tool_names}）写成了文本，用户会直接看到这段原始文本。这些工具已在你的可用工具列表中，请直接用 tool_use 发起结构化调用并带上完整参数。禁止输出 [Called ...]、[调用 ...] 或『我需要调用工具：…』这类文本。"
         )));
-        ctx.messages.push(Message::system(
-            "你刚才用文本描述了工具调用，但用户看到的是原始文本。这些工具已添加到你的可用工具列表中，请直接用 tool_use 功能调用，带上完整的参数。不要再输出 [Called ...] 格式的文本。"
-        ));
         ctx.state.log_turn(
             modality,
             "text_recovery_retry",
@@ -853,10 +880,8 @@ async fn handle_text_recovery(
                 .collect(),
             0,
         );
-        return TextRecoveryOutcome::Continue;
+        TextRecoveryOutcome::Continue
     }
-
-    TextRecoveryOutcome::Proceed(response)
 }
 
 // ---------------------------------------------------------------------------

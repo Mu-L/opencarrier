@@ -184,6 +184,11 @@ pub struct LoopState {
     pub tool_call_counts: HashMap<(String, u64), u32>,
     pub consecutive_max_tokens: u32,
     pub text_recovery_retries: u32,
+    /// Final "no more tools, answer naturally" attempt already issued after
+    /// [`text_recovery_retries`](Self::text_recovery_retries) was exhausted.
+    /// When set and narration STILL appears, the reply is replaced with a
+    /// fallback instead of relaying narration text to the user.
+    pub text_recovery_final: bool,
     pub last_run: Option<LastRunSummary>,
     pub turn_log: Vec<TurnLogEntry>,
     /// Flow/subagent-declared iteration budget. `None` = no cap (stuck detection only).
@@ -207,6 +212,7 @@ impl LoopState {
             tool_call_counts: HashMap::new(),
             consecutive_max_tokens: 0,
             text_recovery_retries: 0,
+            text_recovery_final: false,
             last_run: None,
             turn_log: Vec::new(),
             max_iterations: None,

@@ -36,6 +36,13 @@ use types::tool_compat::normalize_tool_name;
 /// tool executed. Each marker expects a tool name then `]`.
 const NARRATION_MARKERS: &[&str] = &["[Called ", "[调用 ", "[执行 "];
 
+/// User-facing reply substituted when the model keeps narrating tool calls as
+/// text even after the final no-tools attempt — narration text is never
+/// relayed to the user (08-21 86bus: the model parroted the old synthetic
+/// "我需要调用工具：x。" precedent verbatim as its final answer).
+pub const NARRATION_FALLBACK_REPLY: &str =
+    "抱歉，这轮我想调用的工具一直没能正确执行，请稍后重发一次消息，或换个说法告诉我。";
+
 pub fn detect_text_tool_mentions(text: &str) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut out: Vec<String> = Vec::new();
@@ -165,6 +172,15 @@ mod tests {
         // and the raw text reached the user with no tool executed.
         let mentions = detect_text_tool_mentions("正在查库。[调用 sqlite_query]");
         assert_eq!(mentions, vec!["sqlite_query".to_string()]);
+    }
+
+    #[test]
+    fn test_fallback_reply_is_clean() {
+        // The fallback itself must never contain narration markers (and thus
+        // never get stripped into garbage).
+        assert!(!NARRATION_FALLBACK_REPLY.is_empty());
+        assert!(detect_text_tool_mentions(NARRATION_FALLBACK_REPLY).is_empty());
+        assert_eq!(strip_tool_call_artifacts(NARRATION_FALLBACK_REPLY), NARRATION_FALLBACK_REPLY);
     }
 
     #[test]
