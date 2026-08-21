@@ -264,6 +264,20 @@ impl CarrierKernel {
         Some((flow_prompt, flow_max_iter, flow))
     }
 
+    /// Read `default_flow` from the clone's definition-layer `template.json`
+    /// (single field via serde_json::Value — a full-struct parse fails on
+    /// drifted template shapes like mcp_servers object-arrays). Used as the
+    /// classifier-miss fallback source when the agent.toml override is unset.
+    fn read_template_default_flow(entry: &AgentEntry) -> Option<String> {
+        let ws = entry.manifest.workspace.as_ref()?;
+        let text = std::fs::read_to_string(ws.join("template.json")).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+        v.get("default_flow")
+            .and_then(|d| d.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn prepare_agent_context(
         &self,
@@ -796,20 +810,50 @@ impl CarrierKernel {
                     (Some(flow_prompt), flow_max_iter, Some(flow))
                 }
                 None => {
-                    // Classifier miss — BARE turn, deliberately (operator
-                    // ruling 2026-08-18, reversing the 2026-08-16 cage): the
-                    // old default_flow fallback loaded a guessed flow with
-                    // withheld authority, which silently degraded turns (e.g.
-                    // validators dying on skipped shell_allow) instead of
-                    // exposing that no flow was selected. Pin a flow with an
-                    // explicit active_flow (API/cron) or let the classifier
-                    // match it — anything else runs with the agent's base
-                    // tools, visibly.
-                    warn!(
-                        agent = %entry.name,
-                        "Flow classifier returned no match — bare turn (no default_flow fallback; pass active_flow to pin a flow)"
-                    );
-                    (None, None, None)
+                    // Classifier miss — try a SAFE default_flow fallback. The
+                    // 08-16 cage (load a guessed flow but withhold authority)
+                    // silently degraded turns; the 08-18 revert ran fully bare.
+                    // Here we load the clone's declared default_flow ONLY when
+                    // it is a pure consultation flow that cannot elevate (no
+                    // shell_exec/shell_allow) — so a casual message can never
+                    // be lifted to privileged shell access (the
+                    // article-formatter regression). An elevating fallback is
+                    // skipped and the turn stays bare, visibly.
+                    let fallback_name = entry
+                        .manifest
+                        .default_flow
+                        .clone()
+                        .or_else(|| Self::read_template_default_flow(entry));
+                    let fallback_flow = fallback_name
+                        .as_deref()
+                        .and_then(|n| self.load_flow_match(entry, n));
+                    match fallback_flow {
+                        Some(flow) if !flow.elevates() => {
+                            let (flow_prompt, flow_max_iter) =
+                                self.apply_flow_to_turn(&flow, tools, entry);
+                            info!(
+                                agent = %entry.name,
+                                flow = %flow.name,
+                                "Classifier miss — loaded safe default_flow fallback"
+                            );
+                            (Some(flow_prompt), flow_max_iter, Some(flow))
+                        }
+                        Some(flow) => {
+                            warn!(
+                                agent = %entry.name,
+                                flow = %flow.name,
+                                "default_flow fallback skipped — flow elevates (would grant shell access to a casual turn); running bare"
+                            );
+                            (None, None, None)
+                        }
+                        None => {
+                            warn!(
+                                agent = %entry.name,
+                                "Flow classifier returned no match — bare turn (no safe default_flow fallback; pass active_flow to pin a flow)"
+                            );
+                            (None, None, None)
+                        }
+                    }
                 }
             }
         } else {
@@ -3142,6 +3186,39 @@ mod tests {
                 .metadata
                 .contains_key(types::flow::META_FLOW_ELEVATED_TOOLS),
             "elevated tools stamp"
+        );
+    }
+
+    #[test]
+    fn test_read_template_default_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("template.json"),
+            r#"{"default_flow": "consultation"}"#,
+        )
+        .unwrap();
+        let entry = entry_with_workspace(dir.path());
+        assert_eq!(
+            CarrierKernel::read_template_default_flow(&entry).as_deref(),
+            Some("consultation")
+        );
+
+        // Missing template.json → None.
+        let empty = tempfile::tempdir().unwrap();
+        let e2 = entry_with_workspace(empty.path());
+        assert_eq!(CarrierKernel::read_template_default_flow(&e2), None);
+
+        // Drifted template shape (mcp_servers object array) still reads the
+        // single field — a full-struct parse would fail here.
+        std::fs::write(
+            dir.path().join("template.json"),
+            r#"{"mcp_servers":[{"name":"srv","required":true}],"default_flow":"consultation"}"#,
+        )
+        .unwrap();
+        let e3 = entry_with_workspace(dir.path());
+        assert_eq!(
+            CarrierKernel::read_template_default_flow(&e3).as_deref(),
+            Some("consultation")
         );
     }
 }

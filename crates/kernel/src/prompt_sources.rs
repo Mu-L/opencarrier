@@ -532,6 +532,29 @@ pub fn parse_flow_full(content: &str) -> (String, String, Option<u32>, Vec<Strin
     (String::new(), String::new(), None, Vec::new(), content)
 }
 
+/// True if a flow frontmatter declares `entry: false` — meaning it must NOT be
+/// auto-selected by the LLM classifier (reachable only via a default_flow
+/// fallback or an explicit flow_load). Mirrors `types::flow::parse_flow_def`'s
+/// `entry:` handling, reading just this one field so the catalog scan stays
+/// light.
+fn flow_entry_is_false(content: &str) -> bool {
+    let Some(rest) = content.trim().strip_prefix("---") else {
+        return false;
+    };
+    let Some(end) = rest.find("---") else {
+        return false;
+    };
+    rest[..end].lines().any(|line| {
+        let t = line.trim();
+        if let Some(v) = t.strip_prefix("entry:") {
+            let v = v.trim().trim_matches('"').trim_matches('\'');
+            v == "false"
+        } else {
+            false
+        }
+    })
+}
+
 /// Scan a flows directory and return `(name, description, flow_file_path)` for
 /// each flow with a non-empty description. Supports both directory format
 /// (`flows/{name}/SKILL.md`) and flat format (`flows/{name}.md`).
@@ -577,6 +600,13 @@ fn collect_flow_summaries(flows_dir: &Path) -> Vec<(String, String, std::path::P
                  invisible to both the classifier and load_flow_by_name; fix \
                  the frontmatter `description:` to re-enable it)"
             );
+            continue;
+        }
+        if flow_entry_is_false(&content) {
+            // `entry: false` = fallback-only / pure-atomic: never offered to
+            // the LLM classifier for auto-matching (a default_flow consultation
+            // fallback must not hijack specific-flow matching). Still reachable
+            // via default_flow fallback or an explicit flow_load by name.
             continue;
         }
         out.push((name, description, flow_path));
@@ -998,6 +1028,47 @@ mod tests {
             names,
             vec!["healthy"],
             "empty-description flow must be skipped"
+        );
+    }
+
+    #[test]
+    fn test_flow_entry_is_false() {
+        assert!(flow_entry_is_false(
+            "---\nname: x\ndescription: d\nentry: false\n---\nBody"
+        ));
+        assert!(flow_entry_is_false("---\nentry:false\n---\nBody"));
+        assert!(!flow_entry_is_false(
+            "---\nname: x\ndescription: d\nentry: true\n---\nBody"
+        ));
+        assert!(!flow_entry_is_false("---\nname: x\ndescription: d\n---\nBody"));
+    }
+
+    /// `entry: false` hides a flow from the LLM classifier (fallback-only /
+    /// pure-atomic) while keeping it reachable via default_flow fallback or an
+    /// explicit flow_load by name.
+    #[test]
+    fn test_collect_flow_summaries_skips_entry_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let flows = dir.path().join("flows");
+        std::fs::create_dir_all(flows.join("consultation")).unwrap();
+        std::fs::write(
+            flows.join("consultation").join("flow.md"),
+            "---\nname: consultation\ndescription: 默认客服\nentry: false\n---\nBody",
+        )
+        .unwrap();
+        std::fs::create_dir_all(flows.join("charter")).unwrap();
+        std::fs::write(
+            flows.join("charter").join("flow.md"),
+            "---\nname: charter-quoter\ndescription: 包车下单\n---\nBody",
+        )
+        .unwrap();
+
+        let summaries = collect_flow_summaries(&flows);
+        let names: Vec<&str> = summaries.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["charter-quoter"],
+            "entry:false flow must be skipped from classifier candidates"
         );
     }
 }
