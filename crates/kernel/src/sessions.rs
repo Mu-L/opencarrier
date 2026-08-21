@@ -535,7 +535,16 @@ impl CarrierKernel {
         // agent_loop filters out Role::System messages from the LLM request. The split
         // alignment in compact_session ensures kept[0] is Assistant, so the summary
         // (User) + kept[0] (Assistant) pair won't be merged by validate_and_repair.
-        let mut final_messages = vec![types::message::Message::user(&result.summary)];
+        // The SESSION_SUMMARY_PREFIX marker lets the next compaction recognize this
+        // message and fold it in as labeled context instead of re-summarizing it.
+        let mut final_messages = Vec::new();
+        if !result.summary.is_empty() {
+            final_messages.push(types::message::Message::user(format!(
+                "{}\n{}",
+                runtime::compactor::SESSION_SUMMARY_PREFIX,
+                result.summary
+            )));
+        }
         final_messages.extend(repaired_messages);
 
         // Also update the regular session with the repaired messages

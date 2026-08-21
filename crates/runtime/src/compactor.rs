@@ -65,6 +65,16 @@ impl Default for CompactionConfig {
     }
 }
 
+/// Marker prefix on the compaction summary message — defined in `types` and
+/// re-exported here so existing `compactor::SESSION_SUMMARY_PREFIX` references
+/// keep working. See `types::message::SESSION_SUMMARY_PREFIX`.
+pub use types::message::SESSION_SUMMARY_PREFIX;
+
+/// Whether a message is a compaction summary injected by a prior compaction.
+pub fn is_session_summary_message(msg: &Message) -> bool {
+    msg.role == Role::User && msg.content.text_content().starts_with(SESSION_SUMMARY_PREFIX)
+}
+
 /// Result of a compaction operation.
 #[derive(Debug)]
 pub struct CompactionResult {
@@ -471,6 +481,7 @@ async fn summarize_messages(
     model: &str,
     messages: &[Message],
     config: &CompactionConfig,
+    prior_summary: Option<&str>,
 ) -> CarrierResult<(String, Vec<String>)> {
     let conversation_text = build_conversation_text(messages, config);
 
@@ -486,8 +497,15 @@ async fn summarize_messages(
         )));
     }
 
+    let prior_section = prior_summary.map_or(String::new(), |p| {
+        format!(
+            "The earlier part of this conversation was already compacted into the summary below. \
+             Integrate it with the new messages so the result is ONE cohesive summary covering both.\n\
+             PRIOR SUMMARY:\n{p}\n\n"
+        )
+    });
     let summarize_prompt = format!(
-        "Summarize the following conversation preserving key facts, decisions, user preferences, \
+        "{prior_section}Summarize the following conversation preserving key facts, decisions, user preferences, \
          and important context. Be concise but thorough.\n\n\
          Then list any durable facts worth remembering long-term (contact info, preferences, \
          decisions, named entities, scheduled events) as a comma-separated list.\n\n\
@@ -611,6 +629,7 @@ async fn summarize_in_chunks(
     model: &str,
     messages: &[Message],
     config: &CompactionConfig,
+    prior_summary: Option<&str>,
 ) -> CarrierResult<(String, Vec<String>)> {
     let chunk_ratio = compute_adaptive_chunk_ratio(messages, config);
     let chunk_size = (messages.len() as f64 * chunk_ratio).ceil() as usize;
@@ -626,7 +645,10 @@ async fn summarize_in_chunks(
     let mut success_count = 0usize;
     let mut last_chunk_error = CarrierError::Internal("unknown".to_string());
     for (i, chunk) in messages.chunks(chunk_size).enumerate() {
-        match summarize_messages(driver.clone(), model, chunk, config).await {
+        // The prior summary belongs to the head of the history — fold it into
+        // the first chunk so the merge step carries it into the final summary.
+        let prior = if i == 0 { prior_summary } else { None };
+        match summarize_messages(driver.clone(), model, chunk, config, prior).await {
             Ok((summary, facts)) => {
                 info!(
                     chunk = i,
@@ -761,18 +783,50 @@ pub async fn compact_session(
     let to_compact = &session.messages[..split_at];
     let kept = &session.messages[split_at..];
 
+    let kept_messages = kept.to_vec();
+    let compacted_count = to_compact.len();
+
+    // Peel a prior compaction summary off the head of the span: it is folded
+    // into the new summary as labeled context, not re-summarized as a user
+    // utterance (idempotent re-compaction, no summary-of-summary drift).
+    let (prior_summary, to_compact) = match to_compact.first() {
+        Some(m) if is_session_summary_message(m) => {
+            let text = m.content.text_content();
+            let stripped = text
+                .strip_prefix(SESSION_SUMMARY_PREFIX)
+                .unwrap_or(&text)
+                .trim()
+                .to_string();
+            (Some(stripped), &to_compact[1..])
+        }
+        _ => (None, to_compact),
+    };
+
     info!(
         total = msg_count,
         compacting = to_compact.len(),
         keeping = kept.len(),
+        has_prior_summary = prior_summary.is_some(),
         "Compacting session messages"
     );
 
-    let kept_messages = kept.to_vec();
-    let compacted_count = to_compact.len();
+    // The span held only the prior summary — carry it forward verbatim, no
+    // LLM call needed.
+    if to_compact.is_empty() {
+        return Ok(CompactionResult {
+            summary: prior_summary.unwrap_or_default(),
+            kept_messages,
+            compacted_count,
+            chunks_used: 0,
+            used_fallback: false,
+            key_facts: Vec::new(),
+        });
+    }
 
     // Stage 1: Try full single-pass summarization
-    match summarize_messages(driver.clone(), model, to_compact, config).await {
+    match summarize_messages(driver.clone(), model, to_compact, config, prior_summary.as_deref())
+        .await
+    {
         Ok((summary, facts)) => {
             info!(
                 summary_len = summary.len(),
@@ -795,7 +849,9 @@ pub async fn compact_session(
     }
 
     // Stage 2: Chunked summarization with adaptive ratio
-    match summarize_in_chunks(driver.clone(), model, to_compact, config).await {
+    match summarize_in_chunks(driver.clone(), model, to_compact, config, prior_summary.as_deref())
+        .await
+    {
         Ok((summary, facts)) => {
             let chunk_ratio = compute_adaptive_chunk_ratio(to_compact, config);
             let chunk_size = (to_compact.len() as f64 * chunk_ratio).ceil() as usize;
@@ -1305,7 +1361,7 @@ mod tests {
         let config = CompactionConfig::default();
 
         let (summary, _facts) =
-            summarize_in_chunks(Arc::new(CountingDriver), "test-model", &messages, &config)
+            summarize_in_chunks(Arc::new(CountingDriver), "test-model", &messages, &config, None)
                 .await
                 .unwrap();
 
@@ -1407,7 +1463,7 @@ mod tests {
         let messages = vec![Message::user("hi"), Message::assistant("hello")];
         let config = CompactionConfig::default();
         let (summary, facts) =
-            summarize_messages(Arc::new(FactDriver), "test-model", &messages, &config)
+            summarize_messages(Arc::new(FactDriver), "test-model", &messages, &config, None)
                 .await
                 .unwrap();
         assert!(summary.contains("tea"), "summary should survive: {summary}");
@@ -1683,5 +1739,163 @@ mod tests {
         let messages = vec![msg(Role::User), msg(Role::Assistant)];
         // split_at == len should return as-is
         assert_eq!(align_split_to_assistant(&messages, 2), 2);
+    }
+
+    // --- session summary marker (Memento) ---
+
+    #[test]
+    fn test_is_session_summary_message() {
+        let summary = Message::user(format!("{SESSION_SUMMARY_PREFIX}\n用户喜欢茶"));
+        assert!(is_session_summary_message(&summary));
+        assert!(!is_session_summary_message(&Message::user("普通用户消息")));
+        assert!(!is_session_summary_message(&Message::assistant(format!(
+            "{SESSION_SUMMARY_PREFIX}\nwrong role"
+        ))));
+    }
+
+    #[tokio::test]
+    async fn test_compact_peels_prior_summary_into_context() {
+        use crate::llm_driver::{CompletionResponse, LlmError};
+        use async_trait::async_trait;
+        use std::sync::Mutex;
+
+        struct CaptureDriver {
+            prompts: Mutex<Vec<String>>,
+        }
+
+        #[async_trait]
+        impl LlmDriver for CaptureDriver {
+            async fn complete(
+                &self,
+                req: CompletionRequest,
+            ) -> Result<CompletionResponse, LlmError> {
+                let text = req.messages.first().map(|m| m.content.text_content()).unwrap_or_default();
+                self.prompts.lock().unwrap().push(text);
+                Ok(CompletionResponse {
+                    content: vec![ContentBlock::Text {
+                        text: "SUMMARY:\nmerged summary\nFACTS:\nNONE".to_string(),
+                        provider_metadata: None,
+                    }],
+                    stop_reason: types::message::StopReason::EndTurn,
+                    tool_calls: vec![],
+                    usage: TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 10,
+                    },
+                    media: None,
+                })
+            }
+        }
+
+        let driver = Arc::new(CaptureDriver {
+            prompts: Mutex::new(Vec::new()),
+        });
+
+        // messages[0] is a prior compaction summary; index 8 is Assistant so
+        // align_split keeps split_at=8 → to_compact = [summary, 7 new msgs].
+        let mut messages = vec![Message::user(format!(
+            "{SESSION_SUMMARY_PREFIX}\nprior: 用户喜欢茶"
+        ))];
+        for i in 0..7 {
+            messages.push(Message::user(format!("new message {i}")));
+        }
+        messages.push(msg(Role::Assistant));
+        messages.extend((0..4).map(|i| Message::user(format!("kept {i}"))));
+        let session = Session {
+            id: types::agent::SessionId::new(),
+            agent_name: "test-agent".to_string(),
+            messages,
+            context_window_tokens: 0,
+            turn_summaries: Vec::new(),
+            label: None,
+        };
+        let config = CompactionConfig {
+            keep_recent: 4,
+            ..CompactionConfig::default()
+        };
+
+        let result = compact_session(driver.clone(), "test-model", &session, &config)
+            .await
+            .unwrap();
+        assert_eq!(result.summary, "merged summary");
+        // The prior summary message counts as shadowed by the new summary.
+        assert_eq!(result.compacted_count, 8);
+        // Backward alignment moved the split from 9 to 8, so 5 are kept.
+        assert_eq!(result.kept_messages.len(), 5);
+
+        let prompts = driver.prompts.lock().unwrap();
+        let prompt = &prompts[0];
+        assert!(
+            prompt.contains("PRIOR SUMMARY:\nprior: 用户喜欢茶"),
+            "prior summary must be labeled context: {prompt}"
+        );
+        assert!(
+            !prompt.contains("User: [SESSION_SUMMARY]"),
+            "prior summary must not be rendered as a user utterance: {prompt}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_compact_prior_summary_only_span_skips_llm() {
+        use crate::llm_driver::{CompletionResponse, LlmError};
+        use async_trait::async_trait;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static CALLS: AtomicU32 = AtomicU32::new(0);
+
+        struct NoCallDriver;
+
+        #[async_trait]
+        impl LlmDriver for NoCallDriver {
+            async fn complete(
+                &self,
+                _req: CompletionRequest,
+            ) -> Result<CompletionResponse, LlmError> {
+                CALLS.fetch_add(1, Ordering::SeqCst);
+                Ok(CompletionResponse {
+                    content: vec![ContentBlock::Text {
+                        text: "should not happen".to_string(),
+                        provider_metadata: None,
+                    }],
+                    stop_reason: types::message::StopReason::EndTurn,
+                    tool_calls: vec![],
+                    usage: TokenUsage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                    },
+                    media: None,
+                })
+            }
+        }
+
+        CALLS.store(0, Ordering::SeqCst);
+
+        // to_compact = [prior summary] only (all remaining messages are User,
+        // so align_split returns the original split_at=1).
+        let mut messages = vec![Message::user(format!(
+            "{SESSION_SUMMARY_PREFIX}\nprior: 用户喜欢茶"
+        ))];
+        messages.extend((0..5).map(|i| Message::user(format!("kept {i}"))));
+        let session = Session {
+            id: types::agent::SessionId::new(),
+            agent_name: "test-agent".to_string(),
+            messages,
+            context_window_tokens: 0,
+            turn_summaries: Vec::new(),
+            label: None,
+        };
+        let config = CompactionConfig {
+            keep_recent: 5,
+            ..CompactionConfig::default()
+        };
+
+        let result = compact_session(Arc::new(NoCallDriver), "test-model", &session, &config)
+            .await
+            .unwrap();
+        assert_eq!(CALLS.load(Ordering::SeqCst), 0, "no LLM call expected");
+        assert_eq!(result.summary, "prior: 用户喜欢茶");
+        assert_eq!(result.compacted_count, 1);
+        assert!(!result.used_fallback);
+        assert_eq!(result.kept_messages.len(), 5);
     }
 }

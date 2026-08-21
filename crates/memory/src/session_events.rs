@@ -400,7 +400,13 @@ pub fn fold_surface(events: &[SessionEvent]) -> Vec<Message> {
             let mut out = Vec::with_capacity(rendered.len() + 1);
             out.push(Message {
                 role: Role::User,
-                content: MessageContent::Text(s),
+                // Same marked shape the live path constructs — re-compaction
+                // peels the summary by this prefix (types::message).
+                content: MessageContent::Text(format!(
+                    "{}\n{}",
+                    types::message::SESSION_SUMMARY_PREFIX,
+                    s
+                )),
             });
             out.extend(rendered);
             out

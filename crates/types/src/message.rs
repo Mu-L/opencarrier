@@ -167,6 +167,14 @@ impl MessageContent {
     }
 }
 
+/// Marker prefix on the User message a compaction injects back into the
+/// session (codex Memento-style). Lives in `types` because both the live path
+/// (runtime compactor → kernel sessions) and the event-log projection
+/// (memory::session_events::fold_surface) must construct/recognize the same
+/// marked message — re-compaction peels it as labeled context instead of
+/// re-summarizing it (idempotency, no summary-of-summary drift).
+pub const SESSION_SUMMARY_PREFIX: &str = "[SESSION_SUMMARY]";
+
 impl Message {
     /// Create a system message.
     pub fn system(content: impl Into<String>) -> Self {
