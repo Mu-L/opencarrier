@@ -212,7 +212,7 @@ async fn extract_document_with_markitdown(path: &Path, raw_path: &str) -> Carrie
 ///
 /// Returns `None` if the path is a workspace-internal path (knowledge/, flows/, etc.)
 /// that should be handled by the sandbox instead.
-fn resolve_user_data_path(
+pub(crate) fn resolve_user_data_path(
     raw_path: &str,
     home_dir: &Path,
     sender_id: &str,
@@ -368,6 +368,16 @@ async fn tool_file_write(input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<
     let raw_path = input["path"].as_str().ok_or(CarrierError::InvalidInput(
         "Missing 'path' parameter".to_string(),
     ))?;
+
+    // Reject replacement characters (U+FFFD) in paths: a corrupted filename
+    // (e.g. LLM emitting broken UTF-8 for a Chinese name) is un-typeable by
+    // the model afterwards, so any follow-up read/patch/delete of the file
+    // fails and loops (2026-08-21 86bus incident).
+    if raw_path.contains('\u{FFFD}') {
+        return Err(CarrierError::InvalidInput(format!(
+            "路径 '{raw_path}' 含损坏字符（U+FFFD），无法写入。请换一个干净的文件名（中文名或 ASCII 名，例如 output/material.md）重试。"
+        )));
+    }
 
     // input/ is the user's inbox (attachments they sent, saved by the channel
     // bridge). It's read-only from the agent's side - block writes here so a
@@ -659,6 +669,45 @@ mod tests {
 
     fn home() -> PathBuf {
         PathBuf::from("/tmp/oc-fs-test-home")
+    }
+
+    #[tokio::test]
+    async fn file_write_rejects_replacement_char_path() {
+        // A corrupted filename (LLM emitting broken UTF-8) is un-typeable by
+        // the model afterwards - every follow-up read/patch/delete fails and
+        // loops (2026-08-21 86bus incident). Reject at write time.
+        let ctx = crate::tool_context::ToolContext {
+            kernel: None,
+            memory: None,
+            caller_agent_id: None,
+            mcp_connections: None,
+            fetch_engine: None,
+            allowed_env_vars: None,
+            workspace_root: None,
+            brain: None,
+            exec_policy: None,
+            cli_exec_config: None,
+            process_manager: None,
+            sender_id: None,
+            owner_id: None,
+            home_dir: None,
+            agent_name: None,
+            subagent_configs: None,
+            channel_type: None,
+            max_tool_level: types::tool::PermissionLevel::Write,
+            is_clone_admin: false,
+            external_url: None,
+            flow_elevated_tools: None,
+            flow_shell_allow: None,
+            flow_deny_tools: None,
+            flow_allowed_tools: None,
+        };
+        let input = serde_json::json!({
+            "path": "output/p/\u{FFFD}\u{FFFD}材.md",
+            "content": "x",
+        });
+        let err = tool_file_write(&input, &ctx).await.unwrap_err();
+        assert!(err.to_string().contains("U+FFFD"), "{err}");
     }
 
     #[test]
