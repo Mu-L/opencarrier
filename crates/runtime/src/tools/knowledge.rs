@@ -76,6 +76,18 @@ impl ToolModule for KnowledgeTools {
                 }),
             },
             ToolDefinition {
+                name: "knowledge_update".to_string(),
+                description: "Update an EXISTING knowledge file in place (full content replacement). Use this to correct or supersede statements in old knowledge files instead of piling up new entries. First knowledge_read the file, edit, then pass the complete new content (must keep the --- frontmatter with name/description). Filename is fuzzy-matched like knowledge_read.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "filename": {"type": "string", "description": "Knowledge file to update (e.g. 'business-info.md'; fuzzy matched)"},
+                        "content": {"type": "string", "description": "Complete new file content, starting with the --- frontmatter block"},
+                    },
+                    "required": ["filename", "content"],
+                }),
+            },
+            ToolDefinition {
                 name: "knowledge_remove".to_string(),
                 description: "Remove a knowledge entry by filename (supports fuzzy matching).".to_string(),
                 input_schema: serde_json::json!({
@@ -199,6 +211,7 @@ impl ToolModule for KnowledgeTools {
             "knowledge_lint" => Some(tool_knowledge_lint(ctx.workspace_root).await),
             "knowledge_heal" => Some(tool_knowledge_heal(ctx.workspace_root).await),
             "knowledge_add" => Some(tool_knowledge_add(input, ctx.workspace_root).await),
+            "knowledge_update" => Some(tool_knowledge_update(input, ctx.workspace_root).await),
             "knowledge_remove" => Some(tool_knowledge_remove(input, ctx.workspace_root).await),
             "knowledge_import" => Some(tool_knowledge_import(input, ctx.workspace_root).await),
             "clone_evaluate" => Some(tool_clone_evaluate(ctx.workspace_root).await),
@@ -222,8 +235,8 @@ impl ToolModule for KnowledgeTools {
             | "train_list" | "train_evaluate" | "user_profile" => {
                 types::tool::PermissionLevel::ReadOnly
             }
-            "knowledge_add" | "knowledge_remove" | "knowledge_import" | "knowledge_heal"
-            | "flow_create" | "flow_update" | "apply_patch" | "train_write" => {
+            "knowledge_add" | "knowledge_update" | "knowledge_remove" | "knowledge_import"
+            | "knowledge_heal" | "flow_create" | "flow_update" | "apply_patch" | "train_write" => {
                 types::tool::PermissionLevel::Write
             }
             _ => types::tool::PermissionLevel::Dangerous,
@@ -559,6 +572,96 @@ async fn tool_knowledge_add(
 
     let filename = knowledge_add_core(root, title, content, "tool").await?;
     Ok(format!("Knowledge added: {filename}.md"))
+}
+
+/// In-place update of an existing knowledge file. Fuzzy-matches the target
+/// (same matcher as knowledge_remove), validates the replacement keeps a
+/// frontmatter block, rejects credential-looking content (same patterns as
+/// knowledge_add), and records a "update" version entry with before/after so
+/// self-evolution stays auditable.
+async fn tool_knowledge_update(
+    input: &serde_json::Value,
+    workspace_root: Option<&Path>,
+) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal(
+        "knowledge_update requires a workspace root".to_string(),
+    ))?;
+    let filename = input["filename"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'filename' parameter".to_string(),
+        ))?;
+    let content = input["content"]
+        .as_str()
+        .ok_or(CarrierError::InvalidInput(
+            "Missing 'content' parameter".to_string(),
+        ))?;
+
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err(CarrierError::InvalidInput(
+            "Invalid filename: path separators and '..' are forbidden".to_string(),
+        ));
+    }
+
+    // The replacement must be a complete knowledge file: frontmatter fence at
+    // the top plus a closing fence. Structured error so the agent can self-heal.
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") || trimmed[3..].find("\n---").is_none() {
+        return Err(CarrierError::InvalidInput(
+            "content 必须是完整知识文件：以 --- frontmatter 开头（name/description 等），并有闭合的 ---。先 knowledge_read 原文件，在原内容上修改后整体传回。".to_string()
+        ));
+    }
+
+    // Same credential guard as knowledge_add — updates must not leak secrets
+    // into the shared knowledge base either.
+    let content_lower = content.to_lowercase();
+    let sensitive_patterns = [
+        "app_secret",
+        "app_id",
+        "api_key",
+        "apikey",
+        "secret_key",
+        "access_token",
+        "private_key",
+    ];
+    if let Some(pattern) = sensitive_patterns
+        .iter()
+        .find(|p| content_lower.contains(*p))
+    {
+        return Err(CarrierError::InvalidInput(format!(
+            "Rejected: content contains '{pattern}' which looks like credentials/secrets. \
+             Use kv_set to store private data in your personal key-value store instead of knowledge_update."
+        )));
+    }
+
+    let knowledge_dir = root.join("knowledge");
+    let target = find_knowledge_file(&knowledge_dir, filename)?;
+    let name = target
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let before = tokio::fs::read_to_string(&target)
+        .await
+        .map_err(|e| CarrierError::Internal(format!("Failed to read existing file: {e}")))?;
+
+    tokio::fs::write(&target, content)
+        .await
+        .map_err(|e| CarrierError::Internal(format!("Failed to write knowledge file: {e}")))?;
+
+    let _ = lifecycle::version::record_version(
+        root,
+        "update",
+        &name,
+        Some(before.as_str()),
+        Some(content),
+        "tool",
+    );
+    let _ = lifecycle::evolution::update_memory_index(root);
+
+    Ok(format!(
+        "Knowledge updated in place: {name} (version recorded, index rebuilt)"
+    ))
 }
 
 async fn tool_knowledge_extract(
@@ -1180,6 +1283,82 @@ mod apply_patch_routing_tests {
         tool_apply_patch(&add, Some(&workspace), &ctx).await.unwrap();
         assert!(workspace.join("knowledge/new.md").exists());
         assert!(!home.join("workspaces/ag/senders/u1/output/knowledge/new.md").exists());
+    }
+}
+
+#[cfg(test)]
+mod knowledge_update_tests {
+    use super::*;
+
+    fn input(filename: &str, content: &str) -> serde_json::Value {
+        serde_json::json!({ "filename": filename, "content": content })
+    }
+
+    #[tokio::test]
+    async fn update_replaces_in_place_with_fuzzy_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let saved = knowledge_add_core(root, "business-info", "old body", "test")
+            .await
+            .unwrap();
+        assert_eq!(saved, "business-info");
+
+        let new_content = "---\nname: business-info\ndescription: 86巴士业务\n---\nnew body\n";
+        let out = tool_knowledge_update(&input("business", new_content), Some(root))
+            .await
+            .unwrap();
+        assert!(out.contains("business-info.md"), "{out}");
+        // Same path, content replaced in place
+        let on_disk = std::fs::read_to_string(root.join("knowledge/business-info.md")).unwrap();
+        assert!(on_disk.contains("new body"));
+        assert!(!on_disk.contains("old body"));
+    }
+
+    #[tokio::test]
+    async fn update_rejects_missing_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        knowledge_add_core(root, "policy", "old", "test").await.unwrap();
+        let err = tool_knowledge_update(&input("policy.md", "just body, no frontmatter"), Some(root))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("frontmatter"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn update_rejects_credentials() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        knowledge_add_core(root, "policy", "old", "test").await.unwrap();
+        let bad = "---\nname: p\n---\napp_secret = wx123\n";
+        let err = tool_knowledge_update(&input("policy.md", bad), Some(root))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("app_secret"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn update_unknown_file_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("knowledge")).unwrap();
+        let err = tool_knowledge_update(
+            &input("nope.md", "---\nname: n\n---\nbody\n"),
+            Some(root),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("No knowledge file"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn update_rejects_path_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let err = tool_knowledge_update(&input("../evil.md", "---\nname: e\n---\nx\n"), Some(root))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("forbidden"), "{err}");
     }
 }
 

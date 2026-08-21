@@ -509,6 +509,12 @@ pub const CORE_TOOL_NAMES: &[&str] = &[
     "knowledge_add",
     "knowledge_read",
     "knowledge_list",
+    // In-place knowledge editing is core (not catalog): self-evolution is a
+    // first-class clone behavior (server = evolution subject). Without this in
+    // the assembled core set, bare interactive turns genuinely can only
+    // add/read/list (08-21 86bus: "只能增不能改" complaint) and glm won't know
+    // to tool_search for a tool name it has never seen.
+    "knowledge_update",
     "file_read",
     "file_list",
     "web_search",
