@@ -158,6 +158,59 @@ fn find_file_recursive(dir: &std::path::Path, filename: &str) -> Option<String> 
     best.map(|(p, _)| p)
 }
 
+/// Resolve a publish marker's relative `html_path` to an absolute path, trying
+/// the sender-scoped dir first (per-user turns) then the workspace root
+/// (cron/system turns) — the two bases the writer and publisher can fork on.
+/// Returns the first existing path (direct, then filename-match under output/),
+/// or the sender-dir direct path as the fallback so the publish tool reports a
+/// concrete (if wrong) path rather than an empty one.
+fn resolve_publish_html_path(
+    home: &std::path::Path,
+    sender_id: &str,
+    agent_id: &str,
+    workspace_root: Option<&str>,
+    html_path: &str,
+) -> String {
+    let filename = std::path::Path::new(html_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(html_path);
+    let mut bases: Vec<std::path::PathBuf> = vec![types::config::sender_data_dir(
+        home,
+        sender_id,
+        agent_id,
+        Some(sender_id),
+    )];
+    if let Some(ws) = workspace_root {
+        let ws_path = std::path::PathBuf::from(ws);
+        if !bases.contains(&ws_path) {
+            bases.push(ws_path);
+        }
+    }
+    let mut fallback = String::new();
+    for base in &bases {
+        let direct = base.join(html_path);
+        if direct.exists() {
+            return direct.to_string_lossy().to_string();
+        }
+        // Path not found — try resolving just the filename under output/.
+        // AI often writes files to output/<pipeline-dir>/filename.html but
+        // the PUBLISH marker may reference a different <pipeline-dir>.
+        // By searching by filename only, the path mismatch is eliminated.
+        let output_dir = base.join("output");
+        if output_dir.exists() {
+            if let Some(found) = find_file_recursive(&output_dir, filename) {
+                info!(original = %html_path, resolved = %found, "PUBLISH: resolved HTML by filename under output/");
+                return found;
+            }
+        }
+        if fallback.is_empty() {
+            fallback = direct.to_string_lossy().to_string();
+        }
+    }
+    fallback
+}
+
 /// Extract a field from a leading `<!-- ... -->` META header block written by
 /// article-writer etc. `key` is the field name without the `META_` prefix
 /// (e.g. "TITLE", "AUTHOR", "DIGEST"). Recognizes both `META_<KEY>:` (the
@@ -279,39 +332,25 @@ async fn handle_publish_marker(
     digest: Option<&str>,
     agent_id: &str,
 ) {
-    // Resolve html_path to absolute, mirroring how the agent's file_read
-    // resolves relative paths: under the per-sender workspace
-    // (workspaces/<agent>/senders/<sender>/), NOT ~/.opencarrier. Absolute
-    // paths are used as-is.
+    // Resolve html_path to absolute, mirroring how the agent's file_write
+    // resolves relative paths: per-user turns land under the sender-scoped dir
+    // (workspaces/<agent>/senders/<sender>/), cron/system turns (no sender)
+    // land under the workspace root. Absolute paths are used as-is. Try the
+    // sender base first, then the workspace root — so a cron publish whose
+    // article was written to workspace/output/ (NOT senders/_/output/) still
+    // resolves (concert-guide 2026-08 incident: the two bases forked and the
+    // publish read a non-existent senders/_/ path).
     let home = kernel.home_dir().unwrap_or_default();
     let abs_html = if std::path::Path::new(html_path).is_absolute() {
         html_path.to_string()
     } else {
-        let base = types::config::sender_data_dir(&home, sender_id, agent_id, Some(sender_id));
-        let direct = base.join(html_path);
-        if direct.exists() {
-            direct.to_string_lossy().to_string()
-        } else {
-            // Path not found — try resolving just the filename under output/.
-            // AI often writes files to output/<pipeline-dir>/filename.html but
-            // the PUBLISH marker may reference a different <pipeline-dir>.
-            // By searching by filename only, the path mismatch is eliminated.
-            let filename = std::path::Path::new(html_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(html_path);
-            let output_dir = base.join("output");
-            if output_dir.exists() {
-                if let Some(found) = find_file_recursive(&output_dir, filename) {
-                    info!(original = %html_path, resolved = %found, "PUBLISH: resolved HTML by filename under output/");
-                    found
-                } else {
-                    direct.to_string_lossy().to_string()
-                }
-            } else {
-                direct.to_string_lossy().to_string()
-            }
-        }
+        resolve_publish_html_path(
+            &home,
+            sender_id,
+            agent_id,
+            kernel.resolve_agent_workspace(agent_id).as_deref(),
+            html_path,
+        )
     };
 
     let title = match explicit_title.filter(|t| !t.is_empty()) {
@@ -459,6 +498,7 @@ async fn handle_publish_marker(
 mod tests {
     use super::{
         extract_meta_field, extract_meta_title, read_wechat_app_secret, resolve_article_title,
+        resolve_publish_html_path,
     };
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -474,6 +514,36 @@ mod tests {
         let md = dir.join("article.md");
         std::fs::write(&md, content).unwrap();
         md
+    }
+
+    /// Regression (concert-guide 2026-08): a cron publish (empty sender) wrote
+    /// the article to the workspace root `output/`, but the publisher read it
+    /// from `senders/_/output/` — the two bases forked and publish hit
+    /// "No such file". The resolver must fall back to the workspace root.
+    #[test]
+    fn resolve_publish_html_falls_back_to_workspace_root() {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let home = std::env::temp_dir().join(format!("oc_publish_ws_{n}"));
+        let ws = home.join("workspaces").join("86bus-assistant");
+        let article_dir = ws.join("output").join("sg-20260821-concert-guide");
+        std::fs::create_dir_all(&article_dir).unwrap();
+        std::fs::write(article_dir.join("正文.html"), "<p>x</p>").unwrap();
+        // Sender-scoped dir exists but has no article (the fork).
+        let sender_dir = ws.join("senders").join("_");
+        std::fs::create_dir_all(&sender_dir).unwrap();
+
+        let resolved = resolve_publish_html_path(
+            &home,
+            "",
+            "86bus-assistant",
+            Some(ws.to_str().unwrap()),
+            "output/sg-20260821-concert-guide/正文.html",
+        );
+        assert_eq!(
+            resolved,
+            article_dir.join("正文.html").to_string_lossy().to_string(),
+            "must resolve to the workspace root, not senders/_/"
+        );
     }
 
     #[test]
