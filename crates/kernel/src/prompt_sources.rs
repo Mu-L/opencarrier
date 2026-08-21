@@ -602,13 +602,6 @@ fn collect_flow_summaries(flows_dir: &Path) -> Vec<(String, String, std::path::P
             );
             continue;
         }
-        if flow_entry_is_false(&content) {
-            // `entry: false` = fallback-only / pure-atomic: never offered to
-            // the LLM classifier for auto-matching (a default_flow consultation
-            // fallback must not hijack specific-flow matching). Still reachable
-            // via default_flow fallback or an explicit flow_load by name.
-            continue;
-        }
         out.push((name, description, flow_path));
     }
     out
@@ -676,6 +669,15 @@ pub async fn classify_flow_with_llm(
 
     for dir in [workspace.join("flows")] {
         for (name, description, path) in collect_flow_summaries(&dir) {
+            // `entry: false` = fallback-only / pure-atomic: exclude from the
+            // classifier candidates (a default_flow consultation fallback must
+            // not hijack specific-flow matching). Still loadable by name via
+            // load_flow_by_name (which does NOT filter on entry).
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if flow_entry_is_false(&content) {
+                    continue;
+                }
+            }
             if seen_names.insert(name.to_lowercase()) {
                 flow_summaries.push((name, description, path));
             }
@@ -1043,11 +1045,12 @@ mod tests {
         assert!(!flow_entry_is_false("---\nname: x\ndescription: d\n---\nBody"));
     }
 
-    /// `entry: false` hides a flow from the LLM classifier (fallback-only /
-    /// pure-atomic) while keeping it reachable via default_flow fallback or an
-    /// explicit flow_load by name.
+    /// `entry: false` flows must STILL appear in `collect_flow_summaries`
+    /// (which feeds `load_flow_by_name` / the catalog) so a fallback flow stays
+    /// loadable by name — the classifier (`classify_flow_with_llm`) does the
+    /// entry filtering separately.
     #[test]
-    fn test_collect_flow_summaries_skips_entry_false() {
+    fn test_collect_flow_summaries_includes_entry_false() {
         let dir = tempfile::tempdir().unwrap();
         let flows = dir.path().join("flows");
         std::fs::create_dir_all(flows.join("consultation")).unwrap();
@@ -1064,11 +1067,12 @@ mod tests {
         .unwrap();
 
         let summaries = collect_flow_summaries(&flows);
-        let names: Vec<&str> = summaries.iter().map(|(n, _, _)| n.as_str()).collect();
+        let mut names: Vec<&str> = summaries.iter().map(|(n, _, _)| n.as_str()).collect();
+        names.sort_unstable();
         assert_eq!(
             names,
-            vec!["charter-quoter"],
-            "entry:false flow must be skipped from classifier candidates"
+            vec!["charter-quoter", "consultation"],
+            "entry:false flow must still be collectable (loadable by name)"
         );
     }
 }
