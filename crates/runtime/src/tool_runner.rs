@@ -162,10 +162,12 @@ pub async fn execute_tool(
                     return ToolResult {
                         tool_use_id: tool_use_id.to_string(),
                         content: format!(
-                            "Permission denied: shell command not allowed by system flow shell_allow. \
-                             Allowed patterns: {}. Command was: {}",
-                            patterns.join(", "),
-                            crate::str_utils::safe_truncate_str(command, 120)
+                            "权限拒绝：shell 命令不匹配本流程的 shell_allow 白名单。\
+                             命令：{}。允许的 pattern：{}。\
+                             修复：脚本路径写 workspace 相对或绝对都认（系统自动归一化）；\
+                             确需执行请把该脚本目录加进 flow 的 shell_allow 后 dup push 提交",
+                            crate::str_utils::safe_truncate_str(command, 120),
+                            patterns.join(", ")
                         ),
                         is_error: true,
                     };
