@@ -1254,16 +1254,8 @@ impl Default for BrainSourceConfig {
 pub struct MemoryConfig {
     /// Path to SQLite database file.
     pub sqlite_path: Option<PathBuf>,
-    /// Embedding model for semantic search.
-    pub embedding_model: String,
     /// Maximum memories before consolidation is triggered.
     pub consolidation_threshold: u64,
-    /// Embedding provider (e.g., "openai", "ollama"). None = auto-detect.
-    #[serde(default)]
-    pub embedding_provider: Option<String>,
-    /// Environment variable name for the embedding API key.
-    #[serde(default)]
-    pub embedding_api_key_env: Option<String>,
     /// How often to run memory consolidation (hours). 0 = disabled.
     #[serde(default = "default_consolidation_interval")]
     pub consolidation_interval_hours: u64,
@@ -1358,10 +1350,7 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             sqlite_path: None,
-            embedding_model: "all-MiniLM-L6-v2".to_string(),
             consolidation_threshold: 10_000,
-            embedding_provider: None,
-            embedding_api_key_env: None,
             consolidation_interval_hours: default_consolidation_interval(),
             tree: TreeMemoryConfig::default(),
         }
