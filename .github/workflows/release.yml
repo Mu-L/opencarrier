@@ -126,7 +126,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
-          projectPath: crates/carrier-desktop
+          projectPath: desktop
           args: ${{ matrix.platform.args }}
 
   # ── CLI Binary (5 platforms) ──────────────────────────────────────────────
