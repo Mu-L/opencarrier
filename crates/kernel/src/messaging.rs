@@ -3096,6 +3096,7 @@ mod tests {
                 output: Some("report".to_string()),
                 privilege: Default::default(),
                 shell_allow: vec!["python3 flows/article-formatter/scripts/*".to_string()],
+                shell_allow_checks: vec![],
                 deny_tools: vec!["task_plan".to_string()],
             },
         };

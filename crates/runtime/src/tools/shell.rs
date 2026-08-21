@@ -94,6 +94,18 @@ impl ToolModule for ShellTools {
             ))));
         }
 
+        // SECURITY: hard-banned dangerous prefixes — a floor that holds even in
+        // Full mode or when a flow-scoped shell_allow pattern matched (both
+        // otherwise bypass the exec allowlist). Checked against the effective
+        // command so a `cd <ws> && rm -rf /` chain's REST is also caught.
+        if let Some((reason, suggestion)) =
+            crate::subprocess_sandbox::check_dangerous_prefix(&effective_command)
+        {
+            return Some(Err(CarrierError::Sandbox(format!(
+                "shell_exec blocked: 危险命令（{reason}）。{suggestion}"
+            ))));
+        }
+
         // Flow-scoped shell_allow (private brand skills / system office flows):
         // when the turn stamped non-empty shell_allow and this command matches,
         // that list IS the allowlist for this call — skip global exec_policy

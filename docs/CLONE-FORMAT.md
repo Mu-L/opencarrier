@@ -114,6 +114,9 @@ deny_tools:
   - task_plan
 shell_allow:
   - "python3 flows/<name>/scripts/*"
+  - pattern: "python3 flows/<name>/scripts/render.py"
+    match: ["python3 flows/<name>/scripts/render.py --fast"]
+    not_match: ["rm -rf /"]
 max_iterations: 8
 ---
 
@@ -131,7 +134,7 @@ max_iterations: 8
 | `version` | ✅ | 整数，每次修改 +1 |
 | `tools` | ➖ | 本流程额外需要的工具白名单（数组） |
 | `deny_tools` | ➖ | 本轮禁止的工具（即使 core 工具） |
-| `shell_allow` | ➖ | shell_exec 提权的 glob 模式（如 `python3 flows/<n>/scripts/*`） |
+| `shell_allow` | ➖ | shell_exec 提权的 glob 模式（如 `python3 flows/<n>/scripts/*`）。条目两种形式：纯字符串，或带金样本的 map（`pattern` + 可选 `match`/`not_match`）——装机时硬校验：`match` 示例必须匹配（否则 pattern 过窄/typo）、`not_match` 示例必须不匹配（否则 pattern 过宽），不通过则拒收并给出修复指引 |
 | `max_iterations` | ➖ | 声明的轮次上限（软提示 N / 硬掐 N+2，定值留 2~4 轮收束余量） |
 | `output` | ➖ | 顶层输出模式；`report` = 最终回复必须是 Ralph report JSON（硬闸门校验） |
 

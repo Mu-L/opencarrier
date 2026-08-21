@@ -324,6 +324,26 @@ pub const META_MAX_ITERATIONS_DECLARED: &str = "max_iterations_declared";
 /// steps whose quality otherwise rides on agent goodwill.
 pub const META_OUTPUT_REPORT: &str = "flow_output_report";
 
+/// Author-attached golden examples for a single `shell_allow` pattern — used
+/// only by [`validate_shell_allow`] at install/load time to catch patterns that
+/// are too narrow (typo'd script path → the command can never match) or too
+/// broad (would authorize a dangerous command). Never consulted at runtime.
+///
+/// In the flow frontmatter a check is written as a `shell_allow` map entry:
+/// ```yaml
+/// shell_allow:
+///   - pattern: python3 output/scripts/*
+///     match: [python3 output/scripts/run.py]
+///     not_match: [rm -rf /]
+/// ```
+/// (`match` maps to [`Self::matches`]; `not_match` maps to [`Self::not_matches`].)
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ShellAllowCheck {
+    pub pattern: String,
+    pub matches: Vec<String>,
+    pub not_matches: Vec<String>,
+}
+
 /// A parsed flow definition.
 #[derive(Debug, Clone, Default)]
 pub struct FlowDef {
@@ -347,6 +367,9 @@ pub struct FlowDef {
     /// Shell command allow-patterns for elevated `shell_exec` (glob `*`).
     /// Example: `python3 output/scripts/*`
     pub shell_allow: Vec<String>,
+    /// Author-attached golden examples for `shell_allow` patterns (declaration-
+    /// time verification only — never used at runtime). See [`validate_shell_allow`].
+    pub shell_allow_checks: Vec<ShellAllowCheck>,
     /// Tools forbidden for this turn even if they are core/always-on
     /// (e.g. `image_generate` on a template-based poster flow).
     pub deny_tools: Vec<String>,
@@ -450,8 +473,9 @@ pub fn parse_flow_def(content: &str) -> FlowDef {
             def.tools = list;
             i += consumed.max(1);
         } else if trimmed == "shell_allow:" || trimmed.starts_with("shell_allow:") {
-            let (list, consumed) = parse_top_array(&lines, i, "shell_allow");
+            let (list, checks, consumed) = parse_shell_allow(&lines, i);
             def.shell_allow = list;
+            def.shell_allow_checks = checks;
             i += consumed.max(1);
         } else if trimmed == "deny_tools:" || trimmed.starts_with("deny_tools:") {
             let (list, consumed) = parse_top_array(&lines, i, "deny_tools");
@@ -534,6 +558,95 @@ fn parse_top_array(lines: &[&str], key_idx: usize, key: &str) -> (Vec<String>, u
     (out, j - key_idx)
 }
 
+/// Parse the `shell_allow:` field, which accepts two entry forms:
+///   - a plain string: `- python3 output/scripts/*` (backward-compatible)
+///   - a map with golden examples:
+///       - pattern: python3 output/scripts/*
+///         match: [python3 output/scripts/run.py]
+///         not_match: [rm -rf /]
+///
+/// Inline `[...]` form supports plain strings only.
+///
+/// Returns (patterns, checks, lines_consumed_including_the_key_line).
+fn parse_shell_allow(
+    lines: &[&str],
+    key_idx: usize,
+) -> (Vec<String>, Vec<ShellAllowCheck>, usize) {
+    let mut patterns = Vec::new();
+    let mut checks = Vec::new();
+
+    // Inline form (`shell_allow: [a, b]` or `shell_allow: a`) — plain strings only.
+    let inline = lines[key_idx]
+        .trim()
+        .strip_prefix("shell_allow:")
+        .unwrap_or("")
+        .trim();
+    if !inline.is_empty() {
+        for p in parse_inline_list(inline) {
+            if !p.is_empty() {
+                patterns.push(p);
+            }
+        }
+        return (patterns, checks, 1);
+    }
+
+    // Block form: subsequent `  - x` lines at indent > 0.
+    let mut j = key_idx + 1;
+    while j < lines.len() {
+        let l = lines[j];
+        if l.trim().is_empty() {
+            j += 1;
+            continue;
+        }
+        let indent = l.len() - l.trim_start().len();
+        if indent == 0 {
+            break;
+        }
+        let t = l.trim_start();
+        let Some(item) = t.strip_prefix('-') else { break };
+        let item = item.trim();
+        if item.starts_with("pattern:") {
+            let pattern = unquote(item.strip_prefix("pattern:").unwrap_or("").trim());
+            let mut check = ShellAllowCheck {
+                pattern: pattern.clone(),
+                ..Default::default()
+            };
+            j += 1;
+            // Consume nested `match:` / `not_match:` keys at deeper indent.
+            while j < lines.len() {
+                let l2 = lines[j];
+                if l2.trim().is_empty() {
+                    j += 1;
+                    continue;
+                }
+                let indent2 = l2.len() - l2.trim_start().len();
+                if indent2 <= indent {
+                    break;
+                }
+                let t2 = l2.trim_start();
+                if let Some(v) = t2.strip_prefix("match:") {
+                    check.matches.extend(parse_inline_list(v));
+                } else if let Some(v) = t2.strip_prefix("not_match:") {
+                    check.not_matches.extend(parse_inline_list(v));
+                }
+                j += 1;
+            }
+            if !pattern.is_empty() {
+                patterns.push(pattern);
+                checks.push(check);
+            }
+        } else {
+            let v = unquote(item);
+            if !v.is_empty() {
+                patterns.push(v);
+            }
+            j += 1;
+        }
+    }
+
+    (patterns, checks, j - key_idx)
+}
+
 /// Match a shell command against flow `shell_allow` glob patterns.
 ///
 /// Patterns support a single `*` wildcard (e.g. `python3 output/scripts/*`).
@@ -549,6 +662,92 @@ pub fn command_matches_shell_allow(command: &str, patterns: &[String]) -> bool {
     patterns
         .iter()
         .any(|p| shell_allow_glob_match(p.trim(), cmd))
+}
+
+/// Base command names that must never appear as a `shell_allow` pattern's base
+/// command — there is no legitimate vetted-script use for these (unlike
+/// `python3`/`ffmpeg`, which legitimately run flow scripts). A trailing `*`
+/// means prefix-match (e.g. `mkfs*` catches `mkfs.ext4`). Checked at install
+/// time by [`validate_shell_allow`].
+pub const FORBIDDEN_SHELL_ALLOW_BASES: &[&str] = &[
+    "sudo", "rm", "mkfs*", "dd", "osascript", "powershell", "pwsh",
+];
+
+/// Validate a flow's `shell_allow` declarations at install/load time. Returns
+/// structured Chinese errors (what's wrong -> fix hint) so an agent can
+/// self-repair in one round.
+///
+/// Two families:
+///   1. Structural lint (unconditional): a pattern that is `*` (matches
+///      everything = total bypass) or whose base command is a forbidden binary.
+///   2. Golden-sample checks (only when the author attached `match`/`not_match`
+///      examples): the referenced pattern must exist; every `match` example must
+///      match (else the pattern is too narrow — a typo'd script path that can
+///      never authorize the intended command); every `not_match` example must
+///      NOT match (else the pattern is too broad and would authorize a
+///      dangerous command).
+///
+/// Uses [`command_matches_shell_allow`] (the raw glob, no workspace
+/// normalization) because a golden sample asserts the pattern's *intrinsic*
+/// boundary, independent of any runtime path resolution.
+pub fn validate_shell_allow(def: &FlowDef) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    for pattern in &def.shell_allow {
+        let p = pattern.trim();
+        if p == "*" {
+            errors.push(format!(
+                "shell_allow 条目 '{pattern}' 是 '*' —— 匹配一切命令，等于完全绕过 shell 安全边界。\
+                 修复：改成具体脚本路径 glob，例如 'python3 flows/<name>/scripts/*'"
+            ));
+            continue;
+        }
+        let base = p.split_whitespace().next().unwrap_or("");
+        let base = base.rsplit('/').next().unwrap_or(base);
+        let forbidden = FORBIDDEN_SHELL_ALLOW_BASES.iter().any(|b| {
+            if let Some(prefix) = b.strip_suffix('*') {
+                base.starts_with(prefix)
+            } else {
+                *b == base
+            }
+        });
+        if forbidden {
+            errors.push(format!(
+                "shell_allow 条目 '{pattern}' 的基准命令 '{base}' 是危险命令，不允许声明在 shell_allow 里。\
+                 修复：改用安全的脚本/工具路径"
+            ));
+        }
+    }
+
+    for check in &def.shell_allow_checks {
+        let pattern = check.pattern.trim().to_string();
+        if !def.shell_allow.iter().any(|p| p.trim() == pattern) {
+            errors.push(format!(
+                "shell_allow 校验引用了不存在的 pattern '{pattern}' —— 它必须同时出现在 shell_allow 列表里。\
+                 修复：要么把该 pattern 加进 shell_allow，要么删除这条校验"
+            ));
+            continue;
+        }
+        let single = [pattern.clone()];
+        for ex in &check.matches {
+            if !command_matches_shell_allow(ex, &single) {
+                errors.push(format!(
+                    "shell_allow pattern '{pattern}' 的 match 示例 '{ex}' 竟然不匹配 —— pattern 过窄或脚本路径 typo，\
+                     该命令将永远匹配不上。修复：修正 pattern 或示例"
+                ));
+            }
+        }
+        for ex in &check.not_matches {
+            if command_matches_shell_allow(ex, &single) {
+                errors.push(format!(
+                    "shell_allow pattern '{pattern}' 的 not_match 示例 '{ex}' 竟然匹配 —— pattern 过宽，\
+                     会放行危险命令。修复：收紧 pattern（更具体的目录/脚本名）"
+                ));
+            }
+        }
+    }
+
+    errors
 }
 
 /// True if `command` contains a `..` path segment (`../`, `/../`, `/..`, or a
@@ -1691,6 +1890,117 @@ b"#;
         ));
     }
 
+    // ── shell_allow golden-sample parsing + validation ──────────────────
+
+    #[test]
+    fn shell_allow_map_entry_parses_golden_samples() {
+        let content = r#"---
+name: demo
+description: d
+shell_allow:
+  - python3 output/scripts/*
+  - pattern: python3 flows/demo/scripts/*
+    match: [python3 flows/demo/scripts/run.py]
+    not_match: [rm -rf /, bash -c id]
+---
+body"#;
+        let f = parse_flow_def(content);
+        assert_eq!(
+            f.shell_allow,
+            vec![
+                "python3 output/scripts/*".to_string(),
+                "python3 flows/demo/scripts/*".to_string()
+            ]
+        );
+        assert_eq!(f.shell_allow_checks.len(), 1);
+        let check = &f.shell_allow_checks[0];
+        assert_eq!(check.pattern, "python3 flows/demo/scripts/*");
+        assert_eq!(check.matches, vec!["python3 flows/demo/scripts/run.py"]);
+        assert_eq!(check.not_matches, vec!["rm -rf /", "bash -c id"]);
+    }
+
+    #[test]
+    fn validate_shell_allow_clean_flow_passes() {
+        let def = FlowDef {
+            shell_allow: vec!["python3 output/scripts/*".to_string()],
+            shell_allow_checks: vec![ShellAllowCheck {
+                pattern: "python3 output/scripts/*".to_string(),
+                matches: vec!["python3 output/scripts/run.py".to_string()],
+                not_matches: vec!["rm -rf /".to_string()],
+            }],
+            ..Default::default()
+        };
+        assert!(validate_shell_allow(&def).is_empty(), "{:?}", validate_shell_allow(&def));
+    }
+
+    #[test]
+    fn validate_shell_allow_rejects_star_and_forbidden_base() {
+        let star = FlowDef {
+            shell_allow: vec!["*".to_string()],
+            ..Default::default()
+        };
+        let errs = validate_shell_allow(&star);
+        assert!(errs.iter().any(|e| e.contains("'*'")), "{errs:?}");
+
+        let rm = FlowDef {
+            shell_allow: vec!["rm -rf *".to_string()],
+            ..Default::default()
+        };
+        let errs = validate_shell_allow(&rm);
+        assert!(errs.iter().any(|e| e.contains("'rm'")), "{errs:?}");
+
+        let mkfs = FlowDef {
+            shell_allow: vec!["mkfs.ext4 *".to_string()],
+            ..Default::default()
+        };
+        let errs = validate_shell_allow(&mkfs);
+        assert!(errs.iter().any(|e| e.contains("mkfs.ext4")), "{errs:?}");
+    }
+
+    #[test]
+    fn validate_shell_allow_catches_too_narrow_and_too_broad() {
+        // Too narrow: a match example the pattern can never authorize.
+        let narrow = FlowDef {
+            shell_allow: vec!["python3 output/scripts/run.py".to_string()],
+            shell_allow_checks: vec![ShellAllowCheck {
+                pattern: "python3 output/scripts/run.py".to_string(),
+                matches: vec!["python3 output/scripts/other.py".to_string()],
+                not_matches: vec![],
+            }],
+            ..Default::default()
+        };
+        let errs = validate_shell_allow(&narrow);
+        assert!(errs.iter().any(|e| e.contains("match 示例")), "{errs:?}");
+
+        // Too broad: a not_match example the pattern WOULD authorize.
+        let broad = FlowDef {
+            shell_allow: vec!["python3 *".to_string()],
+            shell_allow_checks: vec![ShellAllowCheck {
+                pattern: "python3 *".to_string(),
+                matches: vec![],
+                not_matches: vec!["python3 -c id".to_string()],
+            }],
+            ..Default::default()
+        };
+        let errs = validate_shell_allow(&broad);
+        assert!(errs.iter().any(|e| e.contains("not_match 示例")), "{errs:?}");
+    }
+
+    #[test]
+    fn validate_shell_allow_rejects_unknown_pattern_reference() {
+        let def = FlowDef {
+            shell_allow: vec!["python3 output/*".to_string()],
+            shell_allow_checks: vec![ShellAllowCheck {
+                pattern: "python3 nonexistent/*".to_string(),
+                matches: vec![],
+                not_matches: vec![],
+            }],
+            ..Default::default()
+        };
+        let errs = validate_shell_allow(&def);
+        assert!(errs.iter().any(|e| e.contains("不存在")), "{errs:?}");
+    }
+
     #[test]
     fn flow_shell_allow_matches_absolute_workspace_path() {
         // Flow authors write workspace-relative patterns; agents often use the
@@ -2045,6 +2355,15 @@ mod report_matrix_tests {
         assert!(def.deny_tools.iter().any(|t| t == "task_plan"));
         // `shell_allow` quoted glob.
         assert!(!def.shell_allow.is_empty(), "shell_allow must parse");
+        // `shell_allow` map entry with golden samples must parse too.
+        assert!(
+            !def.shell_allow_checks.is_empty(),
+            "doc example shell_allow map entry must parse into shell_allow_checks"
+        );
+        let check = &def.shell_allow_checks[0];
+        assert_eq!(check.pattern, "python3 flows/<name>/scripts/render.py");
+        assert!(!check.matches.is_empty(), "match examples must parse");
+        assert!(!check.not_matches.is_empty(), "not_match examples must parse");
         // max_iterations numeric.
         assert_eq!(def.max_iterations, Some(8));
         // The doc must also still teach the two hard rules; if these strings

@@ -268,6 +268,100 @@ fn extract_all_commands(command: &str) -> Vec<&str> {
     commands
 }
 
+/// Hard-banned dangerous command prefixes — a runtime floor that applies even
+/// in Full exec mode or when a flow-scoped `shell_allow` pattern matched (both
+/// of which otherwise bypass the exec-policy allowlist). Token-aware: matches
+/// the base command name plus any required flag, never a naive substring — so
+/// `python3 scripts/run.py` is NOT flagged, but `python3 -c ...` is.
+///
+/// Returns `Some((reason, suggestion))` for the first matched entry.
+pub fn check_dangerous_prefix(command: &str) -> Option<(String, String)> {
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    let base = extract_base_command(command);
+    for (bases, flags, reason, suggestion) in DANGEROUS_PREFIXES {
+        // A base name ending in `*` is a prefix match (e.g. `mkfs*` catches
+        // `mkfs.ext4`, `mkfs.xfs`); otherwise exact.
+        let base_hit = bases.iter().any(|b| {
+            if let Some(prefix) = b.strip_suffix('*') {
+                base.starts_with(prefix)
+            } else {
+                *b == base
+            }
+        });
+        if !base_hit {
+            continue;
+        }
+        if flags.is_empty() {
+            return Some(((*reason).to_string(), (*suggestion).to_string()));
+        }
+        // `flags` may be `-`-prefixed options (`-c`, `-rf`) or bare tokens
+        // (`777`). Skip the base command token itself.
+        if tokens.iter().skip(1).any(|t| flags.contains(t)) {
+            return Some(((*reason).to_string(), (*suggestion).to_string()));
+        }
+    }
+    None
+}
+
+/// (base command names, required flags, reason, safer alternative). An empty
+/// flags slice means any invocation of that base command is banned.
+const DANGEROUS_PREFIXES: &[(&[&str], &[&str], &str, &str)] = &[
+    (
+        &["sudo"],
+        &[],
+        "提权",
+        "去掉 sudo —— daemon 用户已有所需权限，flow 脚本无需提权",
+    ),
+    (
+        &["rm"],
+        &["-rf", "-fr", "-r", "-R", "--recursive"],
+        "不可逆递归删除",
+        "用 file_remove 工具，或对明确命名的单文件执行 rm（勿带 -r/-rf）",
+    ),
+    (
+        &["bash", "sh", "zsh", "dash", "ksh"],
+        &["-c"],
+        "嵌套 shell / 命令混淆",
+        "直接 shell_exec 跑目标命令，不套第二层 shell",
+    ),
+    (
+        &["python", "python2", "python3"],
+        &["-c"],
+        "内联代码执行，绕过脚本审查",
+        "把代码写进脚本文件再 python3 <file>",
+    ),
+    (
+        &["node", "nodejs"],
+        &["-e", "-p"],
+        "内联 JS eval",
+        "把代码写进文件再 node <file>",
+    ),
+    (
+        &["osascript"],
+        &[],
+        "macOS 自动化",
+        "改用类型化工具（file_* / 对应 API 工具）",
+    ),
+    (
+        &["powershell", "pwsh"],
+        &["-EncodedCommand", "-enc"],
+        "编码命令混淆",
+        "明文执行",
+    ),
+    (
+        &["mkfs*", "dd"],
+        &[],
+        "裸磁盘写入",
+        "flow 永不需要，拒绝",
+    ),
+    (
+        &["chmod"],
+        &["777"],
+        "权限放宽（世界可写）",
+        "用最小权限，勿用 777",
+    ),
+];
+
 /// Validate a shell command against the exec policy.
 ///
 /// Returns `Ok(())` if the command is allowed, `Err(reason)` if blocked.
@@ -569,6 +663,52 @@ mod tests {
     fn test_extract_all_commands_semicolons() {
         let cmds = extract_all_commands("echo a; echo b; echo c");
         assert_eq!(cmds, vec!["echo", "echo", "echo"]);
+    }
+
+    // ── Dangerous prefix blacklist tests ────────────────────────────────
+
+    #[test]
+    fn test_dangerous_prefix_blocks_recursive_rm() {
+        assert!(check_dangerous_prefix("rm -rf /").is_some());
+        assert!(check_dangerous_prefix("rm -r /tmp/x").is_some());
+        assert!(check_dangerous_prefix("rm -fr /tmp/x").is_some());
+        assert!(check_dangerous_prefix("/bin/rm --recursive foo").is_some());
+    }
+
+    #[test]
+    fn test_dangerous_prefix_blocks_sudo_and_shell_c() {
+        assert!(check_dangerous_prefix("sudo rm -rf /").is_some());
+        assert!(check_dangerous_prefix("bash -c 'id'").is_some());
+        assert!(check_dangerous_prefix("sh -c echo hi").is_some());
+    }
+
+    #[test]
+    fn test_dangerous_prefix_blocks_inline_code() {
+        assert!(check_dangerous_prefix("python3 -c 'print(1)'").is_some());
+        assert!(check_dangerous_prefix("python -c 'x'").is_some());
+        assert!(check_dangerous_prefix("node -e 'x'").is_some());
+    }
+
+    #[test]
+    fn test_dangerous_prefix_blocks_disk_and_perms() {
+        assert!(check_dangerous_prefix("mkfs.ext4 /dev/sda").is_some());
+        assert!(check_dangerous_prefix("mkfs /dev/sda").is_some());
+        assert!(check_dangerous_prefix("dd if=/dev/zero of=x").is_some());
+        assert!(check_dangerous_prefix("chmod 777 file").is_some());
+        assert!(check_dangerous_prefix("osascript -e 'x'").is_some());
+    }
+
+    #[test]
+    fn test_dangerous_prefix_allows_safe_commands() {
+        assert!(check_dangerous_prefix("python3 output/scripts/run.py").is_none());
+        assert!(
+            check_dangerous_prefix("python3 flows/outline-writer/scripts/x.py").is_none()
+        );
+        assert!(check_dangerous_prefix("ffmpeg -i in.mp4 out.mp4").is_none());
+        assert!(check_dangerous_prefix("mkdir -p output/foo").is_none());
+        // Plain `rm <file>` (non-recursive) is a legitimate temp-cleanup pattern.
+        assert!(check_dangerous_prefix("rm temp.txt").is_none());
+        assert!(check_dangerous_prefix("chmod u+x script.sh").is_none());
     }
 
     #[test]

@@ -273,6 +273,15 @@ pub fn validate_install_format(files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<
                          修复：frontmatter 必须包含 name、description（单行非空）、version"
                     ));
                 }
+
+                // 3. shell_allow declarations: structural lint (forbidden base /
+                //    `*` bypass) + golden-sample (match/not_match) verification.
+                let def = types::flow::parse_flow_def(&text);
+                errors.extend(
+                    types::flow::validate_shell_allow(&def)
+                        .into_iter()
+                        .map(|e| format!("文件 '{rel}': {e}")),
+                );
             }
         }
     }
@@ -607,5 +616,50 @@ mod tests {
             b"print(1)".to_vec(),
         );
         assert!(validate_install_format(&files).unwrap().is_empty());
+    }
+
+    #[test]
+    fn validate_install_format_checks_shell_allow() {
+        // `*` shell_allow pattern (total bypass) is rejected at install.
+        let mut files = BTreeMap::new();
+        files.insert(
+            "flows/write/flow.md".to_string(),
+            "---\nname: write\ndescription: 写文章\nversion: 1\nshell_allow:\n  - \"*\"\n---\nbody"
+                .as_bytes()
+                .to_vec(),
+        );
+        let errs = validate_install_format(&files).unwrap();
+        assert!(
+            errs.iter().any(|e| e.contains("shell_allow")),
+            "{errs:?}"
+        );
+
+        // A not_match golden sample the pattern WOULD match is rejected.
+        let mut files = BTreeMap::new();
+        files.insert(
+            "flows/write/flow.md".to_string(),
+            "---\nname: write\ndescription: 写文章\nversion: 1\nshell_allow:\n  - pattern: \"python3 *\"\n    not_match: [\"python3 -c id\"]\n---\nbody"
+                .as_bytes()
+                .to_vec(),
+        );
+        let errs = validate_install_format(&files).unwrap();
+        assert!(
+            errs.iter().any(|e| e.contains("not_match")),
+            "{errs:?}"
+        );
+
+        // A clean map-form shell_allow passes with no errors.
+        let mut files = BTreeMap::new();
+        files.insert(
+            "flows/write/flow.md".to_string(),
+            "---\nname: write\ndescription: 写文章\nversion: 1\nshell_allow:\n  - \"python3 flows/write/scripts/*\"\n  - pattern: \"python3 flows/write/scripts/*\"\n    match: [\"python3 flows/write/scripts/run.py\"]\n    not_match: [\"rm -rf /\"]\n---\nbody"
+                .as_bytes()
+                .to_vec(),
+        );
+        assert!(
+            validate_install_format(&files).unwrap().is_empty(),
+            "{:?}",
+            validate_install_format(&files).unwrap()
+        );
     }
 }
