@@ -87,6 +87,29 @@ fn test_last_run_stuck_prompt_warns_next_turn() {
 }
 
 #[test]
+fn test_last_run_stuck_prompt_strips_operator_advice() {
+    // stuck reason 尾部带运维向建议（"Fix the flow/tool guidance and retry"），
+    // 整段注入会把下一轮模型带去"修 guidance"而不是干活（08-21 86bus 自噬循环）。
+    // prompt_line 只保留第一句。
+    let last = state::LastRunSummary {
+        timestamp: "t".into(),
+        iterations: 12,
+        stop_reason: "stuck: rotating".into(),
+        tokens_used: 10,
+        outcome: state::RunOutcome::Stuck(
+            "agent re-called `file_read` with identical args 8x total this turn. \
+             This is rotating repetition. Turn aborted to save the iteration budget. \
+             Fix the flow/tool guidance and retry."
+                .into(),
+        ),
+    };
+    let line = last.prompt_line();
+    assert!(line.contains("identical args 8x"), "{line}");
+    assert!(!line.contains("Fix the flow"), "{line}");
+    assert!(!line.contains("iteration budget"), "{line}");
+}
+
+#[test]
 fn test_record_progress_aborts_after_threshold_idle_iters() {
     // No progress for 3 consecutive iterations -> Some(streak) on the 3rd.
     let mut state = LoopState::new(128_000);

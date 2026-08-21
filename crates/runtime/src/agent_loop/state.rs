@@ -341,10 +341,24 @@ impl LastRunSummary {
     /// System-message line injected at the start of the next turn.
     pub fn prompt_line(&self) -> String {
         match &self.outcome {
-            RunOutcome::Stuck(reason) => format!(
-                "📋 上次 loop 卡死：跑了 {} 轮后被终止。原因：{reason}。不要重复同样的工具调用或空转，换做法或直接给出目前能给的结论。",
-                self.iterations
-            ),
+            RunOutcome::Stuck(reason) => {
+                // 只把第一句注入给模型：stuck reason 尾部带运维向建议
+                // （"Fix the flow/tool guidance and retry"），整段注入会把模型
+                // 带去"修 guidance"（读 validator/flow 源码）而不是干活，
+                // 再触发守卫、再持久化同条 reason——自我延续（08-21 86bus 实锤）。
+                let first_sentence = reason
+                    .split(['。', '.', '；'])
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .chars()
+                    .take(160)
+                    .collect::<String>();
+                format!(
+                    "📋 上次 loop 卡死：跑了 {} 轮后被终止。原因：{first_sentence}。本轮不要重读已读过的文件、不要重复同样的工具调用；直接基于已有信息推进任务，或给出目前能给的结论。",
+                    self.iterations
+                )
+            }
             _ => format!(
                 "📋 上次 loop 运行: {} 轮, 原因: {}, 结果: {:?}",
                 self.iterations, self.stop_reason, self.outcome
