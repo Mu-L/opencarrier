@@ -163,10 +163,14 @@
   </h3>
   <div id="user-list" style="display:none">
     {% if users %}
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <input id="user-search" class="input" placeholder="搜索 sender_id 或昵称…" oninput="onUserSearch(this.value)" style="flex:1;min-width:220px;max-width:380px">
+      <span id="user-search-count" style="font-size:13px;color:var(--text-dim);white-space:nowrap"></span>
+    </div>
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>用户</th><th>昵称</th><th>会话数</th><th>最近活跃</th><th>操作</th></tr>
+          <tr><th>用户</th><th>昵称</th><th id="th-session-count" style="cursor:pointer;user-select:none" onclick="sortBy('session_count')" title="点击排序">会话数 ⇅</th><th id="th-last-active" style="cursor:pointer;user-select:none" onclick="sortBy('last_active')" title="点击排序">最近活跃 ⇅</th><th>操作</th></tr>
         </thead>
         <tbody id="user-tbody">
         </tbody>
@@ -185,8 +189,9 @@
 
 <div class="card">
   <h3 style="font-size:16px;margin-bottom:16px">用户文件</h3>
-  <div style="margin-bottom:12px">
-    <label style="font-size:13px;margin-right:8px;color:var(--text-dim)">选择用户：</label>
+  <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <label style="font-size:13px;color:var(--text-dim)">选择用户：</label>
+    <input id="file-user-filter" class="input" placeholder="过滤用户（sender_id / 昵称）…" oninput="filterFileUsers(this.value)" style="min-width:200px;max-width:280px">
     <select id="file-user-select" onchange="loadFileTree()" style="background:var(--surface);color:var(--text);border:1px solid var(--border);padding:6px 10px;border-radius:6px;min-width:200px">
       <option value="">— 请选择用户 —</option>
     </select>
@@ -214,17 +219,72 @@
 const PAGE_SIZE = 20;
 let allUsers = JSON.parse(document.getElementById('users-data').dataset.users);
 let currentPage = 1;
+let searchQuery = '';
+let sortKey = null;   // 'session_count' | 'last_active' | null
+let sortDir = -1;     // -1 降序 / 1 升序
 const agentName = document.getElementById('agent-data').dataset.agentName;
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+function onUserSearch(v) { searchQuery = v; currentPage = 1; renderUsers(); }
+
+function filteredUsers() {
+  const q = searchQuery.trim().toLowerCase();
+  let list = allUsers;
+  if (q) {
+    list = list.filter(u =>
+      (u.sender_id || '').toLowerCase().includes(q) ||
+      (u.alias || '').toLowerCase().includes(q));
+  }
+  if (sortKey) {
+    const key = sortKey;
+    list = list.slice().sort((a, b) => {
+      let va, vb;
+      if (key === 'session_count') { va = a.session_count || 0; vb = b.session_count || 0; }
+      else { va = a.last_active || ''; vb = b.last_active || ''; } // RFC3339 同格式，字典序即时间序
+      if (va < vb) return -1 * sortDir;
+      if (va > vb) return 1 * sortDir;
+      return 0;
+    });
+  }
+  return list;
+}
+
+function sortBy(key) {
+  if (sortKey === key) {
+    if (sortDir === -1) sortDir = 1;
+    else { sortKey = null; sortDir = -1; } // 第三次点击恢复默认（最近活跃降序）
+  } else {
+    sortKey = key;
+    sortDir = -1;
+  }
+  currentPage = 1;
+  renderUsers();
+}
+
 function renderUsers() {
   const tbody = document.getElementById('user-tbody');
-  const totalPages = Math.ceil(allUsers.length / PAGE_SIZE);
+  const users = filteredUsers();
+  const totalPages = Math.max(1, Math.ceil(users.length / PAGE_SIZE));
+  if (currentPage > totalPages) currentPage = totalPages;
   const start = (currentPage - 1) * PAGE_SIZE;
-  const pageUsers = allUsers.slice(start, start + PAGE_SIZE);
+  const pageUsers = users.slice(start, start + PAGE_SIZE);
 
-  tbody.innerHTML = pageUsers.map(u => {
+  const countEl = document.getElementById('user-search-count');
+  if (countEl) {
+    countEl.textContent = users.length === allUsers.length
+      ? ('共 ' + allUsers.length + ' 人')
+      : ('匹配 ' + users.length + ' / ' + allUsers.length + ' 人');
+  }
+  const arrow = k => sortKey === k ? (sortDir === -1 ? ' ▼' : ' ▲') : ' ⇅';
+  const thSc = document.getElementById('th-session-count');
+  const thLa = document.getElementById('th-last-active');
+  if (thSc) thSc.textContent = '会话数' + arrow('session_count');
+  if (thLa) thLa.textContent = '最近活跃' + arrow('last_active');
+
+  tbody.innerHTML = pageUsers.length === 0
+    ? '<tr><td colspan="5" style="color:var(--text-dim);text-align:center;padding:16px">无匹配用户</td></tr>'
+    : pageUsers.map(u => {
     const aliasText = u.alias ? esc(u.alias) : '<span style="color:var(--text-dim)">未设置</span>';
     return `<tr>
       <td style="font-weight:500">${esc(u.sender_id)}</td>
@@ -574,6 +634,27 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
 });
+
+// Live-filter the file-management user dropdown by sender_id / alias
+function filterFileUsers(v) {
+  const sel = document.getElementById('file-user-select');
+  if (!sel) return;
+  const q = (v || '').trim().toLowerCase();
+  let firstVisible = '';
+  [...sel.options].forEach(o => {
+    if (!o.value) return; // 占位项始终显示
+    const hit = !q ||
+      o.value.toLowerCase().includes(q) ||
+      (o.textContent || '').toLowerCase().includes(q);
+    o.hidden = !hit;
+    if (hit && !firstVisible) firstVisible = o.value;
+  });
+  // 当前选中项被过滤掉时，跳到第一个可见项（保持文件树可用）
+  if (sel.value && sel.selectedOptions[0] && sel.selectedOptions[0].hidden) {
+    sel.value = firstVisible || '';
+    loadFileTree();
+  }
+}
 
 function switchFileBase(base) {
   fileCurrentBasePath = base;

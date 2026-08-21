@@ -332,6 +332,8 @@ async fn render_clone_detail(
                     "sender_id": sid,
                     "session_count": u["session_count"].as_i64().unwrap_or(0),
                     "last_active_ago": format_time_ago(u["last_active"].as_str().unwrap_or("")),
+                    // 原始时间戳（RFC3339，同格式可字典序排序）供前端排序用
+                    "last_active": u["last_active"].as_str().unwrap_or(""),
                     "alias": alias,
                 })
             })
