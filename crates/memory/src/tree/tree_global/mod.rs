@@ -16,12 +16,6 @@ pub mod hotness;
 /// Number of L0 (daily) nodes that seal into one L1 (weekly) node.
 pub const WEEKLY_SEAL_THRESHOLD: usize = 7;
 
-/// Number of L1 (weekly) nodes that seal into one L2 (monthly) node.
-pub const MONTHLY_SEAL_THRESHOLD: usize = 4;
-
-/// Number of L2 (monthly) nodes that seal into one L3 (yearly) node.
-pub const YEARLY_SEAL_THRESHOLD: usize = 12;
-
 /// Literal scope used for the singleton global tree.
 pub const GLOBAL_SCOPE: &str = "global";
 

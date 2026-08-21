@@ -335,11 +335,6 @@ impl Brain {
         &self.config.default_modality
     }
 
-    /// List all available modalities.
-    pub fn available_modalities(&self) -> Vec<&str> {
-        self.config.modalities.keys().map(|s| s.as_str()).collect()
-    }
-
     /// Check if a modality is available.
     pub fn has_modality(&self, modality: &str) -> bool {
         self.config.modalities.contains_key(modality)
@@ -348,11 +343,6 @@ impl Brain {
     /// Get the underlying config (for dashboard API).
     pub fn config(&self) -> &BrainConfig {
         &self.config
-    }
-
-    /// Get the shared driver for a modality.
-    pub fn driver_for_modality(&self, _modality: &str) -> Option<Arc<dyn LlmDriver>> {
-        self.driver.clone()
     }
 }
 

@@ -5,16 +5,6 @@ use tracing::warn;
 /// Configuration for link understanding (re-exported from types).
 pub use types::media::LinkConfig;
 
-/// Summary of a fetched link.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct LinkSummary {
-    pub url: String,
-    pub title: Option<String>,
-    /// Content preview, max 2000 chars.
-    pub content_preview: String,
-    pub content_type: String,
-}
-
 /// Extract URLs from text, with SSRF validation.
 ///
 /// Returns up to `max` valid, unique, non-private URLs.

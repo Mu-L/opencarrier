@@ -15,8 +15,6 @@ use super::instance::PluginInstance;
 
 /// Entry mapping a tool name to its owning plugin.
 struct PluginToolEntry {
-    /// Name of the plugin providing this tool.
-    plugin_name: String,
     /// The tool definition (description + parameter schema).
     definition: PluginToolDef,
     /// Reference to the loaded plugin (for execution).
@@ -47,18 +45,11 @@ impl PluginToolDispatcher {
             self.tools.insert(
                 tool_name,
                 PluginToolEntry {
-                    plugin_name: plugin.name().to_string(),
                     definition: tool_def.clone(),
                     plugin: plugin.clone(),
                 },
             );
         }
-    }
-
-    /// Unregister all tools from a specific plugin.
-    pub fn unregister_plugin(&self, plugin_name: &str) {
-        self.tools
-            .retain(|_, entry| entry.plugin_name != plugin_name);
     }
 
     /// Check if a tool name is provided by any plugin.

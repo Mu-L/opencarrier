@@ -15,7 +15,6 @@ kernel = { path = "../kernel" }
 api = { path = "../api" }
 memory = { path = "../memory" }
 clone = { path = "../clone" }
-zeroize = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
@@ -29,7 +28,6 @@ reqwest = { workspace = true, features = ["blocking"] }
 runtime = { path = "../runtime" }
 uuid = { workspace = true }
 colored = { workspace = true }
-rusqlite = { workspace = true }
 chrono = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }

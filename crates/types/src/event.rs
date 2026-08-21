@@ -312,18 +312,6 @@ impl Event {
             ttl: None,
         }
     }
-
-    /// Set the correlation ID for request-response linking.
-    pub fn with_correlation(mut self, correlation_id: EventId) -> Self {
-        self.correlation_id = Some(correlation_id);
-        self
-    }
-
-    /// Set the TTL for this event.
-    pub fn with_ttl(mut self, ttl: Duration) -> Self {
-        self.ttl = Some(ttl);
-        self
-    }
 }
 
 #[cfg(test)]
@@ -344,21 +332,6 @@ mod tests {
     }
 
     #[test]
-    fn test_event_with_correlation() {
-        let agent_id = AgentId::new();
-        let corr_id = EventId::new();
-        let event = Event::new(
-            agent_id,
-            EventTarget::System,
-            EventPayload::System(SystemEvent::HealthCheck {
-                status: "ok".to_string(),
-            }),
-        )
-        .with_correlation(corr_id);
-        assert_eq!(event.correlation_id, Some(corr_id));
-    }
-
-    #[test]
     fn test_event_serialization() {
         let agent_id = AgentId::new();
         let event = Event::new(
@@ -373,19 +346,5 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let deserialized: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.id, event.id);
-    }
-
-    #[test]
-    fn test_event_with_ttl_serialization() {
-        let agent_id = AgentId::new();
-        let event = Event::new(
-            agent_id,
-            EventTarget::Broadcast,
-            EventPayload::System(SystemEvent::KernelStarted),
-        )
-        .with_ttl(Duration::from_secs(60));
-        let json = serde_json::to_string(&event).unwrap();
-        let deserialized: Event = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.ttl, Some(Duration::from_millis(60_000)));
     }
 }

@@ -475,17 +475,6 @@ pub struct CliExecConfig {
     pub commands: Vec<CliCommand>,
 }
 
-/// Reason a subprocess was terminated.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TerminationReason {
-    /// Process exited normally.
-    Exited(i32),
-    /// Absolute timeout exceeded.
-    AbsoluteTimeout,
-    /// No output timeout exceeded.
-    NoOutputTimeout,
-}
-
 // ---------------------------------------------------------------------------
 // Gap 5: Docker sandbox maturity
 // ---------------------------------------------------------------------------
@@ -1147,16 +1136,6 @@ pub fn sanitize_path_component(s: &str) -> &str {
     }
 }
 
-/// Path to a sender's session.json.
-///
-/// Returns `~/.opencarrier/senders/{sender_id}/session.json`.
-pub fn sender_session_path(home_dir: &std::path::Path, sender_id: &str) -> PathBuf {
-    home_dir
-        .join("senders")
-        .join(sender_id)
-        .join("session.json")
-}
-
 /// Scan all senders/*/session.json files and return (sender_id, raw_json) pairs.
 ///
 /// Each entry corresponds to a sender directory that has a session.json.
@@ -1182,32 +1161,6 @@ pub fn scan_sender_sessions(home_dir: &std::path::Path) -> Vec<(String, serde_js
     }
 
     results
-}
-
-/// Unified session header fields present in every session.json.
-///
-/// Each platform's session.json contains these two fields plus
-/// platform-specific credential fields. The `channel` field identifies
-/// which platform owns the session; `sender_key` declares which field
-/// in the JSON holds the value that matches the `senders/` directory name.
-///
-/// Example (企微 SmartBot):
-/// ```json
-/// {
-///   "channel": "wecom",
-///   "sender_key": "bot_id",
-///   "bot_id": "aibOXHOLZh1...",
-///   "secret": "...",
-///   "mode": "smartbot"
-/// }
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SenderSessionHeader {
-    /// Platform identifier: "wecom" | "feishu" | "dingtalk" | "weixin"
-    pub channel: String,
-    /// Which field in this JSON holds the sender_id value
-    /// (e.g., "bot_id" for wecom, "app_id" for feishu, "app_key" for dingtalk, "openid" for weixin)
-    pub sender_key: String,
 }
 
 /// Default LLM model configuration.

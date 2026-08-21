@@ -79,10 +79,6 @@ pub enum CarrierError {
     #[error("Max iterations exceeded ({0}). Configure a higher limit in agent.toml under [autonomous] max_iterations")]
     MaxIterationsExceeded(u32),
 
-    /// The kernel is shutting down.
-    #[error("Shutdown in progress")]
-    ShuttingDown,
-
     /// An I/O error occurred.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

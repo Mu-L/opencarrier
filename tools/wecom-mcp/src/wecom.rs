@@ -152,17 +152,6 @@ impl WecomClient {
         Ok(json)
     }
 
-    /// Simple GET (no auth) — returns raw text.
-    #[allow(dead_code)]
-    pub async fn http_get_text(&self, url: &str) -> Result<String> {
-        let resp = self.http.get(url).send().await?;
-        if !resp.status().is_success() {
-            bail!("HTTP {} fetching {}", resp.status(), url);
-        }
-        let text = resp.text().await?;
-        Ok(text)
-    }
-
     /// Simple GET (no auth) — returns JSON.
     pub async fn http_get_json(&self, url: &str) -> Result<Value> {
         let resp = self.http.get(url).send().await?;

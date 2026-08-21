@@ -21,7 +21,6 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use tracing::{info, warn};
 use types::error::{CarrierError, CarrierResult};
 
@@ -63,8 +62,6 @@ pub struct SenderRouter {
     clones: DashMap<String, HashMap<String, CloneEntry>>,
     /// Root directory: ~/.opencarrier/senders/
     senders_dir: PathBuf,
-    /// First available agent name (for auto-assigning new senders).
-    first_agent: Mutex<Option<String>>,
 }
 
 impl SenderRouter {
@@ -74,19 +71,9 @@ impl SenderRouter {
             routes: DashMap::new(),
             clones: DashMap::new(),
             senders_dir,
-            first_agent: Mutex::new(None),
         };
         router.load_all_from_disk();
         router
-    }
-
-    /// Set the first available agent (called after bindings are populated).
-    pub fn set_first_agent(&self, agent_name: String) {
-        let mut first = self.first_agent.lock().unwrap_or_else(|e| e.into_inner());
-        if first.is_none() {
-            info!(agent = %agent_name, "SenderRouter: first agent set");
-            *first = Some(agent_name);
-        }
     }
 
     /// Migrate any routes still stored as UUIDs to agent names.
@@ -290,20 +277,10 @@ impl SenderRouter {
         Some(config.default)
     }
 
-    fn auto_assign(&self, sender_id: &str) -> Option<String> {
-        let agent_name = {
-            let first = self.first_agent.lock().unwrap_or_else(|e| e.into_inner());
-            first.clone()?
-        };
-
-        if let Err(e) = self.persist_route(sender_id, &agent_name) {
-            warn!(sender = %sender_id, "Failed to persist auto-assign: {e}");
-            return None;
-        }
-        self.routes
-            .insert(sender_id.to_string(), agent_name.clone());
-        info!(sender = %sender_id, agent = %agent_name, "Auto-assigned sender to agent");
-        Some(agent_name)
+    fn auto_assign(&self, _sender_id: &str) -> Option<String> {
+        // set_first_agent (the only writer of the removed first-agent slot) never
+        // had a production caller, so there is no first-agent fallback.
+        None
     }
 
     /// Write a sender's route config and create directory structure.
@@ -519,32 +496,6 @@ impl SenderRouter {
         );
     }
 
-    /// Resolve an agent by alias name for a given sender.
-    /// Name matching is case-insensitive.
-    pub fn resolve_by_name(&self, sender_id: &str, name: &str) -> Option<String> {
-        let name_lower = name.to_lowercase();
-
-        // Check in-memory
-        if let Some(clones_map) = self.clones.get(sender_id) {
-            for (agent_id, entry) in clones_map.iter() {
-                if entry.alias.to_lowercase() == name_lower {
-                    return Some(agent_id.clone());
-                }
-            }
-        }
-
-        // Try loading from disk
-        self.load_sender_config(sender_id);
-        if let Some(clones_map) = self.clones.get(sender_id) {
-            for (agent_id, entry) in clones_map.iter() {
-                if entry.alias.to_lowercase() == name_lower {
-                    return Some(agent_id.clone());
-                }
-            }
-        }
-        None
-    }
-
     /// Get the alias (name) for a specific agent under a sender.
     pub fn get_alias(&self, sender_id: &str, agent_id: &str) -> Option<String> {
         if let Some(clones_map) = self.clones.get(sender_id) {
@@ -555,15 +506,6 @@ impl SenderRouter {
             }
         }
         None
-    }
-
-    /// Check if a sender has any aliases set.
-    pub fn has_aliases(&self, sender_id: &str) -> bool {
-        if let Some(clones_map) = self.clones.get(sender_id) {
-            clones_map.values().any(|e| !e.alias.is_empty())
-        } else {
-            false
-        }
     }
 
     /// Check if a sender's default agent has an alias.

@@ -162,12 +162,6 @@ pub fn should_evolve(config: &EvolutionConfig, knowledge_count: usize) -> bool {
     true
 }
 
-/// Check if a file is frozen (V3 identity layer protection).
-/// Returns true if the file is in the identity_frozen_files list.
-pub fn is_file_identity_frozen(config: &EvolutionConfig, filename: &str) -> bool {
-    config.identity_frozen_files.iter().any(|f| f == filename)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

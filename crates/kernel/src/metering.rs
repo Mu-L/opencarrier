@@ -106,21 +106,9 @@ impl MeteringEngine {
         None
     }
 
-    /// Clear alert state for testing / config reload.
-    pub fn reset_alert_state(&self) {
-        if let Ok(mut state) = self.alert_state.lock() {
-            state.fired.clear();
-        }
-    }
-
     /// Get a usage summary, optionally filtered by agent.
     pub fn get_summary(&self, agent_id: Option<AgentId>) -> CarrierResult<UsageSummary> {
         self.store.query_summary(agent_id)
-    }
-
-    /// Get usage grouped by model.
-    pub fn get_by_model(&self) -> CarrierResult<Vec<memory::usage::ModelUsage>> {
-        self.store.query_by_model()
     }
 
     /// Get monthly budget status (used tokens, limit, percentage, fired alerts).

@@ -1,6 +1,5 @@
 //! Agent-related types: identity, manifests, state, and scheduling.
 
-use crate::tool::ToolDefinition;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -137,23 +136,6 @@ pub enum AgentMode {
     /// Unrestricted: agent can use all granted tools.
     #[default]
     Full,
-}
-
-impl AgentMode {
-    /// Filter a tool list based on this mode.
-    pub fn filter_tools(&self, tools: Vec<ToolDefinition>) -> Vec<ToolDefinition> {
-        match self {
-            Self::Observe => vec![],
-            Self::Assist => {
-                let read_only = ["file_read", "file_list", "web_fetch", "agent_list"];
-                tools
-                    .into_iter()
-                    .filter(|t| read_only.contains(&t.name.as_str()))
-                    .collect()
-            }
-            Self::Full => tools,
-        }
-    }
 }
 
 /// How an agent is scheduled to run.
@@ -858,80 +840,6 @@ mod tests {
     #[test]
     fn test_agent_mode_default() {
         assert_eq!(AgentMode::default(), AgentMode::Full);
-    }
-
-    #[test]
-    fn test_agent_mode_observe_filters_all() {
-        let tools = vec![
-            ToolDefinition {
-                name: "file_read".into(),
-                description: String::new(),
-                input_schema: serde_json::Value::Null,
-            },
-            ToolDefinition {
-                name: "shell_exec".into(),
-                description: String::new(),
-                input_schema: serde_json::Value::Null,
-            },
-        ];
-        let filtered = AgentMode::Observe.filter_tools(tools);
-        assert!(filtered.is_empty());
-    }
-
-    #[test]
-    fn test_agent_mode_assist_filters_write_tools() {
-        let tools = vec![
-            ToolDefinition {
-                name: "file_read".into(),
-                description: String::new(),
-                input_schema: serde_json::Value::Null,
-            },
-            ToolDefinition {
-                name: "file_write".into(),
-                description: String::new(),
-                input_schema: serde_json::Value::Null,
-            },
-            ToolDefinition {
-                name: "shell_exec".into(),
-                description: String::new(),
-                input_schema: serde_json::Value::Null,
-            },
-            ToolDefinition {
-                name: "web_fetch".into(),
-                description: String::new(),
-                input_schema: serde_json::Value::Null,
-            },
-            ToolDefinition {
-                name: "web_fetch".into(),
-                description: String::new(),
-                input_schema: serde_json::Value::Null,
-            },
-        ];
-        let filtered = AgentMode::Assist.filter_tools(tools);
-        assert_eq!(filtered.len(), 3);
-        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"file_read"));
-        assert!(names.contains(&"web_fetch"));
-        assert!(!names.contains(&"file_write"));
-        assert!(!names.contains(&"shell_exec"));
-    }
-
-    #[test]
-    fn test_agent_mode_full_passes_all() {
-        let tools = vec![
-            ToolDefinition {
-                name: "file_read".into(),
-                description: String::new(),
-                input_schema: serde_json::Value::Null,
-            },
-            ToolDefinition {
-                name: "shell_exec".into(),
-                description: String::new(),
-                input_schema: serde_json::Value::Null,
-            },
-        ];
-        let filtered = AgentMode::Full.filter_tools(tools);
-        assert_eq!(filtered.len(), 2);
     }
 
     #[test]

@@ -295,26 +295,6 @@ impl ChannelManager {
         })
     }
 
-    /// Deliver rich content through a channel by channel type and bot ID.
-    pub fn channel_deliver(
-        &self,
-        channel_type: &str,
-        bot_id: &str,
-        user_id: &str,
-        content: &types::content::ContentDescriptor,
-    ) -> CarrierResult<()> {
-        let channels = self.channels.lock().unwrap_or_else(|e| e.into_inner());
-        for channel in channels.values() {
-            if channel.channel_type() == channel_type {
-                return channel.deliver(content, bot_id, user_id);
-            }
-        }
-        Err(CarrierError::InvalidInput(format!(
-            "Channel not found for type: {}, bot: {}",
-            channel_type, bot_id
-        )))
-    }
-
     /// Build a closure that delivers rich content through this manager's
     /// channels. Used by the kernel for script/cron delivery without an agent.
     pub fn make_channel_deliver_fn(&self) -> ChannelDeliverFn {

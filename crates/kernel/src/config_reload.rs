@@ -64,11 +64,6 @@ impl ReloadPlan {
         self.restart_required || !self.hot_actions.is_empty() || !self.noop_changes.is_empty()
     }
 
-    /// Whether the plan can be applied without restart.
-    pub fn is_hot_reloadable(&self) -> bool {
-        !self.restart_required
-    }
-
     /// Log a human-readable summary of the plan.
     pub fn log_summary(&self) {
         if !self.has_changes() {
@@ -456,25 +451,6 @@ mod tests {
             noop_changes: vec![],
         };
         assert!(plan.has_changes());
-    }
-
-    #[test]
-    fn test_is_hot_reloadable() {
-        let plan = ReloadPlan {
-            restart_required: false,
-            restart_reasons: vec![],
-            hot_actions: vec![HotAction::ReloadFlows],
-            noop_changes: vec![],
-        };
-        assert!(plan.is_hot_reloadable());
-
-        let plan = ReloadPlan {
-            restart_required: true,
-            restart_reasons: vec!["api_listen changed".to_string()],
-            hot_actions: vec![HotAction::ReloadFlows],
-            noop_changes: vec![],
-        };
-        assert!(!plan.is_hot_reloadable());
     }
 
     // -----------------------------------------------------------------------

@@ -42,7 +42,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tokio-postgres",
  "toml 0.8.23",
@@ -182,7 +181,6 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "argon2",
- "async-trait",
  "axum",
  "base64",
  "channel-dingtalk",
@@ -202,7 +200,6 @@ dependencies = [
  "lazy_static",
  "lifecycle",
  "memory",
- "mime_guess",
  "minijinja",
  "pulldown-cmark",
  "reqwest",
@@ -215,9 +212,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
- "tokio-test",
  "toml 0.8.23",
- "tower",
  "tower-http",
  "tracing",
  "types",
@@ -437,7 +432,6 @@ name = "browser-mcp"
 version = "0.3.0"
 dependencies = [
  "anyhow",
- "base64",
  "dashmap",
  "dirs",
  "futures",
@@ -453,7 +447,6 @@ dependencies = [
  "tokio-tungstenite 0.26.2",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -751,7 +744,6 @@ dependencies = [
  "rand 0.8.6",
  "reqwest",
  "runtime",
- "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -761,7 +753,6 @@ dependencies = [
  "tracing-subscriber",
  "types",
  "uuid",
- "zeroize",
 ]
 
 [[package]]
@@ -781,7 +772,6 @@ dependencies = [
  "tracing",
  "types",
  "urlencoding",
- "uuid",
 ]
 
 [[package]]
@@ -1083,28 +1073,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam"
-version = "0.8.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1137cd7e7fc0fb5d3c5a8678be38ec56e819125d8d7907411fe24ccb943faca8"
-dependencies = [
- "crossbeam-channel",
- "crossbeam-deque",
- "crossbeam-epoch",
- "crossbeam-queue",
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-channel"
-version = "0.5.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-deque"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1119,15 +1087,6 @@ name = "crossbeam-epoch"
 version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-queue"
-version = "0.3.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f58bbc28f91df819d0aa2a2c00cd19754769c2fad90579b3592b1c9ba7a3115"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -2262,33 +2221,25 @@ dependencies = [
  "chrono-tz",
  "clone",
  "cron",
- "crossbeam",
  "dashmap",
- "dirs",
  "ed25519-dalek",
  "futures",
  "hex",
  "libc",
  "lifecycle",
  "memory",
- "rand 0.8.6",
  "reqwest",
  "runtime",
  "serde",
  "serde_json",
- "subtle",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-test",
  "toml 0.8.23",
  "tracing",
- "tracing-subscriber",
  "types",
- "urlencoding",
  "uuid",
  "wechat-oa",
- "zeroize",
 ]
 
 [[package]]
@@ -2373,12 +2324,10 @@ dependencies = [
  "chrono",
  "clone",
  "notify",
- "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
- "tokio",
  "tracing",
  "types",
 ]
@@ -2453,7 +2402,6 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 name = "mcp-common"
 version = "0.1.0"
 dependencies = [
- "regex-lite",
  "reqwest",
  "schemars",
  "serde",
@@ -2506,7 +2454,6 @@ checksum = "38d1115007560874e373613744c6fba374c17688327a71c1476d1a5954cc857b"
 name = "memory"
 version = "0.3.0"
 dependencies = [
- "async-trait",
  "chrono",
  "dashmap",
  "lazy_static",
@@ -2517,9 +2464,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
- "tokio-test",
  "tracing",
  "types",
  "uuid",
@@ -3459,15 +3404,12 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 name = "runtime"
 version = "0.3.0"
 dependencies = [
- "anyhow",
  "async-trait",
- "axum",
  "base64",
  "bytes",
  "chrono",
  "clone",
  "dashmap",
- "dirs",
  "futures",
  "hex",
  "hmac 0.12.1",
@@ -3486,9 +3428,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-stream",
- "tokio-test",
- "tokio-tungstenite 0.24.0",
  "toml 0.8.23",
  "tracing",
  "types",
@@ -4213,17 +4152,6 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
-]
-
-[[package]]
-name = "tokio-test"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f6d24790a10a7af737693a3e8f1d03faef7e6ca0cc99aae5066f533766de545"
-dependencies = [
- "futures-core",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]

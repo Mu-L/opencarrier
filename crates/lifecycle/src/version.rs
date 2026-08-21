@@ -97,15 +97,6 @@ pub fn get_all_versions(workspace: &Path) -> Result<Vec<VersionEntry>> {
     Ok(entries)
 }
 
-/// List unverified knowledge entries (pending human review).
-pub fn list_unverified(workspace: &Path) -> Result<Vec<VersionEntry>> {
-    let versions = get_all_versions(workspace)?;
-    Ok(versions
-        .into_iter()
-        .filter(|v| !v.verified && v.action != "delete" && v.action != "rollback")
-        .collect())
-}
-
 /// Rollback a knowledge file to its previous version.
 ///
 /// Finds the most recent version entry for the file and restores the `before`
@@ -309,9 +300,6 @@ mod tests {
 
         let a_history = get_file_history(workspace, "a.md").unwrap();
         assert_eq!(a_history.len(), 2);
-
-        let unverified = list_unverified(workspace).unwrap();
-        assert_eq!(unverified.len(), 2); // a.md create + update (evolution-sourced)
     }
 
     #[test]
@@ -463,12 +451,9 @@ mod tests {
 
         record_version(workspace, "create", "a.md", None, Some("c"), "evolution").unwrap();
 
-        let unverified = list_unverified(workspace).unwrap();
-        assert_eq!(unverified.len(), 1);
-
         verify_version(workspace, "a.md").unwrap();
 
-        let unverified = list_unverified(workspace).unwrap();
-        assert!(unverified.is_empty());
+        let history = get_file_history(workspace, "a.md").unwrap();
+        assert!(history.iter().all(|e| e.verified));
     }
 }

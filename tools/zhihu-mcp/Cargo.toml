@@ -8,10 +8,10 @@ description = "Zhihu MCP Server — hot, question, search via MCP protocol"
 [dependencies]
 mcp-common = { path = "../mcp-common" }
 rmcp = { version = "1.5", features = ["server", "transport-io"] }
+serde = { workspace = true }
 schemars = "1"
 reqwest = { workspace = true }
 tokio = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

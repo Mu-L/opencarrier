@@ -11,7 +11,6 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// A parsed knowledge entry (title + content + source).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,16 +36,6 @@ pub enum ParseQuality {
 pub struct ParseResult {
     pub entries: Vec<KnowledgeEntry>,
     pub quality: ParseQuality,
-}
-
-impl ParseResult {
-    /// Whether the caller should consider invoking Tier 2 (LLM-assisted parsing).
-    pub fn needs_tier2(&self) -> bool {
-        matches!(
-            self.quality,
-            ParseQuality::Uncertain | ParseQuality::Fallback
-        )
-    }
 }
 
 /// Parse imported data by type (Tier 1 — pure algorithm).
@@ -422,55 +411,6 @@ pub fn parse_document(content: &str) -> Result<Vec<KnowledgeEntry>> {
     Ok(entries)
 }
 
-/// Parse chat records, grouping messages by sender.
-///
-/// Used for style extraction — get all messages from a specific sender.
-pub fn parse_chat_for_sender(content: &str) -> Result<HashMap<String, Vec<String>>> {
-    let json = serde_json::from_str::<serde_json::Value>(content)
-        .map_err(|_| anyhow::anyhow!("风格提取需要 JSON 格式的聊天记录"))?;
-
-    let msgs = extract_msg_array(&json)?;
-    let mut sender_map: HashMap<String, Vec<String>> = HashMap::new();
-
-    for msg in &msgs {
-        let text = extract_message_text(msg);
-        if text.is_empty() {
-            continue;
-        }
-        let sender = extract_sender(msg);
-        if sender.is_empty() {
-            continue;
-        }
-        sender_map.entry(sender).or_default().push(text);
-    }
-
-    Ok(sender_map)
-}
-
-/// Extract message array from JSON (supports all known chat formats).
-fn extract_msg_array(json: &serde_json::Value) -> Result<Vec<serde_json::Value>> {
-    // WeCom room
-    if json.get("roomid").is_some() {
-        if let Some(msgs) = json.get("msgs").and_then(|m| m.as_array()) {
-            return Ok(msgs.clone());
-        }
-    }
-    // WeChat/WeCom
-    if let Some(msgs) = json.get("msgs").and_then(|m| m.as_array()) {
-        return Ok(msgs.clone());
-    }
-    // DingTalk/WhatsApp/Telegram
-    if let Some(msgs) = json.get("messages").and_then(|m| m.as_array()) {
-        return Ok(msgs.clone());
-    }
-    // Direct array
-    if let Some(arr) = json.as_array() {
-        return Ok(arr.clone());
-    }
-
-    Err(anyhow::anyhow!("无法识别聊天记录格式"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,18 +473,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_chat_for_sender() {
-        let json = r#"{"msgs": [
-            {"Message": "你好", "sender": "Alice"},
-            {"Message": "在吗", "sender": "Bob"},
-            {"Message": "在的", "sender": "Alice"}
-        ]}"#;
-        let map = parse_chat_for_sender(json).unwrap();
-        assert_eq!(map.get("Alice").unwrap().len(), 2);
-        assert_eq!(map.get("Bob").unwrap().len(), 1);
-    }
-
-    #[test]
     fn test_parse_document() {
         let content = "第一段落的内容，足够长以满足最低长度要求。这是第一个段落。\n\n第二段落的内容，也足够长。这是第二个段落的内容。";
         let entries = parse_document(content).unwrap();
@@ -578,7 +506,6 @@ mod tests {
             "This is a plain text chat log that isn't JSON at all, so it should be a fallback.";
         let result = parse_import_data(content, "chat").unwrap();
         assert_eq!(result.quality, ParseQuality::Fallback);
-        assert!(result.needs_tier2());
     }
 
     #[test]
@@ -586,7 +513,6 @@ mod tests {
         let content = "Q1,A1\nQ2,A2\nQ3,A3";
         let result = parse_import_data(content, "faq").unwrap();
         assert_eq!(result.quality, ParseQuality::Good);
-        assert!(!result.needs_tier2());
     }
 
     #[test]

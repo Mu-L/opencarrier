@@ -59,15 +59,4 @@ impl ContentRegistry {
             .insert(agent_id.to_string(), (mtime, config.clone()));
         Some(config)
     }
-
-    /// Load and return a cloned descriptor for `key`, or `None` if missing.
-    pub fn get_descriptor(
-        &self,
-        agent_id: &str,
-        workspace: &Path,
-        key: &str,
-    ) -> Option<types::content::ContentDescriptor> {
-        self.load(agent_id, workspace)
-            .and_then(|c| c.get(key).cloned())
-    }
 }

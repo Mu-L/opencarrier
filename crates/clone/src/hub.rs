@@ -639,34 +639,6 @@ pub fn is_plugin_installed(plugins_dir: &Path, name: &str) -> bool {
 
 // === MCP Servers ===
 
-/// Download an MCP server manifest from Hub.
-pub async fn download_mcp_server(
-    hub_url: &str,
-    api_key: &str,
-    name: &str,
-) -> Result<serde_json::Value> {
-    validate_hub_url(hub_url)?;
-    let base = hub_url.trim_end_matches('/');
-    let url = format!(
-        "{}/api/mcp-servers/{}/versions/latest",
-        base,
-        urlencoding::encode(name)
-    );
-
-    let resp = hub_get(&url, api_key)
-        .send()
-        .await
-        .context("无法连接 Hub")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        bail!("下载 MCP Server 失败 {}: {} — {}", name, status, body);
-    }
-
-    resp.json().await.context("解析 MCP Server 响应失败")
-}
-
 // === Brain Config ===
 
 /// Fetch brain configuration from Hub.

@@ -36,11 +36,3 @@ pub fn set_env_override(key: &str, value: &str) {
     let mut overrides = ENV_OVERRIDES.lock().unwrap();
     overrides.insert(key.to_string(), value.to_string());
 }
-
-/// Remove an environment variable override from the in-process map.
-///
-/// This is the safe replacement for `std::env::remove_var` in async contexts.
-pub fn remove_env_override(key: &str) {
-    let mut overrides = ENV_OVERRIDES.lock().unwrap();
-    overrides.remove(key);
-}

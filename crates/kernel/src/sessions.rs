@@ -306,18 +306,6 @@ impl CarrierKernel {
         Ok(())
     }
 
-    /// Update an agent's flow allowlist. Empty = all flows (backward compat).
-    pub fn set_agent_flows(&self, agent_id: AgentId, flows: Vec<String>) -> KernelResult<()> {
-        self.registry
-            .update_flows(agent_id, flows.clone())
-            .map_err(KernelError::Carrier)?;
-
-        self.persist_agent(agent_id);
-
-        info!(agent_id = %agent_id, flows = ?flows, "Agent flows updated");
-        Ok(())
-    }
-
     /// Update an agent's MCP server allowlist. Empty = all servers (backward compat).
     pub fn set_agent_mcp_servers(
         &self,

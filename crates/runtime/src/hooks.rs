@@ -76,14 +76,6 @@ impl HookRegistry {
         }
         Ok(())
     }
-
-    /// Check if any handlers are registered for a given event.
-    pub fn has_handlers(&self, event: HookEvent) -> bool {
-        self.handlers
-            .get(&event)
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
-    }
 }
 
 impl Default for HookRegistry {
@@ -96,14 +88,6 @@ impl Default for HookRegistry {
 mod tests {
     use super::*;
     use types::error::CarrierError;
-
-    /// A test handler that always succeeds.
-    struct OkHandler;
-    impl HookHandler for OkHandler {
-        fn on_event(&self, _ctx: &HookContext) -> CarrierResult<()> {
-            Ok(())
-        }
-    }
 
     /// A test handler that always blocks.
     struct BlockHandler {
@@ -231,14 +215,5 @@ mod tests {
             let _ = registry.fire(&ctx);
         }
         assert_eq!(recorder.call_count(), 4);
-    }
-
-    #[test]
-    fn test_has_handlers() {
-        let registry = HookRegistry::new();
-        assert!(!registry.has_handlers(HookEvent::BeforeToolCall));
-        registry.register(HookEvent::BeforeToolCall, Arc::new(OkHandler));
-        assert!(registry.has_handlers(HookEvent::BeforeToolCall));
-        assert!(!registry.has_handlers(HookEvent::AfterToolCall));
     }
 }

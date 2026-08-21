@@ -6,18 +6,12 @@
 use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
 use base64::Engine;
 use reqwest::Client;
-use tracing::warn;
 
 use types::error::{CarrierError, CarrierResult};
 
 use crate::models::CDN_BASE_URL;
 
 type Aes128 = aes::Aes128;
-
-/// Compute AES-ECB padded ciphertext size.
-pub fn aes_ecb_padded_size(plaintext_len: usize) -> usize {
-    (plaintext_len + 1).div_ceil(16) * 16
-}
 
 /// AES-128-ECB decrypt. Returns plaintext (trailing zeros trimmed).
 pub fn aes_128_ecb_decrypt(ciphertext: &[u8], key: &[u8; 16]) -> Vec<u8> {
@@ -93,44 +87,6 @@ pub async fn cdn_download(http: &Client, url: &str, key: &[u8; 16]) -> CarrierRe
         .map_err(|e| CarrierError::Network(format!("CDN download read error: {e}")))?;
 
     Ok(aes_128_ecb_decrypt(&ciphertext, key))
-}
-
-/// Upload encrypted file to CDN. Returns the download encrypted_query_param.
-pub async fn cdn_upload(
-    http: &Client,
-    upload_url: &str,
-    ciphertext: &[u8],
-) -> CarrierResult<String> {
-    let resp = http
-        .post(upload_url)
-        .header("Content-Type", "application/octet-stream")
-        .body(ciphertext.to_vec())
-        .send()
-        .await
-        .map_err(|e| CarrierError::Network(format!("CDN upload failed: {e}")))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(CarrierError::Network(format!(
-            "CDN upload HTTP {status}: {body}"
-        )));
-    }
-
-    // Extract download param from response header
-    let download_param = resp
-        .headers()
-        .get("x-encrypted-param")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    if let Some(ref err) = resp.headers().get("x-error-message") {
-        warn!(error = ?err, "CDN upload warning");
-    }
-
-    download_param.ok_or_else(|| {
-        CarrierError::Internal("CDN upload: no x-encrypted-param in response".to_string())
-    })
 }
 
 /// Build CDN download URL from encrypt_query_param.

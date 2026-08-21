@@ -12,7 +12,7 @@
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::evolution_config::EvolutionConfig;
 
@@ -232,30 +232,6 @@ pub fn delete_expired_files(workspace: &Path, deletable_files: &[String]) -> usi
     deleted
 }
 
-/// Apply a full bloat cycle: mark stale → delete expired → rebuild MEMORY.md.
-///
-/// Returns (stale_marked, expired_deleted).
-pub fn apply_bloat_cleanup(workspace: &Path, config: &EvolutionConfig) -> Result<(usize, usize)> {
-    let report = check_bloat(workspace, config)?;
-
-    let stale_marked = mark_stale_files(workspace, &report.stale_files);
-    let expired_deleted = delete_expired_files(workspace, &report.deletable_files);
-
-    if stale_marked > 0 || expired_deleted > 0 {
-        // Rebuild MEMORY.md index after changes
-        if let Err(e) = crate::evolution::update_memory_index(workspace) {
-            warn!(error = %e, "Bloat: failed to rebuild MEMORY.md");
-        }
-        info!(
-            stale = stale_marked,
-            deleted = expired_deleted,
-            "Bloat cleanup complete"
-        );
-    }
-
-    Ok((stale_marked, expired_deleted))
-}
-
 /// Compute Jaccard similarity between two tag sets.
 pub fn count_tag_overlap(tags_a: &[String], tags_b: &[String]) -> f64 {
     if tags_a.is_empty() || tags_b.is_empty() {
@@ -266,45 +242,6 @@ pub fn count_tag_overlap(tags_a: &[String], tags_b: &[String]) -> f64 {
     let intersection = set_a.intersection(&set_b).count();
     let union = set_a.union(&set_b).count();
     intersection as f64 / union as f64
-}
-
-/// Scan knowledge directory and return metadata for all files.
-pub fn scan_knowledge(workspace: &Path) -> Result<Vec<KnowledgeMeta>> {
-    let knowledge_dir = workspace.join("knowledge");
-    if !knowledge_dir.exists() {
-        return Ok(vec![]);
-    }
-
-    let mut metas = Vec::new();
-    for entry in fs::read_dir(&knowledge_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.extension().map(|e| e == "md").unwrap_or(false) {
-            continue;
-        }
-        let filename = entry.file_name().to_string_lossy().to_string();
-        let metadata = fs::metadata(&path)?;
-        let size_bytes = metadata.len();
-
-        let modified_at = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-
-        let content = fs::read_to_string(&path).unwrap_or_default();
-        let (tags, status) = parse_frontmatter_tags_status(&content);
-
-        metas.push(KnowledgeMeta {
-            filename,
-            modified_at,
-            tags,
-            status,
-            size_bytes,
-        });
-    }
-    Ok(metas)
 }
 
 // ---------------------------------------------------------------------------
@@ -946,23 +883,5 @@ mod tests {
         let (fm, body) = split_frontmatter(content);
         assert!(fm.contains("name: test"));
         assert_eq!(body, "Body text");
-    }
-
-    #[test]
-    fn test_scan_knowledge() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path().join("knowledge");
-        fs::create_dir_all(&dir).unwrap();
-
-        fs::write(
-            dir.join("a.md"),
-            "---\nname: A\ntags: [\"x\"]\n---\n\nA content",
-        )
-        .unwrap();
-        fs::write(dir.join("b.md"), "---\nname: B\n---\n\nB content").unwrap();
-        fs::write(dir.join("c.txt"), "Not markdown").unwrap();
-
-        let metas = scan_knowledge(tmp.path()).unwrap();
-        assert_eq!(metas.len(), 2);
     }
 }

@@ -143,9 +143,6 @@ pub const MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
 pub const MAX_AUDIO_BYTES: u64 = 20 * 1024 * 1024;
 /// Maximum video size in bytes (50 MB).
 pub const MAX_VIDEO_BYTES: u64 = 50 * 1024 * 1024;
-/// Maximum base64 decoded size (70 MB).
-pub const MAX_BASE64_DECODED_BYTES: u64 = 70 * 1024 * 1024;
-
 /// Allowed image MIME types.
 pub const ALLOWED_IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
 
@@ -342,17 +339,6 @@ impl ImageGenRequest {
 
         Ok(())
     }
-}
-
-/// Result of image generation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImageGenResult {
-    /// Generated images.
-    pub images: Vec<GeneratedImage>,
-    /// Which model was used.
-    pub model: String,
-    /// Revised prompt (DALL-E 3 rewrites prompts for quality).
-    pub revised_prompt: Option<String>,
 }
 
 /// A single generated image.

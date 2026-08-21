@@ -101,14 +101,6 @@ pub fn bump_streak(home: &Path, app_id: &str) -> CarrierResult<u32> {
     Ok(streak)
 }
 
-/// Whether any account has pending publishes (daemon reconcile check that
-/// decides whether a PublishPoll job needs creating).
-pub fn has_any_pending(home: &Path) -> bool {
-    read_tracker(home)
-        .values()
-        .any(|e| !e.publish_ids.is_empty())
-}
-
 /// All app_ids that currently have pending publishes (daemon reconcile uses
 /// this to ensure a poll job exists per account).
 pub fn pending_accounts(home: &Path) -> Vec<String> {
@@ -137,13 +129,11 @@ mod tests {
         // Duplicate track is a no-op.
         track(&home, "wxAAA", "pub-1").unwrap();
         assert_eq!(pending(&home, "wxAAA"), vec!["pub-1", "pub-2"]);
-        assert!(has_any_pending(&home));
 
         remove(&home, "wxAAA", "pub-1").unwrap();
         assert_eq!(pending(&home, "wxAAA"), vec!["pub-2"]);
         remove(&home, "wxAAA", "pub-2").unwrap();
         assert!(pending(&home, "wxAAA").is_empty());
-        assert!(!has_any_pending(&home));
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -169,7 +159,6 @@ mod tests {
     fn missing_file_is_empty() {
         let home = tmp_home("missing");
         assert!(pending(&home, "wxAAA").is_empty());
-        assert!(!has_any_pending(&home));
         let _ = std::fs::remove_dir_all(&home);
     }
 }

@@ -101,40 +101,6 @@ async fn enqueue_daily_jobs(pool: &Pool) -> CarrierResult<()> {
     Ok(())
 }
 
-/// Manually trigger a digest for a specific owner and date.
-pub async fn trigger_digest(
-    pool: &Pool,
-    owner_id: &str,
-    date: chrono::NaiveDate,
-) -> CarrierResult<Option<String>> {
-    let job_store = JobStore::new(pool.clone());
-    let date_iso = date.format("%Y-%m-%d").to_string();
-
-    let payload = DigestDailyPayload {
-        date_iso: date_iso.clone(),
-    };
-    let dedupe_key = format!("digest_daily:{}:{}", owner_id, date_iso);
-    let new_job = NewJob {
-        owner_id: owner_id.to_string(),
-        kind: JobKind::DigestDaily,
-        payload_json: serde_json::to_string(&payload)
-            .map_err(|e| CarrierError::Internal(e.to_string()))?,
-        dedupe_key: Some(dedupe_key),
-        available_at_ms: None,
-        max_attempts: None,
-    };
-
-    let job_id = job_store.enqueue(&new_job).await?;
-    if job_id.is_some() {
-        tracing::info!(
-            "[tree_jobs] manual digest trigger enqueued owner={} date={}",
-            owner_id,
-            date_iso
-        );
-    }
-    Ok(job_id)
-}
-
 async fn list_owners_with_trees(pool: &Pool) -> CarrierResult<Vec<String>> {
     let client = pool
         .get()

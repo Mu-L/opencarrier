@@ -8,5 +8,4 @@ pub mod api;
 pub mod app_auth;
 pub mod cookie;
 pub mod json;
-pub mod path;
 pub mod ssrf;

@@ -33,7 +33,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-thiserror = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]

@@ -64,41 +64,6 @@ pub fn write_if_new(path: &Path, content: &str) -> CarrierResult<bool> {
     Ok(true)
 }
 
-/// Overwrite an existing file atomically (used for tag rewrites).
-pub fn write_atomic(path: &Path, content: &str) -> CarrierResult<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| CarrierError::Internal(format!("mkdir {}: {e}", parent.display())))?;
-    }
-
-    let tmp_name = format!(".tmp_rewrite_{}.md", uuid::Uuid::new_v4().simple());
-    let tmp_path = path.with_file_name(&tmp_name);
-
-    let mut f = fs::File::create(&tmp_path)
-        .map_err(|e| CarrierError::Internal(format!("create {}: {e}", tmp_path.display())))?;
-
-    f.write_all(content.as_bytes())
-        .map_err(|e| CarrierError::Internal(format!("write {}: {e}", tmp_path.display())))?;
-
-    f.sync_all()
-        .map_err(|e| CarrierError::Internal(format!("fsync {}: {e}", tmp_path.display())))?;
-
-    drop(f);
-
-    fs::rename(&tmp_path, path).map_err(|e| {
-        let _ = fs::remove_file(path.with_file_name(&tmp_name));
-        CarrierError::Internal(format!("rename: {e}"))
-    })?;
-
-    Ok(())
-}
-
-/// Read the content of a file.
-pub fn read_content(path: &Path) -> CarrierResult<String> {
-    fs::read_to_string(path)
-        .map_err(|e| CarrierError::Internal(format!("read {}: {e}", path.display())))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,7 +76,7 @@ mod tests {
 
         let written = write_if_new(&path, "hello").unwrap();
         assert!(written);
-        assert_eq!(read_content(&path).unwrap(), "hello");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
     }
 
     #[test]
@@ -122,7 +87,7 @@ mod tests {
         write_if_new(&path, "original").unwrap();
         let written = write_if_new(&path, "updated").unwrap();
         assert!(!written);
-        assert_eq!(read_content(&path).unwrap(), "original");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
     }
 
     #[test]
@@ -132,16 +97,6 @@ mod tests {
 
         let written = write_if_new(&path, "deep").unwrap();
         assert!(written);
-        assert_eq!(read_content(&path).unwrap(), "deep");
-    }
-
-    #[test]
-    fn test_write_atomic_overwrites() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.md");
-
-        write_if_new(&path, "original").unwrap();
-        write_atomic(&path, "updated").unwrap();
-        assert_eq!(read_content(&path).unwrap(), "updated");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "deep");
     }
 }

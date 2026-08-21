@@ -682,20 +682,6 @@ impl MemorySubstrate {
         self.sessions.find_session_by_label(agent_id, label)
     }
 
-    /// Async wrapper for find_session_by_label — runs SQLite query in a blocking thread.
-    pub async fn find_session_by_label_async(
-        &self,
-        agent_id: &str,
-        label: &str,
-    ) -> CarrierResult<Option<Session>> {
-        let sessions = self.sessions.clone();
-        let agent_id = agent_id.to_string();
-        let label = label.to_string();
-        tokio::task::spawn_blocking(move || sessions.find_session_by_label(&agent_id, &label))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
     /// Async wrapper for find_active_session_by_label (staleness-windowed).
     pub async fn find_active_session_by_label_async(
         &self,

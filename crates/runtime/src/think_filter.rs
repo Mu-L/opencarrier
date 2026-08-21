@@ -44,6 +44,7 @@ impl StreamingThinkFilter {
     }
 
     /// Returns `true` if we are currently inside a `<think>` block.
+    #[cfg(test)]
     pub fn is_inside_think(&self) -> bool {
         self.inside_think
     }

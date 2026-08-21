@@ -10,8 +10,6 @@
 //! a file/video on wecom kf, and a plain link on iLink - same content, best
 //! form per channel.
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CarrierError, CarrierResult};
@@ -274,14 +272,6 @@ impl ContentConfig {
             .iter()
             .find(|d| d.key == key)
             .map(|d| &d.content)
-    }
-
-    /// Build a keyed map (for caches that prefer HashMap lookup).
-    pub fn into_map(self) -> HashMap<String, ContentDescriptor> {
-        self.deliverables
-            .into_iter()
-            .map(|d| (d.key, d.content))
-            .collect()
     }
 }
 

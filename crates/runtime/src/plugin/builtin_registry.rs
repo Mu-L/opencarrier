@@ -75,16 +75,6 @@ impl BuiltinPluginRegistry {
                 tools: &entry.tools,
             })
     }
-
-    /// Check if a plugin is registered as built-in.
-    pub fn has_plugin(&self, plugin_name: &str) -> bool {
-        self.entries.contains_key(plugin_name)
-    }
-
-    /// All registered plugin names.
-    pub fn plugin_names(&self) -> Vec<&str> {
-        self.entries.keys().map(|s| s.as_str()).collect()
-    }
 }
 
 impl Default for BuiltinPluginRegistry {

@@ -1,10 +1,8 @@
 //! Process supervision — graceful shutdown, signal handling, and health monitoring.
 
-use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::watch;
 use tracing::{info, warn};
-use types::agent::AgentId;
 
 /// Shutdown signal manager with health monitoring.
 pub struct Supervisor {
@@ -16,8 +14,6 @@ pub struct Supervisor {
     restart_count: AtomicU64,
     /// Total panics caught across all agents.
     panic_count: AtomicU64,
-    /// Per-agent restart counts for enforcing max_restarts.
-    agent_restarts: DashMap<AgentId, u32>,
 }
 
 impl Supervisor {
@@ -29,7 +25,6 @@ impl Supervisor {
             shutdown_rx: rx,
             restart_count: AtomicU64::new(0),
             panic_count: AtomicU64::new(0),
-            agent_restarts: DashMap::new(),
         }
     }
 
@@ -58,11 +53,6 @@ impl Supervisor {
         );
     }
 
-    /// Record that an agent was restarted.
-    pub fn record_restart(&self) {
-        self.restart_count.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// Get the total number of panics caught.
     pub fn panic_count(&self) -> u64 {
         self.panic_count.load(Ordering::Relaxed)
@@ -71,37 +61,6 @@ impl Supervisor {
     /// Get the total number of restarts.
     pub fn restart_count(&self) -> u64 {
         self.restart_count.load(Ordering::Relaxed)
-    }
-
-    /// Record a restart for a specific agent and check if limit is exceeded.
-    ///
-    /// Returns Ok(restart_count) if within limit, or Err(count) if limit exceeded.
-    pub fn record_agent_restart(&self, agent_id: AgentId, max_restarts: u32) -> Result<u32, u32> {
-        let mut count = self.agent_restarts.entry(agent_id).or_insert(0);
-        *count += 1;
-        self.record_restart();
-
-        if max_restarts > 0 && *count > max_restarts {
-            warn!(
-                agent = %agent_id,
-                restarts = *count,
-                max = max_restarts,
-                "Agent exceeded max restart limit"
-            );
-            Err(*count)
-        } else {
-            Ok(*count)
-        }
-    }
-
-    /// Get the restart count for a specific agent.
-    pub fn agent_restart_count(&self, agent_id: AgentId) -> u32 {
-        self.agent_restarts.get(&agent_id).map(|r| *r).unwrap_or(0)
-    }
-
-    /// Reset restart counter for an agent (e.g., on manual intervention).
-    pub fn reset_agent_restarts(&self, agent_id: AgentId) {
-        self.agent_restarts.remove(&agent_id);
     }
 
     /// Get a health summary.
@@ -159,69 +118,11 @@ mod tests {
     }
 
     #[test]
-    fn test_restart_tracking() {
-        let supervisor = Supervisor::new();
-        assert_eq!(supervisor.restart_count(), 0);
-        supervisor.record_restart();
-        assert_eq!(supervisor.restart_count(), 1);
-    }
-
-    #[test]
     fn test_health() {
         let supervisor = Supervisor::new();
         let health = supervisor.health();
         assert!(!health.is_shutting_down);
         assert_eq!(health.panic_count, 0);
         assert_eq!(health.restart_count, 0);
-    }
-
-    #[test]
-    fn test_agent_restart_within_limit() {
-        let supervisor = Supervisor::new();
-        let agent_id = AgentId::new();
-
-        // Allow up to 3 restarts
-        assert!(supervisor.record_agent_restart(agent_id, 3).is_ok());
-        assert_eq!(supervisor.agent_restart_count(agent_id), 1);
-        assert!(supervisor.record_agent_restart(agent_id, 3).is_ok());
-        assert!(supervisor.record_agent_restart(agent_id, 3).is_ok());
-        assert_eq!(supervisor.agent_restart_count(agent_id), 3);
-    }
-
-    #[test]
-    fn test_agent_restart_exceeds_limit() {
-        let supervisor = Supervisor::new();
-        let agent_id = AgentId::new();
-
-        assert!(supervisor.record_agent_restart(agent_id, 2).is_ok());
-        assert!(supervisor.record_agent_restart(agent_id, 2).is_ok());
-        // 3rd restart exceeds max_restarts=2
-        let result = supervisor.record_agent_restart(agent_id, 2);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), 3);
-    }
-
-    #[test]
-    fn test_agent_restart_zero_limit_unlimited() {
-        let supervisor = Supervisor::new();
-        let agent_id = AgentId::new();
-
-        // max_restarts=0 means unlimited
-        for _ in 0..100 {
-            assert!(supervisor.record_agent_restart(agent_id, 0).is_ok());
-        }
-    }
-
-    #[test]
-    fn test_reset_agent_restarts() {
-        let supervisor = Supervisor::new();
-        let agent_id = AgentId::new();
-
-        supervisor.record_agent_restart(agent_id, 10).unwrap();
-        supervisor.record_agent_restart(agent_id, 10).unwrap();
-        assert_eq!(supervisor.agent_restart_count(agent_id), 2);
-
-        supervisor.reset_agent_restarts(agent_id);
-        assert_eq!(supervisor.agent_restart_count(agent_id), 0);
     }
 }

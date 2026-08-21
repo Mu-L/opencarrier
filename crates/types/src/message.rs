@@ -2,8 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{CarrierError, CarrierResult};
-
 /// A message in an LLM conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -126,37 +124,6 @@ pub enum ContentBlock {
     /// Catch-all for unrecognized content block types (forward compatibility).
     #[serde(other)]
     Unknown,
-}
-
-/// Allowed image media types.
-const ALLOWED_IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
-
-/// Maximum decoded image size (5 MB).
-const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
-
-/// Validate an image content block.
-///
-/// Checks that the media type is an allowed image format and the
-/// base64 data doesn't exceed 5 MB when decoded (~7 MB base64).
-pub fn validate_image(media_type: &str, data: &str) -> CarrierResult<()> {
-    if !ALLOWED_IMAGE_TYPES.contains(&media_type) {
-        return Err(CarrierError::InvalidInput(format!(
-            "Unsupported image type '{}'. Allowed: {}",
-            media_type,
-            ALLOWED_IMAGE_TYPES.join(", ")
-        )));
-    }
-    // Base64 encodes 3 bytes into 4 chars, so max base64 len ≈ MAX_IMAGE_BYTES * 4/3
-    let max_b64_len = MAX_IMAGE_BYTES * 4 / 3 + 4; // small padding allowance
-    if data.len() > max_b64_len {
-        return Err(CarrierError::InvalidInput(format!(
-            "Image too large: {} bytes base64 (max ~{} bytes for {} MB decoded)",
-            data.len(),
-            max_b64_len,
-            MAX_IMAGE_BYTES / (1024 * 1024)
-        )));
-    }
-    Ok(())
 }
 
 impl MessageContent {
@@ -302,33 +269,6 @@ mod tests {
             output_tokens: 50,
         };
         assert_eq!(usage.total(), 150);
-    }
-
-    #[test]
-    fn test_validate_image_valid() {
-        assert!(validate_image("image/png", "iVBORw0KGgo=").is_ok());
-        assert!(validate_image("image/jpeg", "data").is_ok());
-        assert!(validate_image("image/gif", "data").is_ok());
-        assert!(validate_image("image/webp", "data").is_ok());
-    }
-
-    #[test]
-    fn test_validate_image_bad_type() {
-        let err = validate_image("image/svg+xml", "data")
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("Unsupported image type"));
-        let err = validate_image("text/plain", "data")
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("Unsupported image type"));
-    }
-
-    #[test]
-    fn test_validate_image_too_large() {
-        let huge = "A".repeat(8_000_000); // ~6MB base64
-        let err = validate_image("image/png", &huge).unwrap_err().to_string();
-        assert!(err.contains("too large"));
     }
 
     #[test]

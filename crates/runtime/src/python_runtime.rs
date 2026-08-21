@@ -111,11 +111,6 @@ fn find_python_interpreter() -> String {
     "python3".to_string() // default, will fail with helpful message
 }
 
-/// Extract the script path from a module string like "python:path/to/script.py".
-pub fn parse_python_module(module: &str) -> Option<&str> {
-    module.strip_prefix("python:")
-}
-
 /// Run a Python agent script with the given message.
 ///
 /// Returns the script's text response.
@@ -338,35 +333,9 @@ fn parse_python_output(lines: &[String]) -> Result<String, PythonError> {
     Ok(text)
 }
 
-/// Check if a module string refers to a Python script.
-pub fn is_python_module(module: &str) -> bool {
-    module.starts_with("python:")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_python_module() {
-        assert_eq!(
-            parse_python_module("python:scripts/agent.py"),
-            Some("scripts/agent.py")
-        );
-        assert_eq!(
-            parse_python_module("python:./research.py"),
-            Some("./research.py")
-        );
-        assert_eq!(parse_python_module("builtin:chat"), None);
-        assert_eq!(parse_python_module("wasm:skill.wasm"), None);
-    }
-
-    #[test]
-    fn test_is_python_module() {
-        assert!(is_python_module("python:test.py"));
-        assert!(!is_python_module("builtin:chat"));
-        assert!(!is_python_module("wasm:skill.wasm"));
-    }
 
     #[test]
     fn test_parse_python_output_json() {

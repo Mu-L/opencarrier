@@ -36,41 +36,6 @@ impl CarrierKernel {
 
     // ── Agent Binding management ──────────────────────────────
 
-    /// List all agent bindings.
-    pub fn list_bindings(&self) -> Vec<types::config::AgentBinding> {
-        self.coordination
-            .bindings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-    }
-
-    /// Add a binding at runtime.
-    pub fn add_binding(&self, binding: types::config::AgentBinding) {
-        let mut bindings = self
-            .coordination
-            .bindings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        bindings.push(binding);
-        // Sort by specificity descending
-        bindings.sort_by_key(|b| b.match_rule.specificity());
-    }
-
-    /// Remove a binding by index, returns the removed binding if valid.
-    pub fn remove_binding(&self, index: usize) -> Option<types::config::AgentBinding> {
-        let mut bindings = self
-            .coordination
-            .bindings
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if index < bindings.len() {
-            Some(bindings.remove(index))
-        } else {
-            None
-        }
-    }
-
     // ── Config hot-reload ─────────────────────────────────────
 
     /// Reload configuration: read the config file, diff against current, and

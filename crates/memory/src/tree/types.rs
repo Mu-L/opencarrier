@@ -135,10 +135,6 @@ impl JobStatus {
 
 pub const CHUNK_STATUS_PENDING_EXTRACTION: &str = "pending_extraction";
 pub const CHUNK_STATUS_ADMITTED: &str = "admitted";
-pub const CHUNK_STATUS_BUFFERED: &str = "buffered";
-pub const CHUNK_STATUS_SEALED: &str = "sealed";
-pub const CHUNK_STATUS_DROPPED: &str = "dropped";
-
 // ---------------------------------------------------------------------------
 // Core structs
 // ---------------------------------------------------------------------------
@@ -385,9 +381,6 @@ pub const DEFAULT_DEFINITE_DROP: f32 = 0.15;
 /// Score below which chunks are pruned.
 pub const DEFAULT_DROP_THRESHOLD: f32 = 0.3;
 
-/// Embedding dimension.
-pub const EMBEDDING_DIM: usize = 1024;
-
 /// Hotness above which a topic tree is materialised.
 pub const TOPIC_CREATION_THRESHOLD: f32 = 10.0;
 
@@ -399,12 +392,6 @@ pub const TOPIC_RECHECK_EVERY: u32 = 100;
 
 /// Maximum cascade depth for seal operations.
 pub const MAX_CASCADE_DEPTH: u32 = 32;
-
-/// Default pagination limit.
-pub const DEFAULT_LIST_LIMIT: usize = 100;
-
-/// Maximum pagination limit.
-pub const MAX_LIST_LIMIT: usize = 10_000;
 
 #[cfg(test)]
 mod tests {

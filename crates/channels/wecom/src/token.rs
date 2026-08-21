@@ -204,19 +204,6 @@ impl BotEntry {
         }
     }
 
-    /// Get MCP bot credentials (bot_id, bot_secret).
-    /// SmartBot mode reuses its mode's bot_id and secret.
-    /// App/Kf modes use the dedicated mcp_bot_id/mcp_bot_secret fields.
-    pub fn mcp_credentials(&self) -> Option<(&str, &str)> {
-        match &self.mode {
-            WecomMode::SmartBot { bot_id, secret } => Some((bot_id, secret)),
-            _ => self
-                .mcp_bot_id
-                .as_deref()
-                .zip(self.mcp_bot_secret.as_deref()),
-        }
-    }
-
     /// Get a valid access token, refreshing if needed.
     /// Returns error for SmartBot mode (no token needed).
     pub fn get_access_token(&self) -> CarrierResult<String> {

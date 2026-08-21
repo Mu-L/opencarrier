@@ -191,6 +191,7 @@ impl BackgroundExecutor {
     }
 
     /// Number of actively running background loops.
+    #[cfg(test)]
     pub fn active_count(&self) -> usize {
         self.tasks.len()
     }
@@ -336,31 +337,5 @@ mod tests {
         assert_eq!(ticks, 1, "Expected 1 tick (skip-if-busy), got {ticks}");
 
         executor.stop_agent(agent_id);
-    }
-
-    #[test]
-    fn test_executor_active_count() {
-        let (_tx, rx) = watch::channel(false);
-        let executor = BackgroundExecutor::new(rx);
-        assert_eq!(executor.active_count(), 0);
-
-        // Reactive mode → no background task
-        let id = AgentId::new();
-        executor.start_agent(id, "reactive", &ScheduleMode::Reactive, |_id, _msg| {
-            tokio::spawn(async {})
-        });
-        assert_eq!(executor.active_count(), 0);
-
-        // Proactive mode → no dedicated task
-        let id2 = AgentId::new();
-        executor.start_agent(
-            id2,
-            "proactive",
-            &ScheduleMode::Proactive {
-                conditions: vec!["event:agent_spawned".to_string()],
-            },
-            |_id, _msg| tokio::spawn(async {}),
-        );
-        assert_eq!(executor.active_count(), 0);
     }
 }

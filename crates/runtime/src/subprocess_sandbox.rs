@@ -357,9 +357,6 @@ pub fn validate_process_command(
 // Process tree kill — cross-platform graceful → force kill
 // ---------------------------------------------------------------------------
 
-/// Default grace period before force-killing (milliseconds).
-pub const DEFAULT_GRACE_MS: u64 = 3000;
-
 /// Maximum grace period to prevent indefinite waits.
 pub const MAX_GRACE_MS: u64 = 60_000;
 
@@ -493,7 +490,6 @@ mod tests {
 
     #[test]
     fn test_grace_constants() {
-        assert_eq!(DEFAULT_GRACE_MS, 3000);
         assert_eq!(MAX_GRACE_MS, 60_000);
     }
 

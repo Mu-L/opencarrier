@@ -71,32 +71,6 @@ pub enum Capability {
     EconTransfer(String),
 }
 
-/// Result of a capability check.
-#[derive(Debug, Clone)]
-pub enum CapabilityCheck {
-    /// The capability is granted.
-    Granted,
-    /// The capability is denied with a reason.
-    Denied(String),
-}
-
-impl CapabilityCheck {
-    /// Returns true if the capability is granted.
-    pub fn is_granted(&self) -> bool {
-        matches!(self, Self::Granted)
-    }
-
-    /// Returns an error if denied, Ok(()) if granted.
-    pub fn require(&self) -> Result<(), crate::error::CarrierError> {
-        match self {
-            Self::Granted => Ok(()),
-            Self::Denied(reason) => {
-                Err(crate::error::CarrierError::CapabilityDenied(reason.clone()))
-            }
-        }
-    }
-}
-
 /// Checks whether a required capability matches any granted capability.
 ///
 /// Pattern matching rules:
@@ -265,12 +239,6 @@ mod tests {
             &Capability::LlmMaxTokens(1000),
             &Capability::LlmMaxTokens(5000),
         ));
-    }
-
-    #[test]
-    fn test_capability_check_require() {
-        assert!(CapabilityCheck::Granted.require().is_ok());
-        assert!(CapabilityCheck::Denied("no".to_string()).require().is_err());
     }
 
     #[test]

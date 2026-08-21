@@ -37,12 +37,6 @@ impl ApiClient {
         self
     }
 
-    /// Set the request timeout (default: 30 s).
-    pub fn with_timeout(mut self, secs: u64) -> Self {
-        self.timeout = Duration::from_secs(secs);
-        self
-    }
-
     /// Send a request and parse the response as JSON.
     ///
     /// * `path` – API path relative to `base_url` (e.g. `/v1/users`).

@@ -259,50 +259,6 @@ impl ProviderCooldown {
             );
         }
     }
-
-    /// Record the result of a probe request.
-    pub fn record_probe_result(&self, provider: &str, success: bool) {
-        if success {
-            self.record_success(provider);
-        } else if let Some(mut state) = self.states.get_mut(provider) {
-            // Probe failed -- extend cooldown by re-calculating with current error count.
-            state.last_probe = Some(Instant::now());
-            state.error_count = state.error_count.saturating_add(1);
-            let cooldown = calculate_cooldown(&self.config, state.error_count, state.is_billing);
-            state.cooldown_start = Some(Instant::now());
-            state.cooldown_duration = cooldown;
-            warn!(
-                provider,
-                error_count = state.error_count,
-                cooldown_secs = cooldown.as_secs(),
-                "circuit breaker: probe failed, extending cooldown"
-            );
-        }
-    }
-
-    /// Clear expired cooldowns (call periodically, e.g. every 60s).
-    pub fn clear_expired(&self) {
-        let mut to_remove = Vec::new();
-        for entry in self.states.iter() {
-            if let Some(start) = entry.value().cooldown_start {
-                if start.elapsed() >= entry.value().cooldown_duration
-                    && entry.value().error_count == 0
-                {
-                    to_remove.push(entry.key().clone());
-                }
-            }
-        }
-        for key in to_remove {
-            self.states.remove(&key);
-            debug!(provider = %key, "circuit breaker: cleared expired entry");
-        }
-    }
-
-    /// Force-reset a specific provider (admin action).
-    pub fn force_reset(&self, provider: &str) {
-        self.states.remove(provider);
-        info!(provider, "circuit breaker: force-reset by admin");
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -417,83 +373,6 @@ mod tests {
 
         let verdict = cb.check("openai");
         assert_eq!(verdict, CooldownVerdict::AllowProbe);
-    }
-
-    #[test]
-    fn test_probe_interval_throttled() {
-        let mut config = fast_config();
-        config.probe_interval_secs = 9999; // very long probe interval
-        config.probe_enabled = true;
-        let cb = ProviderCooldown::new(config);
-
-        cb.record_failure("openai", false);
-
-        // First check: should allow probe (no last_probe yet).
-        let v1 = cb.check("openai");
-        assert_eq!(v1, CooldownVerdict::AllowProbe);
-
-        // Record a failed probe to set last_probe.
-        cb.record_probe_result("openai", false);
-
-        // Second check: probe interval hasn't elapsed, should reject.
-        let v2 = cb.check("openai");
-        match v2 {
-            CooldownVerdict::Reject { .. } => {} // expected
-            other => panic!("expected Reject after probe throttle, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_probe_success_closes_circuit() {
-        let cb = ProviderCooldown::new(fast_config());
-        cb.record_failure("openai", false);
-
-        cb.record_probe_result("openai", true);
-    }
-
-    #[test]
-    fn test_probe_failure_extends_cooldown() {
-        let cb = ProviderCooldown::new(fast_config());
-        cb.record_failure("openai", false);
-
-        let state_before = cb.states.get("openai").unwrap().error_count;
-        cb.record_probe_result("openai", false);
-        let state_after = cb.states.get("openai").unwrap().error_count;
-
-        assert_eq!(
-            state_after,
-            state_before + 1,
-            "error count should increase on probe failure"
-        );
-    }
-
-    #[test]
-    fn test_clear_expired() {
-        let mut config = fast_config();
-        config.base_cooldown_secs = 0;
-        let cb = ProviderCooldown::new(config);
-
-        cb.record_failure("openai", false);
-        // Immediately record success so error_count = 0 with an expired cooldown.
-        cb.record_success("openai");
-
-        // The entry still exists in the map.
-        assert!(cb.states.contains_key("openai"));
-
-        // After success the cooldown_start is None, so clear_expired won't match.
-        // Instead, let's test with a scenario where cooldown expired naturally:
-        cb.force_reset("openai");
-        assert!(!cb.states.contains_key("openai"));
-    }
-
-    #[test]
-    fn test_force_reset() {
-        let cb = ProviderCooldown::new(fast_config());
-        cb.record_failure("openai", false);
-        cb.record_failure("openai", false);
-
-        cb.force_reset("openai");
-        assert_eq!(cb.check("openai"), CooldownVerdict::Allow);
     }
 
     #[test]

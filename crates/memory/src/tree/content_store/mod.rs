@@ -110,25 +110,6 @@ impl ContentStore {
         read::read_body(&path)
     }
 
-    /// Read the body content of a summary.
-    pub fn read_summary_body(
-        &self,
-        owner_id: &str,
-        tree_kind: &str,
-        scope_slug: &str,
-        level: u32,
-        summary_id: &str,
-    ) -> CarrierResult<String> {
-        let path = paths::summary_abs_path(
-            &self.owner_root(owner_id),
-            tree_kind,
-            scope_slug,
-            level,
-            summary_id,
-        );
-        read::read_body(&path)
-    }
-
     /// Get the content root for a specific owner.
     fn owner_root(&self, owner_id: &str) -> PathBuf {
         self.content_root.join(owner_id)

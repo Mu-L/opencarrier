@@ -249,20 +249,6 @@ impl UsageStore {
         Ok(results)
     }
 
-    /// Query the timestamp of the earliest usage event.
-    pub fn query_first_event_date(&self) -> CarrierResult<Option<String>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| CarrierError::Internal(e.to_string()))?;
-        let result: Option<String> = conn
-            .query_row("SELECT MIN(timestamp) FROM usage_events", [], |row| {
-                row.get(0)
-            })
-            .map_err(|e| CarrierError::Memory(e.to_string()))?;
-        Ok(result)
-    }
-
     /// Delete usage events older than the given number of days.
     pub fn cleanup_old(&self, days: u32) -> CarrierResult<usize> {
         let conn = self

@@ -138,21 +138,6 @@ impl AgentRegistry {
         Ok(())
     }
 
-    /// Update an agent's workspace path.
-    pub fn update_workspace(
-        &self,
-        id: AgentId,
-        workspace: Option<std::path::PathBuf>,
-    ) -> CarrierResult<()> {
-        let mut entry = self
-            .agents
-            .get_mut(&id)
-            .ok_or_else(|| CarrierError::AgentNotFound(id.to_string()))?;
-        entry.manifest.workspace = workspace;
-        entry.last_active = chrono::Utc::now();
-        Ok(())
-    }
-
     /// Update an agent's visual identity (emoji, avatar, color).
     pub fn update_identity(
         &self,
@@ -175,17 +160,6 @@ impl AgentRegistry {
             .get_mut(&id)
             .ok_or_else(|| CarrierError::AgentNotFound(id.to_string()))?;
         entry.manifest.model.modality = modality;
-        entry.last_active = chrono::Utc::now();
-        Ok(())
-    }
-
-    /// Update an agent's flow allowlist.
-    pub fn update_flows(&self, id: AgentId, flows: Vec<String>) -> CarrierResult<()> {
-        let mut entry = self
-            .agents
-            .get_mut(&id)
-            .ok_or_else(|| CarrierError::AgentNotFound(id.to_string()))?;
-        entry.manifest.flows = flows;
         entry.last_active = chrono::Utc::now();
         Ok(())
     }
@@ -272,19 +246,6 @@ impl AgentRegistry {
         Ok(())
     }
 
-    /// Update an agent's resource limits.
-    pub fn update_resources(&self, id: AgentId, tokens_per_hour: Option<u64>) -> CarrierResult<()> {
-        let mut entry = self
-            .agents
-            .get_mut(&id)
-            .ok_or_else(|| CarrierError::AgentNotFound(id.to_string()))?;
-        if let Some(v) = tokens_per_hour {
-            entry.manifest.resources.max_llm_tokens_per_hour = v;
-        }
-        entry.last_active = chrono::Utc::now();
-        Ok(())
-    }
-
     /// Update an agent's entire manifest (hot-reload from agent.toml).
     /// Re-indexes capabilities and preserves the workspace path.
     pub fn update_manifest(&self, id: AgentId, new_manifest: AgentManifest) -> CarrierResult<()> {
@@ -293,18 +254,6 @@ impl AgentRegistry {
             .get_mut(&id)
             .ok_or_else(|| CarrierError::AgentNotFound(id.to_string()))?;
         entry.manifest = new_manifest;
-        entry.last_active = chrono::Utc::now();
-        Ok(())
-    }
-
-    /// Mark an agent's onboarding as complete.
-    pub fn mark_onboarding_complete(&self, id: AgentId) -> CarrierResult<()> {
-        let mut entry = self
-            .agents
-            .get_mut(&id)
-            .ok_or_else(|| CarrierError::AgentNotFound(id.to_string()))?;
-        entry.onboarding_completed = true;
-        entry.onboarding_completed_at = Some(chrono::Utc::now());
         entry.last_active = chrono::Utc::now();
         Ok(())
     }

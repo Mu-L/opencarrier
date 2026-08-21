@@ -70,16 +70,6 @@ impl TaintedValue {
         }
     }
 
-    /// Merges the taint labels from `other` into this value.
-    ///
-    /// This is used when two values are concatenated or otherwise combined;
-    /// the result must carry the union of both label sets.
-    pub fn merge_taint(&mut self, other: &TaintedValue) {
-        for label in &other.labels {
-            self.labels.insert(label.clone());
-        }
-    }
-
     /// Checks whether this value is safe to flow into the given sink.
     ///
     /// Returns `Ok(())` if none of the value's labels are blocked by the
@@ -95,19 +85,6 @@ impl TaintedValue {
             }
         }
         Ok(())
-    }
-
-    /// Removes a specific label from this value.
-    ///
-    /// This is an explicit security decision -- the caller is asserting that
-    /// the value has been sanitised or that the label is no longer relevant.
-    pub fn declassify(&mut self, label: &TaintLabel) {
-        self.labels.remove(label);
-    }
-
-    /// Returns `true` if this value carries any taint labels at all.
-    pub fn is_tainted(&self) -> bool {
-        !self.labels.is_empty()
     }
 }
 
@@ -216,29 +193,9 @@ mod tests {
     #[test]
     fn test_clean_passes_all() {
         let clean = TaintedValue::clean("safe data", "internal");
-        assert!(!clean.is_tainted());
 
         assert!(clean.check_sink(&TaintSink::shell_exec()).is_ok());
         assert!(clean.check_sink(&TaintSink::net_fetch()).is_ok());
         assert!(clean.check_sink(&TaintSink::agent_message()).is_ok());
-    }
-
-    #[test]
-    fn test_declassify_allows_flow() {
-        let mut labels = HashSet::new();
-        labels.insert(TaintLabel::ExternalNetwork);
-        labels.insert(TaintLabel::UserInput);
-        let mut tainted = TaintedValue::new("sanitised input", labels, "user_form");
-
-        // Before declassification -- should be blocked by shell_exec
-        assert!(tainted.check_sink(&TaintSink::shell_exec()).is_err());
-
-        // Declassify both offending labels
-        tainted.declassify(&TaintLabel::ExternalNetwork);
-        tainted.declassify(&TaintLabel::UserInput);
-
-        // After declassification -- should pass
-        assert!(tainted.check_sink(&TaintSink::shell_exec()).is_ok());
-        assert!(!tainted.is_tainted());
     }
 }

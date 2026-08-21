@@ -33,15 +33,6 @@ pub struct WechatApiError {
     pub errmsg: String,
 }
 
-impl WechatApiError {
-    pub fn from_serde_json_err(e: serde_json::Error) -> Self {
-        WechatApiError {
-            errcode: -1,
-            errmsg: e.to_string(),
-        }
-    }
-}
-
 /// Verify a WeChat callback signature (checkSign).
 ///
 /// Sorts token + timestamp + nonce lexicographically, concatenates, and

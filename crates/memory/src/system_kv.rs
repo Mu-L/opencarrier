@@ -163,46 +163,6 @@ impl SystemKV {
         Ok(())
     }
 
-    /// Get the full history of a key (all archived values, oldest first).
-    pub fn get_history(
-        &self,
-        agent_id: &str,
-        owner_id: &str,
-        user_id: &str,
-        key: &str,
-    ) -> CarrierResult<Vec<(serde_json::Value, i64, String)>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| CarrierError::Internal(e.to_string()))?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT value, version, archived_at FROM kv_history WHERE agent_id = ?1 AND owner_id = ?2 AND user_id = ?3 AND key = ?4 ORDER BY version ASC",
-            )
-            .map_err(|e| CarrierError::Memory(e.to_string()))?;
-        let rows = stmt
-            .query_map(rusqlite::params![agent_id, owner_id, user_id, key], |row| {
-                let blob: Vec<u8> = row.get(0)?;
-                let version: i64 = row.get(1)?;
-                let archived_at: String = row.get(2)?;
-                Ok((blob, version, archived_at))
-            })
-            .map_err(|e| CarrierError::Memory(e.to_string()))?;
-
-        let mut history = Vec::new();
-        for row in rows {
-            let (blob, version, archived_at) =
-                row.map_err(|e| CarrierError::Memory(e.to_string()))?;
-            let value: serde_json::Value = serde_json::from_slice(&blob).unwrap_or_else(|_| {
-                String::from_utf8(blob)
-                    .map(serde_json::Value::String)
-                    .unwrap_or(serde_json::Value::Null)
-            });
-            history.push((value, version, archived_at));
-        }
-        Ok(history)
-    }
-
     /// List all key-value pairs for an agent.
     pub fn list_kv(
         &self,
@@ -660,60 +620,6 @@ mod tests {
             .unwrap();
         let value = store.get(&agent_id, "user1", "user1", "key").unwrap();
         assert_eq!(value, Some(serde_json::json!("v2")));
-    }
-
-    #[test]
-    fn test_kv_update_preserves_history() {
-        let store = setup();
-        let agent_id = "test-agent".to_string();
-        store
-            .set(&agent_id, "user1", "user1", "key", serde_json::json!("v1"))
-            .unwrap();
-        store
-            .set(&agent_id, "user1", "user1", "key", serde_json::json!("v2"))
-            .unwrap();
-        store
-            .set(&agent_id, "user1", "user1", "key", serde_json::json!("v3"))
-            .unwrap();
-
-        // Latest value is v3
-        let value = store.get(&agent_id, "user1", "user1", "key").unwrap();
-        assert_eq!(value, Some(serde_json::json!("v3")));
-
-        // History preserves all old values
-        let history = store
-            .get_history(&agent_id, "user1", "user1", "key")
-            .unwrap();
-        assert_eq!(history.len(), 2, "should have 2 archived entries (v1, v2)");
-        assert_eq!(history[0].0, serde_json::json!("v1"));
-        assert_eq!(history[1].0, serde_json::json!("v2"));
-    }
-
-    #[test]
-    fn test_kv_delete_preserves_history() {
-        let store = setup();
-        let agent_id = "test-agent".to_string();
-        store
-            .set(
-                &agent_id,
-                "user1",
-                "user1",
-                "key",
-                serde_json::json!("important"),
-            )
-            .unwrap();
-        store.delete(&agent_id, "user1", "user1", "key").unwrap();
-
-        // Value is gone from main store
-        let value = store.get(&agent_id, "user1", "user1", "key").unwrap();
-        assert!(value.is_none());
-
-        // But history preserves it
-        let history = store
-            .get_history(&agent_id, "user1", "user1", "key")
-            .unwrap();
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].0, serde_json::json!("important"));
     }
 
     #[test]

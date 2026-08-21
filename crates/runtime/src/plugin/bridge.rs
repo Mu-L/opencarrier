@@ -127,37 +127,6 @@ impl PluginBridgeManager {
             .unwrap_or_default()
     }
 
-    /// Backward-compatible: add a loaded plugin to the bridge.
-    /// Builds a channel_send_fn that routes through the plugin's channels.
-    pub fn add_plugin(&mut self, plugin: Arc<dyn super::instance::PluginInstance>) {
-        let f: ChannelSendFn = Arc::new(move |channel_type, bot_id, user_id, text| {
-            // Try exact match first
-            for channel in plugin.channels() {
-                if channel.channel_type == channel_type && channel.bot_id == bot_id {
-                    return plugin.channel_send(channel, bot_id, user_id, text);
-                }
-            }
-            // Fallback: any channel of the same type
-            for channel in plugin.channels() {
-                if channel.channel_type == channel_type {
-                    return plugin.channel_send(channel, bot_id, user_id, text);
-                }
-            }
-            Err(CarrierError::InvalidInput(format!(
-                "No plugin channel found for type: {}",
-                channel_type
-            )))
-        });
-
-        // If no send fn set yet, use this one. Otherwise, chain them.
-        if self.channel_send_fn.is_none() {
-            self.channel_send_fn = Some(f);
-        } else {
-            // Already have a send fn — keep the first one (or we could chain,
-            // but in practice the ChannelManager sets one fn that covers all channels)
-        }
-    }
-
     /// Run the message processing loop (consumes self).
     ///
     /// Each message is handled in its own tokio task so different users stay

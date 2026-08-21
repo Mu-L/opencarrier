@@ -64,11 +64,6 @@ pub fn is_installed(name: &str) -> bool {
     read_installed().iter().any(|r| r.name == name && r.enabled)
 }
 
-/// Find an installed record by name.
-pub fn find_installed(name: &str) -> Option<McpInstalledRecord> {
-    read_installed().into_iter().find(|r| r.name == name)
-}
-
 /// Install an MCP server from a manifest.
 ///
 /// 1. Creates `~/.opencarrier/mcp-servers/{name}/` directory

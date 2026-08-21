@@ -58,12 +58,6 @@ impl WebCache {
         );
     }
 
-    /// Remove all expired entries. Called periodically or on demand.
-    pub fn evict_expired(&self) {
-        self.entries
-            .retain(|_, entry| entry.inserted_at.elapsed() <= self.ttl);
-    }
-
     /// Number of entries currently in the cache (including possibly expired).
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -98,16 +92,6 @@ mod tests {
         cache.put("key1".to_string(), "value1".to_string());
         std::thread::sleep(Duration::from_millis(10));
         assert_eq!(cache.get("key1"), None);
-    }
-
-    #[test]
-    fn test_evict_expired() {
-        let cache = WebCache::new(Duration::from_millis(1));
-        cache.put("a".to_string(), "1".to_string());
-        cache.put("b".to_string(), "2".to_string());
-        std::thread::sleep(Duration::from_millis(10));
-        cache.evict_expired();
-        assert_eq!(cache.len(), 0);
     }
 
     #[test]

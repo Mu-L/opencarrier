@@ -929,41 +929,6 @@ fn extract_keywords(text: &str) -> Vec<String> {
     keywords
 }
 
-/// Parse YAML frontmatter from a flow .md file to extract name and description.
-pub fn parse_flow_frontmatter(path: &Path) -> Option<(String, String)> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let content = content.trim();
-
-    // Must start with ---
-    if !content.starts_with("---") {
-        // No frontmatter — use filename as name
-        let name = path.file_stem()?.to_str()?.to_string();
-        return Some((name, String::new()));
-    }
-
-    let rest = &content[3..];
-    let end = rest.find("---")?;
-    let frontmatter = &rest[..end];
-
-    let mut name = String::new();
-    let mut description = String::new();
-
-    for line in frontmatter.lines() {
-        let line = line.trim();
-        if let Some(val) = line.strip_prefix("name:") {
-            name = val.trim().trim_matches('"').trim_matches('\'').to_string();
-        } else if let Some(val) = line.strip_prefix("description:") {
-            description = val.trim().trim_matches('"').trim_matches('\'').to_string();
-        }
-    }
-
-    if name.is_empty() {
-        name = path.parent()?.file_name()?.to_str()?.to_string();
-    }
-
-    Some((name, description))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

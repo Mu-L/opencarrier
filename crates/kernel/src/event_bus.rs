@@ -72,20 +72,6 @@ impl EventBus {
         }
     }
 
-    /// Subscribe to events for a specific agent.
-    pub fn subscribe_agent(&self, agent_id: AgentId) -> broadcast::Receiver<Event> {
-        let entry = self.agent_channels.entry(agent_id).or_insert_with(|| {
-            let (tx, _) = broadcast::channel(256);
-            tx
-        });
-        entry.subscribe()
-    }
-
-    /// Subscribe to all broadcast/system events.
-    pub fn subscribe_all(&self) -> broadcast::Receiver<Event> {
-        self.sender.subscribe()
-    }
-
     /// Get recent event history.
     pub async fn history(&self, limit: usize) -> Vec<Event> {
         let history = self.history.read().await;
@@ -121,29 +107,5 @@ mod tests {
         bus.publish(event).await;
         let history = bus.history(10).await;
         assert_eq!(history.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_agent_subscribe() {
-        let bus = EventBus::new();
-        let agent_id = AgentId::new();
-        let mut rx = bus.subscribe_agent(agent_id);
-
-        let event = Event::new(
-            AgentId::new(),
-            EventTarget::Agent(agent_id),
-            EventPayload::System(SystemEvent::HealthCheck {
-                status: "ok".to_string(),
-            }),
-        );
-        bus.publish(event).await;
-
-        let received = rx.recv().await.unwrap();
-        match received.payload {
-            EventPayload::System(SystemEvent::HealthCheck { status }) => {
-                assert_eq!(status, "ok");
-            }
-            _ => panic!("Wrong payload"),
-        }
     }
 }
