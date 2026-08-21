@@ -1763,62 +1763,6 @@ impl CarrierKernel {
         }
     }
 
-    /// Check hub for newer clone template versions (log-only hint; upgrade was
-    /// removed — definition-layer sync goes through local dup pull/edit/push).
-    fn check_hub_upgrades(self: &Arc<Self>) {
-        let hub_url = match self.config.hub.url.as_str() {
-            "" | "none" => return,
-            url => url.to_string(),
-        };
-
-        let agents = self.registry.list();
-        tokio::spawn(async move {
-            for entry in &agents {
-                let Some(ref cs) = entry.manifest.clone_source else {
-                    continue;
-                };
-                let Some(ref tid) = cs.hub_template_id else {
-                    continue;
-                };
-
-                let local_ver: i64 = match cs.agx_version.parse() {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-
-                let url = format!("{}/api/templates/{}", hub_url.trim_end_matches('/'), tid);
-                let resp = match reqwest::get(&url).await {
-                    Ok(r) if r.status().is_success() => r,
-                    _ => continue,
-                };
-                let json: serde_json::Value = match resp.json().await {
-                    Ok(j) => j,
-                    Err(_) => continue,
-                };
-                let remote_ver: i64 = match json
-                    .get("latest_version")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse().ok())
-                {
-                    Some(v) => v,
-                    None => continue,
-                };
-
-                if remote_ver <= local_ver {
-                    continue;
-                }
-
-                info!(
-                    agent = %entry.name,
-                    hub_template = %tid,
-                    local = local_ver,
-                    remote = remote_ver,
-                    "Hub template update available — sync via local dup pull/edit/push (upgrade removed)"
-                );
-            }
-        });
-    }
-
     /// Iterates the agent registry and starts background tasks for agents with
     /// `Continuous`, `Periodic`, or `Proactive` schedules.
     pub fn start_background_agents(self: &Arc<Self>) {
@@ -1891,7 +1835,6 @@ impl CarrierKernel {
             });
         }
 
-        self.check_hub_upgrades();
         self.start_clone_watchers();
         self.reconcile_self_growth();
 
