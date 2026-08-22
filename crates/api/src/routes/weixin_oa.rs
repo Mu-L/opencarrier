@@ -162,6 +162,15 @@ pub async fn weixin_oa_callback(
 
     let from_user = msg.from_user.clone();
 
+    // 48h customer-service window tracking: inbound interactions (message /
+    // subscribe / SCAN / CLICK) re-open the window; a later 45015 re-marks it
+    // closed. Lets `deliver_oa` skip the doomed text send and go straight to
+    // the template fallback for known-closed followers. Fire-and-forget is
+    // fine (in-memory map, next inbound fixes a missed update).
+    if channel_weixin_oa::opens_cs_window(&msg) {
+        channel_weixin_oa::note_inbound_activity(&app_id, &from_user);
+    }
+
     // Followers ledger (automation Phase 2): subscribe upserts (with QR scene),
     // unsubscribe marks gone (must run BEFORE the needs_reply drop — that is
     // where unsubscribe events exit), every other inbound refreshes last_seen

@@ -2,6 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use tokio::sync::mpsc;
@@ -79,6 +80,69 @@ impl OaAccountState {
 /// read from this Arc so runtime-added accounts are visible to both.
 pub static WEIXIN_OA_STATE: std::sync::LazyLock<Arc<WeixinOaState>> =
     std::sync::LazyLock::new(|| Arc::new(WeixinOaState::new()));
+
+// --- Customer-service 48h window tracking ---
+
+/// Last known window state per (app_id, openid): `Some(t)` = the follower
+/// opened the window at `t` (inbound message / subscribe / SCAN / CLICK);
+/// `None` = a text send hit 45015/45047, i.e. the window is known closed.
+/// In-memory only: after a restart the map is empty → unknown → the
+/// optimistic text-first behavior (unchanged) and the first 45015 re-marks
+/// the recipient closed, so the map relearns without any persistence.
+static CS_WINDOWS: std::sync::LazyLock<DashMap<(String, String), Option<Instant>>> =
+    std::sync::LazyLock::new(DashMap::new);
+
+/// WeChat closes the customer-service window 48h after the follower's last
+/// interaction; treat it as closed after 44h to absorb clock skew and
+/// delivery latency (same margin as the followers-push 44h subset rule).
+const CS_WINDOW_TTL: Duration = Duration::from_secs(44 * 3600);
+
+/// Does this inbound action open/refresh the 48h customer-service window?
+/// Mirrors WeChat's documented window-openers reachable via this webhook:
+/// any user-sent message, plus subscribe / SCAN / CLICK events. (Payment
+/// success etc. never reach this webhook, so they cannot be tracked here.)
+pub fn opens_cs_window(msg: &OaMessage) -> bool {
+    match msg.msg_type.as_str() {
+        "text" | "image" | "voice" | "video" | "shortvideo" | "location" | "link" => true,
+        "event" => matches!(msg.event.as_str(), "subscribe" | "SCAN" | "CLICK"),
+        _ => false,
+    }
+}
+
+/// Record an inbound window-opening action (called from the webhook route).
+pub fn note_inbound_activity(app_id: &str, openid: &str) {
+    if openid.is_empty() {
+        return;
+    }
+    CS_WINDOWS.insert(
+        (app_id.to_string(), openid.to_string()),
+        Some(Instant::now()),
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn test_set_cs_window(app_id: &str, openid: &str, opened_ago: Option<Duration>) {
+    let v = opened_ago.map(|ago| Instant::now() - ago);
+    CS_WINDOWS.insert((app_id.to_string(), openid.to_string()), v);
+}
+
+/// A text send returned 45015/45047 — the window is closed as of now.
+fn note_cs_window_closed(app_id: &str, openid: &str) {
+    CS_WINDOWS.insert((app_id.to_string(), openid.to_string()), None);
+}
+
+/// Window known-closed for this follower? Unknown (no record) is `false` —
+/// stay optimistic and let the send itself discover a closed window (45015).
+fn cs_window_closed(app_id: &str, openid: &str) -> bool {
+    match CS_WINDOWS
+        .get(&(app_id.to_string(), openid.to_string()))
+        .map(|v| *v)
+    {
+        Some(Some(opened)) => opened.elapsed() > CS_WINDOW_TTL,
+        Some(None) => true,
+        None => false,
+    }
+}
 
 pub struct SessionWatcher {
     pub state: Arc<WeixinOaState>,
@@ -380,6 +444,33 @@ fn fallback_summary(text: &str) -> String {
     }
 }
 
+/// Build the template `data` for a fallback send. The configured field gets
+/// the summary (that is the config contract); the other well-known slots are
+/// filled too. WeChat substitutes only the placeholders the template actually
+/// has and ignores extra keys, and an unfilled slot renders as a blank line —
+/// which reads as "broken" to the recipient (86bus's 需求状态变更通知 showed
+/// 需求编码/最新状态 empty, 2026-08-21).
+fn build_fallback_data(field: &str, text: &str) -> serde_json::Value {
+    let mut data = serde_json::json!({ field: { "value": fallback_summary(text) } });
+    let mut fill = |key: &str, value: String| {
+        if key != field {
+            data[key] = serde_json::json!({ "value": value });
+        }
+    };
+    fill("first", "您有一条新通知".to_string());
+    fill("keyword1", "系统通知".to_string());
+    // keyword2 carries the bare content head (no nudge suffix — the remark
+    // slot below carries the guidance).
+    const CAP: usize = 40;
+    let mut head: String = text.chars().take(CAP).collect();
+    if text.chars().count() > CAP {
+        head.push('…');
+    }
+    fill("keyword2", head);
+    fill("remark", "进入公众号回复可继续查看".to_string());
+    data
+}
+
 /// Deliver rich content to a weixin-oa follower. Priority: miniprogram, then
 /// template, then image, then text (degrades via `as_text`, incl. a formatted
 /// link). Template sits above text so a text+template payload uses template as
@@ -457,6 +548,20 @@ async fn deliver_oa(
         }
     }
     if let Some(text) = content.as_text() {
+        // Window known closed: skip the customer-service attempt that would
+        // 45015 and go straight to the template fallback — kills the wasted
+        // API call, the error noise, and the 40241 duplicate retries.
+        if cs_window_closed(&account.app_id, openid) {
+            return template_fallback(
+                account,
+                openid,
+                &text,
+                CarrierError::Network(
+                    "customer-service window known closed, 45015 preempted".to_string(),
+                ),
+            )
+            .await;
+        }
         let result = with_token_retry(account, |token| {
             let http = account.http.clone();
             let openid = openid.to_string();
@@ -477,6 +582,7 @@ async fn deliver_oa(
                     Some(45015) | Some(45047)
                 ) =>
             {
+                note_cs_window_closed(&account.app_id, openid);
                 template_fallback(account, openid, &text, e).await
             }
             Err(e) => Err(e),
@@ -515,7 +621,7 @@ async fn template_fallback(
         );
         return Err(original_err);
     };
-    let data = serde_json::json!({ field: { "value": fallback_summary(text) } });
+    let data = build_fallback_data(field, text);
     let token = account.get_token().await?;
     match api::template_send(
         &account.http,
@@ -697,6 +803,95 @@ impl Channel for SessionWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_opens_cs_window_matches_window_openers() {
+        for ty in ["text", "image", "voice", "location"] {
+            let msg = OaMessage {
+                msg_type: ty.into(),
+                ..Default::default()
+            };
+            assert!(opens_cs_window(&msg), "{ty} should open the window");
+        }
+        for ev in ["subscribe", "SCAN", "CLICK"] {
+            let msg = OaMessage {
+                msg_type: "event".into(),
+                event: ev.into(),
+                ..Default::default()
+            };
+            assert!(opens_cs_window(&msg), "event {ev} should open the window");
+        }
+        for ev in ["VIEW", "view_miniprogram", "unsubscribe"] {
+            let msg = OaMessage {
+                msg_type: "event".into(),
+                event: ev.into(),
+                ..Default::default()
+            };
+            assert!(
+                !opens_cs_window(&msg),
+                "event {ev} must NOT open the window"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cs_window_closed_states() {
+        let (app, oid) = ("wxTestApp", "oTestUser");
+        // Unknown follower: optimistic, not known-closed.
+        assert!(!cs_window_closed(app, oid));
+        // Fresh inbound: open.
+        note_inbound_activity(app, oid);
+        assert!(!cs_window_closed(app, oid));
+        // 45015 marks it closed.
+        note_cs_window_closed(app, oid);
+        assert!(cs_window_closed(app, oid));
+        // Fresh inbound re-opens it.
+        note_inbound_activity(app, oid);
+        assert!(!cs_window_closed(app, oid));
+        // Stale inbound (older than the TTL) counts as closed again.
+        test_set_cs_window(app, oid, Some(CS_WINDOW_TTL + Duration::from_secs(60)));
+        assert!(cs_window_closed(app, oid));
+        // Empty openid is a no-op (never poisoned).
+        note_inbound_activity(app, "");
+        assert!(cs_window_closed("", "").eq(&false));
+    }
+
+    #[test]
+    fn test_build_fallback_data_fills_all_slots() {
+        let data = build_fallback_data("first", "今晨白云线路因暴雨停运两班，已安排接驳车。");
+        assert!(data["first"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("白云线路"));
+        assert!(data["first"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("进入公众号"));
+        assert_eq!(data["keyword1"]["value"], "系统通知");
+        assert!(data["keyword2"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("白云线路"));
+        assert_eq!(data["remark"]["value"], "进入公众号回复可继续查看");
+
+        // Configured field is keyword2: it keeps the summary; the other slots
+        // still get filled (including first, which would otherwise be blank).
+        let data = build_fallback_data("keyword2", "短消息");
+        assert_eq!(data["first"]["value"], "您有一条新通知");
+        assert!(data["keyword2"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("短消息"));
+
+        // Long content is truncated without a mid-sentence cut into the nudge.
+        let long: String = "字".repeat(100);
+        let data = build_fallback_data("first", &long);
+        assert!(data["first"]["value"].as_str().unwrap().contains('…'));
+        assert_eq!(
+            data["keyword2"]["value"].as_str().unwrap().chars().count(),
+            41 // 40 chars + ellipsis
+        );
+    }
 
     #[test]
     fn test_needs_reply_filters_passive_events() {

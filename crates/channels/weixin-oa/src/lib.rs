@@ -10,8 +10,8 @@ pub mod models;
 pub mod tools;
 
 pub use channel::{
-    build_plugin_message, deliver_content, execute_push, needs_reply, OaAccountState,
-    SessionWatcher, WeixinOaState, WEIXIN_OA_STATE,
+    build_plugin_message, deliver_content, execute_push, needs_reply, note_inbound_activity,
+    opens_cs_window, OaAccountState, SessionWatcher, WeixinOaState, WEIXIN_OA_STATE,
 };
 pub use models::{parse_xml_message, OaMessage, ProxyMessage, WeixinOaSessionFile};
 pub use tools::WeixinOaPublishArticleTool;
